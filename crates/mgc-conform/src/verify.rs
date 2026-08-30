@@ -443,6 +443,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     let mut pd = compare(obs, &port, report.human_slot);
                     append_hand_diffs(&mut pd, &st, &port, pst.local_player as usize);
                     append_charge_diffs(&mut pd, &st, &world, report.human_slot);
+                    append_sprite_diffs(&mut pd, &st, &world, report.human_slot);
                     let pd = pd;
                     let mut tags = (roster.is_some() || !args.no_pose_alt).then(|| {
                         let rmap: BTreeMap<u16, &EntObsMc1> =
@@ -904,6 +905,40 @@ pub(crate) fn append_charge_diffs(
     }
 }
 
+/// The SPRITE row (player-banked 2026-08-27, graded since session 68):
+/// retail `+86` vs port `type86`, riding the raw state channel like
+/// f26/charge above. This is the castle-flag-recolor bug class's lane
+/// — visual-only by construction (team rows share extents family-
+/// wide), so every certification before it was blind to a wrong row.
+/// Slots whose class/model disagree across the pair are skipped: those
+/// are the graded diff's own missing/extra/desync story.
+pub(crate) fn append_sprite_diffs(
+    pd: &mut PairDiff,
+    st: &RetailMc1,
+    world: &World,
+    human_slot: u16,
+) {
+    for (slot, ty, class, model) in world.sprite_lane() {
+        if slot == human_slot {
+            continue;
+        }
+        let Some(e) = st.ents.get(slot as usize) else {
+            continue;
+        };
+        if e.class64 != class || e.model65 != model {
+            continue;
+        }
+        if e.type86 != ty {
+            pd.fields.push(FieldDiff {
+                slot: Some(slot),
+                field: "type86",
+                want: e.type86.to_string(),
+                got: ty.to_string(),
+            });
+        }
+    }
+}
+
 /// The measured height/type planes — plus the cave CEILING when the
 /// take declares it — for pair execution, when the recording's
 /// format-2 terrain channel has anchored the accumulator (a
@@ -1092,6 +1127,7 @@ pub(crate) fn exec_pair(
     let mut pd = compare(obs, &port, report.human_slot);
     append_hand_diffs(&mut pd, st, &port, pst.local_player as usize);
     append_charge_diffs(&mut pd, st, world, report.human_slot);
+    append_sprite_diffs(&mut pd, st, world, report.human_slot);
     Ok((pd, port, report.human_slot))
 }
 

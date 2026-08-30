@@ -2340,8 +2340,31 @@ impl Gen {
                 Some(MailTarget::Player) => PLAYER_TARGET,
                 None => MC1_MISS_STAMP,
             };
+            // ⭐⭐ A REFUSED BLOOM LEAVES THE CARRIER ALIVE. The
+            // self-kill is INSIDE the cloud's null guard: HIDDEN
+            // 0x54441 `test %eax,%eax` / 0x54443 `je 0x544ba` jumps
+            // straight to the epilogue, past the kill at 0x544b2
+            // (`call 0x421C0` — a two-instruction leaf that is just
+            // `orb $0x4,0x11(%eax)`, i.e. flags |= 0x400). So when
+            // `new_event` refuses — free stack AND recycle stack both
+            // dry — the carrier is NOT marked dead: it stays alive
+            // and re-tries its bloom on the following ticks.
+            //
+            // ⚠ THE FORK IS DELIBERATE, SO DO NOT GENERALISE IT.
+            // Twenty bytes earlier in this very function the WATER
+            // arm spawns its splash and kills UNCONDITIONALLY: its
+            // `je 0x54407` skips only the +24 copy and the kill at
+            // 0x54408 stands outside (the port's `splash_and_die`
+            // already matches that shape). Every other
+            // `flags |= 0x400` beside a spawn needs its own check
+            // against the binary — retail is not consistent here.
+            //
+            // CARPET.EXE has the same two shapes. mc1hwl0 t=37110:
+            // the pool goes 5 → 0 on the tick, retail's slot 983
+            // keeps flags 6 and its `act_life`/`f126`/pose steps
+            // match the port exactly on every other lane.
+            self.ent[i].flags |= 0x400;
         }
-        self.ent[i].flags |= 0x400;
         false
     }
 
@@ -3381,7 +3404,21 @@ impl Gen {
                         && self.ent[j].class64 == 3
                         && f140 / 4 <= self.ent[j].f140
                 }
-                _ => false, // player shields = the spell track
+                // The human IS retail's own class-3 pool record
+                // (:63437-38): +17 bit 7 is the Rebound bit the port
+                // mirrors as `player_rebound`, +140 is the mana purse
+                // (class64 == 3 holds by construction — the carpet).
+                // No drain, no deflection: only the payload quarters
+                // (:63440 — the ONE `+44 >> 2` site in the listing;
+                // the deflect family :62705/:63109/:63714 is ported
+                // separately). Witness: mc1l32-quick t=18133, beam
+                // slot 48 endpoint blast slot 70 — retail f44 200 vs
+                // the port's 800, knock 20 vs 80, the t=18134 pose
+                // head's whole 59.4-unit residual at dir 258.
+                Some(MailTarget::Player) => {
+                    self.player_rebound && (f140 / 4).max(0) as u32 <= ctx.pmana
+                }
+                None => false,
             };
             let e = &mut self.ent[fx];
             e.id24 = owner;
@@ -3704,42 +3741,125 @@ impl Gen {
                     self.ent[f].id24 = own;
                 }
             }
-            // Undead Army (:65927 → the (10,36) spawner sub_26E90
-            // :29353): up to 8 class-5 model-9 SKELETONS on a
-            // 512-unit ring (angles k·2048/N, facing radial+180°),
-            // zero mana (no corpse balls, :29672 gate), capped at 64
-            // live skeletons per owner (:29375-81). Owner goes on
-            // BOTH +24 and +144 — remc1 writes only +144 (:29399),
-            // which would turn gen-1 skeletons on their caster;
-            // transcription-slip suspicion beside the :29366
-            // hardcode (converted skeletons DO get +24, :23913).
-            // Deferred: the human→skeleton conversion AI arm.
+            // Undead Army: the bolt's detonation does NOT raise the
+            // ring itself. Its `+68/+69` = 10/36 (the cast at :65959-60)
+            // makes the generic-explode child the (10,36) UNDEAD-ARMY
+            // SPAWNER `sub_3B3E0` (:47370), and the eight skeletons are
+            // raised by THAT record's own state-38 tick
+            // ([`Gen::undead_army_tick`], sub_26E90 :29353) later in the
+            // same slot walk. The distinction is not cosmetic: the
+            // spawner takes a pool slot of its own, so an inline ring
+            // hands the FIRST skeleton the free-stack pop that belongs
+            // to the spawner and shifts every later one — mc1hwl0
+            // t=47080 raised its eight on 967/950/934/753/478/476/372/12
+            // where retail spends 967 on the (10,36) and runs the ring
+            // 950…12 + 937. The child stamps are the generic explode's
+            // (:62763-70), the same set arms 2 and 4 carry.
             11 => {
-                let live = (1..self.ent.len())
-                    .filter(|&j| {
-                        let c = &self.ent[j];
-                        c.class64 == 5 && c.model65 == 9 && c.flags & 0x400 == 0 && c.f144 == own
-                    })
-                    .count() as i32;
-                let n = 8i32.min(64 - live).max(0);
-                for k in 0..n {
-                    let ang = ((k * (2048 / n)) as u16) & 0x7FF;
-                    let mut pos = (x, y, 0i16);
-                    Self::polar_step(&mut pos, ang, 0, 512);
-                    let sz = self.ground_z(pos.0, pos.1) as i16;
-                    if let Some(s) = self.spawn_creature(9, pos.0, pos.1, sz) {
-                        let facing = ang.wrapping_add(0x400) & 0x7FF;
-                        let e = &mut self.ent[s];
-                        e.id24 = own;
-                        e.f144 = own;
-                        e.f140 = 0;
-                        e.f30 = facing;
-                        e.f34 = facing;
-                    }
+                let (yaw, pitch, bolt_f44) = {
+                    let e = &self.ent[i];
+                    (e.f30, e.f32, e.f44)
+                };
+                if let Some(s) = self.spawn_effect(36, x, y, z) {
+                    let e = &mut self.ent[s];
+                    e.id24 = own;
+                    e.f30 = yaw;
+                    e.f32 = pitch;
+                    e.f44 = bolt_f44;
+                    e.f146 = match hit {
+                        Some(MailTarget::Pool(j)) => j as u16,
+                        Some(MailTarget::Player) => PLAYER_TARGET,
+                        None => MC1_MISS_STAMP,
+                    };
                 }
             }
             _ => {}
         }
+    }
+
+    /// sub_26E90 (:29353), class-10 state 38 — the UNDEAD ARMY.
+    /// The spawner overwrites its own `+44` with 10000 (the mana
+    /// purse it hands out), sizes the ring from the FREE POOL
+    /// (`sub_37710` :44061 = `free.len() + 1`, clamped to 8), caps it
+    /// at 64 live skeletons per owner, raises them on a 512-unit ring
+    /// at `k·2048/N` facing radial+180°, and marks itself dead.
+    ///
+    /// ⭐ THE RING SIZE IS THE POOL DEPTH. A hardcoded 8 is right only
+    /// while the pool is deep; under pressure retail raises fewer, and
+    /// the pops it does not take shift every later allocation.
+    ///
+    /// ⭐ THE LIVE CENSUS WALKS THE MODEL-9 ROSTER CHAIN (:29373 loads
+    /// `str_36382x[9]` at wizext 36418 = 36382 + 4·9), and its ONLY
+    /// per-member test is `+144 == owner` — liveness is MEMBERSHIP,
+    /// sampled at tick top, never re-read. A full-array walk with a
+    /// live `flags & 0x400` test disagrees in both directions, and is
+    /// blind to the seizure blank.
+    ///
+    /// ⚠ THE OWNER GOES ON `+144` ALONE. remc1 :29399 writes no `+24`,
+    /// and mc1hwl0 t=47080 settles the long-standing "transcription
+    /// slip" suspicion beside it: all eight recorded skeletons carry
+    /// `+24` = their OWN slot, i.e. NewEvent's default, against the
+    /// port's caster id. Recorded gameplay outranks the reading.
+    fn undead_army_tick(&mut self, i: usize) -> bool {
+        self.ent[i].f44 = 10000;
+        // :29367-72 — the pool probe, negative-clamped then capped at
+        // 8. (Retail's `(__int16)` narrowings are unreachable at any
+        // real pool size; kept as the shape, not as live arithmetic.)
+        let mut n = self.free.len() as i32 + 1;
+        if n & 0x8000 != 0 {
+            n = 0;
+        }
+        if n > 8 {
+            n = 8;
+        }
+        let own = self.ent[i].id24;
+        let live = {
+            let chain = self.mob_chains.visible(9);
+            chain
+                .iter()
+                .filter(|&&j| self.ent[j as usize].f144 == own)
+                .count() as i32
+        };
+        if n > 64 - live {
+            n = 64 - live;
+        }
+        if n > 0 {
+            let (bx, by, bz) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z)
+            };
+            // :29384-85 — the purse and its per-skeleton share, both
+            // int16. Each skeleton banks the REMAINDER of what is left
+            // (`v8 % v11`), so a ring that divides 10000 evenly hands
+            // out zero mana all the way round — the "skeletons drop no
+            // corpse ball" reading, but as arithmetic, not a gate.
+            let mut purse: i16 = 10000;
+            let share = 10000i16 / n as i16;
+            let step = (2048i32 / n) as u16;
+            let mut ang: u16 = 0;
+            for _ in 0..n {
+                let mut pos = (bx, by, bz);
+                Self::polar_step(&mut pos, ang, 0, 512);
+                let sz = self.ground_z(pos.0, pos.1) as i16;
+                if let Some(s) = self.spawn_creature(9, pos.0, pos.1, sz) {
+                    // :29396-98 — the +180° flip is done BYTEWISE
+                    // (`HIBYTE += 4 & 7`), which is `(ang + 0x400) &
+                    // 0x7FF` for every in-range angle.
+                    let facing = (ang & 0xFF) | (((ang >> 8).wrapping_add(4) & 7) << 8);
+                    let e = &mut self.ent[s];
+                    e.f140 = (purse % share) as i32;
+                    e.f144 = own;
+                    e.f30 = facing;
+                    e.f34 = facing;
+                    purse -= share;
+                }
+                ang = ang.wrapping_add(step);
+            }
+        }
+        // :29411 — the spawner kills itself unconditionally, outside
+        // the `+44` gate.
+        self.ent[i].flags |= 0x400;
+        false
     }
 
     /// sub_25EC0 (:28731): the volcano eruption driver (m18, state
@@ -4948,6 +5068,24 @@ impl Gen {
                 self.set_sprite(s, 7);
                 self.extents(s, 200, 200);
             }
+            // sub_3B3E0 (:47370): the (10,36) UNDEAD-ARMY spawner —
+            // life 8, sprite 41, extents 512, and `+44` = −1536 which
+            // its own state-38 tick overwrites with 10000 before it
+            // reads it ([`Gen::undead_army_tick`]). The ctor's `+44`
+            // is observable only on a spawner minted at a slot BELOW
+            // the detonating bolt's, which never gets to tick in the
+            // same walk.
+            36 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 38;
+                e.max_life = 8;
+                e.f44 = (-1536i16) as u16;
+                e.flags &= !8;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 41);
+                self.extents(s, 512, 512);
+            }
             // sub_3AF00 (:47090): m11's mana-steal flash (ch3).
             25 => {
                 let e = &mut self.ent[s];
@@ -5126,6 +5264,7 @@ impl Gen {
             16 => self.lava_bomb_tick(i),
             17 => self.blast_ring_tick(i, ctx),
             18 => self.eruption_tick(i, ctx),
+            38 => self.undead_army_tick(i),
             19 => self.plume_tick(i, ctx),
             23 => self.hit_flash_tick(i, ctx),
             26 => self.duel_tether_tick(i, ctx),
@@ -6016,29 +6155,49 @@ impl Gen {
                 ((e.f80 as i32 + 255) >> 8).max(0),
             )
         };
-        for ring in 0..=rings {
-            for dy in -ring..=ring {
-                for dx in -ring..=ring {
-                    if dx.abs().max(dy.abs()) != ring {
-                        continue;
-                    }
-                    let tx = (bx as i32 + dx) as u8;
-                    let ty = (by as i32 + dy) as u8;
-                    let mut j = self.map_entity[tile(tx, ty)] as usize;
-                    while j != 0 {
-                        let c = &self.ent[j];
-                        let next = c.next20 as usize;
-                        if j != i
-                            && c.class64 == 10
-                            && c.model65 == 39
-                            && c.tick70 != 62
-                            && c.flags & 0x400 == 0
-                        {
-                            out.push(j);
-                        }
-                        j = next;
-                    }
+        // ⭐⭐⭐ THE RINGS ARE A DATA FILE, NOT A FORMULA. Retail's
+        // partner search `sub_11D10` (:17127-73) walks rings through
+        // the iterator `sub_11410`/`sub_114B0` (:16697/:16732), whose
+        // offsets are READ FROM `DATA/SEARCH.DAT` (loaded by
+        // sub_11540, :16783-815) — a 32x32 Euclidean-band ring image.
+        // Those shells are 2x2-ANCHORED, not Chebyshev squares:
+        //   ring 0 = (0,0) (+1,0) (0,+1) (+1,+1)   — a 2x2 BLOCK
+        //   ring 1 = the 12 cells of the −1..+2 border
+        // So retail reaches one column/row FURTHER in +x/+y than a
+        // square of the same index, and at larger radii it is ROUND
+        // where a square visits corners retail never does. The scan
+        // takes the FIRST admissible overlap and stops, so the ORDER
+        // is as load-bearing as the membership.
+        //
+        // This was the last hand-rolled Chebyshev ring in the sim;
+        // the certified sibling scan `sub_11AC0` (see `ball_impact`
+        // above) has used [`Gen::ring_cells`] — which is the real
+        // SEARCH.DAT iterator, carrying retail's dropped-last-cell
+        // off-by-one — all along, with this exact centre and radius
+        // arithmetic.
+        //
+        // mc1l32-quick t=34181 measures the difference to the unit:
+        // ball 693 at base cell (192,244) finds slot 777 at offset
+        // (+1,+1) — retail's RING 0 — while the square model reaches
+        // slot 567 at (−1,0) first and absorbs the wrong partner
+        // (mana 9000/2390 retail vs 4430/5760 port), which then
+        // displaced the tick's new (10,0) spawn from slot 567 to 897.
+        for (dx, dy) in self.ring_cells(0, rings) {
+            let tx = bx.wrapping_add(dx);
+            let ty = by.wrapping_add(dy);
+            let mut j = self.map_entity[tile(tx, ty)] as usize;
+            while j != 0 {
+                let c = &self.ent[j];
+                let next = c.next20 as usize;
+                if j != i
+                    && c.class64 == 10
+                    && c.model65 == 39
+                    && c.tick70 != 62
+                    && c.flags & 0x400 == 0
+                {
+                    out.push(j);
                 }
+                j = next;
             }
         }
         out
@@ -6143,6 +6302,7 @@ impl Gen {
         // claim lock; a weak claim bounces off a locked ball. MC1 has
         // no forced writer, so its balls never lock — every MC1 claim
         // runs the weak arm exactly as before.
+        let mut claimed = false;
         if !is_fool && self.ent[i].mail[1].1 != 0 {
             let (force, src) = self.ent[i].mail[1];
             self.ent[i].mail[1] = (0, 0);
@@ -6168,10 +6328,17 @@ impl Gen {
                 if src == crate::mc1::mobs::PLAYER_TARGET {
                     self.snd_player(4);
                 }
-                // A settled ball (+58 == 0) never reaches the tick's
-                // re-derive below, so the intake recolors in place —
-                // retail re-derives every tick (:29569).
-                self.ball_resize(i);
+                // NO intake recolor, EITHER game: the re-derive lives
+                // only in the moving arm — MC1's sub_274D0 inside
+                // `else if (+58)` (:29518-69), MC2's
+                // SetManaSphereColorAndRot inside `else if (byte57 ||
+                // v35)` (EF:26287) — so a ball claimed while SETTLED
+                // keeps its stale row (mc1l0 t=601 slot 131: retail
+                // holds neutral 52 across the human's claim; every
+                // certified take carries the family). MC2's v36 latch
+                // (EF:26074) only overrides the DECAY gate on the
+                // moving tail — carried as `claimed` below.
+                claimed = true;
             }
         }
         // ch4 attract (:29451-62): the (10,54) magnet tagged this
@@ -6349,7 +6516,10 @@ impl Gen {
             } else {
                 self.ent[i].flags &= !0x40; // dangling tether
             }
-            self.ball_resize(i);
+            // No re-derive on a tethered tick, either game: MC1's
+            // first arm (:29464-90) and MC2's (EF:26111-72) both end
+            // without it — the sprite row rides stale until the ball
+            // next runs the moving arm.
             return false;
         }
         // The ballistic arm is `else if (+58)` (sub_27030 :29518): +58
@@ -6652,12 +6822,11 @@ impl Gen {
                 break;
             }
         }
-        // Size re-derivation every tick (:29569) — merged/claimed
-        // balls visibly grow/recolor in the original. MC2's derive
-        // is gated off while decaying (EF:26286 `!(byte[1] & 0x20)`;
-        // the owner-change intake above recolors regardless — the
-        // v36 arm).
-        if !(mc2 && decaying) {
+        // Size re-derivation on MOVING ticks (:29569 / EF:26287) —
+        // merged/claimed balls visibly grow/recolor in the original.
+        // MC2 gates it off while decaying UNLESS the claim latch
+        // fired this tick (EF:26286 `!(byte[1] & 0x20) || v36`).
+        if !(mc2 && decaying) || claimed {
             self.ball_resize(i);
         }
         self.ball_decay_tail(i);

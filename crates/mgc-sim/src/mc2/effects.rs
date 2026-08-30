@@ -748,7 +748,12 @@ impl Gen {
             self.ent[i].flags |= 0x400;
             return;
         }
-        let (grow_cap, shrink_floor) = if self.ent[i].model65 == 13 {
+        // m87 (the third puff, action 0x5E) shares `sub_32160` — the
+        // m13 handler and its 67..74 band (docs/traces/
+        // mc2-class10-m29-m5-m13.md §2.2; the model-13-only test
+        // dropped it into m14's 9..16 band and every m87 row read one
+        // low — the mc2l3 (10,87) f5a family, 4,123 rows).
+        let (grow_cap, shrink_floor) = if matches!(self.ent[i].model65, 13 | 87) {
             (74, 67)
         } else {
             (16, 9)

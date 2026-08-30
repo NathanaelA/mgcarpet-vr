@@ -873,6 +873,34 @@ impl Gen {
         cur: (u16, u16, i16),
         prop: (u16, u16, i16),
     ) -> Option<(u16, u16, i16)> {
+        let (ok, slid) = self.player_wall_slide(cur, prop);
+        ok.then_some(slid)
+    }
+
+    /// sub_45410's FULL contract: the verdict AND the axis the routine
+    /// leaves in the global scratch `word_AE454_AE444` (:14798).
+    ///
+    /// ⚠⚠ THE SCRATCH SURVIVES A REFUSAL, AND SOMETHING READS IT.
+    /// Retail never restores the scratch when both cardinals fail — it
+    /// re-seeds from the pose (:55092), writes the SECOND cardinal's
+    /// step into the scratch (:55094-98), tests it, and sets `v10 = 0`
+    /// (:55099-100) while leaving that step standing. Only the COMMIT
+    /// is conditional (:55250-52 `if (v26) sub_41C70_41FB0(a1, &scr)`).
+    /// The carpet's death-fall handler then spawns its fire trail at
+    /// the scratch, not at the pose (:55478 — see the caller in
+    /// `world.rs`), so a corpse sliding along a wall drops its trail
+    /// on the blocked side. Returning `Option` here threw the axis
+    /// away and cost mc1l32-quick its t=19134 head.
+    ///
+    /// The routine's trailing z-floor (:55103-05) is UNCONDITIONAL and
+    /// outside every branch, so it applies to the refused scratch too;
+    /// it is applied by the caller (`flight::mc1_move`), which owns
+    /// the `ground` closure. HW is line-identical (hw :51133-51174).
+    pub(crate) fn player_wall_slide(
+        &self,
+        cur: (u16, u16, i16),
+        prop: (u16, u16, i16),
+    ) -> (bool, (u16, u16, i16)) {
         let blocked = |x: u16, y: u16| {
             self.cap_bit(x, y) == 0x100
                 || (self.is_cave()
@@ -881,7 +909,7 @@ impl Gen {
                         != 0)
         };
         if !blocked(prop.0, prop.1) {
-            return Some(prop);
+            return (true, prop);
         }
         let v1 = Self::angle_between(cur.0, cur.1, prop.0, prop.1);
         // sub_42340 (3D distance) and sub_42180 (vertical bearing).
@@ -889,15 +917,21 @@ impl Gen {
         let dz = prop.2.wrapping_sub(cur.2) as i32;
         let v7 = Self::isqrt((dh2 as u32).wrapping_add((dz * dz) as u32)) as i32;
         let v8 = Self::pitch_toward(cur.2, prop.2, Self::isqrt(dh2 as u32) as i32);
+        // Each pass re-seeds the scratch from the POSE (:55082,
+        // :55092) before stepping, so the second cardinal is measured
+        // from `cur`, never from the first attempt.
+        let mut slid = cur;
         for cardinal in [(v1 >> 9) << 9, ((v1 >> 9).wrapping_add(1) << 9) & 0x7FF] {
             let scaled = (v7 * (512 - Self::angdist(v1, cardinal) as i32)) >> 9;
-            let mut slid = cur;
+            slid = cur;
             Self::polar_step(&mut slid, cardinal, v8, scaled as i16);
             if !blocked(slid.0, slid.1) {
-                return Some(slid);
+                return (true, slid);
             }
         }
-        None
+        // Refused — but the SECOND cardinal's step is what retail left
+        // in the scratch, and that is what the trail spawn reads.
+        (false, slid)
     }
 
     // ---- the six state primitives (:21311-:21871) --------------------------
@@ -2362,13 +2396,13 @@ impl Gen {
     }
 
     fn militia_idle_body(&mut self, i: usize, base: u8, ctx: &MobCtx) {
-        // First statement of the retail handler (:22482): the walk-in
-        // flag is re-zeroed every idle tick, so +26 is only ever set
-        // during the one-tick hop from the house branch below into the
-        // silent-absorb death slot. Without this, the spawn stagger
-        // (+26 = slot % 100) survives into combat and mob_death's
-        // absorb gate swallows the corpse — no mana ball.
-        self.ent[i].f26 = 0;
+        // The walk-in-flag zero (:22482) is HOISTED to creature_tick's
+        // pre-work block: retail writes it as sub_1B5D0's first
+        // statement ABOVE the inline intake, so it must land on hit
+        // and death ticks too — this body only runs on Quiet ticks
+        // (the mc1hwl0 t=27516 born-into-fire militia was the
+        // witness). +26 is only ever set during the one-tick hop from
+        // the house branch below into the silent-absorb death slot.
         // (The unarmed-look restore that used to sit here was the
         // port's stand-in for the missing sub_1BCE0 disarm trailer;
         // retail's sub_1B5D0 writes neither sprite nor filter, and the
@@ -3110,20 +3144,40 @@ impl Gen {
         // movsx-signed law as the ch0 area window. The id24 self-skip
         // and the full-chain first-hit walk are byte-verified against
         // the binary.
+        //
+        // ⭐⭐ IT WALKS THE PER-MODEL ROSTER CHAIN, NOT THE ARRAY.
+        // remc1 :21796 loads `str_36382x[+65]` — the [`MobChains`]
+        // head — and follows `+0` (`v13 = *(_DWORD *)v13`) to the
+        // pool base; remc1hw :20346 is byte-identical, so this is two
+        // witnesses. The only per-member test retail applies is the
+        // `+24 != own id` self-skip: class, model, state and life are
+        // MEMBERSHIP, sampled at tick top by the roster rebuild, not
+        // re-read live. A full-array walk gets that wrong in both
+        // directions (it sees a creature the tick-top rebuild did not,
+        // and it hides one that died mid-tick), and — the head that
+        // caught it — it is BLIND TO THE SEIZURE BLANK: mc1hwl0
+        // t=42648 exhausts the pool (free 10 → 0, recycle 793 → 352,
+        // 441 records seized for the eruption plume), and the MC1
+        // seizure memsets all 20 heads (:43885-91), so every roster
+        // walk dispatched after the seizing slot sees an EMPTY list.
+        // Retail's militia 924 therefore keeps its leader bearing to
+        // slot 34 (`+34` = 728) while the array scan found militia 236
+        // one tile east and turned away from it (1575).
         let e = &self.ent[i];
         let (ex, ey, id, model) = (e.x, e.y, e.id24, e.model65);
-        for j in 1..self.ent.len() {
-            let c = &self.ent[j];
-            if c.class64 != 5 || c.model65 != model || c.tick70 == 120 || c.act_life < 0 {
+        for k in 0..self.mob_chains.visible(model as usize).len() {
+            let j = self.mob_chains.visible(model as usize)[k] as usize;
+            let (cx, cy, cid) = {
+                let c = &self.ent[j];
+                (c.x, c.y, c.id24)
+            };
+            if cid == id {
                 continue;
             }
-            if c.id24 == id {
-                continue;
-            }
-            let dx = ((ex as i16 as i32) - (c.x as i16 as i32)).abs();
-            let dy = ((ey as i16 as i32) - (c.y as i16 as i32)).abs();
+            let dx = ((ex as i16 as i32) - (cx as i16 as i32)).abs();
+            let dy = ((ey as i16 as i32) - (cy as i16 as i32)).abs();
             if dx < 256 && dy < 256 {
-                self.ent[i].f34 = Self::angle_between(c.x, c.y, ex, ey);
+                self.ent[i].f34 = Self::angle_between(cx, cy, ex, ey);
                 break;
             }
         }
@@ -3946,6 +4000,18 @@ impl Gen {
         }
         if (model, role) == (9, 1) {
             self.m9_hidden_prework(i);
+        }
+        // m4 IDLE's walk-in-flag zero is sub_1B5D0's FIRST statement,
+        // ABOVE its inline intake (:22482, hw :21039) — so it lands on
+        // hit AND death ticks too. Zeroing it inside the idle body
+        // (which Hit/Dead intakes never reach) let a militia born into
+        // fire die with the ctor stagger (+26 = slot % 100) standing,
+        // and sub_1BC10's absorb gate (:22730) swallowed the corpse —
+        // no (10,39) ball. mc1hwl0 t=27513-16 slot 777: popped by a
+        // torched house, hit on its birth tick, dead two later; retail
+        // corpses at state 29 and mints ball 876 (f140=500).
+        if (model, role) == (4, 1) {
+            self.ent[i].f26 = 0;
         }
         // The damage inbox block opening every live state handler
         // (:21330-81): apply pending damage, dispatch death/aggro.

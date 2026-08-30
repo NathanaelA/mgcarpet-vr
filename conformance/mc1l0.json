@@ -151,6 +151,12 @@
    "file": "the-m17-magnet-bolt-flies-state-18-the-m1-homing.mgcr",
    "source": "mc1l0-spells-galore",
    "note": "THE M17 MAGNET BOLT FLIES STATE 18 = THE M1 HOMING SKELETON: HW's listing carries the case-0x11 acquire arm remc1's dropped (hw:60386-405 - walks ONLY the ball chain, no owner exclusion, no danger call, cone 0x71/0x71). The port had the arm (aim_assist_possess_mc1's magnet leg) but strand-ed every bolt in the 6|16|18 inert dispatch; retail's bolt carries +70=18 for its whole life. mc1l0-sg t=2723-2733 slot 46: chase 991, f26 200->16 entry clamp, flags +2 acquire latch, life countdown, then the (10,12)/(10,54) impacts and the ball's f144 claim at 2734. Ledger SESSION 65."
+  },
+  {
+   "t": 600,
+   "file": "a-settled-claim-keeps-the-neutral-ball-row.mgcr",
+   "source": "mc1l0",
+   "note": "A SETTLED CLAIM KEEPS THE NEUTRAL BALL ROW: retail's claim intake (:29439-48) writes +144 only \u2014 sub_274D0's re-derive is the moving arm's alone (:29518-69, MC2 twin EF:26287), so a ball claimed while settled (+58 == 0) keeps its stale sprite row until the wake pass re-arms it. The port's invented intake recolor stamped 105+8*team at the claim (mc1l0 t=601 slot 131: retail 52, port 105 \u2014 the whole certified-corpus (10,39) type86 family, all ten takes). Graded via the session-68 sprite lane (append_sprite_diffs)."
   }
  ]
 }

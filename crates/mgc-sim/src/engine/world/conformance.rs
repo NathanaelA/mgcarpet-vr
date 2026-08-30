@@ -1272,6 +1272,18 @@ impl World {
         &self.g.free
     }
 
+    /// The port's MC1 RECYCLE stack (the victim roster `sub_37220`
+    /// rebuilds at 0x20400), bottom-to-top like
+    /// [`Self::free_stack_mc1`]. MC1 shares the MC2 allocator's recycle
+    /// half — the seizure path only runs once the free stack is dry.
+    ///
+    /// Ungraded for the same reason the free stack is, and it bites the
+    /// same way: mc1hwl0's t=31888 head is 54 consecutive seizures off
+    /// by exactly one victim, invisible to every pair.
+    pub fn recycle_stack_mc1(&self) -> &[u16] {
+        &self.g.mc2_recycle.stack
+    }
+
     /// Arm the mid-walk pool probe (the port-side `dump-state
     /// --at-slot` instrument): the NEXT tick's entity walk snapshots
     /// the whole pool as it reaches `slot`, before that slot
@@ -2026,6 +2038,27 @@ impl World {
             .map(|(s, e)| (s as u16, e.f26))
             .collect();
         (f26, self.wiz_charge)
+    }
+
+    /// The SPRITE lane (player-banked instrument change 2026-08-27,
+    /// landed session 68): per-slot `type86` — MC1's `+86` row, MC2's
+    /// `f5a` — the visual-only lane the flag-recolor bug class lives
+    /// in (a certified take and a white-flag regression could coexist
+    /// because no grader ever compared the row). Same raw-channel
+    /// story as `charge_lane_mc1`: the obs schema is check-decode-
+    /// locked, so the comparator reads both halves off the raw state.
+    /// Yields (slot, type86, class, model) — the class/model ride
+    /// along so the appender can skip disagreeing slots (those are
+    /// the graded diff's missing/extra/desync story).
+    pub fn sprite_lane(&self) -> Vec<(u16, u16, u8, u8)> {
+        self.g
+            .ent
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, e)| e.class64 != 0)
+            .map(|(s, e)| (s as u16, e.type86, e.class64, e.model65))
+            .collect()
     }
 
     /// Apply a decoded MC2 retail closure onto this (already-built,

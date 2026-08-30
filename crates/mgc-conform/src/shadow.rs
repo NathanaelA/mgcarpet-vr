@@ -27,10 +27,13 @@ use mgc_sim::engine::world::conformance::{norm_retail_ai_state_mc1, retail_ent_l
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 
-/// The seventeen MC2 raw lanes `EntObsMc2` carries UNCONDITIONALLY, so
-/// the graded diff already reports them and the shadow must not
-/// double-count. See [`mc2_lane_graded`] for the three conditional ones.
-const GRADED_MC2_ALWAYS: [&str; 17] = [
+/// The MC2 raw lanes the graded diff reports UNCONDITIONALLY, so the
+/// shadow must not double-count: the seventeen `EntObsMc2` carries,
+/// plus `f5a` — the sprite lane, graded off the raw channel since
+/// session 68 (`append_sprite_diffs_mc2`). See [`mc2_lane_graded`]
+/// for the three conditional ones.
+const GRADED_MC2_ALWAYS: [&str; 18] = [
+    "f5a",
     "class3f",
     "model40",
     "life",
@@ -340,7 +343,8 @@ impl Shadow {
                 ("f80", w.f80 as i64, g.f80 as i64),
                 ("f82", w.f82 as i64, g.f82 as i64),
                 ("f84", w.f84 as i64, g.f84 as i64),
-                ("type86", w.type86 as i64, g.type86 as i64),
+                // type86 GRADED since session 68 (append_sprite_diffs)
+                // — dropped here so the shadow doesn't double-count.
                 ("frame88", w.frame88 as i64, g.frame88 as i64),
                 ("frames89", w.frames89 as i64, g.frames89 as i64),
                 ("f128", w.f128 as i64, g.f128 as i64),

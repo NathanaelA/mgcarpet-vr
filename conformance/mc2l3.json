@@ -265,6 +265,12 @@
    "file": "the-lightning-beam-detonates-after-its-trail-and.mgcr",
    "source": "mc2l3",
    "note": "THE LIGHTNING BEAM DETONATES AFTER ITS TRAIL, AND THE COUNTDOWN IS INCLUSIVE: sub_66610 (EF:63583) is a bare walk + blocker test whose whole hit arm is DisableEntityDrawing04 - no clamp, no impact - and sub_66750 lays steps*8+1 nodes starting ON THE MUZZLE before spawning the (10,23) blast at v20x (EF:58401). mc2l3 t=18621: retail allocates 148 records in one tick, 147 trail nodes and the blast LAST at slot 350; the port detonated during the march and took the tick's first pop (slot 114)."
+  },
+  {
+   "t": 5,
+   "file": "the-third-puff-m87-rides-m13-s-67-74-sprite-band.mgcr",
+   "source": "mc2l3",
+   "note": "THE THIRD PUFF (10,87) RIDES m13's 67..74 SPRITE BAND: action 0x5E shares sub_32160 (EF:1696 routes both; docs/traces/mc2-class10-m29-m5-m13.md SS2.2), so the m87 puff grows 67->74 on even drift ticks and floors at 67 exactly like m13. The port's model-13-only band test dropped it into m14's 9..16 band \u2014 no grow, wrong shrink floor \u2014 every m87 row read one low (mc2l3: 4,123 f5a rows across 133 slots). Graded via the session-68 sprite lane (append_sprite_diffs_mc2)."
   }
  ]
 }

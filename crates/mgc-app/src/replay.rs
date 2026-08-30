@@ -328,6 +328,10 @@ pub struct ReplayDriver {
     clean_after: u64,
     skipped: u64,
     stick_unrec: u64,
+    /// Boundaries retail spent PAUSED (`sub_41780`'s `+2 & 1` arm,
+    /// :52224-25) — one LCG draw, no entity walk, so this driver
+    /// consumes the record without a `sim.step`.
+    paused: u64,
     diverged: Option<(u64, String)>,
     /// The on-screen counter line (④): refreshed every boundary.
     pub hud: String,
@@ -386,6 +390,7 @@ impl ReplayDriver {
             clean_after: 0,
             skipped: 0,
             stick_unrec: 0,
+            paused: 0,
             diverged: None,
             hud: String::from("REPLAY starting"),
             ghost: None,
@@ -436,8 +441,17 @@ impl ReplayDriver {
     }
 
     pub fn summary(&self) -> String {
+        // Paused boundaries are reported SEPARATELY from capture
+        // skips: retail ran them, they just ran nothing (`sub_41780`
+        // :52224-25). Folding them into "capture-skipped" reads as
+        // recorder loss, which is the opposite of what they are.
+        let paused = if self.paused > 0 {
+            format!(", {} paused", self.paused)
+        } else {
+            String::new()
+        };
         let base = format!(
-            "{} tick(s) in {} segment(s), {} graded ({} capture-skipped), {} clean",
+            "{} tick(s) in {} segment(s), {} graded ({} capture-skipped{paused}), {} clean",
             self.steps, self.segments, self.graded, self.skipped, self.clean
         );
         match &self.diverged {
@@ -630,7 +644,43 @@ impl ReplayDriver {
         let RetailPrev::Mc1(pst) = prev else {
             unreachable!("family-stable stream")
         };
+        let obs = tick.obs.as_ref().and_then(|v| ObsMc1::deserialize(v).ok());
         let rp = recover::recover_pair_mc1(&pst, &st, tick.input.as_ref());
+        // ⭐⭐ THE PAUSED TURN CONSUMES A BOUNDARY WITHOUT A SIM STEP.
+        // sub_41780's first statement is the global LCG draw; its
+        // SECOND is `if (+2 & 1) goto LABEL_52`, which jumps the whole
+        // 1..999 entity walk (:52223-25 → :52418; hw :48273-75 →
+        // :48468). A paused frame therefore advances the RNG and
+        // nothing else.
+        //
+        // `mgc-conform replay` has modelled this since the mc1l6 dig
+        // (replay.rs, `paused_turn_mc1`); THIS driver did not, and ran
+        // a full `sim.step` per paused boundary. mc1hwl0 pauses for 10
+        // frames at t=30897..30906 (slot 472 frozen on every lane,
+        // free stack unchanged), so the app arrived at t=30907 holding
+        // retail's t=30917 — `tick_ctr` 155 against 145, with y and z
+        // bit-identical to retail ten ticks later. It reported as a
+        // `pose.x` head only because x is the first lane in the pose
+        // projection.
+        //
+        // The pause screen is still INTERACTIVE (the big map / spell-
+        // book re-equips under it), so the recovered hand change is
+        // applied here exactly as the conform twin does — dropping it
+        // cost mc1l6 one lane forever.
+        if obs
+            .as_ref()
+            .is_some_and(|o| recover::paused_turn_mc1(&pst, o))
+        {
+            let w = sim.world.as_mut().ok_or("no world")?;
+            w.tick_paused();
+            if rp.equip_left.is_some() || rp.equip_right.is_some() {
+                w.equip_hands(rp.equip_left.map(SpellId), rp.equip_right.map(SpellId));
+            }
+            self.paused += 1;
+            self.update_ghost_mc1(&st);
+            self.prev = Some((tick.t, RetailPrev::Mc1(Box::new(st))));
+            return Ok(None);
+        }
         if !rp.stick_ok() {
             self.stick_unrec += 1;
         }
@@ -653,11 +703,7 @@ impl ReplayDriver {
         };
         // Gradeability decided from the recording alone; the pose
         // compare itself waits for the step (`grade`).
-        let gradeable = tick
-            .obs
-            .as_ref()
-            .and_then(|v| ObsMc1::deserialize(v).ok())
-            .is_some_and(|obs| recover::capture_clean_mc1(&pst, &obs));
+        let gradeable = obs.is_some_and(|obs| recover::capture_clean_mc1(&pst, &obs));
         self.pending = Some(gradeable);
         self.steps += 1;
         self.update_ghost_mc1(&st);
@@ -715,6 +761,16 @@ impl ReplayDriver {
             unreachable!("family-stable stream")
         };
         let rp = recover::recover_pair_mc2(&pst, &st, respawn, tick.input.as_ref());
+        // The MC2 twin of the paused turn (see `retail_tick_mc1`):
+        // same `+2 & 1` arm, phase field `+0x3E` instead of `+63`.
+        if recover::paused_turn_mc2(&pst, &st) {
+            let w = sim.world.as_mut().ok_or("no world")?;
+            w.tick_paused();
+            self.paused += 1;
+            self.update_ghost_mc2(&st);
+            self.prev = Some((tick.t, RetailPrev::Mc2(Box::new(st))));
+            return Ok(None);
+        }
         if !rp.stick_ok() {
             self.stick_unrec += 1;
         }
@@ -1281,6 +1337,217 @@ pub fn ghost_billboard(driver: &ReplayDriver, sess: &Session) -> Option<mgc_rend
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A two-record MC1 retail stub, wired straight into the driver's
+    /// retail arm — no take, no level, no gamedata.
+    fn paused_stub_driver() -> (ReplayDriver, Simulation, RetailMc1) {
+        // A header-only .mgcr: the driver never pulls from it here
+        // (the test calls `retail_tick_mc1` directly), but `Recording`
+        // is only constructible from a stream.
+        let path = std::env::temp_dir().join("mgcapp-paused-stub.mgcr");
+        std::fs::write(
+            &path,
+            b"{\"format\":2,\"game\":\"mc1\",\"source\":\"retail\",\"tick_hz\":25,\
+              \"channels\":{\"input\":\"raw\",\"obs\":true,\"state\":true,\"hash\":false}}\n",
+        )
+        .expect("stub header");
+        let rec = Recording::open(&path).expect("stub opens");
+
+        // A world is needed only because `tick_paused` lives on one.
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // Diamond rings, like `features::tests::synthetic_assets`.
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let assets = mgc_sim::engine::features::FeatureAssets::parse(
+            &grid,
+            &(0..24u32)
+                .flat_map(|_| {
+                    let mut e = 0u32.to_le_bytes().to_vec();
+                    e.extend_from_slice(&[4, 4]);
+                    e
+                })
+                .collect::<Vec<u8>>(),
+            &[4, 0x10, 0x10, 0x10, 0x10, 0],
+        )
+        .expect("synthetic assets");
+        let sim =
+            Simulation::with_world(mgc_sim::engine::world::World::new(planes, &[], 1, assets));
+
+        // The previous retail closure: two live slots, one wizard.
+        let mut pst = RetailMc1 {
+            rand: 0x1234_5678,
+            wizards: vec![mgcr::RetailWizardMc1::default()],
+            ents: vec![mgcr::RetailEntMc1::default(); 8],
+            ..RetailMc1::default()
+        };
+        for (slot, (class, model)) in [(1usize, (5u8, 2u8)), (2, (4, 13))] {
+            pst.ents[slot].class64 = class;
+            pst.ents[slot].model65 = model;
+            pst.ents[slot].rand = 0x0BAD_F00D;
+            pst.ents[slot].f63 = 7;
+        }
+        let driver = ReplayDriver {
+            rec,
+            source: ReplaySource::Retail,
+            family: Family::Mc1,
+            timg: None,
+            mc2_replayed: false,
+            pristine: None,
+            things: None,
+            witness: recover::Mc2RespawnWitness::default(),
+            prev: Some((100, RetailPrev::Mc1(Box::new(pst.clone())))),
+            human_slot: 0,
+            pending: None,
+            anchored_flag: false,
+            segments: 1,
+            steps: 0,
+            graded: 0,
+            clean: 0,
+            clean_after: 0,
+            skipped: 0,
+            stick_unrec: 0,
+            paused: 0,
+            diverged: None,
+            hud: String::new(),
+            ghost: None,
+            row_set: serde_json::Map::new(),
+            finished: false,
+        };
+        (driver, sim, pst)
+    }
+
+    /// The `obs` channel for the tick after `pst`: one LCG step and
+    /// every live slot frozen is a PAUSE; `bump` perturbs one entity's
+    /// phase byte to make it an ordinary turn instead.
+    fn stub_obs(pst: &RetailMc1, bump: bool) -> serde_json::Value {
+        let rng = pst.rand.wrapping_mul(9377).wrapping_add(9439);
+        let ents: Vec<serde_json::Value> = [1usize, 2]
+            .iter()
+            .map(|&slot| {
+                let e = &pst.ents[slot];
+                serde_json::json!({
+                    "slot": slot,
+                    "class": e.class64,
+                    "model": e.model65,
+                    "sclass": 0,
+                    "smodel": 0,
+                    "flags": 0,
+                    "id": 0,
+                    "life": 100,
+                    "max_life": 100,
+                    "x": 100.0,
+                    "y": 100.0,
+                    "z": 0,
+                    "heading": 0,
+                    "pitch": 0,
+                    "target_yaw": 0,
+                    "speed": 0,
+                    "mana": 0,
+                    "mana_max": 0,
+                    "chase": 0,
+                    "owner_ptr": 0,
+                    "tick_byte": if bump && slot == 2 { e.f63 + 1 } else { e.f63 },
+                    "rand": e.rand,
+                })
+            })
+            .collect();
+        let v = serde_json::json!({
+            "rng": rng,
+            "n_active": 2,
+            "local_player": 0,
+            "player_count": 1,
+            "wizards": [],
+            "control": [],
+            "player": null,
+            "entities": ents,
+        });
+        // ⚠ A stub the driver cannot DECODE makes both pins below
+        // vacuous — the paused branch is gated on `obs` being Some, so
+        // a missing channel would read as "not a pause" and step. Fail
+        // here instead, loudly, when the projection grows a field.
+        ObsMc1::deserialize(&v).expect("the stub obs must decode — a new channel needs a value");
+        v
+    }
+
+    /// ⭐⭐ THE PAUSED TURN CONSUMES A BOUNDARY WITHOUT A SIM STEP.
+    /// `sub_41780`'s second statement (`if (+2 & 1) goto LABEL_52`,
+    /// :52224-25 → :52418) jumps the whole 1..999 entity walk, so a
+    /// paused frame advances the global LCG and nothing else.
+    /// `mgc-conform replay` has modelled it since the mc1l6 dig; THIS
+    /// driver ran a full `sim.step` per paused boundary until session
+    /// 69, which left it holding retail's state TEN TICKS LATE across
+    /// mc1hwl0's 10-frame pause (app horizon 30,896 → 32,879; mc1l6
+    /// app 0 → 4,064 over its 1,602 paused boundaries).
+    ///
+    /// The pin is the CONTROL FLOW, which the corpus alone guards:
+    /// a paused pair must yield no input and no step.
+    #[test]
+    fn the_app_driver_spends_a_paused_boundary_without_a_sim_step() {
+        let (mut d, mut sim, pst) = paused_stub_driver();
+        let before = (sim.tick, sim.state_hash());
+        let tick = mgcr::TickRecord {
+            t: 101,
+            obs: Some(stub_obs(&pst, false)),
+            ..mgcr::TickRecord::default()
+        };
+        let mut st = pst.clone();
+        st.rand = pst.rand.wrapping_mul(9377).wrapping_add(9439);
+
+        let out = d.retail_tick_mc1(&mut sim, &tick, st).expect("paused turn");
+        assert!(
+            out.is_none(),
+            "a paused boundary yields NO flight input — the caller must \
+             pull the next record, not step the sim"
+        );
+        assert_eq!(d.paused, 1, "and it is booked as paused");
+        assert_eq!(
+            d.steps, 0,
+            "⚠ REVERSION PROBE: dropping the branch \
+             books a step here and desyncs by one tick per paused frame"
+        );
+        assert_eq!(sim.tick, before.0, "the sim clock does not advance");
+        assert_ne!(
+            sim.state_hash(),
+            before.1,
+            "but the world DID take its paused turn — the global LCG \
+             draw is the one thing sub_41780 does before the jump"
+        );
+    }
+
+    /// The negative control on the same stub: perturb ONE entity's
+    /// phase byte and the pair stops being a pause, so the driver
+    /// recovers a hand and hands back an input to step with. Without
+    /// this, a predicate that answered `true` for everything would
+    /// pass the pin above and freeze the whole replay.
+    #[test]
+    fn an_ordinary_boundary_still_steps() {
+        let (mut d, mut sim, pst) = paused_stub_driver();
+        let tick = mgcr::TickRecord {
+            t: 101,
+            obs: Some(stub_obs(&pst, true)),
+            ..mgcr::TickRecord::default()
+        };
+        let mut st = pst.clone();
+        st.rand = pst.rand.wrapping_mul(9377).wrapping_add(9439);
+
+        let out = d
+            .retail_tick_mc1(&mut sim, &tick, st)
+            .expect("ordinary turn");
+        assert!(out.is_some(), "one moving entity is not a pause");
+        assert_eq!((d.paused, d.steps), (0, 1));
+    }
 
     /// Opening an MC2 retail take DERIVES its campaign REPLAY gate, so
     /// the app's driver can stamp the world with it exactly as

@@ -861,6 +861,21 @@ pub struct World {
     /// over: the free replay is BOTH a retail import and an
     /// integrating driver.
     fall_pre_z: Option<i16>,
+    /// The MC1 falling carpet's FULL scratch axis — all three
+    /// components of `word_AE454_AE444` as `sub_45410` left it,
+    /// floor-clamped, captured off the mover instead of re-derived.
+    ///
+    /// ⚠ `fall_pre_z` above is the z half ONLY, and the z half alone
+    /// is a half-truth: when both cardinals of the wall slide are
+    /// blocked (:55092-100) retail commits nothing but leaves the
+    /// REFUSED second cardinal standing in the scratch, so the trail
+    /// spawns off the carpet's own axis entirely — mc1l32-quick
+    /// t=19134, corpse pinned at y=36422 and the trail minted at
+    /// 36335. MC1-only: MC2's twin (`world.rs` MC2 fall arm,
+    /// EF:60092) commits its scratch onto the record, so its x/y are
+    /// the pose by construction and `fall_pre_z` remains correct
+    /// there.
+    mc1_fall_scratch: Option<(u16, u16, i16)>,
     /// The falling carpet's TICK-ENTRY z (end of the previous tick),
     /// latched at the tick head for the pinned-pair TOUCHDOWN
     /// reconstruction: the clamp breaks `settled − step` exactly
@@ -1919,6 +1934,7 @@ impl World {
             mc1_v14: false,
             human_wiz_top: true,
             fall_pre_z: None,
+            mc1_fall_scratch: None,
             mc1_fall_entry_z: 0,
             player: Player::default(),
             win_pct: 0,
@@ -4074,6 +4090,11 @@ impl World {
             // Publish the pre-gravity z for the trail spawn below —
             // this is the one place that still holds it.
             self.fall_pre_z = Some(d.s.z);
+            // …and the full scratch axis beside it. On a committed
+            // tick this is the settled pose and the two agree; on a
+            // blocked one it is the refused slide, which is what
+            // retail's :55478 actually reads.
+            self.mc1_fall_scratch = Some(moved.scratch);
             let g = self.ground_z_engine(d.s.x, d.s.y);
             d.s.z = (d.s.z as i32 + dz as i32)
                 .max(g as i32 + 128)
@@ -5423,6 +5444,11 @@ impl World {
                         | 23
                         | 25
                         | 26
+                        // 38 = the (10,36) undead-army spawner
+                        // (sub_26E90): raises the skeleton ring on its
+                        // own dispatch, one slot-walk step after the
+                        // bolt that minted it.
+                        | 38
                         | 40
                         | 41
                         | 42
@@ -6612,12 +6638,31 @@ impl World {
                         player.z.wrapping_sub(applied)
                     }
                 });
+                // ⭐ ALL THREE AXES COME FROM THE SCRATCH, NOT JUST z.
+                // :55478 passes `&word_AE454_AE444` whole. When the
+                // slide committed, scratch.x/y ARE the settled pose
+                // and this is the value the reconstruction above was
+                // already producing; when BOTH cardinals were blocked
+                // (:55092-100) retail froze the carpet and left the
+                // refused second cardinal — a pure ±y step by
+                // construction — standing in the scratch, and the
+                // trail lands there instead. mc1l32-quick t=19134:
+                // corpse pinned at (64801, 36422), trail minted at
+                // (64801, 36335, 6638), the z being the scratch's own
+                // ground+128 inside the BLOCKING cell (which is
+                // higher — that is why it blocks). Drivers that never
+                // run the mover (the pinned-pair path) fall back to
+                // the pose, which is what they modelled before.
+                let (sx, sy, sz) = self
+                    .mc1_fall_scratch
+                    .take()
+                    .unwrap_or((player.x, player.y, tz));
                 // Retail's ctor decorations are exactly `flags |= 0x80`
                 // and `+24 = the wizard's own +24` (:55480-82) — no
                 // damage-suppression bit. Ours also raised 0x10000,
                 // which the whole (10,1) column then carried
                 // (mc1l42 t=17305-17343: retail 0x20084, port 0x30084).
-                if let Some(s) = self.g.spawn_effect(1, player.x, player.y, tz) {
+                if let Some(s) = self.g.spawn_effect(1, sx, sy, sz) {
                     self.g.ent[s].flags |= 0x80;
                     self.g.ent[s].id24 = PLAYER_TARGET;
                 }
@@ -6797,14 +6842,21 @@ impl World {
                     && self.g.ent[j].flags & 0x400 == 0
                     && self.g.ent[j].f144 == PLAYER_TARGET
                 {
+                    // +144 only — the death sweep (sub_275C0 :29633-40)
+                    // never re-derives; the stale row rides until the
+                    // ball's next moving tick reads the grave owner.
                     self.g.ent[j].f144 = gv as u16;
-                    // Settled balls never re-run the tick's re-derive
-                    // — the grave owner reads neutral in place.
-                    self.g.ball_resize(j);
                 }
             }
         }
         self.player.state = LifeState::Dead;
+        // The landing's last statement — the bare `--recycle_top`
+        // (hw :51637, `decl 0x11f1(%eax)` at HIDDEN 0x466DF / CARPET
+        // 0x4639F). The human and the rivals share this fall handler
+        // (`sub_45FC0`), so the discard applies to both; see the
+        // rivals.rs twin for the full mechanism and the mc1hwl0
+        // t=31881 measurement.
+        self.g.mc2_recycle.stack.pop();
         self.entities_dirty = true;
     }
 
@@ -7868,6 +7920,7 @@ impl World {
             mc1_v14: _,
             human_wiz_top: _,
             fall_pre_z: _,
+            mc1_fall_scratch: _,
             mc1_fall_entry_z: _,
             player,
             rivals,
@@ -14543,11 +14596,30 @@ impl World {
     /// sub_59E40_5A350 (:67460): fire one-shot after the watched
     /// class-5 bucket(s) stay empty through a 16-tick countdown; a
     /// non-empty probe pauses (does not reset) the countdown.
-    fn kill_trigger(&mut self, i: usize, list: Option<usize>, buckets: &[u32]) {
+    ///
+    /// ⭐⭐ THE PROBE IS THE ROSTER CHAIN HEAD, NOT A LIVE CENSUS.
+    /// Both arms dereference `str_36382x[model]` — `!*(_DWORD *)
+    /// (dword_AE408 + 4·a2 + 36382)` for a named model (:67492) and
+    /// the same load inside the `a2 == -1` scan (:67472). The
+    /// tick-top rebuild uses the very predicate this used to count
+    /// (`act ≥ 0 ∧ state ≠ 120`), so on a quiet tick the two agree —
+    /// and that is exactly why the census survived so long. They part
+    /// on the ticks that matter: a NewEvent SEIZURE memsets all 20
+    /// heads (:43885-91), so every trigger dispatched after the
+    /// seizing slot reads its watched model as EXTINCT and steps the
+    /// countdown even with the monsters alive and well.
+    ///
+    /// mc1hwl0 pins it end to end: retail's slot-37 m3 watcher sits
+    /// on `+26` = 12 by t=50130 — four steps the port never took —
+    /// with ten model-3 corpses still in the pool the whole time, and
+    /// the counter cashes out at t=50149. The census kept the port's
+    /// `+26` at 0 for the entire take.
+    fn kill_trigger(&mut self, i: usize, list: Option<usize>, _buckets: &[u32]) {
+        let head_empty = |k: usize| self.g.mob_chains.visible(k).is_empty();
         let empty = match list {
-            Some(k) => buckets.get(k).copied().unwrap_or(0) == 0,
-            // The -1 variant: buckets 0..=11 and 16.
-            None => (0..=11).chain([16]).all(|k| buckets[k] == 0),
+            Some(k) => head_empty(k),
+            // The -1 variant: models 0..=11 and 16.
+            None => (0..=11).chain([16]).all(head_empty),
         };
         if !empty {
             return;
@@ -14788,16 +14860,20 @@ impl World {
         out
     }
 
-    /// The sub_45410 wall gate in engine units (the faithful mover
-    /// applies the routine's trailing z-floor itself).
+    /// The sub_45410 wall gate in engine units, reporting BOTH halves
+    /// of the routine's contract: whether the move commits, and the
+    /// axis it leaves in retail's global scratch either way (see
+    /// [`Gen::player_wall_slide`] — the refused second cardinal is
+    /// what the death trail spawns at). The faithful mover applies
+    /// the routine's trailing z-floor itself, to the scratch.
     pub fn player_wall_gate_fixed(
         &self,
         cur: (u16, u16, i16),
         prop: (u16, u16, i16),
-    ) -> Option<(u16, u16, i16)> {
+    ) -> (bool, (u16, u16, i16)) {
         // The CommitGateVerb seam (see `player_wall_gate`).
         match self.g.verbs.commit_gate {
-            CommitGateVerb::Mc1 | CommitGateVerb::Mc2 => self.g.player_wall_gate(cur, prop),
+            CommitGateVerb::Mc1 | CommitGateVerb::Mc2 => self.g.player_wall_slide(cur, prop),
         }
     }
 
@@ -15665,6 +15741,7 @@ impl World {
             // Not saved: a within-tick scratch, re-derived by the next
             // mover pass (a restore never lands mid-dispatch).
             fall_pre_z: _,
+            mc1_fall_scratch: _,
             mc1_fall_entry_z: _,
             player,
             rivals,
@@ -19240,6 +19317,138 @@ mod tests {
             .player_wall_gate((110.0, 99.0, 12.5), (110.3, 99.2, 12.5))
             .expect("free move");
         assert_eq!(free, (110.3, 99.2, 12.5));
+    }
+
+    /// THE REFUSED SLIDE SURVIVES IN THE SCRATCH (`word_AE454_AE444`).
+    /// sub_45410 re-seeds the scratch from the pose per cardinal
+    /// (:55082, :55092), steps it, tests it, and on the second failure
+    /// sets `v10 = 0` (:55099-100) while LEAVING that step standing —
+    /// only the pose commit is conditional (:55250-52). The carpet's
+    /// death-fall trail spawns at the scratch (:55478), so "the move
+    /// was refused" is NOT "nothing happened": the trail lands on the
+    /// blocked side, one cardinal out.
+    ///
+    /// This is the `mobs.rs` half of session 69's Law G — the
+    /// `flight.rs` half (the unconditional z-floor over the scratch,
+    /// :55103-05) is pinned by
+    /// `flight::tests::the_z_floor_clamps_the_scratch_even_when_the_slide_is_refused`.
+    /// A pair fixture CANNOT see this law: pair mode pins the human's
+    /// pose (`pin_pose`), so the mover never runs. mc1l32-quick
+    /// t=19134 is the corpus witness (world horizon 19,133 → 34,180).
+    #[test]
+    fn a_refused_wall_slide_leaves_the_second_cardinal_in_the_scratch() {
+        // Same corner as above: a type-8 wall line at tile x=120 and
+        // another at tile y=101, in ENGINE units this time.
+        let mut planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        for y in 0..=255 {
+            planes.tile_type[tile(120, y)] = 8;
+        }
+        for x in 0..=255 {
+            planes.tile_type[tile(x, 101)] = 8;
+        }
+        let w = World::new(planes, &[], 1, assets());
+
+        // Free move: committed, and the scratch IS the pose — every
+        // ordinary tick leaves trail spawn and pose agreeing.
+        let cur = (110 * 256, 99 * 256, 3200);
+        let prop = (110 * 256 + 103, 99 * 256 + 103, 3200);
+        assert_eq!(
+            w.player_wall_gate_fixed(cur, prop),
+            (true, prop),
+            "an unobstructed move commits the proposal unchanged"
+        );
+
+        // Into the inside corner: BOTH adjacent cardinals land on wall
+        // tiles, so the move is refused — and the scratch still moved.
+        let cur = (119 * 256 + 205, 100 * 256 + 205, 3200); // (30669, 25805)
+        let prop = (120 * 256 + 51, 101 * 256 + 51, 3200); // (30771, 25907)
+        let (ok, scratch) = w.player_wall_gate_fixed(cur, prop);
+        assert!(!ok, "the inside corner refuses the move");
+        assert_ne!(
+            (scratch.0, scratch.1),
+            (cur.0, cur.1),
+            "⚠ REVERSION PROBE: returning the POSE here (the port's old \
+             `Option` shape, which threw the axis away) costs \
+             mc1l32-quick its t=19134 head"
+        );
+        assert_eq!(
+            scratch,
+            (30669, 25877, 3200),
+            "the SECOND cardinal's step stands in the scratch: pure +y \
+             from the pose, x untouched"
+        );
+        // Exactly one axis: each pass re-seeds from the pose, so the
+        // scratch can never carry both cardinals' steps at once.
+        assert_eq!(
+            scratch.0, cur.0,
+            "the first cardinal's axis is re-seeded away"
+        );
+        assert!(
+            scratch.1 > cur.1 && scratch.1 - cur.1 < 128,
+            "and the surviving step is the angular-proximity-scaled one"
+        );
+    }
+
+    /// THE DEATH LANDING DISCARDS THE TOP VICTIM CELL. `sub_45FC0`'s
+    /// last statement is a bare decrement of the recycle stack's top
+    /// index (`--*(_DWORD *)(result + 4593)`, hw :51637) — carried
+    /// verbatim by both shipped binaries as `decl 0x11f1(%eax)`, at
+    /// HIDDEN 0x466DF and CARPET 0x4639F, and the ONLY bare `--top`
+    /// in either image. It is a pure DISCARD: the dropped record is
+    /// not killed, not wiped, and never reaches the free stack — it
+    /// just stops being the next victim.
+    ///
+    /// ⚠ A PAIR FIXTURE CANNOT SEE THIS. The recycle stack is an
+    /// UNGRADED lane ([`World::free_stack_mc1`]'s doc — the obs schema
+    /// never compares either allocator half), and pair mode reinstalls
+    /// retail's stack at every pair, so the omission reads clean
+    /// forever and only bites a free run. mc1hwl0 is the corpus
+    /// witness: at t=31881 the port's stack was retail's stack plus
+    /// exactly one trailing cell, and at t=31888 the free stack ran
+    /// dry and all 54 following seizures took the wrong slot
+    /// (world horizon 31,887 → 37,109 once the discard landed).
+    #[test]
+    fn the_death_landing_discards_the_top_recycle_victim() {
+        let mut w = flat_world();
+        // Three sacrificable victims: class != 0 and flags & 0x20400,
+        // which is the rebuild's exact machine-level predicate
+        // (`testl [ebx+0x7473], 0x20400` at HIDDEN 0x37635, over the
+        // entity's +0x10 flags dword).
+        for slot in [5usize, 9, 12] {
+            w.g.ent[slot].class64 = 5;
+            w.g.ent[slot].model65 = 2;
+            w.g.ent[slot].flags |= 0x20400;
+        }
+        // The landing's FIRST statement rebuilds both halves; the scan
+        // runs slot 999 → 1, so the LOWEST victim ends up on top.
+        w.g.rebuild_recycle(0x20400);
+        let armed: Vec<u16> = w.recycle_stack_mc1().to_vec();
+        assert_eq!(
+            armed.last(),
+            Some(&5),
+            "descending scan puts the lowest victim on top: {armed:?}"
+        );
+
+        w.player_land(away());
+
+        assert_eq!(
+            w.recycle_stack_mc1(),
+            &armed[..armed.len() - 1],
+            "⚠ REVERSION PROBE: without the trailing `--top` the stack \
+             keeps its top cell and every later seizure is shifted by \
+             one slot"
+        );
+        assert_eq!(
+            w.g.ent[5].class64, 5,
+            "and it is a DISCARD, not a seizure — the dropped record \
+             is still alive and untouched"
+        );
     }
 
     #[test]
@@ -22926,6 +23135,75 @@ mod tests {
         );
     }
 
+    /// The m9 beam's ENDPOINT BLAST quarters its payload for a
+    /// Rebound-shielded victim who can afford beam +140/4 (:63436-41
+    /// — the listing's ONE `+44 >> 2` site; no drain, no deflection).
+    /// The HUMAN is retail's own class-3 pool record, so the port's
+    /// out-of-pool `MailTarget::Player` arm must read the
+    /// `player_rebound` mirror + the purse — hard-coding it false
+    /// was the mc1l32-quick t=18134 pose head (blast f44 800 vs
+    /// retail 200; knock 80 vs 20 = the whole 59.4-unit residual).
+    #[test]
+    fn the_beam_endpoint_quarter_reads_the_player_rebound_bit() {
+        // Same-run comparison: the blast's payload against its OWN
+        // beam's +44 (the spent beam record — soft-killed on the
+        // resolve tick, f69 = 23 — survives to the snapshot). A
+        // cross-run compare is invalid: the rebound bit also feeds
+        // the deflect arms, so the two runs part before the beam.
+        let first_player_blast = |rebound: bool| -> Option<(u16, u16)> {
+            let mut w = bare_creature_world(6);
+            rapid_fire(&mut w);
+            // Arm the REAL Rebound machine: the dev-granted token's
+            // tick republishes `player.rebound = (f26 > 0)` every
+            // lap, so a bare flag write dies within one tick — the
+            // spell must actually run (re-cast on a cadence to hold
+            // it through the whole hunt window).
+            if rebound {
+                w.player.right = Some(crate::mc1::spells::SpellId(14));
+            }
+            for _ in 0..3 {
+                w.tick(
+                    firing_line(),
+                    PlayerCommand {
+                        fire_left: true,
+                        fire_right: rebound,
+                        ..Default::default()
+                    },
+                );
+            }
+            for n in 0..2000u32 {
+                w.tick(
+                    firing_line(),
+                    PlayerCommand {
+                        fire_right: rebound && n % 64 == 0,
+                        ..Default::default()
+                    },
+                );
+                let blast = w.g.ent.iter().find(|e| {
+                    e.class64 == 10
+                        && e.model65 == 23
+                        && e.flags & 0x400 == 0
+                        && e.f146 == crate::mc1::mobs::PLAYER_TARGET
+                });
+                let beam = w.g.ent.iter().find(|e| {
+                    e.class64 == 9 && e.model65 == 9 && e.f69 == 23 && e.flags & 0x400 != 0
+                });
+                if let (Some(b), Some(m)) = (blast, beam) {
+                    return Some((b.f44, m.f44));
+                }
+            }
+            None
+        };
+        let (blast, beam) = first_player_blast(false).expect("a kraken beam lands on the player");
+        assert_eq!(blast, beam, "no rebound: the payload lands whole");
+        let (blast, beam) = first_player_blast(true).expect("the rebound run lands one too");
+        assert_eq!(
+            blast,
+            beam >> 2,
+            "the Rebound purse quarter (:63440) reads the Player arm"
+        );
+    }
+
     #[test]
     fn knock_step_clamps_decays_and_snaps() {
         let mut w = flat_world();
@@ -23804,11 +24082,15 @@ mod tests {
         );
     }
 
-    /// A ball claimed AFTER its 128-tick settle window must still swap
-    /// to the owner color row: the settle-freeze skips the tick's
-    /// every-turn `ball_resize`, so the claim intakes recolor in place.
+    /// A ball claimed AFTER its 128-tick settle window keeps the
+    /// NEUTRAL row: retail's re-derive (sub_274D0) runs only in the
+    /// ball tick's moving arm (:29518-69), and the claim intake
+    /// (:29439-48) writes +144 alone. The owner row lands when the
+    /// wake pass re-arms +58 and the moving arm next runs. (The old
+    /// inverse of this test asserted an invented intake recolor —
+    /// the certified corpus's whole (10,39) type86 family.)
     #[test]
-    fn a_ball_claimed_after_settling_recolors_to_the_owner_row() {
+    fn a_ball_claimed_after_settling_keeps_neutral_until_it_moves() {
         let mut w = flat_world();
         let (bx, by) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
         let gz = w.g.ground_z(bx, by) as i16;
@@ -23827,8 +24109,17 @@ mod tests {
         assert_eq!(w.g.ent[b].f144, PLAYER_TARGET, "the claim took");
         let after = w.g.ent[b].type86;
         assert!(
-            (105..113).contains(&after),
-            "a settled ball recolors at the claim intake (was {after})"
+            (52..60).contains(&after),
+            "a settled claim keeps the neutral row (was {after})"
+        );
+        // The wake re-arm (mob_awake_pass, +58 = 16 near the human)
+        // is what brings the moving arm — and the owner row — back.
+        w.g.ent[b].f58 = 16;
+        w.tick(away(), PlayerCommand::default());
+        let woken = w.g.ent[b].type86;
+        assert!(
+            (105..113).contains(&woken),
+            "the next moving tick derives the owner row (was {woken})"
         );
     }
 
@@ -24300,17 +24591,22 @@ mod tests {
             skeletons = skeletons.max(count(&w, 5, 9));
         }
         assert_eq!(skeletons, 8, "8 skeletons on the ring");
-        for e in w
-            .debug_pool()
-            .1
-            .iter()
-            .filter(|e| e.class == 5 && e.model == 9)
-        {
-            assert_eq!(
-                e.id24, PLAYER_TARGET,
-                "owner-tagged: never attacks the caster"
-            );
+        // ⚠ THE OWNER RIDES `+144` ALONE. sub_26E90 (:29399) writes no
+        // `+24`, and mc1hwl0 t=50129's eight recorded skeletons all
+        // carry `+24` = their own slot — NewEvent's default. The port
+        // used to stamp the caster there on a friendly-fire hunch;
+        // this asserts the measurement instead.
+        let mut seen = 0usize;
+        for s in 1..w.g.ent.len() {
+            let e = &w.g.ent[s];
+            if e.class64 != 5 || e.model65 != 9 {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(e.id24, s as u16, "+24 keeps the NewEvent default");
+            assert_eq!(e.f144, PLAYER_TARGET, "the caster is on +144");
         }
+        assert_eq!(seen, 8, "all eight are still in the pool");
     }
 
     #[test]
@@ -25257,6 +25553,58 @@ mod tests {
         assert!(!w.completed, "the win trigger must consume the win bit");
         let creatures = w.live_things().iter().filter(|t| t.class == 5).count();
         assert_eq!(creatures, 1, "the disposition spawned its stage");
+    }
+
+    /// The kill trigger's extinction probe is `str_36382x[model]`, the
+    /// ROSTER CHAIN HEAD (sub_59E40 :67492), not a live census of the
+    /// pool. The two agree on a quiet tick — the tick-top rebuild uses
+    /// exactly the census predicate — and part on a SEIZURE tick,
+    /// where NewEvent memsets all 20 heads (:43885-91) and every
+    /// trigger dispatched afterwards reads its watched model as
+    /// extinct with the monsters alive. mc1hwl0's slot-37 m3 watcher
+    /// is four steps down the countdown by t=50130 on exactly those
+    /// ticks, and cashes out at t=50149.
+    ///
+    /// The census is fed in deliberately non-empty below: under the
+    /// old `buckets[k] == 0` probe the blanked-head arm reads "worm
+    /// alive" and never steps.
+    #[test]
+    fn the_kill_trigger_probes_the_roster_head_not_a_census() {
+        let mut w = bare_creature_world(3);
+        let t = w.g.new_event().expect("pool has room");
+        {
+            let e = &mut w.g.ent[t];
+            e.class64 = 11;
+            e.model65 = 16;
+            e.tick70 = 16; // kill trigger, list index 16 − 13 = model 3
+            e.max_life = 300;
+            e.act_life = 300;
+            e.flags = 1;
+            e.f26 = 0;
+        }
+        w.g.rebuild_mob_chains();
+        assert!(
+            !w.g.mob_chains.visible(3).is_empty(),
+            "the worm head is on model 3's roster"
+        );
+        // A live head pauses the countdown — census and chain agree.
+        let census = vec![1u32; 20];
+        w.kill_trigger(t, Some(3), &census);
+        assert_eq!(w.g.ent[t].f26, 0, "a live roster head pauses the probe");
+        // The seizure blank: heads null for the rest of the tick while
+        // the worm is untouched and the census still counts it.
+        w.g.mob_chains.cut[3] = 0;
+        assert!(
+            w.g.ent
+                .iter()
+                .any(|e| e.class64 == 5 && e.model65 == 3 && e.act_life >= 0 && e.tick70 != 120),
+            "the worm is still alive — only the HEAD was blanked"
+        );
+        w.kill_trigger(t, Some(3), &census);
+        assert_eq!(
+            w.g.ent[t].f26, 16,
+            "a blanked head reads EXTINCT and arms the 16-tick countdown"
+        );
     }
 
     #[test]

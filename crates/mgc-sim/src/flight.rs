@@ -185,14 +185,23 @@ pub struct Mc1Moved {
     /// inside its bounds test). The speed-spell tokens read it the
     /// NEXT walk pass and end their burst on it (sub_56380 :65146-50).
     pub speed_touched: bool,
+    /// The axis sub_45410 leaves in retail's global scratch
+    /// `word_AE454_AE444`, floor-clamped (:55103-05) — EQUAL to the
+    /// settled pose when the move committed, and the refused second
+    /// cardinal when it did not. The death-fall trail spawns here
+    /// (:55478), which is the only reason it has to survive the
+    /// refusal; see [`crate::mc1::Gen::player_wall_slide`].
+    pub scratch: (u16, u16, i16),
 }
 
 /// The faithful human move: sub_46840's command integration followed
 /// by sub_455D0's move, in the original's statement order. `ground`
 /// returns terrain height in engine units at an 8.8 position; `gate`
 /// is the sub_45410 wall gate minus its z-floor (the floor is applied
-/// here, :55103-05) — `None` discards the whole move (x, y AND z
-/// freeze; the sink and any slide are lost with it, verbatim).
+/// here, :55103-05), returning `(commits, scratch)` — `false` discards
+/// the whole move (x, y AND z freeze; the sink and any slide are lost
+/// with it, verbatim) but the scratch it hands back still stands, and
+/// the death trail spawns there.
 /// `accel_over` = the Accelerate spell's signed factor (±3 held / ±2
 /// released); `knock` = this tick's buffet displacement (direction,
 /// magnitude), already decayed by the caller.
@@ -202,7 +211,7 @@ pub fn mc1_move(
     accel_over: Option<f32>,
     knock: Option<(u16, i16)>,
     ground: &dyn Fn(u16, u16) -> i16,
-    gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> Option<(u16, u16, i16)>,
+    gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> (bool, (u16, u16, i16)),
 ) -> Mc1Moved {
     // The Accelerate override writes BOTH the target and the actual
     // speed (:65171-78) — and it lands BEFORE the command integration:
@@ -319,14 +328,21 @@ pub fn mc1_move(
     // (f) commit gate + unconditional z-floor ground+128 (row v_12)
     // at the FINAL candidate (:55250-52, :55103-05). A fully blocked
     // move commits nothing — not even the sink.
-    if let Some(mut p) = gate((st.x, st.y, st.z), cand) {
-        let floor = ground(p.0, p.1).saturating_add(128);
-        if p.2 < floor {
-            p.2 = floor;
-        }
-        st.x = p.0;
-        st.y = p.1;
-        st.z = p.2;
+    //
+    // ⚠ THE Z-FLOOR IS NOT INSIDE THE GATE. :55103-05 sits after every
+    // branch of sub_45410 and clamps the SCRATCH, committed or not,
+    // against the ground under the SCRATCH — which on a refusal is the
+    // blocking cell, and blocking cells are the ones that rise. Only
+    // the three `st` writes below are conditional (:55251-52).
+    let (commit, mut scratch) = gate((st.x, st.y, st.z), cand);
+    let floor = ground(scratch.0, scratch.1).saturating_add(128);
+    if scratch.2 < floor {
+        scratch.2 = floor;
+    }
+    if commit {
+        st.x = scratch.0;
+        st.y = scratch.1;
+        st.z = scratch.2;
     }
 
     // (g) the every-64th-tick flutter roll on the entity's private
@@ -344,6 +360,7 @@ pub fn mc1_move(
     Mc1Moved {
         flutter,
         speed_touched: dir != 0,
+        scratch,
     }
 }
 
@@ -977,8 +994,8 @@ mod tests {
     fn flat_ground(_: u16, _: u16) -> i16 {
         0
     }
-    fn open_gate(_: (u16, u16, i16), p: (u16, u16, i16)) -> Option<(u16, u16, i16)> {
-        Some(p)
+    fn open_gate(_: (u16, u16, i16), p: (u16, u16, i16)) -> (bool, (u16, u16, i16)) {
+        (true, p)
     }
 
     fn step(st: &mut Mc1State, inp: &Mc1Input) -> Mc1Moved {
@@ -1032,6 +1049,61 @@ mod tests {
             (cmd.roll_f, cmd.pitch_f),
             "the stick filters run either way — sub_455D0 always does"
         );
+    }
+
+    /// sub_45410's z-floor (:55103-05) sits AFTER every branch, so it
+    /// clamps the scratch whether or not the move commits, and the
+    /// scratch it clamps survives a refusal (:55092-100 leaves the
+    /// second cardinal standing while `v10 = 0`). Only the three
+    /// pose writes are conditional (:55251-52). The carpet's
+    /// death-fall trail spawns at that scratch (:55478), so a refused
+    /// slide is not a no-op — it relocates the trail.
+    ///
+    /// Reversion-probed: applying the floor inside the commit arm (as
+    /// the port did) drops the refused z to 900 and regresses
+    /// mc1l32-quick's t=19134 head.
+    #[test]
+    fn the_z_floor_clamps_the_scratch_even_when_the_slide_is_refused() {
+        let ground_1000 = |_: u16, _: u16| -> i16 { 1000 };
+        let entry = Mc1State {
+            x: 5000,
+            y: 6000,
+            z: 900,
+            ..Default::default()
+        };
+        let idle = Mc1Input {
+            no_command: true,
+            ..Default::default()
+        };
+
+        // REFUSED: the gate hands back a slide axis it did NOT commit.
+        let refused = (4096u16, 7000u16, 900i16);
+        let mut st = entry;
+        let moved = mc1_move(&mut st, &idle, None, None, &ground_1000, &|_, _| {
+            (false, refused)
+        });
+        assert_eq!(
+            (st.x, st.y, st.z),
+            (entry.x, entry.y, entry.z),
+            "a refused move commits nothing — not even the sink"
+        );
+        assert_eq!(
+            moved.scratch,
+            (refused.0, refused.1, 1128),
+            "but the scratch stands, floor-clamped to ground+128 at the \
+             SCRATCH's own cell"
+        );
+
+        // COMMITTED: scratch and settled pose are the same value, so
+        // the trail spawn is unchanged on every ordinary fall tick.
+        let mut st = entry;
+        let moved = mc1_move(&mut st, &idle, None, None, &ground_1000, &|_, p| (true, p));
+        assert_eq!(
+            moved.scratch,
+            (st.x, st.y, st.z),
+            "a committed move leaves the pose EQUAL to the scratch"
+        );
+        assert_eq!(st.z, 1128, "and the floor still applies on commit");
     }
 
     /// The barrel roll from level flight: two lock-break pulses (the

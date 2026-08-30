@@ -30,8 +30,8 @@
 
 use crate::Args;
 use crate::verify::{
-    PairDiff, PairPose, append_hand_diffs, capture_clean, compare, exec_pair, fire_bits_mc1,
-    measured_planes,
+    PairDiff, PairPose, append_hand_diffs, append_sprite_diffs, capture_clean, compare, exec_pair,
+    fire_bits_mc1, measured_planes,
 };
 use crate::verify_mc2::{capture_clean_mc2, compare_mc2_gated, torn_slots};
 use mgc_formats::mgcr::{
@@ -1682,6 +1682,11 @@ fn run_mc1(
                 }
                 let mut pd = compare(&obs, &port, slot);
                 append_hand_diffs(&mut pd, &st, &port, pst.local_player as usize);
+                // The SPRITE lane grades the free run too: the port
+                // carries its own type86 history from the anchor, so
+                // a wrong row here is the recolor bug class showing
+                // its face — exactly what the lane exists to catch.
+                append_sprite_diffs(&mut pd, &st, &world, slot);
                 let dump = args.dump == Some(pt)
                     || (args.dump_first
                         && stats.seg().horizon.is_none()
@@ -2284,7 +2289,11 @@ fn run_mc2(
                     sh.compare_ents_mc2(&world, &st, slot, &torn, tick.t);
                     sh.compare_free_mc2(&world, &st, slot, tick.t);
                 }
-                let pd = compare_mc2_gated(&obs, &port, slot, &torn);
+                let mut pd = compare_mc2_gated(&obs, &port, slot, &torn);
+                // The MC2 sprite lane, free-run half (see the MC1
+                // boundary above).
+                crate::verify_mc2::append_sprite_diffs_mc2(&mut pd, &st, &world, slot, &torn);
+                let pd = pd;
                 let dump = args.dump == Some(pt)
                     || (args.dump_first
                         && stats.seg().horizon.is_none()
@@ -2638,8 +2647,14 @@ fn render_port_dump(
         }
     }
     // The allocator context — the same tails the recording-side
-    // dump-state prints (next pop LAST).
-    let want: Vec<u16> = st
+    // dump-state prints (next pop LAST). BOTH halves: once the free
+    // stack is dry MC1 seizes recycle victims, and a one-cell
+    // disagreement there shifts every seizure that follows
+    // (mc1hwl0 t=31888). The MC2 twin has printed both since it was
+    // written; the MC1 arm printed only `free` and made that dig a
+    // multi-command detour.
+    let tail = |v: &[u16]| v[v.len().saturating_sub(8)..].to_vec();
+    let live: Vec<u16> = st
         .free_stack
         .iter()
         .copied()
@@ -2648,10 +2663,24 @@ fn render_port_dump(
     let got = world.free_stack_mc1();
     println!(
         "  free stack: retail len {} tail {:?}  port len {} tail {:?}",
-        want.len(),
-        &want[want.len().saturating_sub(8)..],
+        live.len(),
+        tail(&live),
         got.len(),
-        &got[got.len().saturating_sub(8)..],
+        tail(got),
+    );
+    let want_rec: Vec<u16> = st
+        .recycle_stack
+        .iter()
+        .copied()
+        .filter(|&s| (s as usize) < st.ents.len() && s != human_slot)
+        .collect();
+    let got_rec = world.recycle_stack_mc1();
+    println!(
+        "  recycle stack: retail len {} tail {:?}  port len {} tail {:?}",
+        want_rec.len(),
+        tail(&want_rec),
+        got_rec.len(),
+        tail(got_rec),
     );
 }
 

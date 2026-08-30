@@ -2730,7 +2730,12 @@ impl Gen {
             // t=4224 ambush cloud); the generic arm below skipped
             // their two ctor rand draws and left them stateless,
             // spriteless and lifeless.
-            0 | 1 | 5 | 13 | 14 | 17 | 23 | 25 => return self.spawn_effect(model as u8, x, y, z),
+            // 36: the (10,36) undead-army spawner `sub_3B3E0` — the
+            // generic-explode child of the Undead Army bolt, and the
+            // only thing that raises the skeleton ring.
+            0 | 1 | 5 | 13 | 14 | 17 | 23 | 25 | 36 => {
+                return self.spawn_effect(model as u8, x, y, z);
+            }
             39 => return self.spawn_mana_ball(x, y, z),
             _ => {}
         }
@@ -3937,11 +3942,19 @@ impl Gen {
     /// 153,000 -> 0), it simply executes on 18 ticks instead of 20.
     ///
     /// The idle length comes from retail's byte +60, which we do not
-    /// model as a field because both of its writers are known and
-    /// they are complementary: :47583 spawns the plain painter with
-    /// +60 = 1 (a 25-tick idle), and :56490 spawns the upgrade-commit
-    /// painter with +60 = 0 AND the +18 kill bit (:56492). The kill
-    /// bit — our `flags & 0x10000` — therefore selects the branch.
+    /// model as a field because every class-10-reachable writer is
+    /// known: :47583 spawns the plain m42 painter with +60 = 1 (a
+    /// 25-tick idle) and :56490 spawns the upgrade-commit painter
+    /// with +60 = 0 AND the +18 kill bit (:56492). (:48001 also
+    /// writes +60, but on CLASS-12 tokens — never dispatched here.)
+    /// ⚠ THE KILL BIT ALONE IS NOT THE BRANCH: a record that ACQUIRES
+    /// action 44 by mutation — mc1hwl0 t=27411, a (10,6) fire re-mint
+    /// whose stale class-5 roster entry runs the m7 CHASE stamp
+    /// (f70 = base 42 + 2) — was NewEvent-zeroed, carries +60 = 0 and
+    /// NO kill bit, and retail idles it ONE tick (:30514 else-arm),
+    /// finishing at t=27431 where the kill-bit-only proxy idled 25.
+    /// Only the m42 ctor ever writes +60 = 1, so model65 == 42 is
+    /// the faithful ctor-provenance test.
     fn tick_castle_painter(&mut self, i: usize) {
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
@@ -3959,13 +3972,16 @@ impl Gen {
         }
         self.ent[i].f26 = pre - 1;
         if pre == 1 {
-            // :30512-16 — no work on this tick: arm the idle phase and
-            // return. The armed (kill-bit) painter carries +60 = 0 and
-            // so finishes on the NEXT tick; the plain one idles 25.
-            self.ent[i].f26 = if self.ent[i].flags & 0x10000 != 0 {
-                -1
-            } else {
+            // :30512-16 — no work on this tick: arm the idle phase
+            // and return. +60 = 1 (⇒ idle 25) is the m42 ctor's alone
+            // (:47583); the upgrade-commit clears it with the kill
+            // bit (:56490-92) and every mutation-acquired action-44
+            // record was NewEvent-zeroed — both idle 1 (see the doc
+            // note above; mc1hwl0 t=27431 is the witness).
+            self.ent[i].f26 = if self.ent[i].model65 == 42 && self.ent[i].flags & 0x10000 == 0 {
                 -25
+            } else {
+                -1
             };
             return;
         }
@@ -5767,12 +5783,11 @@ impl Gen {
             if self.attacker_is_wizard(claimant) && self.ent[i].f144 == 0 {
                 for j in 1..self.ent.len() {
                     if self.ent[j].f144 == i as u16 && self.ent[j].class64 != 0 {
+                        // +144 only — retail's grave-claim sweep
+                        // (:29644-52) re-points and never re-derives;
+                        // a settled ball keeps its stale row until its
+                        // own moving arm (:29569) reads the new owner.
                         self.ent[j].f144 = claimant;
-                        // Settled balls never re-run the tick's
-                        // re-derive — recolor at the claim.
-                        if self.ent[j].class64 == 10 && self.ent[j].model65 == 39 {
-                            self.ball_resize(j);
-                        }
                     }
                 }
             }
@@ -6389,15 +6404,27 @@ impl Gen {
     /// pattern is stable across the 3,457 ticks between the two
     /// collapses, so "static after boot" survives its first real
     /// test rather than being assumed.
+    /// {7} came from the THIRD collapse, mc1hwl0 t=27767, where rival
+    /// castle 860 at (0,0) is knocked from level 5 to 4 and un-stamps
+    /// a footprint straddling the x wrap (x 241..=14). Its row-0
+    /// epilogue smooths (5,0) and (8,0)..(10,0) but retail leaves
+    /// (6,0) and (7,0) at their pre-smoother rubble heights EXACTLY
+    /// (175 and 156 — neither is the 3x3 average, 168 and 167, so
+    /// this is a skip and not a coincidence). (5,0) smoothing pins
+    /// {5, 6} plain and (8,0) smoothing pins {8, 9} plain, so the one
+    /// byte both skips share is {7}. Blast radius is exactly the two
+    /// row-0 cells x=6 and x=7.
+    ///
     /// The 257 bytes retail's sub_360C0 quad gate reads BELOW the
     /// type plane for row-0 cells (addresses CC0DF..CC1DF — sound-
     /// driver state; see [`Gen::smooth_cell`]). Only the plain/
-    /// building CLASS of a byte matters to the gate, so the three
-    /// observed building-classed offsets carry a representative 22;
-    /// every unobserved byte defaults to 0 (plain). Indexed by
+    /// building CLASS of a byte matters to the gate, so the observed
+    /// building-classed offsets carry a representative 22; every
+    /// unobserved byte defaults to 0 (plain). Indexed by
     /// `signed_index + 257`.
     const OOB_TYPE_SHIM: [u8; 257] = {
         let mut s = [0u8; 257];
+        s[7] = 22;
         s[56] = 22;
         s[59] = 22;
         s[63] = 22;
@@ -8137,6 +8164,63 @@ mod tests {
         );
     }
 
+    /// Shim byte 7, the entry mc1hwl0's THIRD collapse pinned
+    /// (t=27767, rival castle 860 at (0,0) knocked level 5 → 4; the
+    /// un-stamp rect straddles the x wrap, x 241..=14). Retail's
+    /// row-0 epilogue smooths (5,0) and (8,0)..(10,0) but leaves
+    /// (6,0) and (7,0) at their pre-smoother rubble heights EXACTLY
+    /// (175 and 156, against 3x3 averages of 168 and 167 — a skip,
+    /// not a coincidence). (5,0) smoothing pins {5, 6} plain and
+    /// (8,0) smoothing pins {8, 9} plain, so the byte both skips
+    /// share is {7}. A cell (x, 0) reads shim `x` and `x + 1`, so
+    /// this entry is visible ONLY at x = 6 and x = 7.
+    ///
+    /// Pair fixtures are blind to it: pair mode installs the truth
+    /// channel's terrain per pair, so a drifting height plane never
+    /// reaches the compare. It cost mc1hwl0 the `(5,15)slot596:z`
+    /// head at t=27770, where the castle guard's bilinear ground
+    /// sample read the two over-smoothed cells (world horizon
+    /// 27,769 → 31,887 with this byte in place).
+    #[test]
+    fn shim_byte_7_gates_the_two_row0_cells_that_read_it() {
+        let mut g = Gen::new(
+            flat_land(100),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        // A raised cell inside a candidate's 3x3 block moves its
+        // average to (8*100 + 118) / 9 = 102, so "smoothed" and
+        // "skipped" are distinguishable by the height alone. (6,1)
+        // sits in the blocks of (5,0)..(7,0), (8,1) in those of
+        // (7,0)..(9,0) — between them every cell tested below has a
+        // non-identity average to move to.
+        g.t.height[tile(6, 1)] = 118;
+        g.t.height[tile(8, 1)] = 118;
+        // (7,0) reads shim {7, 8}; (6,0) reads shim {6, 7}. Byte 7 is
+        // building-classed, so both decline.
+        g.smooth_cell(tile(7, 0));
+        assert_eq!(g.t.height[tile(7, 0)], 100, "shim byte 7 skips (7,0)");
+        g.smooth_cell(tile(6, 0));
+        assert_eq!(g.t.height[tile(6, 0)], 100, "shim byte 7 skips (6,0)");
+        // Its neighbours on either side read {5,6} and {8,9} — both
+        // plain, so they smooth. This is what pins the skip to 7
+        // rather than to 6 or 8.
+        g.smooth_cell(tile(8, 0));
+        assert_eq!(
+            g.t.height[tile(8, 0)],
+            102,
+            "shim bytes 8 and 9 are plain: (8,0) smooths"
+        );
+        g.smooth_cell(tile(5, 0));
+        assert_eq!(
+            g.t.height[tile(5, 0)],
+            102,
+            "shim bytes 5 and 6 are plain: (5,0) smooths"
+        );
+    }
+
     /// The creature awake gate is a chassis parameter (the
     /// `--awake-range` G-class override): the faithful 0x240_0000
     /// (24 tiles, both retail engines) leaves a distant creature
@@ -8244,6 +8328,54 @@ mod tests {
             return j;
         }
         i
+    }
+
+    /// The painter idle length is +60 CTOR PROVENANCE, not the kill
+    /// bit alone (:30511-17): the m42 painter ctor is +60 = 1's only
+    /// class-10-reachable writer (:47583) — the upgrade-commit clears
+    /// it with the kill bit (:56490-92), and a record that ACQUIRES
+    /// action 44 by mutation was NewEvent-zeroed, so both idle ONE
+    /// tick where the plain painter idles 25. Witness: mc1hwl0
+    /// t=27431 — a (10,6) fire re-mint wearing the stale-roster m7
+    /// CHASE stamp finishes its bogus level-0 painter run there;
+    /// the kill-bit-only proxy held it 24 ticks longer.
+    #[test]
+    fn painter_idle_is_ctor_provenance_not_the_kill_bit() {
+        let mut g = mob_gen();
+        let mk = |g: &mut Gen, model: u8, kill: bool| {
+            let i = g.new_event().unwrap();
+            g.ent[i].class64 = 10;
+            g.ent[i].model65 = model;
+            g.ent[i].tick70 = 44;
+            if kill {
+                g.ent[i].flags |= 0x10000;
+            }
+            // Past the arm write, at the pre == 1 idle-arming read.
+            g.ent[i].flags |= 2;
+            g.ent[i].f26 = 1;
+            i
+        };
+        let plain = mk(&mut g, 42, false);
+        g.tick_castle_painter(plain);
+        assert_eq!(g.ent[plain].f26, -25, "the m42 ctor painter idles 25");
+        let upgrade = mk(&mut g, 42, true);
+        g.tick_castle_painter(upgrade);
+        assert_eq!(g.ent[upgrade].f26, -1, "the upgrade-commit painter idles 1");
+        let mutant = mk(&mut g, 6, false);
+        g.tick_castle_painter(mutant);
+        assert_eq!(
+            g.ent[mutant].f26, -1,
+            "a mutation-acquired action-44 record idles 1 (NewEvent zeroed +60)"
+        );
+        // …and the tick READING -1 finishes it (:30682-83).
+        g.tick_castle_painter(mutant);
+        assert_eq!(g.ent[mutant].f26, 0);
+        assert_ne!(g.ent[mutant].flags & 0x400, 0, "finished on the -1 read");
+        assert_eq!(
+            g.ent[plain].flags & 0x400,
+            0,
+            "the plain painter still idles"
+        );
     }
 
     /// m7's CHASE trailer `sub_1C960` (:23319, twin remc1hw :21876) —

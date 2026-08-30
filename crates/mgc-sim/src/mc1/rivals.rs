@@ -3122,20 +3122,15 @@ impl World {
                     // ceiling: `mana_max` retail 3048, port 3560.
                     if cast && facing < 28 {
                         self.g.ent[t].f144 = self.rivals[ri].ent;
-                        // Settled balls never re-run the tick's
-                        // re-derive — recolor at the claim. BALLS
-                        // ONLY: the re-derive this stands in for is
-                        // the (10,39) tick's own (sub_274D0), which a
-                        // claimed GRAVE never runs — retail's grave
-                        // keeps sprite 65 (+78 100) after a rival
-                        // claim, and the recolored port grave's
-                        // +78 25 skewed every acquire measured at its
-                        // aim-z (mc1hwl0 t=7853: the human's claim
-                        // bolt pitches 2046 against retail's 2041 and
-                        // the whole flight parts by 7 z-units).
-                        if self.g.ent[t].model65 == 39 {
-                            self.g.ball_resize(t);
-                        }
+                        // NO recolor at the claim — for the grave OR
+                        // the ball. Retail's re-derive (sub_274D0)
+                        // runs only in the ball's own MOVING arm
+                        // (:29518-69), so a claimed settled ball keeps
+                        // its stale row exactly like the claimed grave
+                        // keeps sprite 65 (the invented intake recolor
+                        // was the certified corpus's whole (10,39)
+                        // type86 family — retail 52-family vs port
+                        // 105+8·team across all ten takes).
                         self.g.snd(4, t); // the claim chime (:29444)
                         // The state STAYS Possess (:18250-56 writes
                         // no +415): the ball is now MINE, so the
@@ -4117,10 +4112,12 @@ impl World {
             for j in 1..self.g.ent.len() {
                 let e = &self.g.ent[j];
                 if e.class64 == 10 && e.model65 == 39 && e.flags & 0x400 == 0 && e.f144 == me {
+                    // +144 only — retail's death sweep (sub_275C0
+                    // :29633-40) re-points and never re-derives; the
+                    // stale team row rides until the ball's next
+                    // moving tick names the grave (class 10 ≠ 3 →
+                    // neutral).
                     self.g.ent[j].f144 = gv as u16;
-                    // Settled balls never re-run the tick's re-derive
-                    // — the grave owner reads neutral in place.
-                    self.g.ball_resize(j);
                 }
             }
         }
@@ -4134,6 +4131,36 @@ impl World {
             e.flags |= 0x20;
             e.f26 = (32 * ((255 - self.rivals[ri].tempo as i32) / 8) + 32) as i16;
         }
+        // ⭐⭐⭐ THE LANDING DISCARDS THE TOP VICTIM CELL. The very
+        // last statement of the fall handler is a BARE decrement of
+        // the recycle stack's top index — `--*(_DWORD *)(result +
+        // 4593)` (hw :51637), which the shipped binaries carry
+        // verbatim as `decl 0x11f1(%eax)` at HIDDEN 0x466DF and
+        // CARPET 0x4639F. It is the ONLY bare `--top` in either image
+        // (every other writer is the rebuild, the seizure's own
+        // post-decrement, or a full `movl $-1` disarm), and it is
+        // unconditional on the landing path.
+        //
+        // It is a pure DISCARD, not an allocation: no killer call, no
+        // class wipe — the dropped record stays alive, it just stops
+        // being the next victim. So this is `Vec::pop`, never
+        // [`Gen::mc2_recycle_pop`] (which skips invalid cells, counts
+        // a seizure, and hands the caller a record to kill).
+        //
+        // Position is load-bearing: retail runs it AFTER the grave
+        // spawn (0x4663A → 0x466DF), so on a dry free stack the grave
+        // seizes first and this discards whatever is left on top.
+        //
+        // mc1hwl0 t=31881 measures the omission exactly — the port's
+        // victim stack was retail's stack plus ONE trailing cell
+        // (len 515 vs 514, extra slot 16 on top), which shifted all
+        // 54 of t=31888's seizures by one slot. That extra cell was
+        // never a predicate error: under the descending scan slot 36
+        // is pushed before slot 16, so 36 is present in BOTH stacks
+        // and 16 simply sits above retail's top. Retail's index can
+        // reach −2 here when the rebuild found no victims; the
+        // seizure guard is `>= 0`, so popping an empty Vec is exact.
+        self.g.mc2_recycle.stack.pop();
         // Post-death truce: everyone's hate toward this slot decays
         // from the elevated baseline once it respawns (:55037-41 —
         // set at re-init).

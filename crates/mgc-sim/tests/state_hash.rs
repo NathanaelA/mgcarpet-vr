@@ -922,12 +922,23 @@ fn level_005_golden_state_hashes() {
         // authored castles commit on their first tick, whose own
         // stamp had already converged the box, so only the pre-tick
         // frame carried the difference.
+        // D/E re-pinned for THE SETTLED-CLAIM RECOLOR LAW (session
+        // 68, the type86 graded-lane opener): the claim intake writes
+        // +144 only — sub_274D0's re-derive is the moving arm's alone
+        // (:29518-69, MC2 twin EF:26287) — so a ball claimed while
+        // settled keeps its stale neutral row (type86 is hashed).
+        // D's combat kills drop balls that get claimed after
+        // settling; E inherits them. Post-init..C hold byte-for-byte
+        // — no ball is claimed before the combat window. OBSERVABLE
+        // moves at exactly D/E too (below) and that is the CORRECT
+        // signal: the ball's billboard row IS the behavior this law
+        // fixes.
         0x018d2010d9b38aa0, // post-init
         0xd0106aff56c316fb, // A
         0x3e7c352ebcd0d7fe, // B
         0xbed151642b91ccb6, // C
-        0x42d30d7d34d7bc5d, // D: 64 ticks of two-hand fireball combat
-        0xdd4b058f608d4799, // E: 100 aftermath ticks
+        0xbe5ab9f6ee8b8d9e, // D: 64 ticks of two-hand fireball combat
+        0x264e723af9f15f15, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -1136,8 +1147,14 @@ fn level_005_golden_state_hashes() {
         // through A..C and 0 from D on, because the player now owns
         // both spells. E inherits it. Post-init..C hold, which is the
         // evidence that the hide bites only where ownership begins.
-        0xe0f8e2d0d1281196, // D
-        0x912abdee3182fa06, // E
+        // D/E re-pinned with THE SETTLED-CLAIM RECOLOR LAW (see the
+        // GOLDEN note). OBSERVABLE moving here is the CORRECT signal —
+        // the pose set hashes the sprite row (`p.type_index`), and a
+        // ball claimed after settling now WEARS retail's neutral row
+        // through D/E instead of the invented owner color. Post-
+        // init..C hold — nothing claims a settled ball before combat.
+        0x8222e906da907f29, // D
+        0x952dde632fb48148, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

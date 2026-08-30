@@ -1300,7 +1300,7 @@ impl Simulation {
                     th[ty * MAP_TILES + tx] as i16 * 32
                 };
                 flight::mc1_move(&mut self.carpet, &inp, over, knock, &ground, &|_, p| {
-                    Some(p)
+                    (true, p)
                 })
             }
         };

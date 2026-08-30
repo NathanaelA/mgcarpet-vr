@@ -117,7 +117,10 @@ impl Header {
 /// One tick record, container-level view: `obs`/`input` stay untyped
 /// JSON here (the strict comparator wants values, not structs); the
 /// base64 channels are decoded to bytes.
-#[derive(Debug, Clone)]
+///
+/// `Default` is the empty record (every channel absent) — the seed for
+/// hand-built driver stubs in tests, never a decoded row.
+#[derive(Debug, Clone, Default)]
 pub struct TickRecord {
     pub t: u64,
     pub obs: Option<serde_json::Value>,
@@ -1295,7 +1298,11 @@ impl Notify {
 }
 
 /// The typed MC1 retail closure the conformance importer consumes.
-#[derive(Debug, Clone)]
+///
+/// `Default` is the all-zero/empty closure — never a decoded state, but
+/// the seed for hand-built driver stubs in tests (the paused-turn pin
+/// in `mgc-app`'s replay driver).
+#[derive(Debug, Clone, Default)]
 pub struct RetailMc1 {
     pub rand: u32,
     pub local_player: u16,

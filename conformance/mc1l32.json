@@ -235,6 +235,12 @@
    "file": "the-rebound-cast-is-arm-only-and-the-token-debit.mgcr",
    "source": "mc1l32-quick",
    "note": "THE REBOUND CAST IS ARM-ONLY AND THE TOKEN DEBITS: sub_46B00's branch on the token's +65 (14 < 0x10, not 2/16/21) takes LABEL_20 - the command reloads +48 and NOTHING ELSE; the machine sub_573F0 (:65773) is the launcher skeleton without an emit (gate -> the +17 0x80 bit + sub_55E80's arm-tick full-cost debit through +132 -> countdown). The port's command-site toggle armed nothing, so a (re)cast never debited: mc1l32-quick t=18014, retail reloads the token and stamps delta 100 -> -1000 (148 pair rows read +1000 on the port purse). RIDER: 14 joined the import's mana_delta keep-list - the post-cast boundary is already mid-burst, and the clamp ate the -1000 seed. The bank had attributed these rows to the deflection quarter; measurement says they are the cast's. Ledger SESSION 64."
+  },
+  {
+   "t": 34180,
+   "file": "the-ball-merge-partner-scan-walks-the-search-dat-rings.mgcr",
+   "source": "mc1l32-quick",
+   "note": "THE BALL-MERGE PARTNER SCAN WALKS THE SEARCH.DAT RINGS, NOT A CHEBYSHEV SQUARE. sub_11D10 :17127-73 searches rings 0..=(f80+255)>>8 through the sub_11410/sub_114B0 iterator, whose offsets are READ FROM DATA/SEARCH.DAT (sub_11540 :16783-815): the shells are 2x2-anchored, so ring 0 is the block (0,0)(+1,0)(0,+1)(+1,+1) and ring 1 is the -1..+2 border. First admissible overlap wins and the walk STOPS, so order is as load-bearing as membership. At mc1l32-quick t=34181 ball 693 (base cell 192,244) meets slot 777 at offset (+1,+1) = retail ring 0; the square model reached slot 567 at (-1,0) first and merged the wrong partner (mana retail 9000/2390 vs port 4430/5760), which displaced the tick's new (10,0) spawn from slot 567 to 897. Last hand-rolled Chebyshev ring in the sim; the certified sibling scan sub_11AC0 has used Gen::ring_cells all along. Ledger SESSION 70."
   }
  ]
 }

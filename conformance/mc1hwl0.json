@@ -212,6 +212,30 @@
    "file": "the-jar-pickup-writes-the-acq-list-not-the-owned.mgcr",
    "source": "mc1hwl0",
    "note": "THE JAR PICKUP WRITES THE ACQUISITION LIST, NOT THE DERIVED OWNED REGISTER: sub_55A40's grant (:64848-61, hw:61070-89) writes +532[v24]/+940/+772 and never +676; +676 is rebuilt wholesale from +532 by sub_45C10 (:55304-19) as the FIRST statement of the wizard's own dispatch (sub_45C90 :55342, hw:51410). The already-known marker reads +676 (:64794) and the grant-refusal reads the live +532 (:64818-31) - two different registers, one variable in the old port. mc1hwl0 t=25497: the human picks spell 18 off jar 187 inside this pair, and the far (12,18) jar 204 - poll tick +63=176, walk slot below carpet 472 - must still read 'not owned' and hold flags 4; it stamps at its NEXT poll, t=25501 (+63=180), after the carpet's rebuild. The port's eager player.owned[spell]=i at the grant stamped it four ticks early. Same law the 'all spells' cheat already works around (cheats.rs mc1_cheat_all_spells). Reversion signature: slot 204 flags retail 4 port 5."
+  },
+  {
+   "t": 27512,
+   "file": "a-militia-born-into-fire-zeroes-the-walk-in-flag.mgcr",
+   "source": "mc1hwl0",
+   "note": "A MILITIA BORN INTO FIRE STILL ZEROES THE WALK-IN FLAG: sub_1B5D0's +26 = 0 is the handler's FIRST statement, ABOVE its inline damage intake (:22482, hw :21039) \u2014 it lands on hit and death ticks too. The port zeroed inside the idle body (unreached on Hit/Dead intakes), so a torched-house militia hit on its birth tick kept the ctor stagger (+26 = slot % 100) and sub_1BC10's absorb gate (:22730) swallowed the corpse \u2014 no (10,39) 500-mana ball. Witness: mc1hwl0 t=27513 slot 777 (f26 retail 0 vs port 77, the graded charge lane), death at 27515, retail corpse state 29 + ball 876 at t=27516 where the port soft-killed."
+  },
+  {
+   "t": 37109,
+   "file": "a-refused-storm-bloom-leaves-the-carrier-alive.mgcr",
+   "source": "mc1hwl0",
+   "note": "A REFUSED STORM BLOOM LEAVES THE CARRIER ALIVE: the (9,12) lightning carrier's self-kill sits INSIDE the (10,38) cloud's null guard - HIDDEN 0x54441 test/0x54443 je 0x544ba jumps past the kill at 0x544b2 (sub_41E80_421C0 @ 0x421C0 is the two-instruction leaf `orb $4,0x11(%eax)` = flags |= 0x400), decompile hw :59852-73 / base :63768-88. So when new_event refuses (free AND recycle both dry) the carrier is NOT marked dead and re-tries its bloom. The port set the flag outside the `if let`. WARNING - the fork is deliberate and does NOT generalise: the WATER arm 20 bytes earlier (0x54408) kills UNCONDITIONALLY, its je 0x54407 skipping only the +24 copy. mc1hwl0 t=37110: the pool goes 5 -> 0 on the tick, retail keeps slot 983 flags 6 against the port's 1030, every other lane and both allocator halves identical. Ledger SESSION 70."
+  },
+  {
+   "t": 42647,
+   "file": "the-pack-separation-walks-the-per-model-roster.mgcr",
+   "source": "mc1hwl0-noskip",
+   "note": "THE PACK SEPARATION SCAN WALKS THE PER-MODEL ROSTER CHAIN, NOT THE ARRAY: sub_1A390's separation loop (remc1 :21796, remc1hw :20346 byte-identical) loads str_36382x[+65] - the MobChains head at wizext 36382 + 4*model - and follows +0 to the pool base; its only per-member test is +24 != own id. Class, model, state and life are MEMBERSHIP, sampled by the tick-top rebuild, never re-read live, so a full-array walk is wrong in both directions AND blind to the seizure blank: a NewEvent seizure memsets all 20 heads (:43885-91) and every roster walk after the seizing slot sees an EMPTY list. mc1hwl0 t=42648 exhausts the pool for the eruption plume (free 10 -> 0, recycle 793 -> 352, 441 records seized), so militia 924 keeps its leader bearing to slot 34 (+34 = 728) where the array scan found militia 236 one tile east and turned away (1575). Reversion signature: slot 924 target_yaw retail 728 port 1575. Ledger SESSION 71."
+  },
+  {
+   "t": 47079,
+   "file": "the-undead-army-ring-comes-off-the-10-36-spawner.mgcr",
+   "source": "mc1hwl0-noskip",
+   "note": "THE UNDEAD ARMY RING IS RAISED BY THE (10,36) SPAWNER, NOT BY THE BOLT: the (9,11) undead-army projectile carries +68/+69 = 10/36 (the cast at :65959-60), so its generic-explode child is sub_3B3E0's (10,36) spawner (:47370, state 38, life 8, sprite 41, extents 512), and sub_26E90 (:29353) raises the skeletons on THAT record's own dispatch later in the same slot walk. The spawner takes a pool slot of its own, so an inline ring hands the FIRST skeleton the free-stack pop that belongs to the spawner and shifts every later one. Two more laws ride the same handler: the ring SIZE is the free-pool depth (sub_37710 :44061 = free.len() + 1, clamped to 8), and the live census walks the model-9 roster chain (:29373) testing +144 == owner alone. The owner rides +144 ALONE - remc1 :29399 writes no +24, and all eight recorded skeletons carry +24 = their own slot, settling the long-standing transcription-slip suspicion against the port's caster stamp. mc1hwl0 t=47080: retail spends 967 on the (10,36) and runs the ring 950/934/753/478/476/372/12 + 937; the inline port raised its eight on 967/950/934/753/478/476/372/12. Reversion signature: slot 937 missing in port, slot 967 class 10 model 36 vs 5/9, and id 472 vs the own slot on every skeleton. Ledger SESSION 71."
   }
  ]
 }

@@ -802,8 +802,42 @@ pub(crate) fn exec_pair_mc2(
     };
     let port = world.obs_project_mc2(&pin);
     let torn = torn_slots(pst, st);
-    let pd = compare_mc2_gated(obs, &port, report.human_slot, &torn);
+    let mut pd = compare_mc2_gated(obs, &port, report.human_slot, &torn);
+    append_sprite_diffs_mc2(&mut pd, st, world, report.human_slot, &torn);
     Ok((pd, port, report))
+}
+
+/// The MC2 half of the SPRITE lane (see verify.rs
+/// `append_sprite_diffs`): retail `f5a` vs port `type86`, gated the
+/// way every MC2 comparison is — torn slots skipped, class/model must
+/// agree (a slot holding different entities is the graded diff's own
+/// missing/extra story).
+pub(crate) fn append_sprite_diffs_mc2(
+    pd: &mut PairDiff,
+    st: &RetailMc2,
+    world: &World,
+    human_slot: u16,
+    torn: &std::collections::BTreeSet<u16>,
+) {
+    for (slot, ty, class, model) in world.sprite_lane() {
+        if slot == human_slot || torn.contains(&slot) {
+            continue;
+        }
+        let Some(e) = st.ents.get(slot as usize) else {
+            continue;
+        };
+        if e.class3f != class || e.model40 != model {
+            continue;
+        }
+        if e.f5a as u16 != ty {
+            pd.fields.push(FieldDiff {
+                slot: Some(slot),
+                field: "f5a",
+                want: (e.f5a as u16).to_string(),
+                got: ty.to_string(),
+            });
+        }
+    }
 }
 
 /// Slots live at both ends whose phase byte did NOT advance exactly
