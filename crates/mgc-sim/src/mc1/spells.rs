@@ -68,7 +68,9 @@ const NAMES: [&str; SPELL_COUNT] = [
 /// derived rather than stored).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpellDef {
-    /// a4 → `+136` and `+140`: the spell's TOTAL MANA COST — gated
+    /// a4 → `+136`: the spell's TOTAL MANA COST (`+140` is the
+    /// PER-SHOT cost, `a4 / a5` — sub_3BF70 :48001-05 divides by the
+    /// burst count before storing it) — gated
     /// against the wizard's current pool at full charge and debited
     /// through the regen delta (sub_55DD0 :64909 / sub_55E80 :64936;
     /// remc1 ships the debit commented out — a maintainer mis-fix).

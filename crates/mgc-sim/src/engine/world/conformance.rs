@@ -161,6 +161,36 @@ pub fn norm_retail_ai_state_mc1(v: u8) -> i64 {
     crate::mc1::rivals::AiState::from_retail(v).to_retail() as i64
 }
 
+/// One MC2 wizard's ungraded player-block/brain lanes — see
+/// [`World::wiz_shadow_mc2`]. The MC2 twin of [`WizShadowMc1`], and
+/// the arm that was MISSING: the recording carries the whole 2124-byte
+/// player block per wizard, [`World::retail_import_mc2`] restores it
+/// every pair, and neither the graded diff nor the raw entity shadow
+/// ever looked at it — so the entire MC2 rival brain (state, burst,
+/// cooldowns, hate ledger, weave/steer FSMs, the spell book) was
+/// UNGRADED, and the shadow report said so in words rather than
+/// numbers.
+///
+/// Lane names match [`mgc_formats::mgcr::RetailPlayerMc2`]'s fields;
+/// conventions are documented on `Mc2Rival::wiz_shadow_lanes`. `ent`
+/// is [`PLAYER_TARGET`] for the human (wiz 0).
+#[derive(Debug, Clone)]
+pub struct WizShadowMc2 {
+    pub wiz: u8,
+    pub ent: u16,
+    pub scalars: Vec<(&'static str, i64)>,
+    pub arrays: Vec<(&'static str, Vec<i64>)>,
+}
+
+/// Collapse a retail `byte_0x1C1_449` brain byte onto the byte the
+/// port's [`WizShadowMc2::scalars`] `ai_state` lane reports — the
+/// APPROACH arm 4 folds onto the casting arm 6 (the port fuses them),
+/// and the `_nmemneed` stubs 2/5/10 plus 15+ read back as Fresh's 0,
+/// exactly as retail's own dispatch treats them.
+pub fn norm_retail_ai_state_mc2(v: u8) -> i64 {
+    crate::mc2::rivals::Mc2AiState::from_retail(v).to_retail() as i64
+}
+
 /// The pinned human context the projection needs: where the carpet
 /// sits in the recording and the pose the runner is driving.
 #[derive(Debug, Clone, Copy)]
@@ -1257,6 +1287,63 @@ impl World {
         out
     }
 
+    /// Every MC2 wizard's ungraded player-block/brain lanes, retail
+    /// convention — the twin of [`Self::wiz_shadow_mc1`] and the arm
+    /// the harness never had. Wiz 0 is the human's book + charge; each
+    /// live rival contributes the registers
+    /// `Mc2Rival::wiz_shadow_lanes` projects plus the World-held
+    /// charge meter and the castle index retail STORES and the port
+    /// re-derives (`rival_castle`) — that last one is the whole
+    /// `castle_ent` story: 21 brain sites read the stored index, so a
+    /// re-derivation that disagrees for one tick is a different
+    /// decision, and nothing compared them before.
+    ///
+    /// Eliminated rivals are omitted (the roster comparison owns that
+    /// story).
+    pub fn wiz_shadow_mc2(&self) -> Vec<WizShadowMc2> {
+        let book = |b: &crate::mc2::cast::Mc2Spellbook| -> Vec<(&'static str, Vec<i64>)> {
+            vec![
+                ("spell_ent", b.ent.iter().map(|&v| v as i64).collect()),
+                ("levels", b.levels.iter().map(|&v| v as i64).collect()),
+                ("sel", b.sel.iter().map(|&v| v as i64).collect()),
+                ("ring", b.ring.iter().map(|&v| v as i64).collect()),
+                ("xp_bank", b.xp_bank.iter().map(|&v| v as i64).collect()),
+                ("xp_vol", b.xp_vol.iter().map(|&v| v as i64).collect()),
+            ]
+        };
+        let mut out = vec![WizShadowMc2 {
+            wiz: 0,
+            ent: PLAYER_TARGET,
+            scalars: vec![
+                ("charge", self.wiz_charge[0] as i64),
+                ("hand_left", self.mc2_book.left as i64),
+                ("hand_right", self.mc2_book.right as i64),
+            ],
+            arrays: book(&self.mc2_book),
+        }];
+        for r in &self.mc2_rivals {
+            if r.eliminated || r.ent == 0 {
+                continue;
+            }
+            // The rival's own projection already carries the book
+            // (same six array names the `book` helper builds for the
+            // human) — this half adds only what the World holds.
+            let (mut scalars, arrays) = r.wiz_shadow_lanes();
+            scalars.push(("charge", self.wiz_charge[r.slot as usize] as i64));
+            scalars.push((
+                "castle_ent",
+                self.rival_castle(r.ent).map_or(0, |c| c as i64),
+            ));
+            out.push(WizShadowMc2 {
+                wiz: r.slot,
+                ent: r.ent,
+                scalars,
+                arrays,
+            });
+        }
+        out
+    }
+
     /// The port's free list, bottom-to-top (`new_event` pops the END) —
     /// the WORLD-level counterpart of [`Self::raw_shadow_mc1`].
     ///
@@ -2103,6 +2190,28 @@ impl World {
         for (i, p) in st.players.iter().enumerate().take(8) {
             self.wiz_charge[i] = p.charge;
         }
+        // ⭐ A PENDING MAIL IS A SLOT NUMBER, AND AN IMPORT REPLACES
+        // WHAT THE NUMBERS NAME. The ladder mail is our stand-in for
+        // the INLINE second half of `sub_60780` (retail re-prices the
+        // owner's Create-Castle manifestation right there at the
+        // castle, so the record is a castle by construction). The
+        // level build pushes one entry per authored castle and the
+        // drain is post-walk, so those entries are still queued when
+        // this import overwrites the whole pool — after which the
+        // number names whatever landed in that slot. mc2l6-rsg: the
+        // build queued slot 367 as a level-0 (3,2); the import made
+        // 367 a (15,23) manifestation owned by the HUMAN, which still
+        // passes the drain's owner test, so every pair re-priced the
+        // human's Create-Castle token against a phantom rung-0 castle
+        // — max_life/f140 1500/14 (`MC2_CASTLE_COST[0]·384>>8`) where
+        // retail's own level-1 castle says 15000/148, from the tick
+        // the castle stood to the end of the take.
+        // ⚠ DROP THE MAIL, DO NOT FILTER IT AT THE DRAIN: the drain
+        // legitimately serves castles that are already dead by then —
+        // the level-0 downgrade re-prices at the rung-0 run through a
+        // freed record (mc2l3's death-downgrade / balloon-pop /
+        // un-stamp fixtures all pin that path).
+        self.g.mc2_ladder_sync.0.clear();
         // THE FIRING HAND (`struct_byte_0xc_12_15` & 0x300) — the MC1
         // twin's line verbatim (:377). `sub_5F7B0` stamps it on the
         // CASTER at the arm (EF:60977-78) and `sub_68E50` reads it
@@ -2600,6 +2709,7 @@ impl World {
                         reflexes: p.reflexes.max(0) as u16,
                         life_scale: p.life_scale.max(0) as u16,
                         brake: p.brake,
+                        life_regen: p.life_regen,
                     };
                     let book = crate::mc2::cast::Mc2Spellbook {
                         ent: p.spell_ent,

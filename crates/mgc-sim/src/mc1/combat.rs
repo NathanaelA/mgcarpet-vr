@@ -137,13 +137,14 @@ impl Gen {
     /// point-damage writer, whose branches are the exact INVERSE.
     pub(crate) fn mail_write(&mut self, tgt: MailTarget, ch: usize, amt: u32, src: u16) {
         if ch == 0
-            && matches!(tgt, MailTarget::Pool(486) | MailTarget::Player)
+            && matches!(tgt, MailTarget::Pool(s) if s == crate::mail_trace_slot())
+                | matches!(tgt, MailTarget::Player)
             && let Some(t) = crate::mail_trace()
         {
             let who = if matches!(tgt, MailTarget::Player) {
                 "player"
             } else {
-                "castle"
+                "slot"
             };
             eprintln!("[mail] t={t} AREA->{who} amt={amt} src={src}");
         }
@@ -179,13 +180,14 @@ impl Gen {
     /// 1200/800/1200/400 with no compounding at all.
     pub(crate) fn mail_write_single(&mut self, tgt: MailTarget, ch: usize, amt: u32, src: u16) {
         if ch == 0
-            && matches!(tgt, MailTarget::Pool(486) | MailTarget::Player)
+            && matches!(tgt, MailTarget::Pool(s) if s == crate::mail_trace_slot())
+                | matches!(tgt, MailTarget::Player)
             && let Some(t) = crate::mail_trace()
         {
             let who = if matches!(tgt, MailTarget::Player) {
                 "player"
             } else {
-                "castle"
+                "slot"
             };
             eprintln!("[mail] t={t} SINGLE->{who} amt={amt} src={src}");
         }
@@ -482,23 +484,35 @@ impl Gen {
         // / `my_sign32` fixups wrapped around them are DEAD, the
         // extent field is uint16 so the sum never goes negative.
         //
-        // ⚠ The `.max(1)` floor is OURS and it is NOT retail: a
-        // zero-extent writer runs `for i = -0; i <= 0` there and
-        // scans its OWN TILE ALONE, where the floor hands it a 3x3.
-        // Held back whole 2026-08-12 (§THE HELD-BACK AREA FIXES)
-        // because removing it bought nothing on mc1l0 — mc1l32 paid
-        // the MC1 receipt: a (10,17) blast ring's FIRST dispatched
-        // tick runs with entry f26 = 0, extents 0, so retail's window
-        // is the single ch0 back-biased tile — which does not even
-        // cover the ring's own position tile — and the victim standing
-        // ON the impact point is missed for exactly that one tick
-        // (t=29834 pair: field 260's 1000 reaches crab 324 a tick
-        // early in the port, retail 883 vs port 1883). MC2 keeps the
-        // floor: its arrow's direct hit rides this window because the
-        // port's anti-tunnel chord march never engages on that path —
-        // the two are one compensating family (same section).
+        // ⭐⭐ AND THERE IS NO FLOOR UNDER IT, IN EITHER GAME. A
+        // zero-extent writer runs `for i = -0; i <= 0` and scans its
+        // OWN TILE ALONE — one tile, and on ch0 not even the tile it
+        // stands on, because the window centre is `(pos + 128) >> 8`
+        // while the map links at `pos >> 8`. The `.max(1)` that used
+        // to sit here was OURS; it handed such a writer a 3x3 and
+        // stole a tick of grace from every victim standing on an
+        // impact point.
+        //
+        // BOTH GAMES PAY THE SAME RECEIPT, AND IT IS THE SAME SPRITE.
+        // MC1, mc1l32 t=29834: a (10,17) blast ring's first dispatched
+        // tick runs with entry f26 = 0, so field 260's 1000 reaches
+        // crab 324 a tick early in the port (retail 883 v port 1883).
+        // MC2, mc2l6 t=761: the human's (10,17) meteor is born at
+        // (63924, 20732) — rival 383's own tile, (249, 80) — with the
+        // quad still all zeros; `SetEntityShiftRot_49EA0(a1x, (768*0 -
+        // …) >> 2, 512)` (EF:23861) leaves `array_0x52_82.pitch` at 0,
+        // so retail's `v24 = (0 + 255) >> 8 = 0` window is the single
+        // cell (250, 81) and 383 — standing exactly on the poster, box
+        // overlapping on all three axes — takes NOTHING. Its 2,000
+        // arrives one tick later at ring 2, where `v24` is finally 2:
+        // life 3,144 → 3,151 (regen alone) across t=761 and 3,151 →
+        // 1,158 across t=762.
+        //
+        // ⚠ The MC2 floor was held as one half of a compensating pair
+        // with the arrow's direct hit (§THE HELD-BACK AREA FIXES,
+        // 2026-08-12) — if an arrow stops damaging, the anti-tunnel
+        // chord march on that path is the half to fix, not this line.
         let r = (self.ent[i].f80 as i32 + 255) >> 8;
-        let r = if mc2 { r.max(1) } else { r };
         // Pass 2 OWNS the buildings, so the tile scan must not also
         // find them: `&& (class != 10 || model != 45)` sits at
         // EF:4135 right beside the castle exclusion, and for the same
@@ -570,6 +584,15 @@ impl Gen {
             }
         }
         for (j, a) in victims {
+            if j == crate::mail_trace_slot()
+                && let Some(t) = crate::mail_trace()
+            {
+                let e = &self.ent[i];
+                eprintln!(
+                    "[mail] t={t} AREA poster {i} ({},{}) act={} at ({},{},{}) ch={ch} amt={a} src={id}",
+                    e.class64, e.model65, e.tick70, e.x, e.y, e.z
+                );
+            }
             self.mail_write(MailTarget::Pool(j), ch, a, id);
             count += 1;
         }
@@ -749,32 +772,60 @@ impl Gen {
         Some(p)
     }
 
-    /// sub_3A390 (:46392): the m18 GLOBAL DEATH fuse. Fireball-shaped
-    /// ctor (speed 384, life 0x2000/384 = 21, row [5], sprite 42) but
-    /// state 19 sits past remc1's transcribed class-9 table. Observed
-    /// retail behavior: never a bolt — fire once, wait, the blast lands
-    /// AROUND THE CASTER. Reconstructed as a caster-anchored fuse: 21
-    /// ticks tracking the caster, then the generic +44-copying
-    /// detonation into the (10,55) field at the caster's position
-    /// (deliberate reconstruction). The ctor's speed/aim/+150 target
-    /// are carried but unused; the +26 charge byte (spawner moves the
-    /// wizard's accumulated charge into it) stays unmodeled — role
-    /// unknown. OPEN: retail may allow MULTIPLE overlapping charges,
-    /// each detonating on its own delay; our cast gate (the row's
-    /// 101-tick burst counter, decompile-consistent) blocks recast ~4s.
+    /// sub_3A390 (:46392): the m18 GLOBAL DEATH carrier. Fireball-
+    /// shaped ctor (speed 384, life 0x2000/384 = 21, row [5],
+    /// sprite 42), state 19 — and the 21-tick life is DEAD WEIGHT,
+    /// because state 19 is [`Gen::death_relay_tick`], a one-tick
+    /// relay that never reads it (retail's records carry act_life
+    /// frozen at 21 for the carrier's whole one-tick existence:
+    /// mc1l0-sg t=3877 slot 962).
     pub(crate) fn spawn_bomb_fuse(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         self.spawn_projectile(18, 19, x, y, z, 384, 21, 5, 42)
     }
 
-    /// State 19: the Global Death fuse tick — ride the caster, burn
-    /// the 21-tick life, detonate in place (see spawn_bomb_fuse).
-    fn bomb_fuse_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
-            self.move_relink(i, ctx.px, ctx.py, ctx.pz);
-        }
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
-            self.proj_explode(i, ctx, None, true, false);
+    /// sub_54480_54810 (:63928-40 = hw:60038-50): the class-9
+    /// **state-19 relay**. Global Death's carrier does not fly, does
+    /// not tick down and does not detonate — it mints its `+68/+69`
+    /// child at its OWN `+72`, copies four words in, and reaps
+    /// ITSELF, all on the first walk that reaches it.
+    ///
+    /// ⭐ THIS ROW WAS NEVER "MISSING" — IT WAS NEVER WIRED UP. The
+    /// body sits verbatim in BOTH listings; only remc1's transcribed
+    /// class-9 state table stops short of it (14 rows of 21). Read
+    /// off the shipped binaries: CARPET.EXE file 0x9CF34 row 0x13 →
+    /// 0x54480, HIDDEN.EXE 0x9D134 row 0x13 → 0x54810. The port's old
+    /// arm was a reconstruction — a caster-riding 21-tick fuse — from
+    /// the only thing observable without the table: *the blast lands
+    /// around the caster*. It does, because the carrier is born at
+    /// the caster and dies there the same tick.
+    ///
+    /// ⚠ NO `sub_526C0`. The relay does not score, so it must NOT go
+    /// through [`Gen::proj_explode`] — that would bill the caster a
+    /// shot and a hit the wizard lane grades.
+    ///
+    /// The self-reap is INSIDE the null guard (:63932-39): a child
+    /// the pool refuses leaves the carrier alive to try again next
+    /// tick — the same refused-bloom shape as the ball merge's.
+    fn death_relay_tick(&mut self, i: usize) -> bool {
+        let (x, y, z, class, model, own, yaw, pitch, dmg) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.f68, e.f69, e.id24, e.f30, e.f32, e.f44)
+        };
+        // `sub_373F0_377B0` is the whole class/model ctor table; the
+        // only carrier that reaches this row is the cast arm's
+        // (10,55) stamp (:66269-70), so the class-10 effect ctors are
+        // the reachable half.
+        let child = match class {
+            10 => self.spawn_effect(model, x, y, z),
+            _ => None,
+        };
+        if let Some(c) = child {
+            let e = &mut self.ent[c];
+            e.id24 = own;
+            e.f30 = yaw;
+            e.f32 = pitch;
+            e.f44 = dmg;
+            self.ent[i].flags |= 0x400;
         }
         false
     }
@@ -830,7 +881,28 @@ impl Gen {
         // homer hardcoded its caps, live now that the tracked arm
         // reads BEHAVIOR[row156].
         let row = if model == 1 || model == 17 { 2 } else { 1 };
-        self.spawn_projectile(model, state, x, y, z, 384, life, row, sprite)
+        let p = self.spawn_projectile(model, state, x, y, z, 384, life, row, sprite)?;
+        // ⭐ THE TWO SPRITE-209 LOBS CARRY A DOUBLE-SIZE HITBOX. Both
+        // ctors close with an INLINE `sub_37130_374F0(v2, 2 * +80,
+        // 2 * +84)` after the plain sprite bind — sub_39A90 :45917
+        // (possess, hw:42038) and sub_3A2F0 :46385 (magnet,
+        // hw:42505), identical in both binaries. Every other class-9
+        // spell ctor in the family leaves the sprite's own halves
+        // alone. Sprite 209 derives 90/90/75, so these two fly at
+        // 180/180/150 — and the whole flight hangs off it, because
+        // the contact scan is `ent_overlap`'s SUMMED extents: at half
+        // size the bolt passes straight through the ball it was fired
+        // at. mc1l0-sg slot 46 held retail's 180/180/150 vs the
+        // port's 90/90/75 from its first tick (t=2723) and never
+        // touched down; retail's terminated at t=2733 into the
+        // (10,12)+(10,54) pair.
+        //
+        // Not `sub_370A0_37460`: same arithmetic, different shape —
+        // see [`Gen::set_sprite_x2`].
+        if model == 1 || model == 17 {
+            self.set_sprite_x2(p, sprite);
+        }
+        Some(p)
     }
 
     /// Vertical bearing (sub_42180 :52644): the pitch whose polar step
@@ -1798,10 +1870,10 @@ impl Gen {
         match self.ent[i].tick70 {
             0 => self.proj_m0_tick(i, ctx),
             1 => self.proj_m1_tick(i, ctx),
-            // Global Death's m18 fuse (state 19, reconstruction — see
-            // spawn_bomb_fuse): rides the caster, detonates the
-            // (10,55) field in place.
-            19 => self.bomb_fuse_tick(i, ctx),
+            // Global Death's m18 carrier (state 19): the one-tick
+            // relay sub_54480_54810 — mint the (10,55) field, reap
+            // self. Takes no ctx; it never moves.
+            19 => self.death_relay_tick(i),
             3 => self.proj_generic_tick(i, ctx, true),
             8 => self.proj_m8_tick(i, ctx),
             9 => self.proj_m9_tick(i, ctx),
@@ -3513,8 +3585,25 @@ impl Gen {
     /// m5/m7/m11/m17 have their own states past remc1's transcribed
     /// table): m13-bolt-shaped straight flight at the cast pitch (the
     /// down-arc arrives via the cast's pitch bias); on any end
-    /// (victim / ground / expiry) the struck victim takes the row
-    /// damage on ch0 and the per-model payload fires.
+    /// (victim / ground / expiry) the per-model payload fires.
+    ///
+    /// ⭐ THE STATES ARE NOW NAMED, NOT GUESSED. The class-9 dispatch
+    /// table decoded out of the shipped EXEs (CARPET.EXE file
+    /// 0x9CF34 / HIDDEN.EXE 0x9D134; 21 rows 0x00-0x14, where remc1's
+    /// `str_25573C` :4838 stops at 0x0D) binds every state this arm
+    /// serves to the BARE GENERIC `sub_53060` -> `sub_52770`:
+    ///     02 53060 · 04 53060 · 05 53060 · 06 53060 · 0B 53060
+    ///     0F 53060 · 10 53060 · 11 53060(CARPET)/44600(HIDDEN) · 14 53060
+    /// — with state 07 alone going to `sub_530B0` -> `sub_530C0`
+    /// (which state 08 shares, and which the port already runs as
+    /// `proj_m8_tick`). So the faithful end state is to delete this
+    /// function and route 2/4/5/6/0xB/0x10/0x14 to
+    /// `proj_generic_tick` and 7 to `proj_m8_tick`. It is BANKED, not
+    /// done: it swaps `spell_payload`'s per-model switch for the
+    /// generic `+68/+69` explode, which the MC1 cast arms never stamp
+    /// (retail :65465-77 does), and adds the deflection block to
+    /// every payload lob — high blast radius across mc1l42/l3/l4/l5.
+    /// The end bracket below is retail's own, verbatim.
     fn proj_payload_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         // These states run the engine's generic homing flight
         // (sub_52770), so they carry ITS one-shot prologue too
@@ -3583,22 +3672,78 @@ impl Gen {
         // mc1l42 t=20159: retail's crater bolt ends at 5596 with the
         // ground at 5664, and its (10,11) inherits that buried z.
         self.move_relink(i, tmp.0, tmp.1, tmp.2);
-        // The life countdown runs on AIRBORNE ticks only: retail's
-        // end test short-circuits `ground > z || --life < 0 || hit`
-        // (the castle ball's :63586-90 twin), so a touchdown never
-        // reaches the decrement and the detonating bolt is recorded
-        // one tick "younger" than the port's used to be (mc1l42
-        // t=20159 life 12, not 11 — every crater detonation in the
-        // take reads the same way).
-        if !grounded {
-            self.ent[i].act_life -= 1;
-        }
-        if hit.is_some() || grounded || self.ent[i].act_life < 0 {
-            if let Some(MailTarget::Pool(j)) = hit {
-                let amt = self.ent[i].f44 as u32;
-                let src = self.ent[i].id24;
-                self.mail_write(MailTarget::Pool(j), 0, amt, src);
+        // The end test is retail's own three-armed bracket
+        // (sub_52770 :62678-702 / CARPET.EXE 0x52a2d-0x52a8c), not a
+        // short-circuited disjunction. The whole no-victim block sits
+        // under `if (!v5)`, so BOTH the life countdown and the water
+        // splash are unreachable on a strike tick:
+        //
+        //   no victim, airborne  -> --life, survive while >= 0
+        //   no victim, grounded  -> model 4 detonates; else a type-0
+        //                           tile DROWNS the bolt (splash, no
+        //                           detonation), any other explodes
+        //   victim               -> PARK on the victim's aim point,
+        //                           then explode there
+        //
+        // The life countdown running on AIRBORNE ticks only is the
+        // castle ball's :63586-90 twin, so a touchdown is recorded one
+        // tick "younger" (mc1l42 t=20159 life 12, not 11 — every
+        // crater detonation in the take reads the same way).
+        let detonate = match hit {
+            None => {
+                if !grounded {
+                    self.ent[i].act_life -= 1;
+                    self.ent[i].act_life < 0
+                } else if self.ent[i].model65 != 4 && self.on_water_pub(tmp.0, tmp.1) {
+                    // :62690-701 (0x52a44-0x52a7a) — the same water
+                    // arm `proj_move_and_hit` and `proj_m8_tick`
+                    // already carry, and the generic has no revert:
+                    // probe, splash and reap all read the STEPPED
+                    // position. The volcano lob (model 4) is exempt
+                    // and detonates over water like on land.
+                    // mc1l0-sg t=2178/2206: the Undead Army lob
+                    // drowns on tile (55,34) and retail records a
+                    // lone (10,5) splash where we raised an eight-
+                    // skeleton ring off a (10,36) spawner.
+                    self.splash_and_die(i);
+                    return false;
+                } else {
+                    true
+                }
             }
+            Some(v) => {
+                // :62751-55 (0x52d42) — `sub_524C0(victim);
+                // sub_41C70(bolt, victim+72); sub_524E0(victim)`:
+                // the strike PARKS the bolt on the victim's aim point
+                // inside the +76/+78 lift bracket, and the explode
+                // then mints the child THERE. mc1l0-sg t=1619: the
+                // volcano lob strikes building slot 6 (z 544, +78
+                // −8192) and both records land at 16640/13312/−7648,
+                // exactly `victim.z + victim.f78`. Same idiom as
+                // `proj_move_and_hit`'s teleport arm above.
+                match v {
+                    MailTarget::Pool(j) => {
+                        let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].aim_z());
+                        self.move_relink(i, jx, jy, jz);
+                    }
+                    MailTarget::Player => {
+                        self.move_relink(i, ctx.px, ctx.py, ctx.pz.wrapping_add(PLAYER_HH as i16));
+                    }
+                }
+                true
+            }
+        };
+        if detonate {
+            // NO damage mail. Retail's payload strike writes nothing
+            // to the victim: sub_52770's whole victim arm (:62705-55)
+            // only parks the bolt, and the one call it makes past the
+            // explode — sub_526C0 (:62585-614) — bumps the caster's
+            // shot/hit COUNTERS (+343/+347) and nothing else. The
+            // damage rides the CHILD, whose +44 is the bolt's.
+            // mc1l0-sg t=1619: retail's slot 6 keeps mail 0 and life
+            // 1104 through t=1620, then takes the (10,9) child's
+            // 1000/tick from t=1621 (1104 -> 104 -> -896). Our mail
+            // spent that 1000 a tick early and then again per child.
             self.spell_payload(i, hit);
             self.ent[i].flags |= 0x400;
         }
@@ -5021,11 +5166,19 @@ impl Gen {
                 e.f126 = 256;
                 let d = lcg32(&mut e.rand);
                 e.f30 = (d & 0x7FF) as u16;
+                // :47712 clears bit 3, :47729 sets bit 0, and the
+                // position is a RAW `+72`/`+76` store (:47726-28) —
+                // the field never enters a tile chain. Same ctor shape
+                // as its sibling the (10,54) magnet
+                // ([`Gen::spawn_mana_magnet`]).
                 e.flags &= !8;
+                e.flags |= 1;
                 e.f80 = 1024;
                 e.f82 = 1024;
                 e.f84 = 0x4000;
-                self.link(s, x, y, z);
+                e.x = x;
+                e.y = y;
+                e.z = z;
                 self.refill_life(s);
             }
             // sub_3B460 (:47396): the lightning STORM cloud — note

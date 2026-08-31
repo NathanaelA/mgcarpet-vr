@@ -114,7 +114,7 @@ pub const MC2_RIVAL_NAMES: [&str; 8] = [
 /// carries the retail AI band (ceiling ground+768, floor ground+128),
 /// turn caps (v_4 5, v_2 256), climb -4 and the 8192 engagement range
 /// v_28; row 60's 1792/0/22/4096 are wrong for the brain's consumers.
-const WIZARD_ROW: u8 = 67;
+pub(crate) const WIZARD_ROW: u8 = 67;
 
 /// Per-color config from the level record (the 110-byte
 /// `WizardMapSettings_0x360D2` block + the header's authored
@@ -199,6 +199,28 @@ impl Mc2AiState {
             _ => Mc2AiState::Fresh,
         }
     }
+
+    /// The canonical retail byte for this port state — the inverse of
+    /// [`Self::from_retail`] on the states that survive the collapse.
+    /// `Possess` reports 6 (`sub_135C0`, the arm that casts) because
+    /// the port fuses retail's 4 and 6; grade retail's byte through
+    /// `norm_retail_ai_state_mc2`, never raw, or every tick a rival
+    /// sits in the APPROACH arm reads as a mismatch it is not.
+    pub(crate) fn to_retail(self) -> u8 {
+        match self {
+            Mc2AiState::Fresh => 0,
+            Mc2AiState::Upgrade => 1,
+            Mc2AiState::Build => 3,
+            Mc2AiState::Possess => 6,
+            Mc2AiState::RaidCastle => 7,
+            Mc2AiState::AttackWizard => 8,
+            Mc2AiState::RaidBalloon => 9,
+            Mc2AiState::Home => 0xB,
+            Mc2AiState::Cruise => 0xC,
+            Mc2AiState::HuntMana => 0xD,
+            Mc2AiState::Defense => 0xE,
+        }
+    }
 }
 
 /// The retail AI decision lanes for one wizard, as the conformance
@@ -232,6 +254,8 @@ pub(crate) struct Mc2RivalAi {
     /// The players-block brake word `word_0xe_14` (flight +14) —
     /// seeds the hash-silent [`BrakeWord`] at re-anchor.
     pub brake: i16,
+    /// The players-block life-regen register `lifeRegen_0x163_355`.
+    pub life_regen: i16,
 }
 
 /// Hash-silent bool (the `CrtRand` pattern — features.rs): carried
@@ -266,6 +290,18 @@ pub(crate) struct Mc2Rival {
     pub mana: u32,
     pub mana_max: u32,
     pub(crate) mana_delta: i32,
+    /// ⭐⭐ THE STORED LIFE-REGEN RATE (`lifeRegen_0x163_355`), the
+    /// life twin of `mana_delta`. `sub_12A70` adds it to `life_0x8`
+    /// (EF:5425) and re-selects it TWENTY LINES LATER off the
+    /// at-castle/dolmen test (EF:5439/5447), exactly like the mana
+    /// half two statements above it — so the boosted rate lands the
+    /// tick AFTER the rival reaches its castle. The port recomputed
+    /// the life half fresh each tick and paid the boost a frame
+    /// early: mc2l6 t=784, rival 378 (maxLife 1992) arrives over
+    /// castle 174 and retail still regenerates 1992/500 = 3 (life
+    /// 737 → 740, `manaRegen` 100 → 1000 in the same statement pair),
+    /// then 1992/200 = 9 from t=785 — the port jumped straight to 9.
+    pub(crate) life_delta: i32,
     /// Personality (word_0x242/244/246) + the Life scalar (word_0x24A).
     agg: u16,
     per: u16,
@@ -337,6 +373,7 @@ impl Mc2Rival {
             mana: 1000,
             mana_max: 1000,
             mana_delta: 0,
+            life_delta: 0,
             agg: cfg.aggression as u16,
             per: cfg.perception as u16,
             refl: cfg.reflexes as u16,
@@ -369,6 +406,69 @@ impl Mc2Rival {
     /// entity age byte (EF:5460).
     pub(crate) fn think_period(&self) -> u8 {
         (64 - (self.refl / 4) as i32).max(1) as u8
+    }
+
+    /// The rival's player-block/brain registers as RETAIL-convention
+    /// lanes — the per-rival half of `World::wiz_shadow_mc2`, the MC2
+    /// twin of MC1's [`crate::mc1::rivals::Rival::wiz_shadow_lanes`]
+    /// (this module owns the private brain fields, so the projection
+    /// lives here).
+    ///
+    /// Lane names match [`mgc_formats::mgcr::RetailPlayerMc2`]'s
+    /// fields. `ai_state` is the canonical [`Mc2AiState::to_retail`]
+    /// byte (grade retail's through `norm_retail_ai_state_mc2`);
+    /// `poverty`, `war` and `brake` are 0/1 because retail keeps a
+    /// threshold / a flag word where the port keeps a bool, and
+    /// nonzero-ness is the comparable fact. `target`/`target_sig` are
+    /// deliberately absent — they ride the wizard ENTITY's graded
+    /// `f146`/`f148`, and the entity shadow owns that story.
+    pub(crate) fn wiz_shadow_lanes(
+        &self,
+    ) -> (Vec<(&'static str, i64)>, Vec<(&'static str, Vec<i64>)>) {
+        let scalars = vec![
+            ("cmd_speed", self.vdes as i64),
+            ("strafe", self.strafe as i64),
+            ("brake", self.v14.0 as i64),
+            ("invuln", self.grace as i64),
+            ("ai_state", self.state.to_retail() as i64),
+            ("burst", self.burst as i64),
+            ("poverty", self.poverty as i64),
+            ("aggression", self.agg as i64),
+            ("perception", self.per as i64),
+            ("reflexes", self.refl as i64),
+            ("life_scale", self.life_scale as i64),
+            ("weave", self.weave as i64),
+            ("weave_dir", self.weave_dir as i64),
+            ("avoid", self.avoid as i64),
+            ("avoid_exit", self.avoid_exit as i64),
+        ];
+        let arrays = vec![
+            ("hate", self.hate.iter().map(|&v| v as i64).collect()),
+            ("war", self.war.iter().map(|&v| v as i64).collect()),
+            (
+                "cooldown",
+                self.cooldown.iter().map(|&v| v as i64).collect(),
+            ),
+            (
+                "spell_ent",
+                self.book.ent.iter().map(|&v| v as i64).collect(),
+            ),
+            (
+                "levels",
+                self.book.levels.iter().map(|&v| v as i64).collect(),
+            ),
+            ("sel", self.book.sel.iter().map(|&v| v as i64).collect()),
+            ("ring", self.book.ring.iter().map(|&v| v as i64).collect()),
+            (
+                "xp_bank",
+                self.book.xp_bank.iter().map(|&v| v as i64).collect(),
+            ),
+            (
+                "xp_vol",
+                self.book.xp_vol.iter().map(|&v| v as i64).collect(),
+            ),
+        ];
+        (scalars, arrays)
     }
 }
 
@@ -583,6 +683,13 @@ impl World {
         // stage pieces carry the visible castle).
         self.g
             .mc2_set_sprite(c, 177 + crate::mc2::color_art(r.slot) as u16);
+        // ...and LATCH the bit with it. Retail's authored castle takes
+        // its colour from the same one-shot in `mc2_castle_build` case
+        // 0 on its first build tick; the port settles the whole build
+        // synchronously at load, so without the bit the castle's first
+        // later upgrade would re-enter case 0 and add the colour a
+        // SECOND time (180 -> 183).
+        self.g.ent[c].flags |= 2;
         let lvl = (castle_level - 1).min(7);
         self.g.ent[c].f26 = lvl as i16;
         // One BUILD00 terrain pass per authored level (the EF:43787
@@ -746,6 +853,9 @@ impl World {
         // alternation phase or the whole SPEED window shifts a tick
         // (the mc2l22 every-other-tick pump).
         r.v14 = BrakeWord(ai.brake != 0);
+        // The life-regen register is state for the same reason the
+        // brake word is: it is applied before it is re-selected.
+        r.life_delta = ai.life_regen as i32;
         // The book: `SpellsEnabled_0x333` is the live manifestation
         // slot, and DEATH rewrites every owned entry to the boolean
         // marker 1 (EF:60147) — imported verbatim, quirk included,
@@ -756,10 +866,34 @@ impl World {
         for s in 0..MC2_SPELLS {
             r.known[s] = book.ent[s] != 0;
         }
+        // The record's copy is a MIRROR of the entity word, never a
+        // second truth — [`Self::mc2_rival_alive`] re-reads
+        // `word_0x96_150` at every dispatch. The conformance import
+        // seats both (`import_ent` carries target96 → f146), but the
+        // unit rigs call this alone; keep the pair consistent so a
+        // seated target survives its first tick.
+        let e = self.mc2_rivals[ri].ent as usize;
+        if e != 0 && e < self.g.ent.len() {
+            self.g.ent[e].f146 = ai.target;
+        }
     }
 
     /// Housekeeping `sub_12A70` (EF:5320) + the state dispatch.
     fn mc2_rival_alive(&mut self, ri: usize, i: usize) {
+        // ⭐ THE ENTITY WORD IS THE TARGET; the brain record only
+        // MIRRORS it. Retail's AI reads `a1x->word_0x96_150` fresh on
+        // every use (sub_13890 EF:5952, sub_12FF0 EF:5585, the
+        // selector's `sub_14C60` gates), so a write landed by anything
+        // else since our last pick is already in force. The only such
+        // writer is the impact re-point `sub_686D0` (mc2/proj.rs), and
+        // it runs at the BOLT's slot — earlier in the walk than a
+        // higher-slot wizard, later than a lower-slot one, which this
+        // read-at-dispatch reproduces exactly. The SIGNATURE is
+        // deliberately not touched: that mismatch is the mechanism.
+        {
+            let t = self.g.ent[i].f146;
+            self.mc2_rivals[ri].target = t;
+        }
         // Burst lockout recovery (EF:5357).
         if self.mc2_rivals[ri].burst < 0 {
             self.mc2_rivals[ri].burst += 1;
@@ -773,13 +907,23 @@ impl World {
         // At the own castle: grace pinned 2 + the mailbox memset —
         // the AI DISCARDS damage at home (EF:5397-5414; the FORWARD
         // into the castle is human-only, EF:59961).
+        // ⭐ THE FOURTH READER OF ONE PREDICATE. `sub_106C0(rival,
+        // castle)` (EF:5396) is the FULL `sub_10630` (EF:3712-16):
+        // SUMMED extents, strict `<`, z leg included — which is
+        // exactly `Gen::ent_overlap`. The MC1 human (`regen_boost`),
+        // the MC1 rival (mc1/rivals.rs) and the MC2 human all run it
+        // already; this rival copy was the last bare `<= f80/f82`
+        // test, and it reproduced the SAME symptom the human lane was
+        // fixed for at mc1l0 t=1827 — retail +1000/tick vs port +100,
+        // because the point test drops the RIVAL's own extent band.
+        // mc2l6-rival-spells-galore t=148: dx 1755 sits in
+        // [castle 1664, castle+rival 1787), so retail is still at
+        // home and regens 1000 where we regened 100; at t=149 that
+        // is the difference between affording SPEED (240) and not
+        // (80). Retail's own release at t=150 (dx 1983 > 1787)
+        // confirms the summed box.
         let castle = self.rival_castle(self.mc2_rivals[ri].ent);
-        let at_castle = castle.is_some_and(|c| {
-            let (ex, ey) = (self.g.ent[i].x, self.g.ent[i].y);
-            let e = &self.g.ent[c];
-            ((ex.wrapping_sub(e.x) as i16).unsigned_abs()) <= e.f80
-                && ((ey.wrapping_sub(e.y) as i16).unsigned_abs()) <= e.f82
-        });
+        let at_castle = castle.is_some_and(|c| self.g.ent_overlap(i, c));
         if at_castle {
             self.mc2_rivals[ri].grace = self.mc2_rivals[ri].grace.max(2);
         }
@@ -799,6 +943,25 @@ impl World {
 
         // Movement filter/step `sub_146F0` (EF:6415).
         self.mc2_rival_movement(ri, i);
+
+        // ⭐ THE CAST-CHARGE METER IS EVERY WIZARD'S, NOT THE
+        // HUMAN'S. `sub_12A70`'s regen block steps it one statement
+        // after the movement call and one before `mana +=
+        // manaRegen` (EF:5423-25) — the SAME `byte_0x154_340` the
+        // human's carpet tick steps (world.rs, EF:5424-25), the same
+        // 200 ceiling. The port stepped `wiz_charge[0]` only, so
+        // every rival's meter sat frozen at whatever the import
+        // seeded: mc2l6 wiz 1/2/3 part from retail at t=1 and never
+        // rejoin (593 rows apiece over 600 ticks — the first thing
+        // `wiz_shadow_mc2` ever said). ⭐ A LAW LANDED ON ONE CALL
+        // PATH IS NOT LANDED; this is the session-73 shape again,
+        // one column short.
+        {
+            let c = &mut self.wiz_charge[self.mc2_rivals[ri].slot as usize];
+            if *c < 200 {
+                *c += 1;
+            }
+        }
 
         // Regen (EF:5424-5455): delta applied first, then the rate
         // recompute — home /200 (mana min 1000), afield /2000 mana
@@ -827,13 +990,21 @@ impl World {
             self.g.ent[i].flags &= !0x1000;
         }
         {
+            // ⭐⭐ APPLIED FIRST, RE-SELECTED AFTER — see
+            // [`Mc2Rival::life_delta`]. Retail's `life_0x8 +=
+            // lifeRegen_0x163_355` (EF:5425) runs on the rate the
+            // PREVIOUS tick stored; the fork that recomputes it
+            // (EF:5439/5447) is twenty lines further down, past the
+            // mana clamp, and shares its `v2` at-castle test with the
+            // mana half already written above.
             let max = self.g.ent[i].max_life as i32;
-            let heal = if at_castle || at_shrine {
+            let e = &mut self.g.ent[i];
+            e.act_life = (e.act_life + self.mc2_rivals[ri].life_delta).min(max);
+            self.mc2_rivals[ri].life_delta = if at_castle || at_shrine {
                 max / 200
             } else {
                 max / 500
             };
-            self.g.ent[i].act_life = (self.g.ent[i].act_life + heal).min(max);
         }
 
         // Buff windows from the manifestations.
@@ -933,8 +1104,25 @@ impl World {
             self.g.ent[i].mail[3] = (0, 0);
         }
         // ch0 damage.
+        //
+        // ⭐⭐⭐ THE GATE IS THE **SOURCE** WORD, NOT THE AMOUNT.
+        // `sub_5EFA0`'s whole damage block opens `v8 =
+        // str_0x5E_94.word_0x62_98; if (v8)` (EF:60673) and never looks
+        // at `dword_0x5E_94` until it is inside — it cannot, because the
+        // body immediately dereferences `Entities[v8]` for the knockback
+        // bearing (`tan2(source → self)`, EF:60697-99). So an amount
+        // parked with source 0 is not a pending hit at all: it is inert
+        // bytes, and it stays parked forever.
+        //
+        // mc2l6-rsg: rival 370 carries `mail0` (300, src 0) from t=0 to
+        // the end of the take. Retail never delivers it; the port's
+        // `src == 0 && amt == 0` gate let the amount alone open the
+        // block, spending 300 life and one entity LCG draw on the
+        // FIRST tick of every pair cut from that recording — which is
+        // why no mc2l6 fixture could be cut clean (SESSION 75 banked it
+        // after law B fell back to a unit pin).
         let (amt, src) = self.g.ent[i].mail[0];
-        if src == 0 && amt == 0 {
+        if src == 0 {
             return;
         }
         self.g.ent[i].mail[0] = (0, 0);
@@ -1389,11 +1577,82 @@ impl World {
         }
     }
 
+    /// `sub_6A300` (EF:56430) on the RIVAL column — the same body the
+    /// human's [`World::mc2_heal_token_tick`] runs, because retail's
+    /// is caster-generic: it resolves its wizard through the token's
+    /// `parentId_0x28_40` and touches only that record's `life_0x8` /
+    /// `maxLife_0x4` / `mana_0x90_144` / `manaRegen_0x88_136`.
+    ///
+    /// What this replaces was flagged APPROX in place: a flat
+    /// `maxLife/20` per armed tick (MC1's 5%), no `life < maxLife`
+    /// admission, no purse test and NO COST AT ALL. Retail:
+    /// - admits on `sub_68D50` AND `mana >= maxMana_0x8C_140`, and
+    ///   re-tests that purse leg EVERY tick (not just the arm one) —
+    ///   a rival that runs dry mid-window collapses it (`+46 = 1`);
+    /// - heals `maxLife * subSpellIndex_0x2A_42 / 100` and pays the
+    ///   FULL cost onto the regen delta, but ONLY on a tick that
+    ///   actually heals — a rival at full life burns nothing and
+    ///   keeps the window, resuming the moment it is hurt;
+    /// - awards the caster XP on the first HEALING tick.
+    ///
+    /// ⚠ UNWITNESSED ON THIS COLUMN. No graded take reaches a rival
+    /// heal — mc2l6's three rivals hold {0,1,2,3,4,7,9,13,12,14} and
+    /// none holds 5; mc2l22 is the take that does (all seven rivals
+    /// own it) and its horizon is 0. Landed on the decompile alone,
+    /// as the same citation as the human arm, not as a reconstruction.
+    #[cfg(test)]
+    pub(crate) fn mc2_rival_heal_tick_for_test(&mut self, ri: usize, m: usize) {
+        self.mc2_rival_heal_tick(ri, m);
+    }
+
+    fn mc2_rival_heal_tick(&mut self, ri: usize, m: usize) {
+        let i = self.mc2_rivals[ri].ent as usize;
+        if i == 0 || i >= self.g.ent.len() {
+            return;
+        }
+        let cost = self.g.ent[m].max_life;
+        let admitted = self.mc2_rival_afford(ri, m) && self.mc2_rivals[ri].mana >= cost;
+        if !admitted {
+            self.g.ent[m].f26 = 1; // :56466 — the release
+            return;
+        }
+        let max = self.g.ent[i].max_life as i32;
+        if self.g.ent[i].act_life >= max {
+            return; // full life: no heal, no debit, window stays open
+        }
+        let step = (max as i64 * self.g.ent[m].f30 as i64 / 100) as i32;
+        self.g.ent[i].act_life = (self.g.ent[i].act_life + step).min(max);
+        let c = cost.min(i32::MAX as u32) as i32;
+        let r = &mut self.mc2_rivals[ri];
+        r.mana_delta = if r.mana_delta >= 0 {
+            -c
+        } else {
+            r.mana_delta - c
+        };
+    }
+
+    /// `sub_68D50` (EF:55548) on the rival column: the wizard solvent
+    /// and alive, the token's castle-upkeep word (`manaRegen_0x88_136`,
+    /// our `f136`) covered by the rival's own castle store, and — on
+    /// the ARM tick only — the purse against the full cost.
+    fn mc2_rival_afford(&self, ri: usize, m: usize) -> bool {
+        let e = &self.g.ent[m];
+        if e.f136 > 0 {
+            let ok = self
+                .rival_castle(self.mc2_rivals[ri].ent)
+                .is_some_and(|c| self.g.ent[c].f140 >= e.f136);
+            if !ok {
+                return false;
+            }
+        }
+        if e.f26 as u16 == e.f28.max(1) {
+            return self.mc2_rivals[ri].mana >= e.max_life;
+        }
+        true
+    }
+
     fn mc2_rival_buffs(&mut self, ri: usize) {
         let book = self.mc2_rivals[ri].book.ent;
-        // Heal fires on the pre-decrement window (including the 1→0
-        // tick) — capture before the countdown pass.
-        let heal_live = book[5] != 0 && self.g.ent[book[5] as usize].f26 > 0;
         let own = self.mc2_rivals[ri].ent;
         // The class-15 manifestation body is CASTER-GENERIC in
         // retail (GetScroll_69DB0 resolves its caster through
@@ -1418,7 +1677,16 @@ impl World {
             }
             let m = *m as usize;
             if m != 0 && self.g.ent[m].f26 > 0 {
-                if self.g.ent[m].f26 as u16 != self.g.ent[m].f28 {
+                if s == 5 {
+                    // HEAL runs `sub_6A300` (EF:56430), which is the
+                    // ONE effect state that never calls `sub_68DE0` —
+                    // it does its own inline debit. So a live heal
+                    // window contributes NO mid-burst regen pin, and
+                    // it pays per HEALING tick instead of once at the
+                    // arm. Body before the shared decrement, as retail
+                    // has it.
+                    self.mc2_rival_heal_tick(ri, m);
+                } else if self.g.ent[m].f26 as u16 != self.g.ent[m].f28 {
                     mid_burst = true;
                 }
                 self.g.ent[m].f26 -= 1;
@@ -1453,14 +1721,8 @@ impl World {
         let rebound = live(&self.g, 8);
         let invisible = live(&self.g, 0xB);
         // (3 = the approach boost window, read by the movers.)
-        // Heal channel (5): heal while the window is live (the shared
-        // effect-state law; rate APPROX maxLife/20 per armed tick —
-        // the MC1-column rate, MC2 numeric trace not yet pinned).
-        if heal_live {
-            let i = self.mc2_rivals[ri].ent as usize;
-            let max = self.g.ent[i].max_life as i32;
-            self.g.ent[i].act_life = (self.g.ent[i].act_life + max / 20).min(max);
-        }
+        // (5 = heal, now `mc2_rival_heal_tick` in the countdown loop
+        // above — retail's own body, run before its own decrement.)
         {
             let r = &mut self.mc2_rivals[ri];
             r.shield = shield;
@@ -1828,7 +2090,9 @@ impl World {
                 continue;
             }
             let d = Gen::dist2_sq(px, py, e.x, e.y);
-            if d <= range.saturating_mul(range) && best.is_none_or(|(_, bd)| d < bd) {
+            // STRICT: retail rejects the winner at `>= v5*v5`
+            // (EF:6222/6281/6339), so equality is OUT of range.
+            if d < range.saturating_mul(range) && best.is_none_or(|(_, bd)| d < bd) {
                 best = Some((j as u16, d));
             }
         }
@@ -1866,7 +2130,9 @@ impl World {
                 return;
             }
             let d = Gen::dist2_sq(px, py, x, y);
-            if d <= range.saturating_mul(range) && best.is_none_or(|(_, bd)| d < bd) {
+            // STRICT: retail rejects the winner at `>= v5*v5`
+            // (EF:6222/6281/6339), so equality is OUT of range.
+            if d < range.saturating_mul(range) && best.is_none_or(|(_, bd)| d < bd) {
                 *best = Some((tgt, d));
             }
         };
@@ -1946,7 +2212,9 @@ impl World {
                 continue;
             }
             let d = Gen::dist2_sq(px, py, e.x, e.y);
-            if d <= range.saturating_mul(range) && best.is_none_or(|(_, bd)| d < bd) {
+            // STRICT: retail rejects the winner at `>= v5*v5`
+            // (EF:6222/6281/6339), so equality is OUT of range.
+            if d < range.saturating_mul(range) && best.is_none_or(|(_, bd)| d < bd) {
                 best = Some((j as u16, d));
             }
         }
@@ -2391,6 +2659,40 @@ impl World {
                     return;
                 };
                 let (cx, cy) = (self.g.ent[c].x, self.g.ent[c].y);
+                // ⭐ THE LONG WAY HOME IS A MANA RUN. Retail's very
+                // first statement inside the castle-EXISTS arm
+                // (EF:5787-94) is `if (EuclideanDistXY(self, castle) >
+                // 0x6400000)` → walk spell 1 (the Possession /
+                // Mana Magnet / Mana Lock family) down from its level
+                // and, ON A SUCCESSFUL CAST, `goto LABEL_6` — which
+                // RETURNS 1 past the cloak walk and past the approach
+                // entirely. So a rival flying home from far away
+                // spends the tick casting instead of steering, and
+                // that is the mc2l6 t=587 head: rival 378 (ai_state
+                // 0xB the whole window, castle 174 at the map centre,
+                // itself out at x=64384) mints the basic (9,1) at the
+                // just-freed slot 561 with charge 90 -> 0, burst 6 ->
+                // 7 and cooldown[1] 0 -> 10. The port's Home arm was a
+                // paraphrase that started at the cloak walk, so the
+                // rival never chose the spell at all.
+                //
+                // The distance is `EuclideanDistXY_584D0`
+                // (Maths:1043) — dist² with BOTH deltas SIGN-CAST to
+                // int16, which is `Gen::dist2_sq` verbatim; at t=586
+                // the -48000 dx wraps to +17536 and the comparison
+                // clears the threshold by 3x either way.
+                //
+                // ⚠ Retail's loop is `if (probe == 1 && cast(1))
+                // goto`, i.e. it keeps walking DOWN on a refused cast
+                // where `walk_cast` stops. Every refusal `sub_14E10`
+                // can raise here (the 0xAA cone, the burst lockout)
+                // is tier-INDEPENDENT, so the two agree; the shared
+                // helper stays one implementation.
+                if Gen::dist2_sq(self.g.ent[i].x, self.g.ent[i].y, cx, cy) as u32 > 0x640_0000
+                    && self.mc2_rival_walk_cast(ri, i, 1)
+                {
+                    return;
+                }
                 self.mc2_rival_walk_cast(ri, i, 0xB);
                 self.mc2_rival_approach(ri, i, cx, cy, 256, 2048);
                 if self.g.ent[i].act_life >= self.g.ent[i].max_life as i32 {
@@ -2572,22 +2874,64 @@ impl World {
     ) -> bool {
         self.mc2_rivals[ri].v14 = BrakeWord(false);
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
-        let d2 = Gen::dist2_sq(px, py, tx, ty);
+        // ⭐⭐ THE RING IS COMPARED IN LINEAR UNITS, NOT SQUARED ONES.
+        // `sub_14C90` (EF:6713) tests `EuclideanDistXYZ_58490(self,
+        // target)` against a3/a4 raw — and that function
+        // (Maths:738-745) ends in `sub_7277A_radix_3d`, the FLOOR
+        // integer sqrt. Squaring the radius instead loses the whole
+        // band `[R², (R+1)²)`, where retail's floor still reads R:
+        // the port's ring is up to one unit tight, every tick, on
+        // every approach.
+        //
+        // It bites exactly as rarely as that sounds and exactly as
+        // hard. mc2l6 t=623, rival 383 attacking the human at ring
+        // 3328: dx -1904, dy -2730, d² = 11,078,116, which sits 2,532
+        // above 3328² and 4,124 below 3329². Retail's isqrt reads
+        // 3328, ARRIVES, brakes to speed 0, resets the weave 20 -> 0
+        // and runs the combat z-track (914 -> 908); the port read
+        // "not arrived", kept minSpeed 80, held weave at 20 and
+        // skipped the z leg (914 -> 912) — the graded `(3,1) slot 383
+        // z` head, and three ungraded wiz lanes with it.
+        //
+        // ⚠ NOT the same function as the Home handler's
+        // `EuclideanDistXY_584D0` twelve lines up: that one returns
+        // the RAW dist² and is compared against a squared constant
+        // (0x6400000). Retail uses both, and which one a site calls
+        // is the law.
+        let d = crate::mc2::morph::dist2d(px, py, tx as i32, ty as i32);
         self.g.ent[i].f34 = Gen::angle_between(px, py, tx, ty);
-        if d2 <= arrive.saturating_mul(arrive) {
+        if d <= arrive {
             self.mc2_rivals[ri].vdes = 0;
             self.mc2_rivals[ri].v14 = BrakeWord(true);
             return true;
         }
         let m3 = self.mc2_rivals[ri].book.ent[3] as usize;
-        if d2 > boost.saturating_mul(boost) && m3 != 0 && self.g.ent[m3].f26 == 0 {
-            // Speed-up beyond the boost ring on a FREE window. A
-            // LIVE window fails sub_15170's readiness and falls
-            // into the brake else (mc2l6-rsg t=5→6: retail brakes
-            // mid-window and the token's collapse restores 80 the
-            // same tick; mc2l22's every-other-tick pump is the same
-            // alternation).
-            self.mc2_rival_cast(ri, i, 3);
+        if d > boost && self.mc2_rival_cast_ready(ri, 3) {
+            // ⭐⭐⭐ THE LIVE-WINDOW REFUSAL IS A GATE **INSIDE** THE
+            // BOOST ARM, AND ITS ELSE IS EMPTY. Retail's branch
+            // selector is `if (v6 > a4 && sub_15170(a1x, 3u))`, and
+            // `sub_15170`'s case 3 (EF:7050-63) checks the
+            // manifestation, the `maxManaLimit` ceiling and the purse
+            // — NOT the window; the window test is the separate
+            // `if (!sub_156F0(a1x, 3u)) sub_14E10(a1x, 3u)` INSIDE
+            // that arm (EF:6729-31/6744-46). So a rival already
+            // boosting takes the boost arm, casts nothing, AND DOES
+            // NOT BRAKE.
+            //
+            // Folding the window into the selector is what sent a
+            // boosting rival down the brake else — and the brake word
+            // is exactly what makes the speed token collapse itself
+            // (`f26 = 1` then the decrement, EF:56218), so the port
+            // pumped: cast, brake, collapse, cast, brake… mc2l6
+            // t=764, rival 383 running home at ring 2048: retail
+            // holds `cmd_speed` 160 with `cooldown[3]` counting 32 →
+            // 31 → 30 and the token's `word_0x2E_46` walking 301 →
+            // 299, where the port alternated 240/80 and re-stamped
+            // the cooldown every other tick (`speed` retail 160 port
+            // 80 — the graded head).
+            if m3 == 0 || self.g.ent[m3].f26 <= 0 {
+                self.mc2_rival_cast(ri, i, 3);
+            }
         } else {
             self.mc2_rivals[ri].vdes = self.g.ent[i].f128;
             self.mc2_rivals[ri].v14 = BrakeWord(true);
@@ -2884,10 +3228,20 @@ impl World {
         }
         // Arm the recast cooldown + debit the full tier cost through
         // the regen delta (the chassis mana law).
+        //
+        // ⚠ THE DEBIT IS NOT PART OF THE ARM. `sub_5F7B0` (EF:60974)
+        // only writes `word_0x2E_46 = word_0x30_48` and two flag bits;
+        // the payment is each effect body's own first-tick
+        // `sub_68DE0`, which lands in the same frame because the token
+        // sits above the caster (see the arm note below). Stamping it
+        // here is the port's stand-in for that — and it is WRONG for
+        // HEAL, the one body that never calls `sub_68DE0` at all
+        // (`sub_6A300` bills itself, per HEALING tick). Charging both
+        // would double-bill the arm tick.
         self.mc2_rivals[ri].cooldown[s] = AI_RECAST[s];
         let m = self.mc2_rivals[ri].book.ent[s] as usize;
         let cost = self.g.ent[m].max_life as i32;
-        {
+        if s != 5 {
             let r = &mut self.mc2_rivals[ri];
             r.mana_delta = if r.mana_delta >= 0 {
                 -cost
@@ -2896,7 +3250,43 @@ impl World {
             };
         }
         // Arm the manifestation window (buffs/heal read it).
-        self.g.ent[m].f26 = self.g.ent[m].f28.max(1) as i16;
+        //
+        // ⭐⭐ THE CAST FRAME **IS** THE WINDOW'S FIRST TICK. Retail's
+        // arm is a bare `word_0x2E_46 = word_0x30_48` (`sub_5F7B0`
+        // EF:60976) at the CASTER's walk slot — and the token's own
+        // pool slot sits ABOVE the wizard's (MC2 mints the wizard then
+        // its 26 manifestations: mc2l6's rival 370 owns 371-377), so
+        // the class-15 handler runs LATER IN THAT SAME FRAME. It reads
+        // `word_0x2E_46 == word_0x30_48`, stamps `sub_68DE0`'s
+        // first-tick debit, and decrements. Retail's capture at the
+        // cast tick is therefore ALREADY `word_0x30_48 - 1`.
+        //
+        // The port stamps that first-tick debit right above, but
+        // `mc2_rival_buffs` runs at the RIVAL's slot — below every
+        // token — so arming the full duration here bought the window
+        // one extra tick and shifted the whole mid-burst regen pin a
+        // frame late. mc2l6 t=244 fireball (`f30` 5): retail's counter
+        // reads 4/3/2/1/0 at t=244..248 and pins `d88` to 0 across
+        // 245-248, back to +100 at 249; the port read 5/4/3/2/1/0 and
+        // spent t=245 on its own `f26 == f28` first-tick arm, which
+        // skips the pin — so rival 370 regenerated 900 -> 1000 at
+        // t=246 while retail held 900 (the horizon head).
+        //
+        // ⚠ SPELL 3 IS EXCLUDED. Speed's body genuinely runs at the
+        // token's own slot (`mc2_rival_manifestation_tick`, dispatched
+        // from `mc2_manifestation_pass`), so it already gets retail's
+        // same-frame first tick — including the one-factor-hotter
+        // spike that `first` keys on. Pre-consuming here would eat it.
+        let arm = self.g.ent[m].f28.max(1) as i16;
+        self.g.ent[m].f26 = arm;
+        if s != 3 {
+            // HEAL's first tick is its WHOLE BODY, not just a debit —
+            // run it here, where retail's token slot would have.
+            if s == 5 {
+                self.mc2_rival_heal_tick(ri, m);
+            }
+            self.g.ent[m].f26 -= 1;
+        }
         if s == 6 {
             // A fresh shield starts ARMED (the byte[2] 0x40 stage).
             self.mc2_rivals[ri].shield_state = 1;
@@ -2979,46 +3369,46 @@ impl World {
         if sx == 0 && sy == 0 {
             return false;
         }
-        let Some(c) = self.g.new_event() else {
+        // ⭐ EF:6833's `IfSubtypeCallCreatingManaSphere(&axis, 3, 2)`
+        // IS `sub_4AA40` — the SHARED (3,2) ctor the port already
+        // transcribes exactly in `Gen::spawn_castle`. This arm used to
+        // hand-roll a lesser copy of it and got three things wrong:
+        //   · it LINKED at `site_z`, where retail links at the ground
+        //     under the RAW landing point and keeps the perimeter-min
+        //     only in `+0x9E` (the two-z law spelled out in
+        //     `spawn_castle`) — mc2l6 t=70 slot 174 z retail 1536
+        //     (= 6*256) / port 1184, t=104 slot 62 z 64 / 0;
+        //   · it stamped `177 + COLOR_ART[slot]`, where the ctor ends
+        //     in `SetEntityIndexAndRot_49CD0(v2x, 177)` FLAT (EF:33402)
+        //     — the team colour is the build machine's own deferred
+        //     latch one tick later (see `mc2_castle_build` case 0), so
+        //     stamping it here put the recolor a whole tick early AND
+        //     mispriced the derived extents quad (apitch/aroll retail
+        //     194 / port 217 at t=104);
+        //   · it omitted `+28 = 33` and the `frames89` stamp (the
+        //     ungraded `b38`/`b5d` lanes: retail 33/1, port 0/0).
+        // EF:6836 assigns the owner AFTER the ctor returns.
+        let Some(c) = self.g.spawn_castle(sx, sy) else {
             return false;
         };
-        {
-            let e = &mut self.g.ent[c];
-            e.class64 = 3;
-            e.model65 = 2;
-            e.tick70 = 5; // action 5 = the build state machine
-            e.f59 = 0;
-            e.max_life = 40000;
-            e.f26 = 0;
-            e.id24 = self.mc2_rivals[ri].ent;
-            let mut tx = sx >> 8;
-            let ty = sy >> 8;
-            if (tx.wrapping_add(ty)) & 1 == 1 {
-                tx = tx.wrapping_add(1);
-            }
-            e.dest_x = tx << 8;
-            e.dest_y = ty << 8;
-        }
-        let (ax, ay) = (self.g.ent[c].dest_x, self.g.ent[c].dest_y);
-        // The build datum (sub_4AA40 EF:33399): corner-mean site z.
-        // Without it the painter datum reads 0 and the footprint
-        // excavates to sea level — the "sunken rival castle".
-        let z = self.g.mc2_castle_site_z((ax >> 8) as u8, (ay >> 8) as u8);
-        self.g.ent[c].site_z = z;
-        self.g.link(c, ax, ay, z);
-        self.g.refill_life(c);
-        self.g.mc2_set_sprite(
-            c,
-            177 + crate::mc2::color_art(self.mc2_rivals[ri].slot) as u16,
-        );
-        {
-            let r = &mut self.mc2_rivals[ri];
-            r.mana_delta = if r.mana_delta >= 0 {
-                -cost
-            } else {
-                r.mana_delta - cost
-            };
-        }
+        self.g.ent[c].id24 = self.mc2_rivals[ri].ent;
+        // ⭐⭐ THE FIRST CASTLE IS FREE. The castle-less arm (EF:6831-40)
+        // is the ONE case-2 leg that never reaches `sub_5F660` — and
+        // `sub_5F660` is where BOTH the manifestation arm and the mana
+        // debit live (`sub_5F7B0` past the `mana < maxMana` refusal,
+        // EF:60948-56). The upgrade leg above calls it and pays; this
+        // one spawns the (3,2), stamps the owner and the castle index,
+        // and returns 1 — no arm, no cooldown, NO DEBIT. The port
+        // already had the cooldown half of that right (see the comment
+        // at the top of this fn) and still charged for the spawn, which
+        // is the mc2l6 t=71 head: rival 378 pays its whole 1000 purse
+        // for its first castle and retail's stays pinned at 1000
+        // (mana_max) with d88 +100 for the rest of the take.
+        // Affordability is still GATED — retail's `sub_15170` refuses
+        // the attempt below `manaCost_6` / the manifestation's own
+        // `maxMana_0x8C_140` (EF:6929-33) — it is only the PAYMENT that
+        // never happens.
+        let _ = cost;
         self.g.snd(30, c);
         // Stage-1 research for the fresh castle (A.5 shortcut).
         let own = self.mc2_rivals[ri].ent;
@@ -3114,6 +3504,7 @@ impl World {
         // arm in mc2_launch already carries this (mc2l4 t=83 slot
         // 306: retail 33 = the token's purse, not the ctor's 50).
         let token_mana = self.g.ent[m].f140;
+        let charge_bank = std::mem::take(&mut self.wiz_charge[self.mc2_rivals[ri].slot as usize]);
         {
             let e = &mut self.g.ent[p];
             e.id24 = owner;
@@ -3133,6 +3524,22 @@ impl World {
             // The impact-XP back-ref (the owner-tagged sub_6D8B0
             // mail): f40 carries the spell index.
             e.f40 = s as u16;
+            // The CHARGE BANK, rival column: every retail effect-state
+            // spawner writes `v6x->dword_0x10_16 = caster wizext
+            // byte_0x154_340` and ZEROES the meter (EF:55869-70 for
+            // the fireball and seventeen siblings) — the basic
+            // possession bolt instead stamps a FLAT 200 and keeps the
+            // zero (`sub_69900` EF:56057-58). The human's `mc2_launch`
+            // has carried both halves for sessions; the rival funnel
+            // banked nothing, so mc2l6 t=687's (9,0) at slot 643 read
+            // `scratch10` 0 where retail banked 60. @0x10 is the
+            // port's `f26` (`port_ent_lanes_mc2` maps it to the
+            // `scratch10` lane).
+            e.f26 = if subtype == 1 {
+                200
+            } else {
+                charge_bank as i16
+            };
             // NO f146 hand-off: no site in retail's rival cast
             // chain writes word_0x96_150 onto the spawned bolt
             // (sub_14E10 writes only the caster's pitch; sub_5F660/
@@ -3466,6 +3873,7 @@ impl Snap for Mc2Rival {
             mana,
             mana_max,
             mana_delta,
+            life_delta,
             agg,
             per,
             refl,
@@ -3500,6 +3908,7 @@ impl Snap for Mc2Rival {
         w.put(mana);
         w.put(mana_max);
         w.put(mana_delta);
+        w.put(life_delta);
         w.put(agg);
         w.put(per);
         w.put(refl);
@@ -3536,6 +3945,7 @@ impl Snap for Mc2Rival {
             mana: r.get()?,
             mana_max: r.get()?,
             mana_delta: r.get()?,
+            life_delta: r.get()?,
             agg: r.get()?,
             per: r.get()?,
             refl: r.get()?,

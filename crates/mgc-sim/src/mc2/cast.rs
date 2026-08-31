@@ -41,6 +41,7 @@ use crate::engine::features::Gen;
 use crate::engine::world::{AimLock, LifeState, PlayerPose, World};
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc2::spells::Mc2SubSpell;
+use crate::world::PLAYER_LIFE_MAX;
 
 /// Notification lives, in ticks (retail message-life `a3`): the
 /// level-up path sets 200 (EF:44012), the change-spell toast 20
@@ -1370,6 +1371,13 @@ impl World {
                 }
                 return;
             }
+            // HEAL (5) has its OWN body — `sub_6A300` (EF:56430) — and
+            // shares nothing with the skeleton below but the trailing
+            // `word_0x36_54` decrement.
+            if spell == 5 {
+                self.mc2_heal_token_tick(m);
+                return;
+            }
             if self.g.ent[m].f26 > 0 {
                 // `sub_68DE0` (EF:55569) has two halves keyed on the
                 // FIRST burst tick (`word_0x2E_46 == word_0x30_48`):
@@ -1559,6 +1567,89 @@ impl World {
         }
     }
 
+    /// **MC2 HEAL — `sub_6A300` (EF:56430-56477).** The human column's
+    /// heal had NO effect tick at all: `mc2_spell_fire` set
+    /// `player.heal_active`, the expiry cleared it, and nothing in the
+    /// crate ever read it (the only `player.life` writers were the
+    /// cheats, the respawn, the passive regen and MC1's two heal
+    /// sites). Casting heal in MC2 restored nothing.
+    ///
+    /// The body is MC1's `sub_56270` skeleton with ONE structural
+    /// difference, and that difference is the whole player-facing
+    /// character of the spell:
+    ///
+    /// - **MC1** puts `actLife < maxLife` INSIDE the admission
+    ///   (`sub_55DD0 && v1[3] < v1[2] && v1[35] >= +136`,
+    ///   remc1 :65101-03), so a full-life tick takes the `else` and
+    ///   RELEASES (`word_0x30_48 = 1`). The release is terminal —
+    ///   nothing in retail resurrects a zeroed counter.
+    /// - **MC2** admits on the gate and the purse ALONE and nests the
+    ///   life test inside the accepted branch (:56445/:56450). A
+    ///   full-life tick therefore falls through doing *nothing*: no
+    ///   heal, no XP, **no debit** — and the window STAYS OPEN and
+    ///   keeps re-testing. Get hurt while it runs and it starts
+    ///   healing and charging again, mid-window.
+    ///
+    /// So the player's report — *"heal costs nothing if there's
+    /// nothing to heal, no matter how many times it is cast, even
+    /// though it appears active… if hurt while heal is active, it will
+    /// start costing and healing again"* — is a composite of the two
+    /// games: the first half holds in both, the second is MC2-only and
+    /// structurally impossible in MC1 (see the SESSION 73 entry, where
+    /// the MC1 half was measured and the mechanism read backwards from
+    /// an identical observable).
+    ///
+    /// The other MC2-specific details, all from the same lines:
+    /// - the amount is `maxLife * subSpellIndex_0x2A_42 / 100` (the
+    ///   TIER drives the percentage) where MC1's is a flat 5%;
+    /// - the admission carries an EXTRA `mana >= maxMana_0x8C_140` leg
+    ///   on TOP of `sub_68D50` (:56445), so unlike every other MC2
+    ///   spell heal re-checks affordability EVERY tick, not just the
+    ///   `word_0x2E_46 == word_0x30_48` one — run dry mid-window and
+    ///   it collapses;
+    /// - the debit is the FULL cost stamped on the regen delta on
+    ///   every HEALING tick (:56458-61), not a one-shot at the arm;
+    /// - `sub_6A300` never calls `sub_68DE0`, so heal does NOT pin
+    ///   mid-burst regen the way the skeleton's spells do;
+    /// - the XP award (`sub_6D8B0(parent, 5, 1)` :56452) is on the
+    ///   first HEALING tick, so a cast at full life scores nothing;
+    /// - sound 25 is on the first ADMITTED tick, healing or not.
+    fn mc2_heal_token_tick(&mut self, m: usize) {
+        if self.g.ent[m].f26 > 0 {
+            let first = self.g.ent[m].f26 as u16 == self.g.ent[m].f28.max(1);
+            let cost = self.g.ent[m].max_life;
+            // `sub_68D50` is `mc2_afford`; the second leg is heal's own
+            // per-tick purse test (:56445).
+            let admitted = self.mc2_afford(m) && (self.dev_spells || self.player.mana >= cost);
+            if admitted {
+                if first {
+                    self.g.snd_player(25);
+                    self.player.heal_active = true;
+                }
+                if self.player.life < PLAYER_LIFE_MAX {
+                    if first {
+                        self.mc2_award_xp(PLAYER_TARGET, 5, 1);
+                    }
+                    // Retail's operand order: `maxLife * sub / 100`.
+                    let step = (PLAYER_LIFE_MAX as i64 * self.g.ent[m].f30 as i64 / 100) as i32;
+                    self.player.life = (self.player.life + step).min(PLAYER_LIFE_MAX);
+                    self.mana_debit(cost);
+                }
+            } else {
+                // :56466 — the refusal RELEASES; the decrement below
+                // expires it next tick.
+                self.g.ent[m].f26 = 1;
+            }
+            self.g.ent[m].f26 -= 1;
+            if self.g.ent[m].f26 == 0 {
+                self.mc2_cast_expire(5, m);
+            }
+        }
+        if self.g.ent[m].f54 > 0 {
+            self.g.ent[m].f54 -= 1;
+        }
+    }
+
     /// The CASTLE spell (2) tick — the UPGRADE LOCK, ported from retail's
     /// `sub_69AB0` + `sub_5F890` (EF:56086/61029). The manifestation's
     /// cast timer `f26` (`word_0x2E_46`) is NEVER a countdown for the
@@ -1594,32 +1685,98 @@ impl World {
         if active {
             self.g.ent[m].f26 = dur - 1; // word_0x30_48 - 1
         } else if was {
-            self.g.ent[m].f26 = 0;
-            self.mc2_cast_expire(2, m);
-            // `sub_60780` (EF:61670): every castle HP/CAP stamp also
-            // re-runs SetSpell on the manifestation's OWN tier
-            // (deferral suppressed — retail zeroes word_46 around the
-            // call), so the cached cast cost (`max_life`, the mana
-            // gate's word) tracks the castle level BOTH ways —
-            // including a DOWNGRADE, which awards no XP (demolish or
-            // an enemy razing a level would otherwise leave the old
-            // rung cached and ding an affordable rebuild as
-            // unaffordable). Ported at the lock-release edge instead
-            // of retail's mid-transform stamp: observably equivalent,
-            // since the cast gate is armed-blocked for the whole
-            // transform — WHILE A CASTLE STANDS. Retail's stamp rides
-            // the castle's own HP/CAP writes, so castle DEATH leaves
-            // the old rung cached (the MC2 face of the first-castle
-            // lockout): under the `castle_recast_cost` retail arm the
-            // castle-less release skips the re-sync exactly like
-            // retail; the patched arm re-syncs to the base-cost
-            // rebuild.
-            if (self.patches.castle_recast_cost && !self.strict_retail)
-                || self.player_castle().is_some()
-            {
-                let tier = self.g.ent[m].f71;
-                self.mc2_set_spell(m, tier);
-            }
+            self.mc2_castle_lock_release(m);
+        }
+    }
+
+    /// `sub_5F890`'s `a2 == 0` arm on the MANIFESTATION side: drop the
+    /// upgrade lock and re-price the cached cast cost.
+    ///
+    /// `sub_60780` (EF:61670): every castle HP/CAP stamp also re-runs
+    /// SetSpell on the manifestation's OWN tier (deferral suppressed —
+    /// retail zeroes word_46 around the call), so the cached cast cost
+    /// (`max_life`, the mana gate's word) tracks the castle level BOTH
+    /// ways — including a DOWNGRADE, which awards no XP (demolish or an
+    /// enemy razing a level would otherwise leave the old rung cached
+    /// and ding an affordable rebuild as unaffordable). Ported at the
+    /// lock-release edge instead of retail's mid-transform stamp — and
+    /// since [`World::mc2_castle_lock_stamp`] moved that edge to the
+    /// CASTLE's own pass, both writers now sit at the same slot retail
+    /// runs them from. Retail's stamp rides the castle's own HP/CAP
+    /// writes, so castle DEATH leaves the old rung cached (the MC2 face
+    /// of the first-castle lockout): under the `castle_recast_cost`
+    /// retail arm the castle-less release skips the re-sync exactly
+    /// like retail; the patched arm re-syncs to the base-cost rebuild.
+    fn mc2_castle_lock_release(&mut self, m: usize) {
+        self.g.ent[m].f26 = 0;
+        self.mc2_cast_expire(2, m);
+        if (self.patches.castle_recast_cost && !self.strict_retail)
+            || self.player_castle().is_some()
+        {
+            let tier = self.g.ent[m].f71;
+            self.mc2_set_spell(m, tier);
+        }
+    }
+
+    /// ⭐⭐⭐ `sub_5F890` (EF:61029) RUN AT THE **CASTLE'S** OWN PASS —
+    /// the CREATE-CASTLE UPGRADE-LOCK, published one dispatch slot
+    /// before the carpet instead of one after.
+    ///
+    /// Retail resolves the castle owner's spell-2 manifestation
+    /// (`Entities[castle->id]->player->SpellsEnabled[2]`) and either
+    /// PINS it at `word_0x30_48 - 1` (`a2 != 0`) or RELEASES it to 0
+    /// and runs `sub_6D880` on the castle (`a2 == 0`). Every call site
+    /// is the castle's own handler:
+    ///
+    /// * `EndOfCastleProjectile_5F8F0` action 4 — PIN on each
+    ///   blast-shake countdown tick (EF:61076; the `== 1` release tick
+    ///   transitions without pinning, so the census is on the PRE
+    ///   `word_0x30_48` being >= 2),
+    /// * `BeginOfCastleCreation_5FA70` action 5 — **RELEASE** on case 2
+    ///   (EF:61151, the settle back to standing), PIN on cases 3 and 5
+    ///   (EF:61155/61173),
+    /// * `sub_605E0` from action 6 — PIN on each level actually taken
+    ///   off (EF:61643) and RELEASE once the level reaches 0
+    ///   (EF:61662, `sub_5F890(a1x, a1x->dword_0x10_16)`).
+    ///
+    /// **WHY THE SLOT IS THE WHOLE LAW.** The castle sits far BELOW the
+    /// carpet in the ascending walk (mc2l6 castle 63, carpet 343,
+    /// manifestation 346), and the human's cast gate runs at the
+    /// carpet. The port published the release from
+    /// [`World::mc2_castle_spell_tick`] — the manifestation's own pass,
+    /// one slot ABOVE the carpet — so on the frame a build settles the
+    /// gate still read the pinned 100, took `sub_5F660`'s `case 2:
+    /// word_0x2E_46 > 0` buzz arm (EF:60908-13), and a HELD cast button
+    /// lost that whole frame. mc2l6-rsg t=324: the (10,42) painter at
+    /// slot 60 signals `f59 = 2`, castle 63 settles to action 4 and
+    /// releases, and the human's held button re-casts THE SAME TICK —
+    /// retail mints the (10,43) delivery pair and debits 30000 where
+    /// the port fired nothing until t=328.
+    ///
+    /// ⚠ HUMAN ONLY. Retail's `SpellsEnabled[2]` is materialized for
+    /// every player including AI (`sub_5CF40` EF:59374), so a RIVAL
+    /// castle stamps its owner's manifestation too — but MC2 rivals
+    /// cast through [`World::mc2_rival_cast_castle`], which owns no
+    /// class-15 record for the stamp to land on. Unported, and inert.
+    pub(crate) fn mc2_castle_lock_stamp(&mut self, own: u16, pin: bool) {
+        if own != PLAYER_TARGET {
+            return;
+        }
+        let m = self.mc2_book.ent[2] as usize;
+        // The model gate matters under import — a book slot that
+        // survived a re-import can name a record that is no longer the
+        // castle manifestation.
+        if m == 0
+            || m >= self.g.ent.len()
+            || self.g.ent[m].class64 != 15
+            || self.g.ent[m].model65 != 2
+        {
+            return;
+        }
+        if pin {
+            self.g.ent[m].f26 = self.g.ent[m].f28.max(1) as i16 - 1;
+        } else if self.g.ent[m].f26 > 0 {
+            self.mc2_castle_lock_release(m);
         }
     }
 
@@ -1921,12 +2078,13 @@ impl World {
                 self.mc2_award_xp(PLAYER_TARGET, 3, 1);
                 self.g.snd_player(19);
             }
-            // heal (EF:56432), sound 25.
-            5 => {
-                self.player.heal_active = true;
-                self.mc2_award_xp(PLAYER_TARGET, 5, 1);
-                self.g.snd_player(25);
-            }
+            // heal (5) NEVER REACHES HERE. `sub_6A300` is not a
+            // "fire once on the first tick" spell at all — its whole
+            // body, sound 25 and the XP award included, is the
+            // per-tick effect state, and the XP is gated on actually
+            // healing. See [`Self::mc2_heal_token_tick`], which
+            // `mc2_manifestation_tick` early-returns into.
+            5 => debug_assert!(false, "mc2 heal routes through mc2_heal_token_tick"),
             // shield (EF:56496): armed-window flag.
             6 => {
                 self.player.shield = true;
@@ -2303,6 +2461,9 @@ impl World {
             pitch: p.pitch,
             model: subtype,
             own: PLAYER_TARGET,
+            // The would-be shot's owner is the human carpet, a wizard
+            // row like any other (`sub_67CB0`'s owner hoist).
+            range: self.g.mc2_owner_lock_range(PLAYER_TARGET),
             reach: speed as i64 * max_life as i64,
         };
         let slot = self.g.mc2_aim_scan(&probe, None)?;

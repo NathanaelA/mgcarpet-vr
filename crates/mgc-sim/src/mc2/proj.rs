@@ -62,6 +62,17 @@ pub(crate) struct AimProbe {
     /// The PROJECTILE model — keys the candidate lists.
     pub model: u8,
     pub own: u16,
+    /// ⭐⭐ THE CLASS-3 LOCK RANGE IS THE **OWNER'S** BEHAVIOUR ROW,
+    /// NOT THE PROJECTILE'S — `v43x = Entities[a1x->id_0x1A_26]`
+    /// hoisted before the walk, then
+    /// `v10 = v43x->dword_0xA0_160x->word_160_0x1c_28` inside it
+    /// (EF:54783-88, and the same hoist in the sibling cases at
+    /// EF:54866/54941). Every class-9 row carries 4096; the wizard
+    /// ctors carry 8192 (`AddPlayer_4A920` → `str_D7BD6[66]`, cave
+    /// 104; `sub_4A9C0` → `[67]`), so a WIZARD-cast bolt reaches a
+    /// full 4096 further for its lock than the port's projectile-row
+    /// reading allowed. See [`Gen::mc2_owner_lock_range`].
+    pub range: i64,
     /// Lightning's wizard range = minSpeed · maxLife (EF:54896);
     /// unused for every other model.
     pub reach: i64,
@@ -891,6 +902,55 @@ impl Gen {
                 self.mc2_cast_xp.0.push((id, spell, 1));
             }
         }
+        // ⭐ THE IMPACT RE-POINTS THE OWNER WIZARD AT WHAT IT STRUCK —
+        // AND LEAVES THE TARGET SIGNATURE ALONE. `sub_686D0`
+        // (EF:55192-55215) resolves `Entities[bolt->id_0x1A_26]`, and
+        // if that owner is a wizard (class 3, model 0 or 1) writes
+        // `owner->word_0x96_150 = victim`. It is the ONLY writer of
+        // that word that does NOT also write `word_0x98_152` — every
+        // AI picker (EF:6114/6140/6151/6174/6224/6259/6283/6332/6374/
+        // 6394, the raid/attack picks EF:6224-6228 and the reactive
+        // pick EF:7713) writes the pair. All four impact workers call
+        // it right after their effect spawn: `sub_65820` (EF:62983),
+        // `sub_65C20` (EF:63187), `sub_662E0` (EF:63549) and the
+        // lightning `sub_66750` (EF:58408).
+        //
+        // ⭐ SO A LANDED SHOT USUALLY BRICKS THE SHOOTER'S CURRENT
+        // GOAL. The AI's every target read goes through `sub_14C60`
+        // (EF:5497), which compares `sub_14C40(Entities[+0x96])` —
+        // id + model + (class<<7) — against the STORED `+0x98`. The
+        // fresh victim almost never matches the sig of whatever the
+        // picker chose, so the state handler falls out at its first
+        // line: `sub_13890` (state 8) returns 0 without the tan2
+        // roll, without `sub_14C90`'s approach/brake command and
+        // without its z-step, leaving the wizard on the mover's bare
+        // gravity (`sub_580E0`'s v_14) until the decision cadence
+        // re-arbitrates. mc2l6-rival-spells-galore t=294: rival 370's
+        // fireball reaches the HUMAN's castle (slot 63, id 343 model
+        // 2 → sig 729) while 370 is chasing the human himself (sig
+        // 727), so retail stamps 370's +0x96 = 63, freezes its roll
+        // at 241 and lets z fall 332 → 328 → … → 280 for the 36
+        // ticks up to the next think tick.
+        //
+        // ⚠ ONE FORK NOT REPRODUCED: `sub_662E0` — the possession
+        // worker this seam folds in — reaches its `sub_686D0` only
+        // down the branch that already required the victim to be a
+        // class-3 model-0/1 wizard (EF:63541-49); the other three
+        // workers stamp any victim. The folded seam stamps
+        // unconditionally, which is right for the three and one
+        // possession-shot-at-a-non-wizard too eager.
+        if victim != 0 && id != 0 && id != PLAYER_TARGET {
+            let owner = id as usize;
+            // The human owner is stamped by retail too, but his pool
+            // record is the reserved hole here (out-of-pool carpet)
+            // and nothing reads or grades a target word on it.
+            if owner < self.ent.len()
+                && self.ent[owner].class64 == 3
+                && self.ent[owner].model65 <= 1
+            {
+                self.ent[owner].f146 = victim;
+            }
+        }
         self.ent[i].flags |= 0x400;
     }
 
@@ -916,7 +976,26 @@ impl Gen {
         // The one-shot acquisition + full snap (`sub_66610`
         // EF:63586-98). A fresh cast always lands here (the a3==7
         // dispatch stamps no victim); no target = freeze the facing.
-        if self.ent[i].flags & F_AIMED == 0 {
+        //
+        // ⭐⭐⭐ AND IT IS GATED ON HAVING NO TARGET, NOT ON A LATCH.
+        // `sub_66610`'s whole acquire block sits inside
+        // `if (Entities[0] >= Entities[a1x->word_0x96_150])`
+        // (EF:63583) — a beam that arrives already carrying
+        // `word_0x96_150` never re-aims and never even sets the
+        // `byte[0] & 2` bit; it marches on the attitude its LAUNCHER
+        // wrote. The port ran the acquisition off `F_AIMED` alone, so
+        // a CASTLE TURRET's lightning re-acquired the same victim from
+        // its own muzzle — and the muzzle is the turret's z plus the
+        // sprite half-height, which `mc2_piece_fire` deliberately adds
+        // AFTER the aim (EF:30296). Re-aiming from there hands back the
+        // full box the turret's law had just given up.
+        // mc2l6-rsg t=463: turret 2 at (61952, 23296, 2218) with `f78`
+        // 100 fires on rival 383 at aim_z 932 — retail's beam keeps the
+        // turret's pitch 207, the port re-acquired from z 2318 and got
+        // 217. `sub_66750` builds ONE rounded step vector from that
+        // pitch and ACCUMULATES it down all 49 trail nodes, so node k
+        // landed exactly k units low and k units long.
+        if self.ent[i].flags & F_AIMED == 0 && self.ent[i].f146 == 0 {
             self.ent[i].flags |= F_AIMED;
             if self.mc2_autoaim(i, ctx) {
                 let e = &mut self.ent[i];
@@ -928,9 +1007,17 @@ impl Gen {
                 e.f36 = e.f32;
             }
         }
-        let (sx, sy, sz, yaw, pitch, speed, id) = {
+        // ⚠ AND THE LATCH STAYS OFF WHEN THE GATE REFUSED. `byte[0] |= 2`
+        // lives INSIDE retail's no-target branch too, so a turret beam
+        // reaches its death with the bit clear — a GRADED lane (mc2l6-rsg
+        // t=463 slot 414 `flags` 1024, not 1026). The march's own re-aim
+        // is suppressed by `mc2_beam_defer` instead (see
+        // [`Gen::mc2_flyer_tick`]): the port stashes `f146` aside for the
+        // walk, which would otherwise make the generic flyer read the
+        // beam as targetless and re-acquire on its first step.
+        let (sx, sy, sz, speed, id) = {
             let e = &self.ent[i];
-            (e.x, e.y, e.z, e.f30, e.f32, e.f126.max(384), e.id24)
+            (e.x, e.y, e.z, e.f126.max(384), e.id24)
         };
         // Straight march: the beam never homes per-step, so the lock
         // is held aside for the walk (F_AIMED is latched, so the
@@ -939,6 +1026,27 @@ impl Gen {
         let lock = self.ent[i].f146;
         self.ent[i].f146 = 0;
         let mut steps = 0i32;
+        // ⭐⭐ THE STEP VECTOR IS BUILT ONCE AND ACCUMULATED, SO A
+        // ONE-UNIT PITCH ERROR IS A ONE-UNIT ERROR **PER NODE**.
+        // Retail reads `v5`/`v4` after the march, but only because it
+        // restored them to the values its FIRST `sub_66610` left —
+        // which, for a beam that already carries `word_0x96_150`, are
+        // exactly the launcher's (that call takes the no-target gate
+        // and touches neither axis). The port front-loads that first
+        // acquisition into the block above, so the pre-march read here
+        // is the same register.
+        //
+        // mc2l6-rsg t=463 lays 49 trail nodes off one turret shot, and
+        // the port's `y`/`z` were off by exactly the node index — +1/−1,
+        // node 3 by 3, node 27 by 27 — with `x` bit-exact throughout:
+        // the signature of a slightly steeper shared delta (a larger
+        // `dist·sin` and a smaller `dist·cos`, the latter too small to
+        // move `x` at this yaw). pitch 205 gives retail's (10, −36, −28)
+        // at spacing 48; the re-acquired 217 gives (10, −35, −29).
+        let (yaw, pitch) = {
+            let e = &self.ent[i];
+            (e.f30, e.f32)
+        };
         // The march is `sub_66610` — walk, blocker test, disable — and
         // NOTHING of the impact. Park it (see `Gen::mc2_beam_defer`).
         self.mc2_beam_defer.armed = true;
@@ -1373,7 +1481,13 @@ impl Gen {
                 e.f32 = (pitch as i32 + Self::turn_step(pitch, f36, cp) as i32) as u16 & 0x7FF;
             }
             None => {
-                if self.ent[i].flags & F_AIMED == 0 {
+                // ⚠ `mc2_beam_defer.armed` = a lightning beam mid-march
+                // with its lock stashed aside. Retail's per-step worker
+                // there is `sub_66610`, whose acquire arm is gated on
+                // `word_0x96_150 == 0` and so never fires for a beam
+                // that arrived with a target; the port must not let the
+                // stashed lock read as "targetless" and re-aim.
+                if self.ent[i].flags & F_AIMED == 0 && !self.mc2_beam_defer.armed {
                     self.ent[i].flags |= F_AIMED;
                     // One-shot acquisition (`sub_67CB0`): the
                     // FIREBALL states nudge yaw ≤34 units toward the
@@ -1693,9 +1807,22 @@ impl Gen {
                 // 937 retail-derived) sat entirely above its own
                 // burst. Model-2 exempt ([`Ent::aim_z`]) like every
                 // sub_65580 site — castle hits land at the flag.
+                //
+                // ⚠ EXCEPT UNDER THE BEAM. The lightning walk's own
+                // per-step worker is `sub_66610`, and its blocker arm is
+                // a BARE `a1x->position_0x4C_76 = v2x->position_0x4C_76`
+                // (EF:63605-08) — no `sub_65580` bracket anywhere in the
+                // function, so the beam stops at the victim's RAW
+                // origin. mc2l6-rsg t=463 slot 414: retail's beam ends
+                // at rival 383's own 832, the raised 932 is this arm's.
                 let (vx, vy, vz) = {
                     let t = &self.ent[v];
-                    (t.x, t.y, t.aim_z())
+                    let tz = if self.mc2_beam_defer.armed {
+                        t.z
+                    } else {
+                        t.aim_z()
+                    };
+                    (t.x, t.y, tz)
                 };
                 self.move_relink(i, vx, vy, vz);
                 v as u16
@@ -1830,9 +1957,6 @@ impl Gen {
     // instrument) + the mutating first-tick lock (`mc2_autoaim`).
     // Best scorer result wins, first-scanned breaks ties.
     // Deliberate approximations (cited):
-    // - the owner's lock range rides the wizard row 59's v_28
-    //   (4096 — every class-9 row carries the same value; the
-    //   out-of-pool human has no row156);
     // - the awake gate `byte_0x39_57` → f58 nonzero (retail's own
     //   truthiness on the byte);
     // - bucket 22 = the worm family, approximated as model-22
@@ -1887,6 +2011,36 @@ impl Gen {
         })
     }
 
+    /// The class-3 lock range for a shot owned by `own`
+    /// (`Entities[a1x->id_0x1A_26]->dword_0xA0_160x->word_160_0x1c_28`,
+    /// EF:54783/54787).
+    ///
+    /// ⭐⭐⭐ WHOSE ROW A SITE READS IS A LAW. The port took the range
+    /// off the PROJECTILE (class-9 rows are all 4096); retail hoists
+    /// the OWNER's entity before the walk and reads its row, which for
+    /// every wizard — human (`str_D7BD6[66]`, cave `[104]`) and rival
+    /// (`[67]`) alike — is 8192. mc2l6 t=687 is the corpus row: rival
+    /// 370's fresh (9,0) at (59264, 20095, 930) sits 5,065 from rival
+    /// 383's carpet, inside 8192 and outside 4096, so retail locks it
+    /// (`word_0x96_150` 383, desired 578/3 → yaw 515 + the hard-capped
+    /// 34 = 549, pitch snapped to 3) where the port found nothing and
+    /// flew on at the cast attitude 515/50.
+    ///
+    /// The human owner is out of the pool and has no `row156`; his
+    /// carpet's row is a wizard row either way, and all three wizard
+    /// rows carry the same 8192, so the constant is exact rather than
+    /// an approximation. An owner-less shot (`id24` 0) reads retail's
+    /// sentinel record — not a case the corpus reaches; it takes the
+    /// same wizard default here.
+    pub(crate) fn mc2_owner_lock_range(&self, own: u16) -> i64 {
+        let row = match own {
+            PLAYER_TARGET | 0 => crate::mc2::rivals::WIZARD_ROW,
+            o if (o as usize) < self.ent.len() => self.ent[o as usize].row156,
+            _ => crate::mc2::rivals::WIZARD_ROW,
+        };
+        BEHAVIOR[row as usize].v_28 as i64
+    }
+
     /// The pure acquisition scan under an [`AimProbe`] — the scoring
     /// sweep of `sub_67CB0` with no writes (shared by the live
     /// first-tick lock and the crosshair instrument's preview).
@@ -1900,7 +2054,7 @@ impl Gen {
         let (wizards, creatures, worms_always, spheres, buildings, yc, pc, _alarm, grounded) =
             Self::mc2_aim_lists(probe.model)?;
         let own = probe.own;
-        let range = BEHAVIOR[crate::mc2::behavior::ROW_BASE].v_28 as i64;
+        let range = probe.range;
         // Lightning's wizard range = the projectile's own reach
         // (minSpeed · maxLife, EF:54896).
         let wiz_range = if probe.model == 9 { probe.reach } else { range };
@@ -2144,6 +2298,7 @@ impl Gen {
                 pitch: e.f32,
                 model: e.model65,
                 own: e.id24,
+                range: self.mc2_owner_lock_range(e.id24),
                 reach: e.f128 as i64 * e.max_life as i64,
             }
         };
@@ -2155,8 +2310,27 @@ impl Gen {
         let alarm = Self::mc2_aim_lists(probe.model).is_some_and(|l| l.7);
         // `sub_655C0`: the lock + the desired aim toward it (the
         // sub_65580 bracket — model-2 raw, [`Ent::aim_z`]).
+        // ⭐ THE `sub_65580` RAISE IS NOT POOL-ONLY — IT LIFTS THE
+        // HUMAN TOO. `sub_655C0` (EF:54862) brackets BOTH tan calls in
+        // `sub_65580`/`sub_655A0`, which add and remove
+        // `target->array_0x52_82.yaw` on any model but 2; retail's
+        // player is an ordinary boxed pool wizard, so his carpet is
+        // lifted by its own 100 like everything else. The servo arm in
+        // [`Gen::mc2_flyer_tick`] already carries this (`tz +
+        // PLAYER_HH`); the ONE-SHOT acquisition here read the raw pose
+        // and aimed a full box low at the player alone.
+        // mc2l6-rival-spells-galore t=309: rival 378's (9,0) at
+        // (64750, 16685, 484) acquires the human at (62080, 18560,
+        // 256) — retail's `fov_0x22_34` is 12 off the raised 356,
+        // where the raw 256 gave 21, and `sub_65C20`'s arm copies that
+        // word straight into `pitch_0x1E_30` (EF:63104/63118), so the
+        // whole flight flew a box low (z 455 vs retail's 467).
         let (tx, ty, tz) = if target == PLAYER_TARGET {
-            (ctx.px, ctx.py, ctx.pz)
+            (
+                ctx.px,
+                ctx.py,
+                ctx.pz + crate::mc1::combat::PLAYER_HH as i16,
+            )
         } else {
             let t = &self.ent[target as usize];
             (t.x, t.y, t.aim_z())

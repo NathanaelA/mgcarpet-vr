@@ -154,10 +154,17 @@ impl Gen {
     /// m13 ctor at :46274 and then the firing thunk at :21928) and the
     /// box does not grow to 4x.
     ///
-    /// Only three call sites exist in the whole binary, all on the m13
-    /// arrow path — the sibling m14 boulder ctor (:46297) deliberately
-    /// uses the PLAIN setter, so the two projectiles differ in hitbox
-    /// as well as in art.
+    /// Only three call sites of THIS WRAPPER exist (:21928, :21957,
+    /// :46274), all on the m13 arrow path — the sibling m14 boulder
+    /// ctor (:46297) deliberately uses the PLAIN setter, so the two
+    /// projectiles differ in hitbox as well as in art.
+    ///
+    /// ⚠ THE DOUBLING ALSO SHIPS INLINE, AND THE WRAPPER'S CALL LIST
+    /// DOES NOT FIND IT. Two class-9 ctors open-code the same thing as
+    /// `set_sprite` + `extents(2 * +80, 2 * +84)`: the possess lob
+    /// sub_39A90 (:45917) and the Mana Magnet bolt sub_3A2F0 (:46385),
+    /// both confirmed in CARPET *and* HIDDEN (hw:42038 / hw:42505).
+    /// Grep the SHAPE (`sub_37130_374F0(.., 2 * ..)`), not the wrapper.
     pub(crate) fn set_sprite_x2(&mut self, i: usize, t: u16) {
         self.set_sprite(i, t);
         let e = &mut self.ent[i];

@@ -49,6 +49,20 @@ pub fn mail_trace() -> Option<u64> {
     Some(t)
 }
 
+/// The pool slot [`Gen::mail_write`]/[`Gen::mail_write_single`] narrate
+/// under `MGC_MAIL_TRACE` — `MGC_MAIL_SLOT=<n>`, default 486 (the
+/// mc1l4 castle the trace was first cut for). The player's own mailbox
+/// always narrates.
+pub fn mail_trace_slot() -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("MGC_MAIL_SLOT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(486)
+    })
+}
+
 use engine::{features, world};
 use mc1::spells;
 

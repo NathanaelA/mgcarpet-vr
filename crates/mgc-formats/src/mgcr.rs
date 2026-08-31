@@ -1646,6 +1646,12 @@ pub struct RetailPlayerMc2 {
     /// Seeded at re-anchor so a replayed rival resumes mid-alternation
     /// (the every-other-tick SPEED pump) in retail's phase.
     pub brake: i16,
+    /// The STORED life-regen rate `lifeRegen_0x163_355` (flight
+    /// +355). `sub_12A70` applies it and only THEN re-selects it from
+    /// the at-castle/dolmen test (EF:5425 apply, EF:5439/5447 select),
+    /// so a rate change lands one tick after the test flips — which
+    /// makes the register real state, not a derived value.
+    pub life_regen: i16,
     pub strafe: i16, // +998 +16
     // The pose channel's flight lanes (Type_str_164 offsets, all
     // decompile-verified against remc2 global_types.h):
@@ -1990,6 +1996,7 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
         guards: GuardReg(std::array::from_fn(|k| u16_(d, t + 92 + 2 * k))),
         cmd_speed: i16_(d, t + 12),
         brake: i16_(d, t + 14),
+        life_regen: i16_(d, t + 355),
         strafe: i16_(d, t + 16),
         move_bits: u32_(d, t),
         roll_delta: i16_(d, t + 4),

@@ -3830,14 +3830,14 @@ impl World {
         let _ = target;
         match s {
             3 => {
+                // The doubled extents live in the CTOR (sub_39A90
+                // :45917), not here — see the human twin's note in
+                // `cast_projectile` and [`Gen::spawn_spell_lob`].
                 let e = &mut self.g.ent[pr];
                 e.f68 = 10;
                 e.f69 = 12;
                 e.f66 = 10;
                 e.f26 = 200;
-                e.f80 *= 2;
-                e.f82 *= 2;
-                e.f84 *= 2;
             }
             7 => self.g.ent[pr].f69 = 17,
             13 => {

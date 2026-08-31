@@ -5523,7 +5523,40 @@ impl World {
                 // three-actionIndex castle (tick70 4/5/6) and the
                 // AddBallon_60AB0 balloon.
                 3 if matches!(self.game, GameId::Mc2) && self.g.ent[i].model65 == 2 => {
-                    self.g.mc2_castle_tick(i, self.patches)
+                    let (pre59, pre50, pre70) = {
+                        let e = &self.g.ent[i];
+                        (e.f59, e.f50, e.tick70)
+                    };
+                    // Action 6 only reaches `sub_605E0` when a sphere
+                    // can spawn (EF:61224); the starved retry stamps
+                    // nothing.
+                    let downgraded = !self.g.free.is_empty();
+                    self.g.mc2_castle_tick(i, self.patches);
+                    // `sub_5F890` AT THE CASTLE'S OWN PASS — the census
+                    // is documented on `mc2_castle_lock_stamp`, and it
+                    // is the MC1 arm below's twin (that column resolves
+                    // the token through wizard +708 instead of the
+                    // spellbook).
+                    let pin = match pre70 {
+                        // The level-off: PIN per level taken
+                        // (EF:61643), RELEASE once the ladder reaches 0
+                        // — retail reaps the record on that same arm
+                        // (EF:61663), which is the port's level-0 tell.
+                        6 if downgraded => Some(self.g.ent[i].flags & 0x400 == 0),
+                        // SETTLED: only the blast-shake countdown pins.
+                        4 if pre50 >= 2 => Some(true),
+                        // TRANSFORMING: the sub-state actions.
+                        5 => match pre59 {
+                            2 => Some(false),
+                            3 | 5 => Some(true),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(pin) = pin {
+                        let own = self.g.ent[i].id24;
+                        self.mc2_castle_lock_stamp(own, pin);
+                    }
                 }
                 3 if matches!(self.game, GameId::Mc2) && self.g.ent[i].model65 == 3 => {
                     self.g.mc2_balloon_tick(i)
@@ -8619,16 +8652,21 @@ impl World {
         match id {
             // Possess (:65236-52): detonation = the (10,12) ch1
             // claim flash; target-class filter 10 (the dedicated
-            // ball/house victim scan), charge 200, doubled extents
-            // (sub_39A90 :45917).
+            // ball/house victim scan), charge 200.
+            //
+            // ⚠ THE DOUBLED EXTENTS ARE THE CTOR'S, NOT THIS ARM'S.
+            // :45917 is the LAST LINE OF sub_39A90 — the cast arm
+            // never touches +80/+82/+84 — and the misattribution
+            // showed as a hole rather than a wrong value because the
+            // MAGNET shares that ctor and has no such cast arm (it
+            // flew at 90/90/75 for the whole campaign). See
+            // [`Gen::spawn_spell_lob`]. Left here it double-doubles:
+            // `*= 2` is not idempotent the way the setter is.
             3 => {
                 e.f68 = 10;
                 e.f69 = 12;
                 e.f66 = 10;
                 e.f26 = 200;
-                e.f80 *= 2;
-                e.f82 *= 2;
-                e.f84 *= 2;
                 // The return-path dest (:65247-49): the CASTER's own
                 // position — raw z, not the muzzle's lifted one —
                 // projected 10240 along the live aim (sub_41EC0).
@@ -9681,7 +9719,14 @@ impl World {
         e.f30 = p.heading;
         e.f32 = p.pitch;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
-        e.f140 = def.possess_mana as i32;
+        // :66273 copies the TOKEN's `+140`, and the shared ctor
+        // sub_3BF70 (:48001-05) sets `+140 = a4 / a5` — the PER-SHOT
+        // cost — while `+136` keeps the total. 75000/101 = 742, which
+        // is what mc1l0-spells-galore records on every one of the 26
+        // Global Death fuses (t=3992 slot 220, t=3876 slot 962, …).
+        // This was the only manifestation-family `+140` in the tree
+        // written without the divide.
+        e.f140 = (def.possess_mana / def.count.max(1) as u32) as i32;
         e.f68 = 10;
         e.f69 = 55;
         // The family charge move (:66278-79) — the same bank-and-zero
@@ -9938,10 +9983,29 @@ impl World {
                 // the stream a tick early and off the free-stack top,
                 // laying 43 phantom `(9,9)` segments at 22111.
                 //
-                // ⚠ Spells 5 (Beyond Sight) and 12 (Invisible) are
-                // still absent on the same "hold/channel set rests
-                // inert" reasoning. They have NO corpus witness yet —
-                // do not add them without one.
+                // ⭐ 12 (INVISIBLE) NOW HAS ITS WITNESS and has joined
+                // the list. `sub_571B0_576E0` is a REAL handler —
+                // dispatch row 0x24 (:4994) = spell 12 * 3 + phase 0 —
+                // and it is the same bare skeleton as Rebound's
+                // sub_573F0: per-tick `sub_55DD0` gate, `sub_55E80`,
+                // shared `--(+48)`. `sub_55E80`'s else arm (:64955-57)
+                // is the one that matters here: a MID-BURST tick
+                // (`+48 != +50`) PINS a positive `+132` to 0, so a
+                // live burst freezes the caster's mana regen.
+                // mc1l0-spells-galore: the human's (12,12) at slot 634
+                // runs t=4677→5164 and retail's carpet `+132` is 0 for
+                // that whole window, lifting to 1103 on t=5165 — the
+                // tick `+48` reaches 0. With the token inert we
+                // regenerated 1103/tick through it: 242 of the take's
+                // 277 reset heads, every one `player.mana` off by
+                // exactly +1103, plus 488 pair rows of frozen `f26`
+                // (the `+48` we never decremented).
+                //
+                // ⚠ Spell 5 (Beyond Sight) is STILL absent. `sub_56730`
+                // (:65292, row 0x0F) is structurally the same
+                // skeleton, but no take in the corpus casts (12,5), so
+                // it would ride 12's evidence rather than its own —
+                // do not add it without a witness.
                 if self.player.owned[spell] == i as u16
                     && matches!(
                         spell,
@@ -9953,6 +10017,7 @@ impl World {
                             | 9
                             | 10
                             | 11
+                            | 12
                             | 13
                             | 14
                             | 15
@@ -10365,6 +10430,26 @@ impl World {
             }
             return;
         }
+        // 1 HEAL HAS A BODY OF ITS OWN — `sub_56270` (:65091) shares
+        // nothing with the launcher skeleton but the `+48` countdown,
+        // and [`Self::mc1_heal_token_tick`] already models it
+        // line-for-line. It was wired to the STRICT encoding's token
+        // walk only, so the player's natively-minted token kept the
+        // old reconstruction below: 5%/tick heal with no
+        // `actLife < maxLife` gate, `cost/count` taken straight off
+        // the purse instead of the whole `+136` on the regen delta,
+        // and no release. mc1l0-sg t=5447: retail's heal pays 1000
+        // ONCE, tops the wizard up from 9595 and RELEASES the burst
+        // the next tick (life is full); the port paid 47/tick and ran
+        // the counter all the way down. Same half-landed shape as
+        // Shield's `skeleton` arm below.
+        //
+        // ⚠ Returning here is also what keeps heal OUT of the
+        // mid-burst regen pin: sub_56270 never calls `sub_55E80`.
+        if spell == 1 {
+            self.mc1_heal_token_tick(i);
+            return;
+        }
         // `sub_55E80` (:64936): on the FULL tick the launcher fires
         // and the debit overwrites the regen delta (:64942-52); on
         // mid-burst ticks the positive delta is pinned to 0 — the
@@ -10395,7 +10480,20 @@ impl World {
         // retail delta 100 → −1000 on the re-cast; 148 pair rows
         // read +1000 on the port purse without it). The machine's
         // whole output is the bit and the economy.
-        let skeleton = spell == 14;
+        // 4 SHIELD IS THE SAME SKELETON — sub_566C0 (:65266-89) is
+        // Rebound's body with a different bit (`+17 |= 0x40` instead
+        // of 0x80): gate → bit → `sub_55E80` → countdown, gate fail =
+        // `+48 = 1`. Only HALF of this law was landed: the command
+        // site was correctly demoted to arm-only (see the `+65 <
+        // 0x10` LABEL_20 note in `mc1_cast_command`) and the token's
+        // debit was landed for the RIVAL/strict arm
+        // ([`Self::mc1_shield_token_tick`]) — but the PLAYER's own
+        // token routes here, where 4 was in neither `launcher` nor
+        // `skeleton`, so the human's shield was FREE. mc1l0-sg
+        // t=5164: retail arms +48 = 251 and the machine spends 2000
+        // on its first full tick; the port ran the countdown and the
+        // shield bit and never touched the purse.
+        let skeleton = matches!(spell, 4 | 14);
         let mut fired = false;
         let mut gate_failed = false;
         if was_live
@@ -17140,6 +17238,104 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **THE MC2 RIVAL'S AT-CASTLE PROBE IS THE SUMMED-EXTENTS BOX,
+    /// NOT A POINT TEST.** `sub_12A70` (EF:5396) asks
+    /// `sub_106C0(rival, castle)`, which is the full `sub_10630`
+    /// (EF:3712-16): summed extents per axis, strict `<`, z leg
+    /// included. The port's rival copy was the last bare
+    /// `<= castle.f80/f82` point test in the tree — it dropped the
+    /// RIVAL's own extent band and so lost the castle regen rate
+    /// half a tile early, the exact symptom the HUMAN lane was fixed
+    /// for at mc1l0 t=1827. mc2l6-rival-spells-galore t=148: the
+    /// rival sits at dx 1755, inside [castle 1664, castle+rival
+    /// 1787), and retail still regens 1000 where we regened 100 —
+    /// which at t=149 is the difference between affording SPEED
+    /// (240) and not (80).
+    ///
+    /// The head is FREE-RUN ONLY: the rival's regen register is an
+    /// ungraded lane, so a pair fixture is vacuous and the law pins
+    /// here. Non-vacuity is the second half of the test — one unit
+    /// PAST the summed edge the slow rate must return, so the old
+    /// point test cannot pass both halves.
+    #[test]
+    fn the_mc2_rival_at_castle_probe_sums_both_extents() {
+        use crate::mc2::rivals::{MC2_SPELLS, Mc2RivalConfig};
+        let mut w = mc2_flat_world();
+        w.start_markers[1] = Some((128, 128));
+        let mut configs: [Option<Mc2RivalConfig>; 8] = Default::default();
+        configs[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 0,
+            castle_level: 0,
+            start: [false; MC2_SPELLS],
+            start_level: [0; MC2_SPELLS],
+            blocked: [false; MC2_SPELLS],
+        });
+        w.set_mc2_wizards(&configs, 2);
+        let wiz = w.mc2_rivals[0].ent as usize;
+        let (cx, cy) = mc2_pos(128, 128);
+        let cz = w.g.ground_z(cx, cy) as i16;
+        let c = w.g.new_event().expect("castle");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.tick70 = 4;
+            e.f59 = 4;
+            e.f26 = 1;
+            e.id24 = w.mc2_rivals[0].ent;
+            e.f80 = 1664;
+            e.f82 = 1664;
+            e.f78 = 0;
+            e.f84 = 0x4000;
+            e.max_life = 40000;
+            e.act_life = 40000;
+        }
+        w.g.link(c, cx, cy, cz);
+        // The rival carpet's own extent quad, as recorded on
+        // mc2l6-rival-spells-galore slot 370: ayaw/apitch/aroll/afov
+        // = 100/119/119/100. It is the `apitch` leg (f80) the point
+        // test threw away.
+        {
+            let e = &mut w.g.ent[wiz];
+            e.f78 = 100;
+            e.f80 = 119;
+            e.f82 = 119;
+            e.f84 = 100;
+        }
+        let rw = w.g.ent[wiz].f80;
+        let max = w.mc2_rivals[0].mana_max;
+        let fast = ((max / 200) as i32).max(1000);
+        let slow = ((max / 2000) as i32).max(100);
+        assert_ne!(fast, slow, "the two rates must differ for this pin");
+
+        // INSIDE the summed box but OUTSIDE the castle's own — the
+        // band the point test threw away.
+        let inside = cx.wrapping_add(1664 + rw - 1);
+        w.g.ent[wiz].x = inside;
+        w.g.ent[wiz].y = cy;
+        w.g.ent[wiz].z = cz;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.mc2_rivals[0].mana_delta, fast,
+            "dx inside [castle.f80, castle.f80 + rival.f80) is STILL at home"
+        );
+
+        // One unit past the summed edge: `sub_10630`'s strict `<`
+        // fails and the slow rate returns.
+        let outside = cx.wrapping_add(1664 + rw);
+        w.g.ent[wiz].x = outside;
+        w.g.ent[wiz].y = cy;
+        w.g.ent[wiz].z = cz;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.mc2_rivals[0].mana_delta, slow,
+            "at the summed edge the box closes — strict `<`"
+        );
     }
 
     #[test]
@@ -24475,6 +24671,242 @@ mod tests {
         );
     }
 
+    /// ⭐ THE TWO SPRITE-209 LOBS ARE BORN WITH A DOUBLE-SIZE
+    /// HITBOX — and the doubling belongs to the CTOR, not to
+    /// possession's cast arm. `sub_39A90` (:45917) and `sub_3A2F0`
+    /// (:46385) both close with an inline
+    /// `sub_37130_374F0(v2, 2 * +80, 2 * +84)`, identical in CARPET
+    /// and HIDDEN (hw:42038 / hw:42505); every other class-9 spell
+    /// ctor keeps the sprite's own halves.
+    ///
+    /// The old port had the doubling on the possess CAST arm alone,
+    /// which is why the misattribution read as a HOLE rather than a
+    /// wrong value: the Mana Magnet shares the ctor and has no such
+    /// arm, so it flew at half size for the whole campaign and its
+    /// contact scan — `ent_overlap`'s SUMMED extents — passed
+    /// straight through the ball it was aimed at. Pair mode cannot
+    /// see any of this: the importer restores +80/+82/+84 off the
+    /// recording every tick, so the lane only speaks in a free run
+    /// (mc1l0-sg slot 46 from its first tick, t=2723).
+    #[test]
+    fn the_two_sprite_209_lobs_double_their_ctor_extents() {
+        let mut w = flat_world();
+        let p = firing_line();
+        let possess = w.g.spawn_spell_lob(1, p.x, p.y, p.z).unwrap();
+        let magnet = w.g.spawn_spell_lob(17, p.x, p.y, p.z).unwrap();
+        // Sprite 209 derives 90/90/75; the ctor's last line doubles.
+        for (name, i) in [("possess", possess), ("magnet", magnet)] {
+            let e = &w.g.ent[i];
+            assert_eq!(
+                (e.f80, e.f82, e.f84),
+                (180, 180, 150),
+                "{name}'s ctor doubles the sprite halves"
+            );
+        }
+        // The sibling payload lobs do NOT (sub_39BC0 :45941 onward
+        // end at the plain setter).
+        let crater = w.g.spawn_spell_lob(5, p.x, p.y, p.z).unwrap();
+        let e = &w.g.ent[crater];
+        assert!(
+            e.f80 < 180 && e.f80 == e.f82,
+            "the crater lob keeps its sprite's own halves"
+        );
+    }
+
+    /// ⭐ THE MAGNET AND THE DEATH FIELD ARE BORN OFF THE TILE CHAIN.
+    /// `sub_3B970` (:47694-97) and `sub_3BA00` (:47726-29) store
+    /// `+72`/`+76` RAW and set bit 0; neither calls `sub_41CF0`, so
+    /// neither carries the link bit at birth. The port's `link` here
+    /// was invisible on the castle-ejector path — which relinks 25
+    /// tiles out immediately, and the corpus pin of flags 5 is THAT
+    /// relink's bit — and wrong everywhere else: mc1l0-sg t=2733
+    /// reads retail flags 1 against the port's 5 on the Mana Magnet
+    /// bolt's own detonation, which never relinks.
+    #[test]
+    fn the_magnet_and_the_death_field_are_born_unlinked() {
+        let mut w = flat_world();
+        let p = firing_line();
+        let m = w.g.spawn_mana_magnet(p.x, p.y, p.z, 0).unwrap();
+        assert_eq!(w.g.ent[m].flags & 4, 0, "the (10,54) magnet is unlinked");
+        assert_eq!(w.g.ent[m].flags & 1, 1, "…with :47697's bit 0 set");
+        assert_eq!((w.g.ent[m].x, w.g.ent[m].y), (p.x, p.y), "raw +72 store");
+        // The castle ejector's own relink is what puts the corpus'
+        // flags 5 on a magnet — it still works off an unlinked one.
+        w.g.move_relink(m, p.x.wrapping_add(25 << 8), p.y, p.z);
+        assert_eq!(w.g.ent[m].flags & 4, 4, "a relink links it");
+
+        let f = w.g.spawn_effect(55, p.x, p.y, p.z).unwrap();
+        assert_eq!(w.g.ent[f].flags & 4, 0, "the (10,55) field is unlinked");
+        assert_eq!(w.g.ent[f].flags & 1, 1, "…with :47729's bit 0 set");
+    }
+
+    /// ⭐ SHIELD'S FULL-COST DEBIT IS THE TOKEN'S, AND THE HUMAN'S
+    /// TOKEN NEVER RAN IT. `sub_566C0` (:65266-89) is Rebound's
+    /// skeleton with a different bit: gate → `+17 |= 0x40` →
+    /// `sub_55E80` → countdown. Half of that law was already landed
+    /// (the command site demoted to arm-only, the RIVAL/strict body
+    /// written), but the player's own token routes through
+    /// `manifestation_tick`, where 4 was in neither the launcher set
+    /// nor the skeleton set — so the human's shield was FREE.
+    /// mc1l0-sg t=5164 is the witness: retail arms `+48 = 251` and
+    /// spends 2000 on the first full tick.
+    #[test]
+    fn shields_token_spends_the_full_cost_on_its_first_tick() {
+        use crate::mc1::spells::SpellId;
+        let mut w = flat_world();
+        w.grant_spells(&[4]);
+        w.player.left = Some(SpellId(4));
+        let p = firing_line();
+        // Shield costs 2000 and the intrinsic ceiling is 1000, so the
+        // purse needs a CLAIMED BALL: the pool ceiling is the mana
+        // census's own sum and is re-derived every lap.
+        let b = w.g.spawn_mana_ball(100 << 8, 100 << 8, 4000).unwrap();
+        w.g.ent[b].f140 = 20_000;
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        w.tick(p, PlayerCommand::default());
+        w.player.mana = w.player.mana_max;
+        w.player.mana_delta = 0;
+        let before = w.player.mana;
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+        // The command site ARMS only (the `+65 < 0x10` LABEL_20 flow);
+        // the machine spends on the next lap, through the regen delta.
+        for _ in 0..3 {
+            w.tick(p, PlayerCommand::default());
+        }
+        assert!(w.player.shield, "the machine published the absorb bit");
+        assert!(
+            before.saturating_sub(w.player.mana) >= SPELLS[4].possess_mana,
+            "the shield burst paid its 2000 (before {before}, now {})",
+            w.player.mana
+        );
+    }
+
+    /// ⭐ HEAL RUNS `sub_56270` (:65091), NOT THE LAUNCHER SKELETON:
+    /// admission is the shared gate AND `actLife < maxLife` AND
+    /// `+140 >= +136`, an admitted tick heals 5% of the CEILING and
+    /// stamps the WHOLE `+136` on the regen delta, and a refusal
+    /// RELEASES the burst (`+48 = 1`). [`World::mc1_heal_token_tick`]
+    /// already modelled it for the strict encoding; the player's own
+    /// natively-minted token kept the old reconstruction — 5%/tick
+    /// with no full-life gate and `cost/count` off the purse.
+    /// mc1l0-sg t=5447: retail pays 1000 once, tops 9595 to full and
+    /// releases; the port paid 47/tick and ran the counter down.
+    #[test]
+    fn heal_pays_the_whole_cost_and_releases_at_full_life() {
+        use crate::mc1::spells::SpellId;
+        let mut w = flat_world();
+        w.grant_spells(&[1]);
+        w.player.left = Some(SpellId(1));
+        let p = firing_line();
+        // Heal costs exactly the intrinsic ceiling, so one claimed
+        // ball is enough to tell "paid 1000 once" from "paid 47 a
+        // tick for the whole 21-tick burst".
+        let b = w.g.spawn_mana_ball(100 << 8, 100 << 8, 4000).unwrap();
+        w.g.ent[b].f140 = 20_000;
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        w.tick(p, PlayerCommand::default());
+        w.player.mana = w.player.mana_max;
+        w.player.mana_delta = 0;
+        w.player.life = PLAYER_LIFE_MAX - 100;
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+        // ONE lap: the token's single admitted tick. Measured across
+        // it so the pool's own +100/tick regen cannot mask the
+        // amount — 1000 out is unmistakable next to the old arm's
+        // cost/count 47, which regen alone outruns.
+        let before = w.player.mana;
+        w.tick(p, PlayerCommand::default());
+        assert_eq!(
+            w.player.life, PLAYER_LIFE_MAX,
+            "the admitted tick tops the wizard up (5% of the ceiling)"
+        );
+        assert!(
+            before.saturating_sub(w.player.mana) > SPELLS[1].possess_mana / 2,
+            "the whole +136 went out on that tick, not cost/count \
+             (before {before}, now {})",
+            w.player.mana
+        );
+        // Full life REFUSES the next tick, and a refusal releases the
+        // burst (`+48 = 1`, then the shared decrement) instead of
+        // running the 21-tick count out.
+        let tok = w.player.owned[1] as usize;
+        w.tick(p, PlayerCommand::default());
+        w.tick(p, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[tok].f26, 0,
+            "the full-life refusal released the burst"
+        );
+    }
+
+    /// ⭐ **HEAL AT FULL LIFE IS FREE, HOWEVER MANY TIMES IT IS CAST**
+    /// (player-observed in retail, both games). It falls straight out
+    /// of `sub_56270`'s admission (:65103-05): the `actLife < maxLife`
+    /// leg refuses, the refusal takes the `else` arm — `+48 = 1`
+    /// (:65120) — and the shared `--(+48)` zeroes it, so the burst
+    /// RELEASES before `sub_55E80` is ever reached and nothing touches
+    /// the regen delta. Heal is a straight mana-for-health exchange
+    /// and the exchange rate on zero health owed is zero.
+    ///
+    /// ⚠ AND THE RELEASE IS TERMINAL, NOT A PAUSE. A refused tick ends
+    /// the burst; damage taken afterwards does NOT restart it, because
+    /// there is no longer a counter to restart — the player has to
+    /// re-cast, which from the seat is indistinguishable (a full-life
+    /// cast is free and dies instantly, the next cast while hurt
+    /// pays). Retail has no arm that can resurrect a zeroed `+48`.
+    #[test]
+    fn heal_at_full_life_is_free_however_many_times_it_is_cast() {
+        use crate::mc1::spells::SpellId;
+        let mut w = flat_world();
+        w.grant_spells(&[1]);
+        w.player.left = Some(SpellId(1));
+        let p = firing_line();
+        let b = w.g.spawn_mana_ball(100 << 8, 100 << 8, 4000).unwrap();
+        w.g.ent[b].f140 = 60_000;
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        w.tick(p, PlayerCommand::default());
+        w.player.mana = w.player.mana_max;
+        w.player.mana_delta = 0;
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
+        let tok = w.player.owned[1] as usize;
+
+        let before = w.player.mana;
+        for _ in 0..10 {
+            w.tick(p, fire);
+            w.tick(p, PlayerCommand::default());
+            w.tick(p, PlayerCommand::default());
+        }
+        assert_eq!(
+            w.player.mana, before,
+            "ten casts at full life spent nothing"
+        );
+        assert_eq!(w.g.ent[tok].f26, 0, "each one released on its first tick");
+
+        // Hurt, and the very next cast pays in full and heals.
+        w.player.life = PLAYER_LIFE_MAX - 400;
+        w.tick(p, fire);
+        let mid = w.player.mana;
+        w.tick(p, PlayerCommand::default());
+        assert_eq!(w.player.life, PLAYER_LIFE_MAX, "that one healed");
+        assert!(
+            mid.saturating_sub(w.player.mana) > SPELLS[1].possess_mana / 2,
+            "…and paid the whole +136 for it"
+        );
+    }
+
     #[test]
     fn global_death_fuses_at_the_caster_into_the_flat_plane_field() {
         use crate::mc1::spells::SpellId;
@@ -24490,36 +24922,30 @@ mod tests {
             },
         );
         w.tick(p, PlayerCommand::default()); // the token fires at arm+1
-        assert_eq!(count(&w, 9, 18), 1, "the (9,18) death fuse armed");
-        // Charges STACK: a release + re-press primes a second
-        // independent fuse.
-        w.tick(
-            p,
-            PlayerCommand {
-                fire_left: true,
-                ..Default::default()
-            },
+        // ⭐ THE CARRIER IS A ONE-TICK RELAY (sub_54480_54810, the
+        // class-9 state-19 row read off both shipped EXEs), not a
+        // 21-tick fuse: it relays its `+68/+69` (10,55) child at its
+        // own axis and reap-flags itself on the first walk that
+        // reaches it. So the field is ALREADY up — and OVERLAPPING
+        // CHARGES ARE STRUCTURALLY IMPOSSIBLE, which is what the old
+        // reconstruction's "OPEN: multiple charges?" question turned
+        // out to answer.
+        let field = (1..w.g.ent.len()).find(|&j| {
+            w.g.ent[j].class64 == 10 && w.g.ent[j].model65 == 55 && w.g.ent[j].flags & 0x400 == 0
+        });
+        let f = field.expect("the relay raised the (10,55) death field on its own tick");
+        assert!(
+            count(&w, 9, 18) <= 1,
+            "the carrier does not accumulate — it dies into its child"
         );
-        w.tick(p, PlayerCommand::default()); // second token fire
-        assert_eq!(count(&w, 9, 18), 2, "overlapping charges both live");
-
-        // The fuse rides the caster ~21 ticks, then the (10,55)
-        // field detonates AT the caster (never a downrange bolt).
-        let mut field = None;
-        for _ in 0..40 {
-            w.tick(p, PlayerCommand::default());
-            if field.is_none() {
-                field = (1..w.g.ent.len()).find(|&j| {
-                    w.g.ent[j].class64 == 10
-                        && w.g.ent[j].model65 == 55
-                        && w.g.ent[j].flags & 0x400 == 0
-                });
-                if field.is_some() {
-                    break;
-                }
-            }
-        }
-        let f = field.expect("the fuse raised the (10,55) death field");
+        // OFF THE TILE CHAIN (sub_3BA00 :47726-29 writes +72/+76 raw
+        // and sets bit 0; `sub_41CF0` is never called), so the field
+        // carries the link bit NOWHERE.
+        assert_eq!(
+            w.g.ent[f].flags & 4,
+            0,
+            "the (10,55) field is not tile-linked"
+        );
         let d = crate::engine::features::Gen::isqrt(crate::engine::features::Gen::dist2_sq(
             w.g.ent[f].x,
             w.g.ent[f].y,
@@ -25755,6 +26181,184 @@ mod tests {
             ceiling: Vec::new(),
         };
         World::new_for_game(planes, &[], 1, assets(), GameId::Mc2)
+    }
+
+    /// A flat MC2 world with heal (5) owned, in the left hand, and a
+    /// deep purse — the rig both `sub_6A300` pins share. Returns the
+    /// world and the heal manifestation's pool slot.
+    ///
+    /// ⚠ `player.mana` cannot simply be assigned: the mana ceiling is
+    /// re-derived from the MANA CENSUS every lap, so a bare write is
+    /// clamped back to the intrinsic 1000 (SESSION 73's rig note). A
+    /// claimed sphere is the supported way to fund a burst.
+    fn mc2_heal_world() -> (World, usize) {
+        // The shared `assets()` carries no MC2 spell table, so the row
+        // is synthesized at retail's own tier-0 heal numbers: cost 500
+        // (mc2l0-spells-galore's token `mana_max`), an 11-tick window
+        // (its `mana` 45 = cost/duration), and `subSpellIndex` 1 — the
+        // 1%-of-ceiling step the take measures as +100/tick.
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut a = assets();
+        a.spells = mc2_synth_spell_rows(&[(5, [500, 500, 500])]);
+        for t in 0..3 {
+            a.spells[5].tiers[t].word_0x18 = 11;
+            a.spells[5].tiers[t].sub_spell = 1;
+        }
+        let mut w = World::new_for_game(planes, &[], 1, a, GameId::Mc2);
+        w.mc2_grant_plausible(&[(5, 0)]);
+        let m = w.mc2_book.ent[5] as usize;
+        assert!(m != 0, "heal was granted");
+        // `mc2_rebind_hands_canonical` is the level-start binding, not
+        // ours to guess — put heal in the left hand explicitly.
+        w.mc2_book.left = 5;
+        let (px, py, _) = w.human_pose;
+        let b = w.g.spawn_mana_ball(px, py, 4000).expect("purse");
+        w.g.ent[b].f140 = 200_000;
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        w.tick(away(), PlayerCommand::default());
+        w.player.mana = w.player.mana_max;
+        w.player.mana_delta = 0;
+        (w, m)
+    }
+
+    /// ⭐⭐⭐ **MC2 HEAL IS `sub_6A300` (EF:56430) — A PER-TICK
+    /// EXCHANGE OF MANA FOR HEALTH.** The port had NO body for it:
+    /// `mc2_spell_fire`'s spell-5 arm set `player.heal_active`, the
+    /// window expiry cleared it, and nothing in the crate ever read
+    /// it — the only `player.life` writers were the cheats, the
+    /// respawn, the passive regen and MC1's two heal sites. Casting
+    /// heal in MC2 restored nothing at all.
+    ///
+    /// Retail, per healing tick: `life += maxLife * subSpellIndex /
+    /// 100` clamped to the ceiling (:56453-57), and the FULL cost
+    /// stamped on the regen delta (:56458-61) — not the skeleton's
+    /// one-shot debit at the arm. mc2l0-spells-galore t=22776-86 is
+    /// the witness: eleven ticks of life +105 (heal 100 = 1% of the
+    /// 10000 ceiling, plus the +5 afield regen) against mana −500,
+    /// the heal token's own `mana_max`. Pair fixture
+    /// `mc2-heal-is-sub-6a300-per-tick-heal-and-full-cos` grades
+    /// t=22777; under the reverted build it reads `life: retail 7735
+    /// port 7635` — the port banked only the passive +5.
+    #[test]
+    fn mc2_heal_is_a_per_tick_exchange_of_mana_for_health() {
+        let (mut w, m) = mc2_heal_world();
+        let (sub, cost, dur) = (
+            w.g.ent[m].f30 as i32,
+            w.g.ent[m].max_life,
+            w.g.ent[m].f28 as i32,
+        );
+        assert!(sub > 0 && cost > 0 && dur > 1, "the baked heal row is live");
+        let step = PLAYER_LIFE_MAX * sub / 100;
+        // Hurt enough that the whole window heals without topping out.
+        w.player.life = PLAYER_LIFE_MAX - step * dur;
+        w.player.regen_delay = 64; // silence the passive climb
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
+        let (life0, mana0) = (w.player.life, w.player.mana);
+        w.tick(away(), fire);
+        w.tick(away(), PlayerCommand::default());
+        w.tick(away(), PlayerCommand::default());
+        assert!(
+            w.player.life >= life0 + step,
+            "the admitted tick healed maxLife*sub/100 = {step} \
+             (life {life0} -> {})",
+            w.player.life
+        );
+        assert!(
+            mana0.saturating_sub(w.player.mana) >= cost,
+            "and paid the FULL {cost} for it, not a fraction \
+             (mana {mana0} -> {})",
+            w.player.mana
+        );
+        // Two more laps: the debit REPEATS. The skeleton this
+        // replaced billed once at the arm and then only pinned regen.
+        let mana1 = w.player.mana;
+        w.tick(away(), PlayerCommand::default());
+        w.tick(away(), PlayerCommand::default());
+        assert!(
+            mana1.saturating_sub(w.player.mana) >= cost,
+            "every healing tick bills again (mana {mana1} -> {})",
+            w.player.mana
+        );
+    }
+
+    /// ⭐⭐⭐ **THE PLAYER'S OBSERVATION, AND THE PLACE THE TWO GAMES
+    /// SPLIT.** Player, on retail: *"In both games heal costs nothing
+    /// if there's nothing to heal, no matter how many times it is
+    /// cast, even though it appears active. It basically exchanges
+    /// mana for health. My guess is that if hurt while heal is active,
+    /// it will start costing and healing again."*
+    ///
+    /// The first half holds in both games; **the second is MC2-ONLY,
+    /// and it is exactly right here.** The two engines put the same
+    /// life test on opposite sides of the admission:
+    ///
+    /// - MC1 `sub_56270` (remc1 :65101-03) has `actLife < maxLife`
+    ///   INSIDE the admission, so a full-life tick takes the `else`
+    ///   and RELEASES (`+48 = 1`). Terminal — nothing resurrects a
+    ///   zeroed counter, so "it starts costing again when I'm hurt"
+    ///   is really the RE-CAST (see
+    ///   `heal_at_full_life_is_free_however_many_times_it_is_cast`).
+    /// - MC2 `sub_6A300` (:56445/:56450) admits on the gate and the
+    ///   purse ALONE and nests the life test inside the accepted
+    ///   branch. A full-life tick therefore does *nothing* — no heal,
+    ///   no XP, no debit — and **the window stays open and keeps
+    ///   re-testing.** Get hurt mid-window and it resumes, with no
+    ///   re-cast at all.
+    ///
+    /// ⭐ A player report can be exactly right about the observable
+    /// and still need both games measured before the mechanism is
+    /// named: from the seat MC1 and MC2 look identical until you are
+    /// hurt WHILE the window runs.
+    #[test]
+    fn mc2_heal_at_full_life_is_free_and_the_window_survives_to_resume() {
+        let (mut w, m) = mc2_heal_world();
+        let dur = w.g.ent[m].f28 as i32;
+        let step = PLAYER_LIFE_MAX * w.g.ent[m].f30 as i32 / 100;
+        assert!(dur >= 4 && step > 0, "a window long enough to re-enter");
+        w.player.regen_delay = 4096; // no passive climb anywhere below
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
+        // Cast at FULL life and run half the window.
+        let mana0 = w.player.mana;
+        w.tick(away(), fire);
+        for _ in 0..(dur / 2) {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(
+            w.player.life, PLAYER_LIFE_MAX,
+            "nothing to heal, so nothing healed"
+        );
+        assert_eq!(w.player.mana, mana0, "and it cost NOTHING");
+        // ⭐ THE MC2 DIFFERENCE: the window is STILL OPEN. MC1's would
+        // have released on its first tick.
+        assert!(
+            w.g.ent[m].f26 > 0,
+            "the full-life window is still running (MC1's would be 0)"
+        );
+        // Now get hurt WITHOUT re-casting — it resumes mid-window.
+        w.player.life = PLAYER_LIFE_MAX - step * 2;
+        let (life1, mana1) = (w.player.life, w.player.mana);
+        w.tick(away(), PlayerCommand::default());
+        w.tick(away(), PlayerCommand::default());
+        assert!(
+            w.player.life > life1,
+            "the live window started healing again on its own"
+        );
+        assert!(
+            mana1 > w.player.mana,
+            "…and started costing again, with no re-cast"
+        );
     }
 
     /// The metamorph pose-puppet's parent is the body's OWN caster
@@ -29602,6 +30206,18 @@ mod tests {
     #[test]
     fn mc2_arrow_direct_hits_the_first_filter_matching_creature() {
         let mut w = mc2_flat_world();
+        // ⚠ SCAFFOLDING, AND IT IS LOAD-BEARING HERE. The static
+        // `SPRITE_PARAMS` column `speed_6` is a placeholder retail
+        // never runs with — the engine derives it from the sprite
+        // bitmap at load ([`crate::mc2::derive_sprite_extents`]) — and
+        // row 195's zero would hand the arrow a ZERO-WIDTH box. Since
+        // `area_write`'s ch0 scan radius is `(f80 + 255) >> 8`, a
+        // zero-box writer scans one tile, and not even its own (the
+        // window centres on `(pos + 128) >> 8` while the map links at
+        // `pos >> 8`), so the direct hit could not land. Seed the
+        // derivation's own no-dims 255x255 fallback, which is what
+        // gives the recorded (9,13) its measured pitch/roll of 44.
+        w.g.assets.mc2_sprite_ext = crate::mc2::derive_sprite_extents(&[]);
         // A skeleton shooter and an archer bystander 3 tiles east of
         // the arrow's flight origin, dead on the flight line.
         let (sx, sy) = mc2_pos(100, 100);
@@ -29873,6 +30489,53 @@ mod tests {
             (3 << 14, 0),
             "band-2 x scouts corner 3 (retail signed math)"
         );
+    }
+
+    /// ⭐ THE CAST-CHARGE METER IS EVERY WIZARD'S. `sub_12A70`'s regen
+    /// block steps `byte_0x154_340` one statement after the movement
+    /// call and one before `mana += manaRegen` (EF:5423-25) — the same
+    /// meter, the same 200 ceiling, as the human's carpet tick. The
+    /// port stepped `wiz_charge[0]` only, so every MC2 rival's meter
+    /// sat frozen at whatever the conformance import seeded: mc2l6's
+    /// three rivals part from retail at t=1 and never rejoin, 593 rows
+    /// apiece over 600 ticks.
+    ///
+    /// A PAIR FIXTURE CANNOT PIN THIS. The meter lives in the player
+    /// block, which the import RESTORES on every pair, so a one-tick
+    /// pair re-seeds the lane before it can drift — the divergence is
+    /// only visible to a free run (or to `wiz_shadow_mc2`, which is
+    /// how it was found). Hence a unit pin: the ungraded-lane doctrine
+    /// (INHERITED ⇒ pair vacuous ⇒ unit test).
+    #[test]
+    fn mc2_rival_steps_its_own_cast_charge_meter() {
+        use crate::mc2::rivals::Mc2RivalConfig;
+        let mut w = mc2_flat_world();
+        let mut cfg: [Option<Mc2RivalConfig>; 8] = Default::default();
+        cfg[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 0,
+            castle_level: 0,
+            start: [false; 26],
+            start_level: [0; 26],
+            blocked: [false; 26],
+        });
+        w.set_mc2_wizards(&cfg, 2);
+        assert_eq!(w.wiz_charge[1], 0, "the rival's meter starts empty");
+        for n in 1..=5u8 {
+            w.tick(away(), PlayerCommand::default());
+            assert_eq!(
+                w.wiz_charge[1], n,
+                "the rival's meter steps once per live tick"
+            );
+        }
+        // The 200 ceiling is the same saturation the human's lane has.
+        w.wiz_charge[1] = 199;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.wiz_charge[1], 200, "one more step reaches the cap");
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.wiz_charge[1], 200, "and saturates there");
     }
 
     /// The MC2 rival carpet carries `byte_0x38_56 = 29` (the wizard
@@ -30155,6 +30818,100 @@ mod tests {
     /// redirect forwards exactly 100; the unwiped stale 100 from the
     /// t=1128 melee accumulated to a 200 forward (retail castle −100
     /// vs port −200, the banked ch5-lane fork's real cause).
+    /// **A PAYLOAD STRIKE SENDS NO DAMAGE MAIL — IT PARKS AND LETS
+    /// THE CHILD BILL THE VICTIM.** `sub_52770`'s whole victim arm
+    /// (:62705-55) does three things and no more: lift the victim's
+    /// z by its `+78`, relink the BOLT onto that aim point, drop the
+    /// lift. The one call it makes past the explode, `sub_526C0`
+    /// (:62585-614), bumps the caster's shot/hit COUNTERS (`+343` /
+    /// `+347`) and touches nothing else. The damage rides the CHILD,
+    /// whose `+44` is the bolt's. Our arm mailed the row damage at
+    /// impact AND minted the child, so the victim paid twice — once
+    /// a tick early.
+    ///
+    /// Receipt: mc1l0-spells-galore t=1619, the volcano lob into
+    /// building slot 6. Retail's slot 6 keeps `mail 0` and life 1104
+    /// through t=1620, then takes the `(10,9)` child's 1000/tick from
+    /// t=1621 (1104 -> 104 -> -896). Removing the mail moved the
+    /// take's free-run horizon 1619 -> 2732 on its own.
+    ///
+    /// FREE-RUN ONLY, so the law pins here: the mail lands on the
+    /// victim's own walk slot, which for a lower-numbered victim is
+    /// the NEXT tick — a one-tick pair re-imports retail's mailbox
+    /// before it can ever be read (`verify-deltas --dump 1619` is
+    /// clean either way).
+    #[test]
+    fn a_payload_strike_bills_nothing_and_parks_on_the_aim_point() {
+        use crate::mc1::mobs::PLAYER_TARGET;
+        let mut w = flat_world();
+        let home = away();
+        // The victim: a squat record with a NONZERO +78, so its aim
+        // point is provably not its own z and the park is visible.
+        let v = w.g.new_event().expect("victim");
+        let (vx, vy) = (0x5000u16, 0x5000u16);
+        let vz = w.g.ground_z(vx, vy) as i16;
+        {
+            let e = &mut w.g.ent[v];
+            e.class64 = 10;
+            e.model65 = 45;
+            e.tick70 = 52;
+            e.id24 = 0;
+            e.max_life = 30000;
+            e.act_life = 30000;
+            e.f80 = 512;
+            e.f82 = 512;
+            e.f84 = 0x4000;
+            e.f78 = 700; // the aim lift
+        }
+        w.g.link(v, vx, vy, vz);
+
+        // The bolt: class-9 state 4 = the Volcano payload lob, parked
+        // right on top of the victim so its post-step scan hits.
+        let b = w.g.new_event().expect("bolt");
+        {
+            let e = &mut w.g.ent[b];
+            e.class64 = 9;
+            e.model65 = 4;
+            e.tick70 = 4;
+            e.id24 = PLAYER_TARGET;
+            e.f68 = 10;
+            e.f69 = 9;
+            e.f66 = 255;
+            e.f67 = 255;
+            e.f44 = 1000;
+            e.f126 = 0; // no step: the scan runs where it stands
+            e.f128 = 0;
+            e.max_life = 20;
+            e.act_life = 18;
+            e.f80 = 256;
+            e.f82 = 256;
+            e.f84 = 256;
+        }
+        w.g.link(b, vx, vy, vz + 700);
+
+        w.tick(home, PlayerCommand::default());
+
+        assert_ne!(
+            w.g.ent[b].flags & 0x400,
+            0,
+            "the strike reap-flags the bolt"
+        );
+        assert_eq!(
+            (w.g.ent[b].x, w.g.ent[b].y, w.g.ent[b].z),
+            (vx, vy, vz.wrapping_add(700)),
+            "the bolt parks on (victim.x, victim.y, victim.z + victim.f78)"
+        );
+        assert_eq!(
+            w.g.ent[b].act_life, 18,
+            "a strike tick spends NO life — the decrement is inside `if (!victim)`"
+        );
+        assert_eq!(
+            w.g.ent[v].mail,
+            [(0, 0); 6],
+            "and it bills the victim NOTHING: sub_526C0 counts, it does not damage"
+        );
+    }
+
     #[test]
     fn the_at_castle_tick_rearms_grace_and_wipes_stale_mail() {
         let mut w = flat_world();
@@ -31360,6 +32117,168 @@ mod tests {
             w.g.ent[m].max_life, 100,
             "the tier-0 cost stamp rode the retune"
         );
+    }
+
+    /// ⭐⭐ **THE RIVAL'S CASTLE-LESS FIRST CASTLE IS FREE.** Retail's
+    /// `case 2u` (EF:6822-40) has two legs and only one of them
+    /// reaches `sub_5F660` — which is where the manifestation arm AND
+    /// the mana debit live (`sub_5F7B0` past the `mana < maxMana`
+    /// refusal, EF:60948-56). With a castle standing, the upgrade leg
+    /// calls it and pays. Castle-LESS, retail spawns the (3,2)
+    /// directly, stamps the owner and `CastleEntityIndex_0x3A_58`,
+    /// and returns 1: no arm, no recast cooldown, no payment. The
+    /// port had already read the cooldown half of that and still
+    /// charged for the spawn.
+    ///
+    /// mc2l6-rival-spells-galore t=70 is the witness: rival 378 mints
+    /// its first castle and retail's purse never moves — mana pinned
+    /// at 1000 with `d88` +100 from t=71 to the end of the take —
+    /// while the port billed the whole 1000 and ran the rival broke.
+    /// That was the take's horizon head (t=71 `(3,1)slot378:mana`);
+    /// the pair lane cannot hold it (import@70 already carries the
+    /// castle, so the castle-less arm never runs — INHERITED), hence
+    /// the unit pin.
+    ///
+    /// Affordability is still gated: retail's `sub_15170` (EF:6929-33)
+    /// refuses the attempt below the row's `manaCost_6` and the
+    /// manifestation's `maxMana_0x8C_140`. It is only the PAYMENT that
+    /// never happens.
+    #[test]
+    fn mc2_rivals_castle_less_first_castle_is_free() {
+        let mut w = mc2_brain_world(&[&[(2, 0)]], &[(2, [1000, 1000, 1000])]);
+        let i = w.mc2_rivals[0].ent as usize;
+        w.mc2_rivals[0].mana = crate::mc2::castle::MC2_CASTLE_COST[0] as u32;
+        w.mc2_rivals[0].mana_delta = 0;
+        w.mc2_rivals[0].site = (w.g.ent[i].x, w.g.ent[i].y);
+        assert!(
+            w.rival_castle(w.mc2_rivals[0].ent).is_none(),
+            "the rival starts castle-less"
+        );
+        assert!(w.mc2_rival_cast(0, i, 2), "the castle-less spawn fires");
+        assert!(
+            w.rival_castle(w.mc2_rivals[0].ent).is_some(),
+            "a (3,2) stands"
+        );
+        assert_eq!(
+            w.mc2_rivals[0].mana_delta, 0,
+            "…and NOTHING was stamped on the regen delta for it"
+        );
+        assert_eq!(
+            w.mc2_rivals[0].mana,
+            crate::mc2::castle::MC2_CASTLE_COST[0] as u32,
+            "the purse is untouched"
+        );
+    }
+
+    /// ⭐⭐ **THE RIVAL'S CAST FRAME *IS* THE WINDOW'S FIRST TICK.**
+    /// Retail's arm is a bare `word_0x2E_46 = word_0x30_48`
+    /// (`sub_5F7B0` EF:60976) at the CASTER's walk slot, and MC2 mints
+    /// a wizard's 26 manifestations at slots ABOVE it — so the
+    /// class-15 handler runs later in that SAME frame, reads
+    /// `word_0x2E_46 == word_0x30_48`, stamps `sub_68DE0`'s first-tick
+    /// debit and decrements. Retail's capture at the cast tick is
+    /// therefore already `word_0x30_48 - 1`.
+    ///
+    /// The port stamps that debit at the cast site but runs the
+    /// countdown from `mc2_rival_buffs`, at the RIVAL's slot — below
+    /// every token — so arming the full duration bought one extra tick
+    /// and shifted the mid-burst regen pin a frame late. mc2l6 t=244,
+    /// the fireball (`f30` 5): retail's counter reads 4/3/2/1/0 across
+    /// t=244..248 and holds `d88` at 0 for 245-248, back to +100 at
+    /// 249; the port read 5/4/3/2/1/0, spent t=245 on its own
+    /// first-tick arm — which skips the pin — and regenerated rival
+    /// 370 from 900 back to 1000 while retail held 900.
+    ///
+    /// ⚠ SPEED (3) is excluded: its body genuinely dispatches at the
+    /// token's own slot (`mc2_rival_manifestation_tick`), so it
+    /// already gets the same-frame first tick, spike included.
+    #[test]
+    fn mc2_rival_cast_frame_is_the_windows_first_tick() {
+        let mut w = mc2_brain_world(
+            &[&[(6, 0), (3, 0)]],
+            &[(6, [50, 50, 50]), (3, [50, 50, 50])],
+        );
+        let i = w.mc2_rivals[0].ent as usize;
+        let (shield, speed) = (
+            w.mc2_rivals[0].book.ent[6] as usize,
+            w.mc2_rivals[0].book.ent[3] as usize,
+        );
+        let dur = w.g.ent[shield].f28 as i16;
+        assert!(dur > 1, "a countable window");
+        assert!(w.mc2_rival_cast(0, i, 6), "the shield arms");
+        assert_eq!(
+            w.g.ent[shield].f26,
+            dur - 1,
+            "the cast frame already spent the window's first tick"
+        );
+        // SPEED keeps the full arm — its own token-slot body consumes
+        // that first tick itself, and `first` there is the
+        // one-factor-hotter spike.
+        assert!(w.mc2_rival_cast(0, i, 3), "the boost arms");
+        assert_eq!(
+            w.g.ent[speed].f26, w.g.ent[speed].f28 as i16,
+            "spell 3 is NOT pre-consumed"
+        );
+    }
+
+    /// ⭐ **THE RIVAL COLUMN RUNS THE SAME `sub_6A300`** — retail's
+    /// body resolves its wizard through the token's
+    /// `parentId_0x28_40`, so there is one heal in the engine, not
+    /// two. What this replaced was flagged APPROX in place: a flat
+    /// `maxLife/20` per armed tick (MC1's 5%), no `life < maxLife`
+    /// admission, no purse test and NO COST AT ALL.
+    ///
+    /// ⚠ UNWITNESSED ON THIS COLUMN — no graded take reaches a rival
+    /// heal (mc2l6's three rivals hold none of spell 5; mc2l22, whose
+    /// seven rivals all own it, is at horizon 0). Landed on the same
+    /// decompile citation as the human arm, and pinned here so the
+    /// arithmetic cannot drift before an instrument arrives.
+    #[test]
+    fn mc2_rival_heal_is_the_same_body_as_the_humans() {
+        let mut w = mc2_brain_world(&[&[(5, 0)]], &[(5, [500, 500, 500])]);
+        let i = w.mc2_rivals[0].ent as usize;
+        let m = w.mc2_rivals[0].book.ent[5] as usize;
+        w.g.ent[m].f30 = 10; // subSpellIndex: 10% of the ceiling a tick
+        let max = w.g.ent[i].max_life as i32;
+        let cost = w.g.ent[m].max_life;
+        assert!(max > 0 && cost == 500, "a live rival and a priced row");
+
+        // HURT: the arm tick heals 10% and bills the FULL cost.
+        w.g.ent[i].act_life = max / 2;
+        w.mc2_rivals[0].mana = 100_000;
+        w.mc2_rivals[0].mana_delta = 0;
+        assert!(w.mc2_rival_cast(0, i, 5), "heal arms");
+        assert_eq!(
+            w.g.ent[i].act_life,
+            max / 2 + max / 10,
+            "the arm tick healed maxLife*sub/100"
+        );
+        assert_eq!(
+            w.mc2_rivals[0].mana_delta,
+            -(cost as i32),
+            "…and billed the full cost, once"
+        );
+
+        // FULL LIFE: free, and the window is NOT released (the MC2
+        // difference — MC1's `sub_56270` would have collapsed it).
+        let mut w = mc2_brain_world(&[&[(5, 0)]], &[(5, [500, 500, 500])]);
+        let i = w.mc2_rivals[0].ent as usize;
+        let m = w.mc2_rivals[0].book.ent[5] as usize;
+        w.g.ent[m].f30 = 10;
+        w.mc2_rivals[0].mana = 100_000;
+        w.mc2_rivals[0].mana_delta = 0;
+        assert!(w.mc2_rival_cast(0, i, 5), "heal arms at full life too");
+        assert_eq!(
+            w.mc2_rivals[0].mana_delta, 0,
+            "nothing to heal, nothing paid"
+        );
+        assert!(w.g.ent[m].f26 > 0, "and the window is still open");
+
+        // BROKE: the per-tick purse leg collapses a live window.
+        w.mc2_rivals[0].mana = 0;
+        w.g.ent[i].act_life = 1;
+        w.mc2_rival_heal_tick_for_test(0, m);
+        assert_eq!(w.g.ent[m].f26, 1, "a refused tick releases the window");
     }
 
     /// A homing-family spell casts, cools down, and casts AGAIN —
@@ -33318,6 +34237,7 @@ mod tests {
             pitch: 0,
             model: 0x1C,
             own: PLAYER_TARGET,
+            range: 8192, // the wizard owner row (str_D7BD6[67].v_28)
             reach: 0x2000,
         };
         assert_ne!(
@@ -34077,6 +34997,76 @@ mod tests {
     /// 3-D contact law end-to-end: a locked meteor must land ON the
     /// flyer, not fall through to terrain (retail's `sub_10630` box
     /// overlap — do NOT widen it; the homing z is the knob).
+    /// `sub_655C0`'s `sub_65580` bracket (EF:54862) raises the AIM
+    /// TARGET by its own `array_0x52_82.yaw` on any model but 2 — and
+    /// retail's player is an ordinary boxed pool wizard, so the ONE-
+    /// SHOT acquisition lifts the human's carpet like any creature.
+    /// The port's servo arm carried the raise from the start; the
+    /// acquisition read the raw pose for the player alone and aimed a
+    /// full box low, which `sub_65C20` then copied out of
+    /// `fov_0x22_34` into `pitch_0x1E_30` (EF:63104/63118) for the
+    /// WHOLE flight (mc2l6-rsg t=309: pitch 12 vs 21, z 467 vs 455).
+    ///
+    /// Pinned as a UNIT because every mc2l6 pair carries an unrelated
+    /// parked-mail residue on its rival wizard, so no pair from that
+    /// take cuts clean.
+    #[test]
+    fn mc2_acquisition_raises_the_human_by_his_own_box() {
+        use crate::engine::features::Gen;
+        use crate::mc1::combat::PLAYER_HH;
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = mc2_flat_world();
+        // The human 10 tiles out at ground level; the bolt well above
+        // him so the raise TILTS the aim rather than rounding away.
+        let (px, py) = mc2_pos(110, 100);
+        let pz = w.g.ground_z(px, py) as i16;
+        let (bx, by) = mc2_pos(100, 100);
+        let bz = pz + 1024;
+        let b = w.g.mc2_spawn_bolt9(bx, by, bz).unwrap();
+        let dh = Gen::isqrt(Gen::dist2_sq(bx, by, px, py) as u32) as i32;
+        let raw = Gen::pitch_toward(bz, pz, dh);
+        {
+            let e = &mut w.g.ent[b];
+            e.id24 = 1; // NOT the player: the scan offers him as prey
+            e.f146 = 0; // unlocked → the one-shot acquisition arm
+            e.tick70 = 0; // sub_65C20's body (yaw nudge, pitch snap)
+            // Launched already looking at him (the acquisition cone is
+            // a separate law); the UNRAISED aim is the launch value,
+            // so the assert below fails if the raise is dropped.
+            e.f30 = Gen::angle_between(bx, by, px, py);
+            e.f32 = raw;
+        }
+        let ctx = MobCtx {
+            px,
+            py,
+            pz,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        w.g.mc2_flyer_tick(b, &ctx);
+        assert_eq!(
+            w.g.ent[b].f146, PLAYER_TARGET,
+            "the acquisition locks the human"
+        );
+        let raised = Gen::pitch_toward(bz, pz + PLAYER_HH as i16, dh);
+        assert_ne!(raised, raw, "geometry must discriminate");
+        assert_eq!(
+            w.g.ent[b].f36, raised,
+            "the desired pitch aims at the carpet's box center"
+        );
+        assert_eq!(
+            w.g.ent[b].f32, raised,
+            "sub_65C20 snaps the live pitch to the fov word it just wrote"
+        );
+    }
+
     #[test]
     fn mc2_meteor_homing_aims_at_target_box_center() {
         use crate::engine::features::Gen;

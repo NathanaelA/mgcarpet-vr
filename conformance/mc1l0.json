@@ -45,10 +45,28 @@
    "note": "THE SCORCH DISC LAW: a fire's scorch is sub_40D30 ring 0 = THREE cells with no zero-delta early-out (:51621-89), so even a zero-depth dig latches angle|=1 and makes the fire gate refuse every later re-scorch of those cells \u2014 ledger 2026-08-14."
   },
   {
+   "t": 600,
+   "file": "a-settled-claim-keeps-the-neutral-ball-row.mgcr",
+   "source": "mc1l0",
+   "note": "A SETTLED CLAIM KEEPS THE NEUTRAL BALL ROW: retail's claim intake (:29439-48) writes +144 only \u2014 sub_274D0's re-derive is the moving arm's alone (:29518-69, MC2 twin EF:26287), so a ball claimed while settled (+58 == 0) keeps its stale sprite row until the wake pass re-arms it. The port's invented intake recolor stamped 105+8*team at the claim (mc1l0 t=601 slot 131: retail 52, port 105 \u2014 the whole certified-corpus (10,39) type86 family, all ten takes). Graded via the session-68 sprite lane (append_sprite_diffs)."
+  },
+  {
    "t": 604,
    "file": "the-severed-ball-chain-the-9-1-lob-reusing-colle.mgcr",
    "source": "mc1l0",
    "note": "THE SEVERED BALL CHAIN: the (9,1) lob reusing collected ball 642's slot scans only the tick-head chain prefix (chase 104, not the closer-scoring 714 above the cut) \u2014 ledger 2026-08-14."
+  },
+  {
+   "t": 1078,
+   "file": "an-active-earthquake-never-blocks-regen-sub-567a.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "AN ACTIVE EARTHQUAKE NEVER BLOCKS REGEN: sub_567A0's mid-burst arm decrements and returns BEFORE sub_55E80 (:65336-41) \u2014 the only machine of the 24 with the inverted return, so the shared launcher suppress-regen pin abstains on spell 6. mc1l0-sg t=1079/1130/1172: retail regens through the burst; the port suppressed. Ledger SESSION 62 law 3."
+  },
+  {
+   "t": 1079,
+   "file": "quake-volcano-payload-children-are-generic-explo.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "QUAKE/VOLCANO PAYLOAD CHILDREN ARE GENERIC-EXPLODE CHILDREN (:62759-71): arms 2/(10,15) and 4/(10,9) spawn at the BOLT's own axis (z included) and stamp owner + heading + pitch + f44 off the bolt and f146 the target (miss => MC1_MISS_STAMP) \u2014 arm 5's shape verbatim. The bare-at-ground mint dropped every one of those lanes at once (mc1l0-sg t=1080/1133 quake, t=1176/1483 volcano). Ledger SESSION 62 law 4."
   },
   {
    "t": 1165,
@@ -57,16 +75,34 @@
    "note": "THE LEVELER'S FIELD HOME: the (10,41) ground leveler's \"current\" rung lives at retail +48, not +28; the generic importer's mis-home stepped the castle mound +160/tick where retail sinks it -64 \u2014 ledger 2026-08-15 (second session, law 1)."
   },
   {
+   "t": 1176,
+   "file": "a-tree-on-a-zeroed-measured-cell-splash-dies.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "A TREE ON A ZEROED MEASURED CELL SPLASH-DIES: retail's tree tail (:57703-11) snaps z to ground, probes the TILE TYPE, and on water (type 0) mints a (10,5) splash at the tree's own axis (child +24 = the tree's) and despawns. The old strict-retail suppression was a PRISTINE-plane workaround (village paint under trees read as water); a format-2 MEASURED channel carries the type plane as ground truth, so the arm is live again. mc1l0-sg t=1177: two quake-drowned trees (238/243, cells (84,57)/(85,57) type->0 at 1176) splash and free their slots - without the law the free-list pops off by two and the (10,11) diggers land in the trees' slots (the old missing(10,11)slot685x2 head). Ledger SESSION 65."
+  },
+  {
    "t": 1364,
    "file": "mana-magnet-10-54-lifecycle-ball-pull-untriaged.mgcr",
    "source": "mc1l0",
    "note": "mana magnet (10,54) lifecycle + ball pull \u2014 untriaged"
   },
   {
+   "t": 1618,
+   "file": "the-payload-strike-parks-on-the-victim-s-aim-p.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "THE PAYLOAD STRIKE PARKS ON THE VICTIM'S AIM POINT, AND SPENDS NO LIFE: sub_52770's victim arm (:62751-55, CARPET.EXE 0x52d42) is `sub_524C0(victim); sub_41C70(bolt, victim+72); sub_524E0(victim)` \u2014 the bolt teleports to (victim.x, victim.y, victim.z + victim.f78) and the explode mints the child THERE; and the life decrement lives inside the `if (!victim)` arm, so a strike tick is recorded one tick younger. mc1l0-sg t=1619: the volcano lob strikes building slot 6 (z 544, f78 -8192) and both records land at 16640/13312/-7648 = 544 + (-8192). Session 72."
+  },
+  {
    "t": 1710,
    "file": "the-castle-less-respawn-falls-through-to-the-aut.mgcr",
    "source": "mc1l0-permadeath",
    "note": "THE CASTLE-LESS RESPAWN FALLS THROUGH TO THE AUTHORED START at ground+256 (case 0xF :48628 + sub_44D30 :54845-48) - permadeath seam A runs the full respawn body"
+  },
+  {
+   "t": 2177,
+   "file": "the-payload-lob-drowns.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "THE PAYLOAD LOB DROWNS: the class-9 water arm (sub_52770 :62690-701, CARPET.EXE 0x52a44-0x52a7a) was missing from the payload path \u2014 a lob that touches DOWN on a type-0 tile mints the (10,5) splash at the stepped position, copies its own +24 owner in, reaps itself unconditionally and NEVER runs its +68/+69 detonation. Model 4 (the volcano lob) is exempt. mc1l0-sg t=2178: the Undead Army lob drowns on tile (55,34) where the port raised an eight-skeleton ring off a (10,36) spawner. Session 72."
   },
   {
    "t": 2216,
@@ -105,6 +141,18 @@
    "note": "A MAIL-LESS CORPSE FLIPS AT THE REGEN TAIL'S DEATH ARM (:55424-29): no regen on a negative life, the flip+scream land one tick after the write"
   },
   {
+   "t": 2723,
+   "file": "the-m17-magnet-bolt-flies-state-18-the-m1-homing.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "THE M17 MAGNET BOLT FLIES STATE 18 = THE M1 HOMING SKELETON: HW's listing carries the case-0x11 acquire arm remc1's dropped (hw:60386-405 - walks ONLY the ball chain, no owner exclusion, no danger call, cone 0x71/0x71). The port had the arm (aim_assist_possess_mc1's magnet leg) but strand-ed every bolt in the 6|16|18 inert dispatch; retail's bolt carries +70=18 for its whole life. mc1l0-sg t=2723-2733 slot 46: chase 991, f26 200->16 entry clamp, flags +2 acquire latch, life countdown, then the (10,12)/(10,54) impacts and the ball's f144 claim at 2734. Ledger SESSION 65."
+  },
+  {
+   "t": 2732,
+   "source": "mc1l0-spells-galore",
+   "note": "the (10,54) mana magnet is BORN OFF THE TILE CHAIN: sub_3B970 :47694-97 stores +72/+76 raw and sets bit 0, never calling sub_41CF0, so the Mana Magnet bolt's own detonation lands flags 1 where the port's link wrote 5 (the castle ejector's relink is what puts a 5 on the corpus' other magnets)",
+   "file": "the-10-54-mana-magnet-is-born-off-the-tile-chain.mgcr"
+  },
+  {
    "t": 2811,
    "file": "the-signed-area-window-centre-carpet-exe-loads-t.mgcr",
    "source": "mc1l0",
@@ -123,40 +171,28 @@
    "note": "THE FOOTPRINT SWEEP SOFT-KILLS SCENERY: sub_40E20's class-2 arm kills swept scenery through sub_41E80 = flags|=0x400 (:51747), a one-snapshot corpse reaped at the next tick top, never an immediate free \u2014 the castle level-4 commit's 39 trees \u2014 ledger 2026-08-13."
   },
   {
+   "t": 3876,
+   "source": "mc1l0-spells-galore",
+   "note": "class-9 state 19 is a ONE-TICK RELAY, not a fuse: sub_54480_54810 mints the carrier's +68/+69 (10,55) child at its own +72, copies +24/+30/+32/+44 and reap-flags ITSELF inside the null guard - the row read off both shipped EXEs (CARPET 0x9CF34 / HIDDEN 0x9D134 row 0x13)",
+   "file": "class-9-state-19-is-a-one-tick-relay-not-a-fuse.mgcr"
+  },
+  {
+   "t": 3991,
+   "file": "cast-bomb-s-140-is-the-per-shot-quotient.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "cast_bomb's +140 IS THE PER-SHOT QUOTIENT: sub_580A0 :66273 copies the TOKEN's +140, and the shared ctor sub_3BF70 (:48001-05) stores `a4 / a5` there \u2014 the per-shot cost \u2014 while +136 keeps the total. 75000/101 = 742. This was the only manifestation-family +140 in the tree written without the divide. Session 72."
+  },
+  {
+   "t": 4677,
+   "file": "the-invisible-token-runs-and-a-live-burst-free.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "THE INVISIBLE TOKEN RUNS, AND A LIVE BURST FREEZES THE CASTER'S MANA: dispatch row 0x24 (:4994) binds spell 12 to the real handler sub_571B0_576E0 (:65675), whose sub_55E80 call pins a positive +132 to 0 on every MID-BURST tick (:64955-57) and decrements +48. With the token inert the port regenerated 1103/tick through a window retail spends frozen \u2014 242 of this take's 277 reset heads \u2014 and never stepped +48 (the graded f26 lane this pair pins). Session 72."
+  },
+  {
    "t": 5026,
    "file": "a-villager-s-hit-tick-freezes-the-walker-the-m12.mgcr",
    "source": "mc1l0",
    "note": "A VILLAGER'S HIT TICK FREEZES THE WALKER: the m12/13/14 damage prologue puts the movement core and the wander draws in the ELSE of the damage test (m12 :25057-67), so on the tick the damage lands the settler only marks its attacker \u2014 ledger 2026-08-15 (end-to-end, law 5)."
-  },
-  {
-   "t": 1078,
-   "file": "an-active-earthquake-never-blocks-regen-sub-567a.mgcr",
-   "source": "mc1l0-spells-galore",
-   "note": "AN ACTIVE EARTHQUAKE NEVER BLOCKS REGEN: sub_567A0's mid-burst arm decrements and returns BEFORE sub_55E80 (:65336-41) \u2014 the only machine of the 24 with the inverted return, so the shared launcher suppress-regen pin abstains on spell 6. mc1l0-sg t=1079/1130/1172: retail regens through the burst; the port suppressed. Ledger SESSION 62 law 3."
-  },
-  {
-   "t": 1079,
-   "file": "quake-volcano-payload-children-are-generic-explo.mgcr",
-   "source": "mc1l0-spells-galore",
-   "note": "QUAKE/VOLCANO PAYLOAD CHILDREN ARE GENERIC-EXPLODE CHILDREN (:62759-71): arms 2/(10,15) and 4/(10,9) spawn at the BOLT's own axis (z included) and stamp owner + heading + pitch + f44 off the bolt and f146 the target (miss => MC1_MISS_STAMP) \u2014 arm 5's shape verbatim. The bare-at-ground mint dropped every one of those lanes at once (mc1l0-sg t=1080/1133 quake, t=1176/1483 volcano). Ledger SESSION 62 law 4."
-  },
-  {
-   "t": 1176,
-   "file": "a-tree-on-a-zeroed-measured-cell-splash-dies.mgcr",
-   "source": "mc1l0-spells-galore",
-   "note": "A TREE ON A ZEROED MEASURED CELL SPLASH-DIES: retail's tree tail (:57703-11) snaps z to ground, probes the TILE TYPE, and on water (type 0) mints a (10,5) splash at the tree's own axis (child +24 = the tree's) and despawns. The old strict-retail suppression was a PRISTINE-plane workaround (village paint under trees read as water); a format-2 MEASURED channel carries the type plane as ground truth, so the arm is live again. mc1l0-sg t=1177: two quake-drowned trees (238/243, cells (84,57)/(85,57) type->0 at 1176) splash and free their slots - without the law the free-list pops off by two and the (10,11) diggers land in the trees' slots (the old missing(10,11)slot685x2 head). Ledger SESSION 65."
-  },
-  {
-   "t": 2723,
-   "file": "the-m17-magnet-bolt-flies-state-18-the-m1-homing.mgcr",
-   "source": "mc1l0-spells-galore",
-   "note": "THE M17 MAGNET BOLT FLIES STATE 18 = THE M1 HOMING SKELETON: HW's listing carries the case-0x11 acquire arm remc1's dropped (hw:60386-405 - walks ONLY the ball chain, no owner exclusion, no danger call, cone 0x71/0x71). The port had the arm (aim_assist_possess_mc1's magnet leg) but strand-ed every bolt in the 6|16|18 inert dispatch; retail's bolt carries +70=18 for its whole life. mc1l0-sg t=2723-2733 slot 46: chase 991, f26 200->16 entry clamp, flags +2 acquire latch, life countdown, then the (10,12)/(10,54) impacts and the ball's f144 claim at 2734. Ledger SESSION 65."
-  },
-  {
-   "t": 600,
-   "file": "a-settled-claim-keeps-the-neutral-ball-row.mgcr",
-   "source": "mc1l0",
-   "note": "A SETTLED CLAIM KEEPS THE NEUTRAL BALL ROW: retail's claim intake (:29439-48) writes +144 only \u2014 sub_274D0's re-derive is the moving arm's alone (:29518-69, MC2 twin EF:26287), so a ball claimed while settled (+58 == 0) keeps its stale sprite row until the wake pass re-arms it. The port's invented intake recolor stamped 105+8*team at the claim (mc1l0 t=601 slot 131: retail 52, port 105 \u2014 the whole certified-corpus (10,39) type86 family, all ten takes). Graded via the session-68 sprite lane (append_sprite_diffs)."
   }
  ]
 }

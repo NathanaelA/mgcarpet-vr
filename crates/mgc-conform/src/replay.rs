@@ -2287,6 +2287,7 @@ fn run_mc2(
                 // break whose pair diff at the same tick is CLEAN.
                 if let Some(sh) = shadow.as_mut() {
                     sh.compare_ents_mc2(&world, &st, slot, &torn, tick.t);
+                    sh.compare_wiz_mc2(&world, &st, tick.t);
                     sh.compare_free_mc2(&world, &st, slot, tick.t);
                 }
                 let mut pd = compare_mc2_gated(&obs, &port, slot, &torn);

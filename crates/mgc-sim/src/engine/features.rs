@@ -5686,8 +5686,20 @@ impl Gen {
             e.id24 = own;
             let d = lcg32(&mut e.rand);
             e.f30 = (d & 0x7FF) as u16;
+            // ⭐ THE MAGNET IS BORN OFF THE TILE CHAIN. :47694-96 is a
+            // RAW `+72`/`+76` store — `sub_41CF0` is never called — so
+            // a fresh magnet carries NO link bit. The old `link` here
+            // was invisible on the castle-ejector path (which relinks
+            // 25 tiles out immediately, and the corpus pin of flags 5
+            // is that relink's bit, not the ctor's) and wrong on the
+            // Mana Magnet bolt's detonation, which does not relink:
+            // mc1l0-sg t=2733 slot 41 reads retail 1 vs the port's 5.
+            // Its sibling the (10,55) Global Death field (sub_3BA00
+            // :47705-34) is built the same way.
+            e.x = x;
+            e.y = y;
+            e.z = z;
         }
-        self.link(s, x, y, z);
         self.refill_life(s);
         {
             let e = &mut self.ent[s];
@@ -9636,6 +9648,7 @@ mod tests {
             pitch: 0,
             model: 1, // the basic possession bolt
             own: 5,
+            range: 8192, // the wizard owner row (str_D7BD6[67].v_28)
             reach: 0,
         };
         // Precondition (and the cone/convention calibration): with

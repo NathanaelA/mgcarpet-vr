@@ -444,9 +444,38 @@ fn dump_state(args: &Args) -> i32 {
                 if p.play_index == 0 {
                     continue;
                 }
+                // The brain half beside the fleet register — the MC2
+                // twin of the MC1 wizard line below. `wiz_shadow_mc2`
+                // grades these lanes now, so reading them absolutely
+                // (not just as mismatch rows) is what a rival-AI dig
+                // needs: a state byte and a cooldown say WHICH handler
+                // ran and WHICH spell it just armed.
+                let cds: Vec<(usize, u16)> = p
+                    .cooldown
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &c)| c != 0)
+                    .map(|(s, &c)| (s, c))
+                    .collect();
                 println!(
-                    "t={t} player {pi} carpet={} castle={} breg={:?}",
-                    p.play_index, p.castle_ent, p.balloons
+                    "t={t} player {pi} carpet={} castle={} breg={:?} ai_state={} \
+                     burst={} charge={} pov={} invuln={} cmd_speed={} strafe={} \
+                     brake={} weave={}/{} avoid={}/{} cd={cds:?}",
+                    p.play_index,
+                    p.castle_ent,
+                    p.balloons,
+                    p.ai_state,
+                    p.burst,
+                    p.charge,
+                    p.poverty,
+                    p.invuln,
+                    p.cmd_speed,
+                    p.strafe,
+                    p.brake,
+                    p.weave_dir,
+                    p.weave,
+                    p.avoid,
+                    p.avoid_exit,
                 );
             }
             if all {

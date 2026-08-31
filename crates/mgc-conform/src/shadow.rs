@@ -23,7 +23,9 @@
 
 use mgc_formats::mgcr::{RetailMc1, RetailMc2};
 use mgc_sim::engine::world::World;
-use mgc_sim::engine::world::conformance::{norm_retail_ai_state_mc1, retail_ent_lanes_mc2};
+use mgc_sim::engine::world::conformance::{
+    norm_retail_ai_state_mc1, norm_retail_ai_state_mc2, retail_ent_lanes_mc2,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 
@@ -137,10 +139,10 @@ pub(crate) struct Shadow {
     /// allocators and a single merged compare would measure the
     /// importer's COMPOSITION rather than the port's order.
     pub(crate) recycle: (u64, u64, String),
-    /// Set once [`Self::compare_wiz_mc1`] has run. MC2 has no WIZEXT
-    /// half yet (no `wiz_shadow_mc2` / port-side player-lane
-    /// projection), and a silent "0 mismatches" would read as "the
-    /// player block is clean" when it means "nobody looked".
+    /// Set once [`Self::compare_wiz_mc1`] or [`Self::compare_wiz_mc2`]
+    /// has run — a silent "0 mismatches" would read as "the player
+    /// block is clean" when it means "nobody looked", which is exactly
+    /// how MC2's half hid until it was built.
     pub(crate) wiz_fed: bool,
     /// Retail lane names absent from the port's table (`?` in
     /// `dump-state`): a table skew, reported once rather than per slot.
@@ -583,6 +585,71 @@ impl Shadow {
         }
     }
 
+    /// The MC2 twin of [`Self::compare_wiz_mc1`] — the player-block
+    /// arm that did not exist before, so every rival brain register
+    /// (state, burst, the 26 recast cooldowns, the hate ledger, the
+    /// weave/steer FSMs, the charge meter, the stored castle index)
+    /// rode 40,000 ticks of mc2l6 ungraded.
+    pub(crate) fn compare_wiz_mc2(&mut self, world: &World, st: &RetailMc2, t: u64) {
+        self.wiz_fed = true;
+        for ws in world.wiz_shadow_mc2() {
+            let Some(p) = st.players.get(ws.wiz as usize) else {
+                continue;
+            };
+            // Eliminated on either side, or a carpet-slot desync: the
+            // roster/graded comparison owns those stories.
+            if p.play_index == 0 || (ws.wiz != 0 && p.play_index != ws.ent) {
+                continue;
+            }
+            for &(name, port) in &ws.scalars {
+                let retail: i64 = match name {
+                    "charge" => p.charge as i64,
+                    "cmd_speed" => p.cmd_speed as i64,
+                    "strafe" => p.strafe as i64,
+                    "brake" => (p.brake != 0) as i64,
+                    "invuln" => p.invuln as i64,
+                    "ai_state" => norm_retail_ai_state_mc2(p.ai_state),
+                    "burst" => p.burst as i64,
+                    "poverty" => (p.poverty != 0) as i64,
+                    "aggression" => p.aggression as i64,
+                    "perception" => p.perception as i64,
+                    "reflexes" => p.reflexes as i64,
+                    "life_scale" => p.life_scale as i64,
+                    "weave" => p.weave as i64,
+                    "weave_dir" => p.weave_dir as i64,
+                    "avoid" => p.avoid as i64,
+                    "avoid_exit" => p.avoid_exit as i64,
+                    "castle_ent" => p.castle_ent as i64,
+                    "hand_left" => p.hand_left as i64,
+                    "hand_right" => p.hand_right as i64,
+                    _ => continue,
+                };
+                if retail != port {
+                    self.wiz_hit((ws.wiz, name), t, 0, retail, port);
+                }
+            }
+            for (name, port) in &ws.arrays {
+                let retail: Vec<i64> = match *name {
+                    "hate" => p.hate.iter().map(|&v| v as i64).collect(),
+                    "war" => p.war.iter().map(|&v| (v != 0) as i64).collect(),
+                    "cooldown" => p.cooldown.iter().map(|&v| v as i64).collect(),
+                    "spell_ent" => p.spell_ent.iter().map(|&v| v as i64).collect(),
+                    "levels" => p.levels.iter().map(|&v| v as i64).collect(),
+                    "sel" => p.sel.iter().map(|&v| v as i64).collect(),
+                    "ring" => p.ring.iter().map(|&v| v as i64).collect(),
+                    "xp_bank" => p.xp_bank.iter().map(|&v| v as i64).collect(),
+                    "xp_vol" => p.xp_vol.iter().map(|&v| v as i64).collect(),
+                    _ => continue,
+                };
+                for (i, (&a, &b)) in retail.iter().zip(port).enumerate() {
+                    if a != b {
+                        self.wiz_hit((ws.wiz, name), t, i as u16, a, b);
+                    }
+                }
+            }
+        }
+    }
+
     /// Diff the port's free list against the recording's, filtered the
     /// way the importer itself filters it — so any difference is the
     /// port's own allocator ORDER, never the importer's census.
@@ -673,16 +740,15 @@ impl Shadow {
             );
         }
         if !self.wiz_fed {
-            // MC2 has no WIZEXT arm. Say so — "0 mismatches" would read
-            // as "the player block is clean" when it means "nobody
-            // looked", which is the exact instrument asymmetry this
-            // module exists to end.
+            // No WIZEXT arm ran on this path. Say so — "0 mismatches"
+            // would read as "the player block is clean" when it means
+            // "nobody looked", which is the exact instrument asymmetry
+            // this module exists to end.
             let _ = writeln!(
                 s,
-                "  WIZEXT SHADOW: NOT WATCHED on this game — no `wiz_shadow_mc2` and no \
-                 port-side MC2 player-lane projection exist, so the per-player block \
-                 (charge, knock_dir/mag, castle_ent, cmd_speed, strafe, menu_state, \
-                 ring_cursor, the spell-book arrays) is UNCHECKED. Its own dig."
+                "  WIZEXT SHADOW: NOT WATCHED on this path — no per-player projection was \
+                 fed, so the wizard block (charge, brain state, cooldowns, hate, the \
+                 spell-book arrays) is UNCHECKED here."
             );
             let _ = writeln!(
                 s,

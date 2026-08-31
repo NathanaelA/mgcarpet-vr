@@ -229,8 +229,29 @@ impl Gen {
             0 => {
                 self.mc2_castle_preclear(i);
                 if self.ent[i].f26 == 0 || self.mc2_castle_space_ok(i) {
-                    // Owner palette shift (EF:61137-41): renderer
-                    // team tint (deliberate).
+                    // ⭐ THE DEFERRED TEAM-FLAG LATCH (EF:61131-35 —
+                    // the old comment here cited EF:61137-41, which is
+                    // `sub_60480` and the `else` arm, and wrote the
+                    // block off as a renderer tint). It is a ONE-SHOT
+                    // sim write: a RAW `+=` on the sprite row guarded
+                    // by `byte[0] & 2`, with NO extents re-derive.
+                    // The ctor stamps 177 FLAT, so a fresh castle
+                    // wears the neutral row for exactly one tick and
+                    // takes its colour on its first build pass —
+                    // mc2l6 t=70/71 slot 174 f5a 177 then 181
+                    // (COLOR_ART[2] = 4), t=104/105 slot 62 177 then
+                    // 178 (COLOR_ART[1] = 1), each with
+                    // `flags.b0_done2` flipping 0 -> 1 the same tick.
+                    if self.ent[i].flags & 2 == 0 {
+                        let own = self.ent[i].id24;
+                        let slot = self
+                            .rival_ents
+                            .iter()
+                            .position(|&e| e != 0 && e == own)
+                            .unwrap_or(0);
+                        self.ent[i].type86 += crate::mc2::color_art(slot as u8) as u16;
+                        self.ent[i].flags |= 2;
+                    }
                     self.mc2_castle_upgrade(i);
                 } else {
                     self.ent[i].f59 = 2;
@@ -976,12 +997,37 @@ impl Gen {
             return;
         }
         let own = self.ent[i].id24;
-        for j in 1..self.ent.len() {
-            if self.ent[j].class64 == 10
-                && self.ent[j].model65 == 39
-                && self.ent[j].f144 == own
-                && self.mc2_overlap_xy(i, j)
-            {
+        // ⭐⭐⭐ THE ABSORB WALKS `dword_38523`, NOT THE POOL — and that
+        // chain is SEVERABLE. Retail (EF:61101-61118) starts at the
+        // tick-top class-10 list head and follows `next_0`, so the scan
+        // inherits both of [`TickChain`]'s laws: membership is sampled
+        // at the TICK TOP (a sphere minted mid-frame is invisible until
+        // the next one), and a member record RE-USED mid-frame has its
+        // `next_0` wiped by the `NewEvent_4A050` memset — every walk
+        // after that stops at the re-used node.
+        //
+        // The severance is the load-bearing half here, because the
+        // castle's OWN even-tick block mints into the chain: `sub_5FF50`
+        // (the roster) runs two statements before this scan, and the
+        // build ball's impact effect lands on a sphere slot too. Both
+        // re-use LOW slots, so the castle at slot 63 is left walking a
+        // stump. mc2l6-rsg, castle 63 with 20,746 banked under a 78,600
+        // cap and fourteen overlapping owned 12,234-spheres on the full
+        // list: retail absorbs NOTHING at t=371 (the (10,43) impact took
+        // sphere slot 15, chain cut at 15) and NOTHING at t=417 (the
+        // roster's fresh (3,3) balloon took sphere slot 10), then
+        // absorbs sphere 52 on EVERY even pass from t=419, where nothing
+        // re-used a member. A live pool scan takes the first overlap on
+        // all three.
+        //
+        // ⚠ VERBATIM: retail's loop condition is `model != 39 ||
+        // playerEntityIndex != castle->id || !overlap` — MODEL only, no
+        // class and no liveness test, so a re-used node is tested with
+        // its NEW bytes and models 40/57 are walked past, not stopped
+        // at.
+        for c in 0..self.ball_chain.visible_len() {
+            let j = self.ball_chain.list[c] as usize;
+            if self.ent[j].model65 == 39 && self.ent[j].f144 == own && self.mc2_overlap_xy(i, j) {
                 self.ent[i].f140 += self.ent[j].f140;
                 self.ent[j].flags |= 0x400;
                 return; // one per tick (retail breaks after the first)

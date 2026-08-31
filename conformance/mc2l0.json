@@ -169,6 +169,12 @@
    "file": "the-morph-body-spawns-at-the-casters-full-3d-pos.mgcr",
    "source": "mc2l0-spells-galore",
    "note": "THE MORPH BODY SPAWNS AT THE CASTER'S FULL 3-D POSITION AND ITS FOLLOW FLOORS AT ZERO: sub_6A030 (EF:56325) mints the sv2=12 pose-puppet at position_0x4C_76 forwarded untouched (no terrain clamp on the path - t=7282 slot 28 born at carpet z 256, not ground 0); the follow (sub_1E4D0 EF:10663-75) is parent z minus the per-model offset (m16 -896, m25 -512) FLOORED AT 0 (236 of 508 live-morph ticks sit on the clamp). The parent is the body's OWN caster carpet (a rival's body follows the rival - mc2l22 slot 673 owner 557); the obs owner lane projects the caster for any sv2=12 body (retail stamps parentId, EF:56328-29). Ledger SESSION 65."
+  },
+  {
+   "t": 22777,
+   "file": "mc2-heal-is-sub-6a300-per-tick-heal-and-full-cos.mgcr",
+   "source": "mc2l0-spells-galore",
+   "note": "MC2 HEAL IS `sub_6A300` (EF:56430) AND THE PORT HAD NO BODY FOR IT AT ALL: `mc2_spell_fire` set `player.heal_active`, the expiry cleared it, and nothing in the crate ever read it \u2014 casting heal in MC2 restored nothing. Retail's effect state heals `maxLife * subSpellIndex_0x2A_42 / 100` and stamps the FULL cost on the regen delta on EVERY healing tick (:56453-61), admits on `sub_68D50` AND a per-tick `mana >= maxMana_0x8C_140` leg (:56445), and never calls `sub_68DE0` so it pins no mid-burst regen. mc2l0-spells-galore t=22776-86: life +105/tick (heal 100 = 1% of the 10000 ceiling, plus the +5 passive regen) and mana \u2212500/tick against the token's own 500 cost; the port healed 0 and debited once. Ledger SESSION 74 law C."
   }
  ]
 }
