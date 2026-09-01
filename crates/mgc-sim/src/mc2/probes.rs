@@ -563,4 +563,111 @@ mod tests {
             "no witness, no reason to spare the near corner"
         );
     }
+
+    /// ⭐⭐ `sub_583F0_distance_3d` (`NETHERW.EXE` file **0x7CBF0**,
+    /// linear 0x583F0) IS `isqrt(dx² + dy² + dz²)` — a TRUNCATED
+    /// LINEAR distance, not a squared one. It is only DECLARED in the
+    /// decompile (EventsFunctions.cpp:822), so the shipped EXE is the
+    /// only authority: `movswl` three 16-bit wrapping deltas, `imul`
+    /// each, sum, then `push %eax; call 0x96f7a; add $0x4,%esp`.
+    ///
+    /// File **0x96f7a** is the Newton integer square root:
+    /// ```text
+    ///   96f83: or %ecx,%ecx ; je -> 0            (n == 0 -> 0)
+    ///   96f87: bsr %ecx,%eax                     (k = highest set bit)
+    ///   96f8a: movzwl 0x627b0(,%eax,2),%ebx      (g = SEED[k], file 0x96FB0)
+    ///   96f92: mov %ecx,%eax ; xor %edx,%edx ; div %ebx    (x = n / g)
+    ///   96f98: cmp %ebx,%eax ; jge -> return g   (x >= g -> g)
+    ///   96f9c: add %eax,%ebx ; shr $1,%ebx ; jmp (g = (x + g) >> 1)
+    /// ```
+    /// The 32-entry `u16` seed table at file **0x96FB0** is
+    /// `1,2,2,4,5,8,0xB,0x10,0x16,0x20,0x2D,0x40,0x5A,0x80,0xB5,0x100,
+    /// 0x16A,0x200,0x2D4,0x400,0x5A8,0x800,0xB50,0x1000,0x16A0,0x2000,
+    /// 0x2D41,0x4000,0x5A82,0x8000,0xB504,0xFFFF` — byte-identical to
+    /// [`crate::mc1::tables::BIT_SQRT`], which is what [`Gen::isqrt`]
+    /// seeds from. ⚠ NOTE the data offset rule differs from the code
+    /// one: the instruction's operand is linear `0x627b0`.
+    ///
+    /// The pin below is the retail loop transcribed instruction by
+    /// instruction, checked against [`Gen::isqrt`] on the seed-table
+    /// boundaries (`2^k`, `2^k - 1`), on perfect squares and their
+    /// neighbours, and on the two thresholds `sub_15FC0`/`sub_161A0`
+    /// actually gate with (0xA00 and 0x1400). It also pins the
+    /// consequence the port kept getting wrong: `isqrt(D) > C` is
+    /// `D >= (C+1)²`, NOT `D > C²`.
+    #[test]
+    fn sub_583f0_isqrt_matches_the_shipped_newton_loop() {
+        const SEED: [u32; 32] = [
+            0x1, 0x2, 0x2, 0x4, 0x5, 0x8, 0xB, 0x10, 0x16, 0x20, 0x2D, 0x40, 0x5A, 0x80, 0xB5,
+            0x100, 0x16A, 0x200, 0x2D4, 0x400, 0x5A8, 0x800, 0xB50, 0x1000, 0x16A0, 0x2000,
+            0x2D41, 0x4000, 0x5A82, 0x8000, 0xB504, 0xFFFF,
+        ];
+        assert_eq!(
+            SEED,
+            crate::mc1::tables::BIT_SQRT,
+            "the MC2 EXE's seed table at file 0x96FB0 IS the port's BIT_SQRT"
+        );
+        // The retail loop, verbatim (file 0x96f7a).
+        let retail = |n: u32| -> u32 {
+            if n == 0 {
+                return 0;
+            }
+            let mut g = SEED[(31 - n.leading_zeros()) as usize];
+            loop {
+                let x = n / g;
+                if x >= g {
+                    return g;
+                }
+                g = (x + g) >> 1;
+            }
+        };
+        let mut cases: Vec<u32> = vec![0, 1, 2, 3, 0xA00 * 0xA00, 0x1400 * 0x1400, u32::MAX];
+        for k in 0..32u32 {
+            cases.push(1u32 << k);
+            cases.push((1u32 << k).wrapping_sub(1));
+        }
+        for m in [1u32, 2, 3, 7, 45, 255, 2560, 2561, 5120, 5121, 46340, 65535] {
+            for d in [-1i64, 0, 1] {
+                let v = (m as i64 * m as i64 + d).clamp(0, u32::MAX as i64) as u32;
+                cases.push(v);
+            }
+        }
+        for n in cases {
+            let want = retail(n);
+            assert_eq!(Gen::isqrt(n), want, "Gen::isqrt({n})");
+            // ... and the retail loop really is floor(sqrt).
+            assert!(
+                (want as u64) * (want as u64) <= n as u64
+                    && (want as u64 + 1) * (want as u64 + 1) > n as u64,
+                "sub_583F0's isqrt({n}) = {want} is not floor(sqrt)"
+            );
+        }
+        // ⭐ THE BOUNDARY LAW. `sub_15FC0`'s scan-1 gate is
+        // `cmpl $0x1400,-0xc(%ebp); jbe` (file 0x3a87b, EF:7657) on a
+        // TRUNCATED root, so the band retail KEEPS runs all the way to
+        // 5121² − 1 — the port's `D > 0x1400 * 0x1400` dropped
+        // everything above 5120².
+        assert_eq!(Gen::isqrt(5120 * 5120), 5120);
+        assert_eq!(Gen::isqrt(5121 * 5121 - 1), 5120);
+        assert_eq!(Gen::isqrt(5121 * 5121), 5121);
+        for d in [5120 * 5120, 5120 * 5120 + 1, 5121 * 5121 - 1] {
+            assert!(
+                !(Gen::isqrt(d) > 0x1400),
+                "retail keeps d={d} in sub_15FC0 scan 1"
+            );
+        }
+        assert!(Gen::isqrt(5121 * 5121) > 0x1400);
+        // ... while `>=` and `<` edges ARE exact in squared space, which
+        // is why the port's other two gates were right by accident.
+        for d in [5119 * 5119, 5120 * 5120 - 1, 5120 * 5120, 5121 * 5121] {
+            assert_eq!(Gen::isqrt(d) >= 0x1400, d >= 5120 * 5120);
+            assert_eq!(Gen::isqrt(d) < 0x1400, d < 5120 * 5120);
+        }
+        // ⭐ AND TRUNCATION IS THE TIE-BREAKER: two candidates at
+        // genuinely different squared distances tie in retail, so the
+        // FIRST in walk order keeps the seat (`cmp %edx,%eax; jae`,
+        // file 0x3a8cb). mc2l22 t=15113 is the witness in the corpus.
+        assert_eq!(Gen::isqrt(2560 * 2560), Gen::isqrt(2560 * 2560 + 900));
+        assert!(2560 * 2560 < 2560 * 2560 + 900);
+    }
 }

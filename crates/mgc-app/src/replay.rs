@@ -644,7 +644,10 @@ impl ReplayDriver {
         let RetailPrev::Mc1(pst) = prev else {
             unreachable!("family-stable stream")
         };
-        let obs = tick.obs.as_ref().and_then(|v| ObsMc1::deserialize(v).ok());
+        let obs = tick
+            .obs
+            .as_ref()
+            .and_then(|v| serde_json::from_str::<ObsMc1>(v.get()).ok());
         let rp = recover::recover_pair_mc1(&pst, &st, tick.input.as_ref());
         // ⭐⭐ THE PAUSED TURN CONSUMES A BOUNDARY WITHOUT A SIM STEP.
         // sub_41780's first statement is the global LCG draw; its
@@ -1431,7 +1434,13 @@ mod tests {
     /// The `obs` channel for the tick after `pst`: one LCG step and
     /// every live slot frozen is a PAUSE; `bump` perturbs one entity's
     /// phase byte to make it an ordinary turn instead.
-    fn stub_obs(pst: &RetailMc1, bump: bool) -> serde_json::Value {
+    /// The stub obs as RAW JSON — `TickRecord::obs` is the recording's
+    /// obs TEXT now, not a materialised `Value`.
+    fn stub_obs(pst: &RetailMc1, bump: bool) -> Box<serde_json::value::RawValue> {
+        serde_json::value::to_raw_value(&stub_obs_value(pst, bump)).expect("stub obs")
+    }
+
+    fn stub_obs_value(pst: &RetailMc1, bump: bool) -> serde_json::Value {
         let rng = pst.rand.wrapping_mul(9377).wrapping_add(9439);
         let ents: Vec<serde_json::Value> = [1usize, 2]
             .iter()

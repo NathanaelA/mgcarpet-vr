@@ -24,6 +24,7 @@
 //! - The (10,54) aura scans retail's `dword_38523` creature list —
 //!   our pool slot-order scan over the mobs.rs list stands in.
 
+use super::behavior::BEHAVIOR;
 use super::sprite_params::SPRITE_PARAMS;
 use crate::engine::features::Gen;
 use crate::mc1::combat::MailTarget;
@@ -37,6 +38,46 @@ use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 // MC2-column marker off any projectile caught in the sweep, dropping
 // it to the MC1 handler with an MC2 behavior row.
 pub(crate) const F_GRABBED: u32 = 1 << 22;
+
+/// A/B toggle for the whirlwind lift pass's billing protocol: set
+/// `MGC_NO_WHIRLWIND_SINGLE_BILL` to restore the pre-dig behaviour,
+/// where `sub_33340`'s `sub_11900` call used the AREA protocol
+/// ([`Gen::mail_write`]) instead of the SINGLE/INVERSE one.
+fn no_whirlwind_single_bill() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_WHIRLWIND_SINGLE_BILL").is_some())
+}
+
+/// A/B toggle for the whirlwind's MID-RING arm on the human wizard:
+/// set `MGC_NO_MC2_WW_MIDRING` to restore the pre-dig behaviour,
+/// where the funnel drove the human through the KNOCK register
+/// (`Gen::player_knock` = retail `moveBoost_0x1E_30`) — a lane
+/// `sub_33340` never writes — instead of the direct pose seizure.
+fn no_mc2_ww_midring() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_MIDRING").is_some())
+}
+
+/// A/B toggle for the lift pass's DISC WALK: set
+/// `MGC_NO_MC2_WW_WALK` to restore the pre-dig traversal, which
+/// captured the tile link BEFORE the victim body ran instead of
+/// re-reading it after `CopyEntityPosition_57CF0` relinked the
+/// victim (shipped `NETHERW.EXE` 0x57ea3 `mov bx,[ebx+0x16]`, the
+/// loop's increment, is AFTER the call at 0x57e7b).
+/// A/B toggle for the AURA's `w7A` GUARD: set
+/// `MGC_NO_AURA_CLAIM_W7A_GUARD` to restore the pre-dig behaviour,
+/// where `sub_38D80`'s `if (!word_0x7A_122)` (EF:28364) was modelled
+/// against the claim map alone and missed the `mail[4]` half of the
+/// same retail cell.
+pub(crate) fn aura_claim_w7a_guard_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_AURA_CLAIM_W7A_GUARD").is_none())
+}
+
+fn no_mc2_ww_walk() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_WALK").is_some())
+}
 
 impl Gen {
     // ---- ctors ---------------------------------------------------------------
@@ -169,10 +210,31 @@ impl Gen {
             let e = &self.ent[i];
             (e.z, e.id24, e.f140)
         };
+        // ⭐⭐⭐ **THE HALF-TURN IS THE LOOP'S FIRST STATEMENT, NOT ITS
+        // LAST.** `yaw_0x1C_28 = rand & 0x7FF` seeds the pair, and then
+        // the do-while OPENS with `HIBYTE(yaw) = (HIBYTE(yaw) + 4) & 7`
+        // (EF:25911-13) — so the FIRST beam flies at `base + 1024` and
+        // the second at `base` (two half-turns = back to the seed), the
+        // exact inverse of a `base + k * 1024` loop. Both beams exist
+        // either way, but they are spawned in the opposite order, so
+        // every downstream slot the impact pair claims is swapped: at
+        // mc2l6-rsg t=2547 retail's yaw-188 blast takes slot 733 and its
+        // yaw-1212 twin takes 845, and the port had them the other way
+        // round with all ~70 of their (9,9) children following. ⚠ the
+        // sign of a mis-ordered PAIR is that the two records hold each
+        // OTHER's values, lane for lane — nothing is missing.
+        //
+        // The storm also carries the pair on its OWN pose registers
+        // (`pitch_0x1E_30 = 56` before the loop, `yaw_0x1C_28`
+        // re-stamped each iteration) and hands them to each beam from
+        // there, which is why the cloud ends the tick holding the seed
+        // yaw and a pitch of 56.
         let r = self.mc2_rand(i);
-        let base = (r & 0x7FF) as u16;
+        self.ent[i].f32 = 56; // pitch_0x1E_30 = 56 (EF:25909)
+        let mut yaw = (r & 0x7FF) as u16;
         for k in 0..2u16 {
-            let yaw = base.wrapping_add(k.wrapping_mul(1024)) & 0x7FF; // opposite
+            yaw = yaw.wrapping_add(1024) & 0x7FF; // the half-turn, FIRST
+            self.ent[i].f30 = yaw; // the beams read the CLOUD's yaw
             if let Some(b) = self.mc2_spawn_cast_proj(9, x, y, sz) {
                 {
                     let e = &mut self.ent[b];
@@ -440,20 +502,39 @@ impl Gen {
         let mut prev = h;
         for i in 0..11u16 {
             let Some(c) = self.new_event() else { break };
-            // qmemcpy(child, head, 0xA8) — the gameplay fields the
-            // node machinery reads, id included (nodes share the
-            // head's id).
+            // `qmemcpy(child, head, 0xA8)` (EF:35882) — the WHOLE
+            // record, not the subset the node machinery reads. Every
+            // graded lane the head carries at this point is the
+            // node's birth value: yaw/pitch/roll = the ctor's
+            // `(rand & 0x7FF) - 1` (EF:35873-76 — the head's own
+            // yaw/pitch are later overwritten by the bolt in
+            // `sub_65820` EF:63000-01, the nodes keep the ctor's),
+            // actSpeed 50 / minSpeed 20 / maxSpeed 10 (EF:35865-67),
+            // subSpellIndex 1000 (EF:35869), byte_0x38_56 = 1
+            // (EF:35872), word_0x2E_46 = 1 (EF:35863), fov 0
+            // (EF:35871). Measured mc2l6-rsg pair 10086→10087: all
+            // 11 nodes `heading/pitch: retail 1299 port 0`, `speed:
+            // retail 50 port 16` (16 = NewEvent's default, EV:568).
             {
-                let (head_id, head_life, head_rand) =
-                    { (self.ent[h].id24, self.ent[h].act_life, self.ent[h].rand) };
+                let hd = self.ent[h];
                 let e = &mut self.ent[c];
                 e.class64 = 10;
                 e.model65 = 75;
                 e.tick70 = 82;
                 e.max_life = 500;
-                e.act_life = head_life;
-                e.id24 = head_id;
-                e.rand = head_rand;
+                e.act_life = hd.act_life;
+                e.id24 = hd.id24;
+                e.rand = hd.rand;
+                e.f30 = hd.f30; // yaw_0x1C_28
+                e.f32 = hd.f32; // pitch_0x1E_30
+                e.f34 = hd.f34; // roll_0x20_32
+                e.f36 = hd.f36; // fov_0x22_34 (0)
+                e.f46 = hd.f46; // word_0x2E_46
+                e.f56 = hd.f56; // byte_0x38_56
+                e.f126 = hd.f126; // actSpeed_0x82_130 = 50
+                e.f128 = hd.f128; // minSpeed_0x84_132 = 20
+                e.f130 = hd.f130; // maxSpeed_0x86_134 = 10
+                e.f140 = hd.f140; // subSpellIndex_0x2A_42 = 1000
                 e.flags &= !8;
                 e.f44 = i + 1; // word_0x2C_44 — the node index
                 e.f52 = prev as u16;
@@ -572,27 +653,83 @@ impl Gen {
             // Water (tested at the CURRENT position, EF:23779):
             // (10,5) splash, id inherited, gone — despawn only if
             // the splash actually spawned (pool-full keeps rolling).
+            //
+            // ⭐ THE SPLASH IS NOT AN EARLY EXIT. `DisableEntityDrawing04_
+            // 57F10` (EF:238f10) is a ONE-LINE flag set —
+            // `byte[1] |= 4` — and `sub_32600` runs its whole tail
+            // afterwards regardless: `dword_0x10_16++`, the
+            // `CopyEntityPosition_57CF0` move onto the predicted
+            // point, and the resting slope+friction block. A drowned
+            // boulder therefore takes ONE more step, lands ON the
+            // splash, and banks the friction, all on its reap tick.
+            // The port `return`ed here instead, freezing the record
+            // where it stood. mc2l6-rsg t=6355 slot 553: retail steps
+            // (51382, 15405, 84) → (51446, 15377, 0) with `scratch10`
+            // 8 → 9 and `dest_x/y` 64/−28 → 62/−27, and the splash it
+            // just spawned at slot 11 links AHEAD of it in the shared
+            // cell — proof 553 was still in the map chain, and still
+            // moving, after the flag went on.
             if self.cap_bit(x, y) == 1 {
                 let own = self.ent[i].id24;
                 if let Some(s) = self.mc2_spawn_splash(px, py, pz) {
                     self.ent[s].id24 = own;
                     self.ent[i].flags |= 0x400;
-                    return;
                 }
             } else {
                 // Light a (10,6) standing fire where none burns
                 // (`sub_10B70` cell probe, EF:23790-801): life 30
                 // (act only — max stays the ctor's), subSpell ×3.
-                let t = crate::engine::features::tile((px >> 8) as u8, (py >> 8) as u8);
-                let mut j = self.map_entity[t] as usize;
+                //
+                // ⭐ THE PROBE IS A 2x2 RING **PLUS A RADIUS**, AND
+                // THE PORT HAD ONLY THE CELL. `sub_10B70` (EF:3921)
+                // anchors at `((x - 128) >> 8, (y - 128) >> 8)` —
+                // each axis wrapped to a byte — walks all FOUR cells
+                // of the 2x2 block from there, and gates every
+                // candidate on `sub_583F0_distance_3d(a1, j.pos) <=
+                // 0x80`. Cell membership alone is not the test: a
+                // 256-unit tile is twice the radius wide and the
+                // metric is genuinely 3-D (`dy² + dx² + **dz²**`), so
+                // a fire on the same tile but down a slope is far
+                // outside it. mc2l6-rsg t=6291 is the witness — the
+                // boulder at slot 189 steps to (49018, 16375, 3540)
+                // with its own earlier fire (slot 620) still burning
+                // at (49087, 16382, 2982): the same cell (191, 63),
+                // 69 units away horizontally and **562 in 3-D**.
+                // Retail lights the second fire; the port's cell-only
+                // probe read "already burning" and lit nothing.
+                //
+                // ⭐ AND THE PROBE HAS NO REAP TEST. `sub_10B70`'s
+                // per-candidate predicate is exactly `class == a2 &&
+                // a3 == model && dist3d <= 0x80` — a fire that died
+                // earlier in this same walk still occupies its
+                // ground until the tick-top reaper frees it, and it
+                // still suppresses a re-light. mc2l6-rsg t=6423:
+                // boulder 408 rests at (47360, 15649, 540) with fire
+                // 104 burnt out 44 units away at (47337, 15611, 548)
+                // — slot 104 < 408, so its own dispatch has already
+                // stamped `flags.b1_reap4`; retail lights nothing and
+                // the port's reap filter lit a fresh (10,6) every
+                // tick the boulder sat there.
+                let ax = (((px as i32) - 128) >> 8) as u8;
+                let ay = (((py as i32) - 128) >> 8) as u8;
                 let mut burning = false;
-                while j != 0 {
-                    let e = &self.ent[j];
-                    if e.class64 == 10 && e.model65 == 6 && e.flags & 0x400 == 0 {
-                        burning = true;
-                        break;
+                'probe: for dy in 0..2u8 {
+                    for dx in 0..2u8 {
+                        let t =
+                            crate::engine::features::tile(ax.wrapping_add(dx), ay.wrapping_add(dy));
+                        let mut j = self.map_entity[t] as usize;
+                        while j != 0 {
+                            let e = &self.ent[j];
+                            if e.class64 == 10
+                                && e.model65 == 6
+                                && Self::mc2_dist3((px, py, pz), (e.x, e.y, e.z)) <= 0x80
+                            {
+                                burning = true;
+                                break 'probe;
+                            }
+                            j = e.next20 as usize;
+                        }
                     }
-                    j = e.next20 as usize;
                 }
                 if !burning {
                     let own = self.ent[i].id24;
@@ -995,6 +1132,20 @@ impl Gen {
     /// the radius, sound 10, the type-0 area beat (the id-0xF
     /// spellbook report is emitted by the spell-XP column).
     pub(crate) fn mc2_fissure_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        // ⭐ `if (life_0x8 >= 0)` GUARDS THE WHOLE BODY, AND ITS ELSE
+        // ARM IS THE REAP FLAG ALONE — no life decrement. NETHERW.EXE
+        // 0x5eadc `cmpl $0x0,0x8(%ebx)` / `jl 0x5ed96`, and 0x5ed96 is
+        // `push %ebx; call 0x7c710` (= `DisableEntityDrawing04_57F10`,
+        // `orb $0x4,0xd(%eax)` = our bit 10) and nothing else. Retail's
+        // fall-through tail is a bare `decl 0x8(%ebx)` (0x5ED8C), so a
+        // spent fissure PARKS at life -1 for one tick and is reaped on
+        // the NEXT one. The port decremented unconditionally and
+        // latched the flag the tick life first went negative — one tick
+        // early (mc2l6-rsg t=24739 slot 401: retail life -1, port -2).
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
         if self.ent[i].f71 == 0 {
             let maxl = self.ent[i].max_life as i32;
             self.ent[i].f44 = (maxl >> 3) as u16; // word_0x2C_44
@@ -1061,9 +1212,6 @@ impl Gen {
             }
         }
         self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
-            self.ent[i].flags |= 0x400;
-        }
         dirty
     }
 
@@ -1098,7 +1246,17 @@ impl Gen {
             (e.x, e.y, e.z)
         };
         self.ent[i].f50 = z; // word_0x30_48 — remembered eye z
-        self.ent[i].f63 = self.ent[i].f63.wrapping_add(1);
+        // `if (!(a1x->byte_0x3E_62 & 0xF))` (EF:24191) reads the tick
+        // counter AS IT STANDS — `sub_331A0` never increments it; the
+        // ONLY writer is the dispatch walk's post-handler `++`
+        // (ported at world.rs `f63.wrapping_add(1)` after the match).
+        // The port's own pre-check increment double-clocked the head
+        // (coin every 8 ticks, one tick early) and shifted
+        // `sub_33710`'s `& 7` cadence with it. Measured mc2l6-rsg pair
+        // 10236→10237: head 547 `phase3e 64`, retail draws (rand
+        // 31487→23358, `f2e 1→-1`), the port did not (65 & 0xF != 0).
+        // NewEvent seeds the counter with the SLOT index (EV:577), so
+        // the phase is per-head, not per-birth.
         if self.ent[i].f63 & 0xF == 0 {
             let d = self.mc2_rand(i);
             if d & 1 == 0 {
@@ -1160,14 +1318,31 @@ impl Gen {
     /// mailbox damage every airborne tick (`sub_11900`). The
     /// spellbook report (id 0x15) is emitted by the spell-XP column.
     ///
-    /// Deliberate approximations (cited):
+    /// Deliberate approximation (cited):
     /// - the HUMAN player arm (yaw-step 56, threshold 384, camera
     ///   roll crank, actSpeed 80) needs the FlightVerb takeover seam
     ///   (the level-end cinematic's seam) — until then the player is
-    ///   damaged when overlapping the eye ring but not lifted;
-    /// - the victim z-float band (`sub_580E0` row args) collapses to
-    ///   the computed lift z (the row hover clamp needs the behavior
-    ///   rows' word_0xa/0xc homes).
+    ///   damaged when overlapping the eye ring but not lifted.
+    ///
+    /// ⭐ THE BAND RUNS ON EVERY VICTIM, NOT ONLY THE ONES THE FUNNEL
+    /// MOVED. `sub_580E0(&pred, getTerrainAlt(&pred), word_0xc,
+    /// word_0xa, v37)` (EF:24390-94) sits BELOW the arm chain, after
+    /// the swirl step and the cave clamp, and is followed by an
+    /// UNCONDITIONAL `CopyEntityPosition_57CF0` (EF:24395) — so a
+    /// victim the disc merely contains is still floor-clamped to
+    /// `getTerrainAlt(pred) + word_0xc` every tick. `v37` (the sink
+    /// step) is the row's `word_0xe` in the FAR-GRAB arm alone
+    /// (EF:24315) and 0 in every other arm, and `word_0xa` is
+    /// `sub_580E0`'s dead a4 (EF:40372 ignores it).
+    ///
+    /// mc2l6-rsg pair 10089→10090, slot 745 — a (10,39) sphere in the
+    /// MID-RING arm (`explain`: yaw AND word_0x30_48 both 393→477 =
+    /// `bearing+591`, xy stepped 96 to (6996,26015), and z 0→73 with
+    /// no arm that writes z). Row 59 (`NewEvent_4A050` seeds
+    /// `&str_D7BD6[59]`, Events.cpp:573, and the sphere ctor
+    /// `CreateManaSphere_500C0` EF:36607 never overrides it) has
+    /// `word_0xc` = 0 and `word_0xe` = −4, so the band is a pure
+    /// clamp UP to the terrain: 73 is `getTerrainAlt(6996,26015)`.
     ///
     /// The victim filter is `sub_33810` VERBATIM (EF:24452-515):
     /// class-2 m7/8; class-3 non-castle, non-own (the ONLY owner
@@ -1215,11 +1390,17 @@ impl Gen {
                 let mut pos = (vx, vy, vz);
                 let mut drift = 0i16;
                 let mut airborne = false;
+                // `v37` — `sub_580E0`'s sink step. Initialised 0 at
+                // the top of the victim body (EF:24291) and written
+                // in the FAR-GRAB arm ALONE (EF:24315, `v37 =
+                // ix->dword_0xA0_160x->word_160_0xe_14`).
+                let mut float = 0i16;
                 if d2 >= 3_211_264 {
                     if grabbed {
                         self.ent[j].flags |= super::mobs::F_STOP;
                         airborne = true;
                         drift = 64;
+                        float = BEHAVIOR[self.ent[j].row156 as usize].v_14;
                         self.ent[j].f30 = self.ent[j].f30.wrapping_add(204) & 0x7FF;
                         if d2 >= 5_308_416 {
                             self.ent[j].flags &= !F_GRABBED; // FLUNG
@@ -1259,23 +1440,88 @@ impl Gen {
                     let swirl = self.ent[j].f50 as u16 & 0x7FF;
                     Self::polar_step(&mut pos, swirl, 0, drift);
                 }
-                if pos != (vx, vy, vz) {
-                    // Cave ceiling clamp on the thrown victim
-                    // (EF:24382-88), before the commit.
-                    if self.is_cave() {
-                        let c = (self.ceiling_z(pos.0, pos.1) as i16 as i32
-                            - self.ent[j].f84 as i32) as i16;
-                        if pos.2 > c {
-                            pos.2 = c;
-                        }
+                // Cave ceiling clamp on the thrown victim
+                // (EF:24382-88), before the band.
+                if self.is_cave() {
+                    let c = (self.ceiling_z(pos.0, pos.1) as i16 as i32 - self.ent[j].f84 as i32)
+                        as i16;
+                    if pos.2 > c {
+                        pos.2 = c;
                     }
-                    self.move_relink(j, pos.0, pos.1, pos.2);
                 }
+                // `sub_580E0(&pred, getTerrainAlt(&pred), word_0xc,
+                // word_0xa, v37)` (EF:24390-94) — the victim's own
+                // float band, on EVERY victim in the disc, keyed off
+                // the ground under the PREDICTED xy. `word_0xc` =
+                // `v_12` (the floor offset), `word_0xa` = `v_10` (a4,
+                // dead), `v37` = the far-grab sink step above.
+                {
+                    let row = &BEHAVIOR[self.ent[j].row156 as usize];
+                    let galt = self.ground_z(pos.0, pos.1) as i16;
+                    Self::mc2_alt_core(&mut pos.2, galt, row.v_12, float);
+                }
+                // `CopyEntityPosition_57CF0(ix, &pred)` (EF:24395) is
+                // UNCONDITIONAL — and it only relinks when the tile
+                // word changes (EF:40294-40302), exactly what
+                // `move_relink` does, so an unmoved victim is a plain
+                // position write, never a tile-chain reorder.
+                self.move_relink(j, pos.0, pos.1, pos.2);
                 if airborne {
                     hits += 1;
-                    self.mail_write(MailTarget::Pool(j), 0, amt, id);
+                    // ⭐⭐⭐ THE LIFT PASS BILLS THROUGH `sub_11900`, THE
+                    // **SINGLE/INVERSE** PROTOCOL — `sub_33340`
+                    // EF:24400 is a bare `sub_11900(a1x, ix, 0, v26)`,
+                    // and `sub_11900` (EF:4375-88, EXE 0x3611f-36137)
+                    // is `if (src) amt = a4; else amt += a4`. This
+                    // writer had been on the AREA protocol
+                    // ([`Gen::mail_write`], accumulate-while-pending),
+                    // which is its exact inverse.
+                    //
+                    // It is load-bearing because the disc walk VISITS
+                    // ONE VICTIM TWICE: `CopyEntityPosition_57CF0`
+                    // (EF:24395) relinks the victim mid-walk, and a
+                    // victim carried into a tile the ring walker has
+                    // not reached yet is lifted, moved AND billed a
+                    // second time on the same pass. Retail's second
+                    // letter lands on a PENDING box and OVERWRITES it;
+                    // the port's ACCUMULATED, doubling the hit.
+                    //
+                    // mc2l6-rsg t=10110 is the take's horizon: head 159
+                    // lifts rival 378 at cell (25,105), the relink
+                    // carries it to (25,106), and the walker bills it
+                    // again. Retail reads `mail0.amt` 20 → life
+                    // 10000 − 20 + 20 regen = 10000 (pinned at
+                    // max_life); the port read 40 → 9960 + 20 = 9980.
+                    // ⚠ The double VISIT is retail's own behaviour —
+                    // both columns land the identical two lift steps
+                    // and agree on the final (6600, 27378).
+                    if no_whirlwind_single_bill() {
+                        self.mail_write(MailTarget::Pool(j), 0, amt, id);
+                    } else {
+                        self.mail_write_single(MailTarget::Pool(j), 0, amt, id);
+                    }
                 }
-                j = next;
+                // ⭐⭐⭐ THE WALK RE-READS THE LINK **AFTER** THE BODY.
+                // Retail's per-cell loop is `for (ix =
+                // Entities[map[cell]]; ix != Entities[0]; ix =
+                // Entities[ix->oldMapEntity_0x16_22])` (EF:24283-85),
+                // and the shipped EXE settles it: the increment
+                // `mov bx,[ebx+0x16]` sits at `NETHERW.EXE` file
+                // 0x57ea3, AFTER `call 0x7c4f0`
+                // (`CopyEntityPosition_57CF0`, linear 0x57CF0) at
+                // 0x57e7b and after the `sub_11900` bill at 0x57e9b.
+                // So the link the walker follows is the one the
+                // RELINK just wrote: a victim carried into another
+                // tile hands the walker that tile's chain, and the
+                // walk continues there. The port captured `next20`
+                // BEFORE the body, which is the same multi-visit the
+                // billing law already depends on but a DIFFERENT
+                // traversal.
+                j = if no_mc2_ww_walk() {
+                    next
+                } else {
+                    self.ent[j].next20 as usize
+                };
             }
         }
         // The player arm — the tornado SWAY (retail `sub_33340`'s
@@ -1290,7 +1536,49 @@ impl Gen {
         // Same-owner gate (`sub_33810` case 1, EF:24473: `a2x->id ==
         // a1x->id → return 0`) — your OWN whirlwind never sways you.
         let pd = Self::isqrt(Self::dist2_sq(ex, ey, ctx.px, ctx.py) as u32) as i32;
-        if pd < 3328 && id != crate::mc1::mobs::PLAYER_TARGET {
+        // RETAIL'S FAR BAND. `sub_33340`'s victim body (EF:24306,
+        // `NETHERW.EXE` 0x57c41 `cmp $0x310000,%eax`) splits on
+        // `EuclideanDistXY(eye, victim) >= 3211264` (d >= 1792) and in
+        // that arm does NOTHING to an UNGRABBED victim: `v30` stays 0,
+        // so the closing `MoveEntity_57FA0(..., 0)` is a no-op, and
+        // nothing in the function ever writes `moveBoost_0x1E_30` —
+        // retail's own knock register — at all. The port's human arm
+        // reached 3328 with no band structure, arming `player_knock`
+        // (a RECORDED, GRADED, decaying channel retail holds at 0)
+        // about four ticks early and 1.9x too far out.
+        let far_skip = (Self::dist2_sq(ex, ey, ctx.px, ctx.py) as i64) >= 3_211_264;
+        let pd2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py) as i64;
+        if pd < 3328
+            && !far_skip
+            && pd2 >= 0x40000
+            && !no_mc2_ww_midring()
+            && id != crate::mc1::mobs::PLAYER_TARGET
+        {
+            // ⭐⭐⭐ THE MID RING IS A POSE SEIZURE, NOT A KNOCK.
+            // `v33 >= 0x40000 && !(byte[3] & 0x10)` (EF:24350-56) is
+            // four writes on the victim and nothing else: `v14 =
+            // (tan2(eye, victim) + 591) & 0x7FF` into BOTH
+            // `word_0x30_48` and `yaw_0x1C_28`, `v30 = 96`, and — for
+            // the HUMAN alone (`v40 = class == 3 && !model`,
+            // EF:24345-49) — `roll_0x155_341 += 28` while it is under
+            // 256 plus `actSpeed_0x82_130 = 80`. The move that
+            // follows is `MoveEntity_57FA0(&pred, word_0x30_48, 0,
+            // v30)` + `CopyEntityPosition_57CF0`, a direct POSITION
+            // write; `moveBoost_0x1E_30` is never touched anywhere in
+            // `sub_33340`, so the old `player_knock` shove (with its
+            // invented +45° bias and its distance-ramped magnitude)
+            // was writing a recorded, graded, decaying lane retail
+            // holds at 0. The seizure rides
+            // [`crate::engine::features::PlayerWhirl`] instead, and
+            // the carpet's own walk slot applies it — see
+            // `World::step_player_flight_mc2` for the mc2l1 t=269
+            // arithmetic.
+            self.player_whirl = crate::engine::features::PlayerWhirl {
+                armed: true,
+                heading: Self::angle_between(ex, ey, ctx.px, ctx.py).wrapping_add(591) & 0x7FF,
+                step: 96,
+            };
+        } else if pd < 3328 && !far_skip && id != crate::mc1::mobs::PLAYER_TARGET {
             let toward = Self::angle_between(ctx.px, ctx.py, ex, ey);
             let dir = (toward as i32 + 256) as u16 & 0x7FF; // +45° spiral bias
             // Stronger closer (0..128 across the funnel), clamped to
@@ -1358,12 +1646,32 @@ impl Gen {
         }
         let mut castles_hit = 0i32;
         for (j, castle) in hits {
+            // ⭐⭐ TWO ARMS, TWO DIFFERENT WRITE PROTOCOLS, NEITHER OF
+            // THEM THE AREA ONE. `sub_33710` bills the BUILDING list
+            // through `sub_11900` (EF:24429 — the SINGLE/INVERSE
+            // protocol, `if (src) amt = a4; else amt += a4`) and the
+            // CASTLE list through an OPEN-CODED, UNCONDITIONAL
+            // accumulate (EF:24438-40: `jx->dword_0x5E_94 +=
+            // subSpellIndex; … word_0x62_98 = id`, with no source
+            // test at all — a THIRD protocol, and the only site in
+            // the whirlwind that has it). Both had been on
+            // [`Gen::mail_write`], whose branches are the inverse of
+            // `sub_11900` and which overwrites a consumed box where
+            // the castle arm accumulates.
             if castle {
                 self.ent[j].f50 = 30;
                 self.ent[j].f40 = i as u16;
                 castles_hit += 1;
             }
-            self.mail_write(MailTarget::Pool(j), 0, amt, id);
+            if no_whirlwind_single_bill() {
+                self.mail_write(MailTarget::Pool(j), 0, amt, id);
+            } else if castle {
+                let m = &mut self.ent[j].mail[0];
+                m.0 = m.0.wrapping_add(amt); // :24438, unconditional
+                m.1 = id; // :24440
+            } else {
+                self.mail_write_single(MailTarget::Pool(j), 0, amt, id);
+            }
         }
         // The contact-pass batch XP: +2 per CASTLE struck
         // (sub_33710 EF:24444, `v1 += 2` per castle).
@@ -1407,8 +1715,11 @@ impl Gen {
 
     /// `sub_33E20` (EF:24817) — the (10,25) tick: life-- /f26++;
     /// while alive, ONE latched `sub_10C80(type 3, byte_0x46_70)`
-    /// burst (the amount is the par-set f71, NOT subSpell); a hit
-    /// zeroes life (despawn next tick).
+    /// burst — the channel-3 payload is the steal TIER INDEX in f71
+    /// (EF:24829-31), NOT an amount and NOT subSpell; the victims'
+    /// `sub_61050` re-reads `SPELLS[13]` from it. A hit zeroes life
+    /// (despawn next tick). The area write is `sub_10C80`'s class-3
+    /// arm (EF:4034-60): see `Gen::area_write`'s MC2 ch3/ch4 branch.
     pub(crate) fn mc2_blast25_tick(&mut self, i: usize, ctx: &MobCtx) {
         let life = self.ent[i].act_life - 1;
         self.ent[i].f26 += 1;
@@ -1710,13 +2021,44 @@ impl Gen {
         for k in 0..self.ball_chain.visible_len() {
             let j = self.ball_chain.list[k] as usize;
             let c = &self.ent[j];
-            if c.class64 != 10 || !matches!(c.model65, 39 | 57) || c.flags & 0x400 != 0 {
+            // ⭐ THE MAGNET DOES NOT TEST THE REAP BIT — SOFT KILL IS
+            // NOT A FREE. `sub_38D80`'s whole loop body is
+            // `if (!ix->str_0x5E_94.word_0x7A_122)` (EF:28364): no
+            // 0x400 test, no liveness test, no class or model test
+            // either. A sphere flagged EARLIER in the same pass keeps
+            // its class, model and chain links for the rest of the
+            // tick, so retail's magnet still stamps it and the sphere
+            // takes ONE MORE full pull step on its dying tick.
+            // mc2l6-rsg t=3555 slot 743: the ball is already 0x400
+            // when aura 569 dispatches, retail pulls it (−42,+3) —
+            // MoveEntity's own floor of `(42·SIN[1519])>>16` — while
+            // the port's gate skipped it and left it riding the
+            // PREVIOUS tick's friction residue (−41,+2), the last
+            // step of its life off by one unit on both axes.
+            // ⚠ The class/model filter stays: it is the documented
+            // pre-existing residual (retail pulls the (10,40) totem
+            // too), and changing membership and the reap gate in one
+            // step would make neither attributable.
+            if c.class64 != 10 || !matches!(c.model65, 39 | 57) {
                 continue;
             }
             // The claim handshake (EF:28364): only an UNCLAIMED ball
             // takes the pull; the ball's tick clears the claim after
             // consuming it. First aura in slot order keeps the ball.
-            if self.mc2_aura_claim.0.contains_key(&(j as u16)) {
+            // ⭐ RETAIL'S GUARD IS ON `w7A`, WHICH THE PORT HOMES TWICE.
+            // `sub_38D80` EF:28364 is `if (!ix->str_0x5E_94.word_0x7A_122)`
+            // — ONE cell (line verified verbatim by the main session).
+            // The port splits that cell across `mail[4].1` and this
+            // claim map, so testing the map alone let an aura stamp a
+            // sphere that already carried a ch4 source; the sphere then
+            // ran BOTH of `ball_tick`'s intake arms and the aura arm
+            // clobbered the mail arm's (correct) aim. mc2l22 t=8510:
+            // the mail arm computed 1497 = retail's exact bearing to
+            // 985, the aura arm overwrote it with 439 = the bearing to
+            // 253. Ledger ROUND 99 dig 99-7.
+            if self.mc2_aura_claim.0.contains_key(&(j as u16))
+                || (aura_claim_w7a_guard_law() && self.ent[j].mail[4].1 != 0)
+            {
                 continue;
             }
             let d2 = Self::dist2_sq(ax, ay, c.x, c.y);
@@ -1736,5 +2078,313 @@ impl Gen {
             self.ent[j].dest_x = vx as u16;
             self.ent[j].dest_y = vy as u16;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::F_GRABBED;
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::engine::world::conformance::import_ent_mc2;
+    use crate::mc1::combat::MailTarget;
+    use crate::verbs::VerbSet;
+    use mgc_formats::mgcr::RetailEntMc2;
+
+    /// Flat 100-height OPEN world — the mailbox protocols are pure
+    /// record arithmetic, so the terrain only has to exist.
+    fn flat_gen() -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // Ring 0 is the CENTRE cell; the outer rings are parked on a
+        // far offset so the disc walk visits exactly one tile and the
+        // billing assertion counts one letter per visit.
+        let mut rings: Vec<Vec<(u8, u8)>> = (0..32).map(|_| vec![(15u8, 15u8)]).collect();
+        rings[0] = vec![(0u8, 0u8)];
+        let assets = FeatureAssets {
+            rings,
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    /// ⭐⭐⭐ `sub_11900` AND THE AREA WRITER ARE EXACT INVERSES, AND
+    /// THE WHIRLWIND BILLS THROUGH THE FORMER.
+    ///
+    /// `sub_11900` (EF:4375-88) is
+    /// `if (dst->word_0x62_98) dword_0x5E_94 = a4; else += a4`, and
+    /// the shipped EXE settles the branch direction — NETHERW.EXE
+    /// 0x3611f `cmpw $0x0,0x62(%eax)` / `je 0x36130`, with the
+    /// NOT-taken (source PENDING) arm at 0x3612b `mov %edx,0x5e(%eax)`
+    /// = ASSIGN and the taken (source CONSUMED) arm at 0x36135
+    /// `add %edx,0x5e(%eax)` = ACCUMULATE. The area writer
+    /// ([`Gen::mail_write`], `sub_118C0`) is the other way round.
+    ///
+    /// This is load-bearing because retail's whirlwind disc walk
+    /// VISITS ONE VICTIM TWICE on a single pass:
+    /// `CopyEntityPosition_57CF0` (EF:24395) relinks the victim
+    /// mid-walk, and a victim carried into a tile the ring walker has
+    /// not reached yet is lifted, moved AND billed again. Retail's
+    /// second letter lands on a PENDING box and OVERWRITES it, so two
+    /// 20-point letters bill 20; on the area protocol they bill 40.
+    ///
+    /// ⚠ THIS LAW HAS NO FIXTURE HOME: `retail_import_mc2` does not
+    /// restore mailbox state, so the pair channel is structurally
+    /// blind to it (the whole-take census is byte-identical either
+    /// way) and only the free run can see it. Hence a unit pin.
+    /// Corpus receipt: `mc2l6-rival-spells-galore` t=10110, whirlwind
+    /// head 159 lifting rival 378 across cells (25,105)→(25,106) —
+    /// retail bills 20 and the rival's regen pins it at max_life
+    /// 10000, the port billed 40 and landed on 9980. Free-run horizon
+    /// 10,109 → 10,787.
+    #[test]
+    fn the_whirlwind_lift_bills_on_the_single_protocol_not_the_area_one() {
+        let mut g = flat_gen();
+        let v = g.new_event().expect("victim slot");
+
+        // Two letters onto one box in a single pass, from one source,
+        // exactly as the double visit delivers them.
+        g.ent[v].mail[0] = (0, 0);
+        g.mail_write_single(MailTarget::Pool(v), 0, 20, 159);
+        g.mail_write_single(MailTarget::Pool(v), 0, 20, 159);
+        assert_eq!(
+            g.ent[v].mail[0],
+            (20, 159),
+            "sub_11900's second letter must OVERWRITE the pending box, \
+             not add to it (EXE 0x3612b assigns while 0x62 is non-zero)"
+        );
+
+        // The area protocol is the exact inverse, and doubles it —
+        // this is precisely the bug the law removed.
+        g.ent[v].mail[0] = (0, 0);
+        g.mail_write(MailTarget::Pool(v), 0, 20, 159);
+        g.mail_write(MailTarget::Pool(v), 0, 20, 159);
+        assert_eq!(
+            g.ent[v].mail[0],
+            (40, 159),
+            "the AREA writer accumulates while a source is pending — \
+             if this ever equals the single protocol the two have been \
+             collapsed and the whirlwind law is untestable"
+        );
+
+        // And the other arm of each: onto a CONSUMED box (source 0)
+        // the single protocol accumulates and the area one assigns.
+        g.ent[v].mail[0] = (7, 0);
+        g.mail_write_single(MailTarget::Pool(v), 0, 20, 159);
+        assert_eq!(
+            g.ent[v].mail[0],
+            (27, 159),
+            "sub_11900 accumulates once a reader has cleared the source"
+        );
+        g.ent[v].mail[0] = (7, 0);
+        g.mail_write(MailTarget::Pool(v), 0, 20, 159);
+        assert_eq!(
+            g.ent[v].mail[0],
+            (20, 159),
+            "the area writer assigns onto a consumed box"
+        );
+    }
+
+    /// ⭐⭐⭐ AND THE LAW ITSELF: THE LIFT PASS *CALLS* THE SINGLE
+    /// PROTOCOL. The test above pins the two primitives apart; this
+    /// one pins WHICH ONE `mc2_whirlwind_lift` reaches for, which is
+    /// the thing that was actually wrong.
+    ///
+    /// The discriminator is a box that already holds a PENDING letter
+    /// (`word_0x62_98 != 0`): `sub_11900` OVERWRITES it, the area
+    /// writer ADDS to it. One visit is enough to tell them apart, so
+    /// the test does not have to stage retail's double visit.
+    #[test]
+    fn the_whirlwind_lift_call_site_uses_sub_11900() {
+        let mut g = flat_gen();
+        let head = g.new_event().expect("head slot");
+        let victim = g.new_event().expect("victim slot");
+
+        // Cell ORIGIN, not centre: the disc walk rounds to nearest
+        // with `(x + 128) >> 8` (EF:24273-74), so a head parked at
+        // `tile*256 + 128` scans the NEXT cell along and would walk
+        // straight past the victim.
+        let (hx, hy) = (40u16 * 256, 40u16 * 256);
+        {
+            let e = &mut g.ent[head];
+            e.class64 = 10;
+            e.model65 = 22;
+            e.id24 = 159;
+            e.x = hx;
+            e.y = hy;
+            e.z = 400;
+            e.dest_x = hx; // the eye
+            e.dest_y = hy;
+            e.f50 = 400;
+            e.f140 = 20; // the amount each letter carries
+        }
+        {
+            let e = &mut g.ent[victim];
+            e.class64 = 10;
+            e.model65 = 13; // on the lift's victim list
+            e.id24 = 378;
+            e.x = hx;
+            e.y = hy;
+            e.z = 400;
+            e.flags |= F_GRABBED; // grabbed => the pass bills it
+        }
+        g.link(victim, hx, hy, 400);
+
+        // A letter already in the box from an earlier writer, still
+        // pending (source non-zero) — retail's second lift letter
+        // lands on exactly this state.
+        g.ent[victim].mail[0] = (200, 999);
+
+        let ctx = crate::mc1::mobs::MobCtx {
+            px: hx,
+            py: hy,
+            pz: 400,
+            pyaw: 0,
+            pmana: 1000,
+            pmana_max: 1000,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        g.mc2_whirlwind_lift(head, &ctx);
+
+        assert_eq!(
+            g.ent[victim].mail[0],
+            (20, 159),
+            "the lift must bill through sub_11900, which OVERWRITES a \
+             pending box (EF:24400 is a bare sub_11900 call). Getting \
+             (220, 159) means the call site is back on the AREA \
+             protocol and every whirlwind hit double-bills."
+        );
+    }
+
+    /// ⭐⭐⭐ THE `(10,77)` SATELLITE'S SPIN LIVES IN **TWO** WORDS,
+    /// AND THE IMPORTER ONLY CARRIED ONE.
+    ///
+    /// `sub_4F440` (EF:36049-72; NETHERW.EXE 0x73C40) draws ONE spin
+    /// rate per orb — `v6 = (rand & 0x3F) + 84` — and files it by
+    /// RING (`byte_0x43_67 = i / 5`): ring 0 into `roll_0x20_32`
+    /// (0x73CF2 `mov %ax,0x20(%ebx)`, its `fov` left 0), rings 1-4
+    /// into `fov_0x22_34` (0x73D5E `mov %ax,0x22(%ebx)`, their `roll`
+    /// left 0). `sub_33B20` (EF:24675-79; 0x5835B `add 0x20(%ebx),%ax`
+    /// and 0x58366 `mov 0x22(%ebx),%cx`) then steps ONE axis each:
+    /// `yaw += roll`, `pitch += fov`. So a ring-0 sphere sweeps a
+    /// horizontal circle and a ring-1..4 sphere a vertical one, off the
+    /// SAME number.
+    ///
+    /// [`Gen::mc2_orb_tumble`] ports both steps faithfully, but
+    /// `import_ent_mc2` restored only `f34 <- @0x20`; its `f36` arm
+    /// listed the m27 spline, the (5,10) pyramid and the (10,78) mine
+    /// and gave everything else 0. Every imported pair therefore
+    /// handed the 20 ring-1..4 spheres of every orb spin 0 while their
+    /// 5 ring-0 siblings stepped correctly — the constellation froze
+    /// one tumble behind retail's on the orb's FIRST graded tick and
+    /// stayed exactly one behind for its whole life.
+    ///
+    /// ⚠ NO FIXTURE HOME. A `(10,77)` satellite never bumps its phase
+    /// byte (action 0x54 is a NULL dispatch row — `mc2_no_bump_action`,
+    /// verify_mc2.rs), so `torn_slots` excludes it from grading on
+    /// every pair EXCEPT its birth pair, and on the birth pair both
+    /// columns still hold the pristine `sub_4F440` layout with no
+    /// tumble applied. The lane is visible only under
+    /// `MGC_TEAR_PHASE_LAW=1 MGC_TEAR_NO_BUMP_C10=1`, where it was
+    /// 76,300 dirty slot-ticks over 1,287 ticks and 387 slots on
+    /// mc2l22 — fixed 301,612 rows of that census's 305,101, with 0
+    /// introduced on the default oracle (which itself moved 570 dirty
+    /// pairs -> 561). Corpus receipt: the orb born at t=47850, spin 111 —
+    /// pair 47851→47852 moves ring-1 slot 822's pitch 512 → 623 and
+    /// ring-0 slot 816's yaw 512 → 623; the port moved only 816.
+    /// `MGC_NO_ORB_SAT_FOV=1` reverts the import arm.
+    #[test]
+    fn the_orb_satellite_pitch_spin_is_the_fov_word() {
+        // 1. The import homes, ring by ring — retail's own t=47851
+        //    records for slots 816 (ring 0) and 822 (ring 1).
+        let ring0 = RetailEntMc2 {
+            class3f: 10,
+            model40: 77,
+            yaw: 512,
+            pitch: 0,
+            roll: 111, // @0x20 — ring 0's spin
+            f22: 0,    // @0x22 — unused on ring 0
+            b43: 0,
+            b44: 0,
+            ..Default::default()
+        };
+        let ring1 = RetailEntMc2 {
+            class3f: 10,
+            model40: 77,
+            yaw: 512,
+            pitch: 512,
+            roll: 0,   // @0x20 — unused on rings 1-4
+            f22: 111,  // @0x22 — THE PITCH SPIN
+            b43: 1,
+            b44: 0,
+            ..Default::default()
+        };
+        let (e0, e1) = (
+            import_ent_mc2(&ring0, 816, 0, &|v| v),
+            import_ent_mc2(&ring1, 822, 0, &|v| v),
+        );
+        assert_eq!(e0.f34, 111, "ring-0 spin @0x20 -> f34");
+        assert_eq!(e0.f36, 0, "ring-0 has no @0x22 spin");
+        assert_eq!(e1.f34, 0, "ring-1 has no @0x20 spin");
+        assert_eq!(
+            e1.f36, 111,
+            "ring-1..4 spin @0x22 -> f36. Reading 0 here is the bug: \
+             the importer's f36 arm dropped the (10,77) lane."
+        );
+
+        // 2. And the consequence, through the tumble itself.
+        let mut g = flat_gen();
+        let h = g.new_event().expect("hub slot");
+        let s0 = g.new_event().expect("ring-0 slot");
+        let s1 = g.new_event().expect("ring-1 slot");
+        {
+            let e = &mut g.ent[h];
+            e.class64 = 10;
+            e.model65 = 76;
+            e.f30 = 0; // hub yaw
+            e.f32 = 0; // hub pitch
+            e.f44 = 192; // word_0x2C_44, the ring radius
+            e.x = 40 * 256;
+            e.y = 40 * 256;
+            e.z = 4411;
+            e.f54 = s0 as u16;
+        }
+        for (slot, r) in [(s0, &e0), (s1, &e1)] {
+            let e = &mut g.ent[slot];
+            e.class64 = 10;
+            e.model65 = 77;
+            e.f30 = r.f30;
+            e.f32 = r.f32;
+            e.f34 = r.f34;
+            e.f36 = r.f36;
+        }
+        g.ent[s0].f54 = s1 as u16;
+        g.ent[s1].f54 = 0;
+
+        g.mc2_orb_tumble(h);
+
+        assert_eq!(g.ent[h].f30, 22, "hub yaw += 22 (EF:24668)");
+        assert_eq!(g.ent[h].f32, 16, "hub pitch += 16 (EF:24671)");
+        assert_eq!(g.ent[s0].f30, 623, "ring-0 yaw += roll");
+        assert_eq!(g.ent[s0].f32, 0, "ring-0 pitch is fixed at 0");
+        assert_eq!(g.ent[s1].f30, 512, "ring-1 yaw is fixed");
+        assert_eq!(
+            g.ent[s1].f32, 623,
+            "ring-1 pitch += fov. Reading 512 means the spin never \
+             arrived and every replayed orb tumbles one step behind."
+        );
     }
 }

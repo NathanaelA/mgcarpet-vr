@@ -29,6 +29,93 @@
 
 use crate::engine::features::{Gen, tile};
 
+/// `MGC_NO_CASTLE_SCRATCH_ARG=1` restores the pre-dig behaviour, where
+/// `sub_605E0`'s stage-removal operand was passed as a plain argument
+/// and the shared scratch record `Entities_EA3E4[0]` was never written
+/// — leaving `ent[0].z` permanently 0 and every rival build datum
+/// (`site_z`, copied out of that scratch by `sub_13B00` EF:6090) 0
+/// with it. See the citation block in [`Gen::mc2_castle_downgrade`].
+pub(crate) fn no_castle_scratch_arg() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_CASTLE_SCRATCH_ARG").is_some())
+}
+
+/// `MGC_NO_MC2_BALL_PICK_MODEL_ONLY=1` restores the pre-dig MC2 balloon
+/// retarget filter, which carried two guards `sub_5F810` (EF:60994)
+/// does not have: a `class64 == 10` test and a `tick70 != 62` action
+/// test. See the citation block in [`Gen::mc2_castle_roster`].
+pub(crate) fn no_mc2_ball_pick_model_only() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BALL_PICK_MODEL_ONLY").is_some())
+}
+
+/// ⭐⭐⭐ **THE (10,42) PAINTER'S SETTLE LATCH IS `byte_0x3B_59`, AND
+/// THE IMPORT SEAT WAS READING `@0x3A`.**
+///
+/// `sub_50370`, the painter ctor, stamps **`@0x3B` = 1** and touches
+/// `@0x3A` nowhere — verified byte-for-byte in the shipped
+/// `NETHERW.EXE` at file **0x74BAF**: `c6 43 3b 01
+/// movb $0x1,0x3b(%ebx)` (EF:36745). Its sole reader is the painter
+/// tick `AddTerrainMod0A_2A_37BC0`'s countdown end, file **0x5C8C7**:
+/// `80 7b 3b 00  cmpb $0x0,0x3b(%ebx) / je` → set ⇒ `@0x10 = -25`
+/// (`c7 43 10 e7 ff ff ff`), clear ⇒ `@0x10 = -1` (EF:27760-65), and
+/// `-1` is a DEATH.
+///
+/// The port keeps that latch in [`crate::engine::features::Ent::f59`]
+/// and its native mint writes 1 there, so a NATIVELY spawned painter
+/// parks for the full 25-tick settle. But `import_ent_mc2` seats
+/// `f59` from the recorder's `b3a` (retail `@0x3A`) for everything
+/// except a (3,2) castle — so every IMPORTED painter came back with
+/// the latch CLEAR and expired **exactly 21 ticks after birth**
+/// (19-tick rise + the 0-crossing + one settle tick) where retail's
+/// sat out the window. On `mc2l6-rival-spells-galore` that is the
+/// `missing in port: (10,42)` wall at t=34625 (painter 24, born
+/// 34604) and at t=39033 (painters 631/635, born 39012).
+///
+/// Set `MGC_NO_MC2_PAINTER_SETTLE_LANE=1` to restore the old seat.
+pub(crate) fn no_mc2_painter_settle_lane() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PAINTER_SETTLE_LANE").is_some())
+}
+
+/// ⭐⭐⭐ **THE PAINTER'S BUILD00 ROW IS THE *SIGN-EXTENDED* BYTE, AND
+/// RETAIL NEVER CLAMPS IT.** `AddTerrainMod0A_2A_37BC0` (EF:27648;
+/// shipped NETHERW.EXE **0x5C3C0**) reads the row three times and every
+/// one of them is `0f be 53 46  movsbl 0x46(%ebx),%edx` — **0x5C451**
+/// and **0x5C49D** (the VGA arm) and **0x5C471** (the non-VGA arm) —
+/// followed by `lea (,%edx,4),%eax; sub %edx,%eax; mov 0x4(%edx,%eax,2)`,
+/// i.e. `BUILD00[row].width` at `table + 6*row + 4` with NO bounds test.
+/// The port clamped the row with `.min(7)` — an INVENTED clamp, and
+/// `.min()` where the disassembly has a bare index is the classic
+/// porting tell.
+///
+/// It matters because the WIZARD painter's row is residue.
+/// `sub_377A0` stamps `byte_0x46_70 = wizard->dword_0x10_16`, and on
+/// the HUMAN's out-of-pool wizard body that word is never written:
+/// `mc2l6-rival-spells-galore` t=34604 borns painter **slot 24** at
+/// position **(0,0,0)** with `b46 = -80`. Retail therefore indexed
+/// BUILD00 **480 bytes BEFORE** its 77-row table and got extents
+/// **w=38, h=18** — which the CAPTURE proves, because the ctor stamps
+/// them into the record: `apitch 5504 = ((38<<8)+1280)>>1` and
+/// `aroll 2944 = ((18<<8)+1280)>>1`. The port's `.min(7)` handed it
+/// **row 7 = 48x48** instead, and the frame is anchored on the map
+/// ORIGIN, so the phantom pad wrapped to tiles (232..255, 232..255)
+/// and re-terraformed the far corner of the map EVERY TICK.
+///
+/// The residue extents are not reproducible from the shipped assets
+/// (the registered MC2 out-of-bounds class), so an unresolvable row
+/// takes BUILD00 **row 0** — the table's own EMPTY row (w=h=0) — and
+/// the painter stamps NOTHING while its countdown runs on, which is
+/// exactly what the recording's terrain channel shows retail doing at
+/// the graded cells.
+///
+/// Set `MGC_NO_MC2_PAINTER_ROW_VERBATIM=1` to restore the `.min(7)`
+/// clamp for A/B.
+pub(crate) fn no_mc2_painter_row_verbatim() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PAINTER_ROW_VERBATIM").is_some())
+}
+
 /// `sub_60810` (EF:61695): capacity by level. Differs from MC1 at
 /// every level >= 1; the level-7 sentinel is 300M (MC1: 30M).
 ///
@@ -501,9 +588,94 @@ impl Gen {
             // (EF:28092-28108) — it does NOT restore heights, and
             // nothing else does either. Level 0 → no re-scatter.
             let lvl = self.ent[i].f26;
+            // ⭐⭐⭐ THE ARGUMENT IS BUILT IN THE SHARED SCRATCH RECORD
+            // — AND LEFT THERE. `sub_605E0` (EF:61628-35) does not
+            // pass a struct: it writes `RemoveCastleStage_385C0`'s
+            // operand into `Entities_EA3E4[0]`, the pool's slot-0
+            // sentinel, field by field —
+            //     Entities[0]->position      = a1x->axis_0x9A_154x
+            //     Entities[0]->byte_0x46_70  = a1x->dword_0x10_16
+            //     Entities[0]->id_0x1A_26    = a1x->id_0x1A_26
+            //     Entities[0]->model_0x40_64 = 0
+            //     Entities[0]->dword_0x10_16 = 0
+            //     Entities[0]->parentId_0x28_40 = <this castle's slot>
+            // — and slot 0 is a REAL POOL RECORD (`new_event` never
+            // hands it out; every walker uses it as the list floor),
+            // so the operand SURVIVES the call as residue.
+            //
+            // That residue has a reader. `sub_13B00` (EF:6070-90),
+            // the rival's build-site scout, borrows the SAME slot 0
+            // as its own scratch, writes only `id_0x1A_26` and
+            // `position.x/y` (the candidate corner) and then copies
+            // the WHOLE axis out: `a1x->axis_0x9A_154x =
+            // v1x->position_0x4C_76` — z included, untouched. So a
+            // rival's build datum `site_z` is the site-z of the LAST
+            // CASTLE ANYWHERE ON THE MAP THAT LOST A LEVEL.
+            //
+            // The port passed the row as a function ARGUMENT and
+            // never wrote slot 0, so `ent[0].z` was permanently 0 and
+            // every rival scouted a site_z of 0. `mc2_rival_state_tick`'s
+            // Build whiff-hover steps `z += v_14 * sign(z − (site_z +
+            // 512))` (EF:5620, row 67 v_14 = −4), so the sign of the
+            // whole hover inverts: mc2l6-rsg t=10788, rival 378 sits
+            // at 1378 after the `sub_12A70` band floor, retail's
+            // site_z 1184 (castle 174's, stamped when it lost its
+            // last level at t=10432) puts the setpoint at 1696 and
+            // steps UP to 1382; the port's 0 put it at 512 and
+            // stepped DOWN to 1374. That was the take's horizon.
+            //
+            // FROM-BINARY CORROBORATED (NETHERW.EXE `sub_605E0`,
+            // linear 0x605E0 = file 0x84DE0 by the banked recipe
+            // `0x34800 + (linear − 0x10000)`); the residue block is
+            // linear 0x6065C..0x606B5 = file 0x84E5C..0x84EB5:
+            //   6065c  mov  esi, ds:0x1a3e4      ; Entities[0]
+            //   60662  lea  edi,[esi+0x4c]       ; &[0]->position
+            //   60665  lea  esi,[ebx+0x9a]       ; &castle->axis_0x9A
+            //   6066b  movs dword / 6066c movs word   ; 6 bytes: x,y,z
+            //   60674  mov  al,[ebx+0x10] / 60677 mov [edx+0x46],al
+            //   6067a  mov  ax,[ebx+0x1a] / 6067e mov [edx+0x1a],ax
+            //   606a2  mov  byte [edx+0x40],0
+            //   606a9  mov  dword [edx+0x10],0
+            //   606b1  mov  [edx+0x28],ax        ; (castle−pool)/0xA8
+            //   606b5  call 0x385c0              ; RemoveCastleStage
+            //   606ba  dec  dword [ebx+0x10]     ; level−−
+            // `ds:0x1a3e4` is a FIXED global pointer to pool slot 0 —
+            // the write is unconditional, not an allocation failure —
+            // and the level goes across as a BYTE (`mov al`).
+            //
+            // ⚠ `id_0x1A_26` and `parentId_0x28_40` are NOT written
+            // here: the port fuses both retail words into `Ent::id24`
+            // for this family, and neither has a port reader on slot 0
+            // (nothing dispatches or grades the sentinel), so writing
+            // one would be a guess with no witness. The position and
+            // the level byte are what `sub_13B00` and the stage walker
+            // actually read.
+            if !no_castle_scratch_arg() {
+                let (dx, dy, dz) = {
+                    let e = &self.ent[i];
+                    (e.dest_x, e.dest_y, e.site_z)
+                };
+                let s = &mut self.ent[0];
+                s.x = dx;
+                s.y = dy;
+                s.z = dz;
+                s.f71 = lvl as u8; // `mov al,[ebx+0x10]` — a plain truncation
+                s.model65 = 0;
+                s.f26 = 0;
+            }
             self.mc2_castle_unstamp(i, lvl.clamp(1, 7) as u8);
             self.ent[i].f26 = lvl - 1;
             self.mc2_castle_extents(i, (lvl - 1).clamp(0, 7) as u8);
+            // EF:61639-40: the downgrade's own AIM LIFT + fov
+            // re-assert right after `SetShiftByCastle`, the same pair
+            // the upgrade (EF:61587-88) and the even-phase standing
+            // tick (EF:61098-99) write. The extents helper only
+            // carried the fov half, so a castle losing a level on an
+            // action-6 tick read `applied_yaw` 0 where retail holds
+            // -8192 (mc2l22 t=3960 castle 556, level 5 → 4 under a
+            // (5,25) bolt; that tick was the take's horizon).
+            self.ent[i].f78 = 0xE000;
+            self.ent[i].f84 = 0x4000;
             self.mc2_castle_ladder(i);
             self.mc2_castle_stages(i);
         }
@@ -701,7 +873,7 @@ impl Gen {
     /// `applied_yaw`/`afov` read 0/256 there (mc2l4 t=1 castle 304).
     /// `mc2_castle_extents_ent` above stays the NON-writing variant
     /// for the port's own refresh callers (its ⛔ note).
-    fn mc2_castle_box_quad(&mut self, i: usize, row: u8) {
+    pub(crate) fn mc2_castle_box_quad(&mut self, i: usize, row: u8) {
         let Some(def) = self.assets.build_tab.get(row as usize).copied() else {
             return;
         };
@@ -881,13 +1053,32 @@ impl Gen {
         // Retail caps the count by the free-pool HEADROOM and splits
         // the FULL spill across the clamped count (EF:61272-96) —
         // fewer-but-bigger spheres on a short pool, never an
-        // under-eject. (Retail's zero-headroom arm spawns nothing
-        // after a failed GC pass; our free list is exact.)
-        let headroom = self.free.len() as i32;
+        // under-eject.
+        let mut headroom = self.free.len() as i32;
+        // ⭐⭐⭐ THE DRY ARM IS A GC PASS, NOT A BAIL-OUT — and it
+        // RE-DENOMINATES THE BURST. The old note here ("retail's
+        // zero-headroom arm spawns nothing after a failed GC pass;
+        // our free list is exact") read the decompile's
+        // `if (!result) { v3 = 8; v16 = result; … }`, which discards a
+        // SUCCESSFUL GC. `NETHERW.EXE` 0x5FD73-0x5FDA5 shows the three
+        // writes are UNCONDITIONAL: `sub_49F90` reaps every pending
+        // ghost and rebuilds both stacks, the burst ceiling is FORCED
+        // to 8 (`mov esi,0x8`), the victim stack is emptied
+        // (`mov dword [edx+0x11e6],-1`), and only a still-full pool
+        // bails. Full citation + disassembly on
+        // [`Gen::mc2_eject_gc`].
+        let mut burst = spill / 1000;
         if headroom == 0 {
-            return;
+            if crate::engine::features::no_castle_eject_gc() {
+                return;
+            }
+            headroom = self.mc2_eject_gc();
+            burst = 8;
+            if headroom == 0 {
+                return;
+            }
         }
-        let count = (spill / 1000).clamp(1, 32).min(headroom);
+        let count = burst.clamp(1, 32).min(headroom);
         let mut share = spill / count;
         let (cx, cy, cz) = {
             let e = &self.ent[i];
@@ -1235,12 +1426,44 @@ impl Gen {
                 // 215 instead (3-D 8,019,381 vs 152,881), bearing 205
                 // where retail bears 0: the t=404 free-run signature
                 // `(3,3)slot162:x,y,heading`.
-                if e.class64 != 10
-                    || e.model65 != 39
-                    || e.tick70 == 62
-                    || e.flags & 0x2000 != 0
-                    || e.f144 != own
-                {
+                //
+                // ⭐⭐⭐ AND NO CLASS TEST EITHER — the gate is MODEL 39,
+                // the decay channel, and the owner. `sub_5F810`
+                // (EF:61006-10) reads `model_0x40_64`, `byte[1] & 0x20`
+                // and `playerEntityIndex_0x94_148`; it never touches
+                // `class_0x3F_63` and never touches
+                // `actionIndex_0x45_69`. The port's `class64 != 10` and
+                // `tick70 == 62` were both invented, and the class one
+                // is FALSE EXACTLY WHEN IT MATTERS: a record FREED
+                // earlier in the same tick has its class byte cleared
+                // but keeps model 39, `+144` and its position, and —
+                // not yet REUSED — keeps its `next_0` too, so it is
+                // still a full member of the `dword_38523` walk with
+                // its stale bytes. MC1's twin `sub_46CA0` (:55931-43)
+                // has filtered on MODEL + OWNER ONLY since mc1l2, with
+                // the same reasoning written out in
+                // [`Gen::castle_balloons`] — THE MC2 CALL PATH NEVER
+                // GOT IT.
+                //
+                // mc2l22 t=28098 is the row: sphere 786 (mail 592 from
+                // the rival at 557 against life 300) is freed at its
+                // own slot's tick, class 10 -> 0, model still 39, still
+                // at (12738, 40875, 3304) and still owned by the human;
+                // the castle at 496 then retargets balloon 949 and
+                // retail RE-PICKS 786 (3-D 953,811 against sphere 291's
+                // 1,075,094). The port's class test dropped it, took
+                // 291 instead, and the balloon flew: retail bears 1762
+                // at the freed record and does not step at all (786 is
+                // reborn a (10,0) with `+148` 0 later in the tick, so
+                // `AddBallon_60AB0`'s "not ours" arm skips the move),
+                // while the port bore 858 at 291 and stepped a full 48
+                // — the segment-8 reset at x 48.910/49.0.
+                let pick_gate = if no_mc2_ball_pick_model_only() {
+                    e.class64 != 10 || e.model65 != 39 || e.tick70 == 62
+                } else {
+                    e.model65 != 39
+                };
+                if pick_gate || e.flags & 0x2000 != 0 || e.f144 != own {
                     continue;
                 }
                 // The two exclusions are REGISTER-INDEXED, not a
@@ -1445,7 +1668,7 @@ impl Gen {
 
     /// `sub_4ABA0` (EF:33409) — the MC2 (3,3) balloon ctor: life
     /// 10000, speed 48, cargo cap 10000, ch0 intake, behavior row
-    /// 68 (= ROW_BASE + 9, the same servo family as MC1's row 9),
+    /// 68 (the same servo family as MC1's row 9),
     /// sprite 169 (+ team). The ctor's action 7 is overwritten to
     /// the working 9 by the roster (EF:61391) — spawned here as 9
     /// directly.
@@ -1462,7 +1685,7 @@ impl Gen {
             e.f136 = 10000;
             e.f140 = 0;
             e.f28 = 1; // byte_0x38_56 = 1: ch0 vulnerable
-            e.row156 = 9; // behavior row (MC2 abs 68 = base + 9)
+            e.row156 = 68; // behavior row (ABSOLUTE `str_D7BD6` index)
             e.id24 = own;
             e.f144 = own;
         }
@@ -1490,9 +1713,9 @@ impl Gen {
     /// owner balloon-alert, killer memory — the corpse is the
     /// roster pass's business (no despawn here).
     pub(crate) fn mc2_balloon_tick(&mut self, i: usize) {
-        use super::behavior::{BEHAVIOR, ROW_BASE};
+        use super::behavior::BEHAVIOR;
         let t = self.ent[i].f146 as usize;
-        let row = &BEHAVIOR[ROW_BASE + self.ent[i].row156 as usize];
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
         // The target read is identity-blind (EF:61779): the only
         // retail gate is the slot itself — no liveness, reap-mark or
         // model test — so a reaped-and-reminted target slot is chased
@@ -1798,7 +2021,20 @@ impl Gen {
             p if p != 0 && p < self.ent.len() => p,
             _ => 0,
         };
-        let row = (self.ent[i].f71 as usize).min(7);
+        // See `no_mc2_painter_row_verbatim`: retail indexes BUILD00
+        // with the SIGN-EXTENDED `byte_0x46_70`, unclamped
+        // (NETHERW.EXE 0x5C451/0x5C471/0x5C49D `movsbl 0x46(%ebx)`).
+        // A row outside the table is retail reading heap residue for
+        // the extents; the port takes the table's EMPTY row 0 and
+        // stamps nothing rather than inventing row 7's 48x48 pad.
+        let row = if super::castle::no_mc2_painter_row_verbatim() {
+            (self.ent[i].f71 as usize).min(7)
+        } else {
+            usize::try_from(self.ent[i].f71 as i8)
+                .ok()
+                .filter(|r| *r < self.assets.build_tab.len())
+                .unwrap_or(0)
+        };
         let Some(def) = self.assets.build_tab.get(row).copied() else {
             self.ent[i].flags |= 0x400;
             return false;
@@ -2311,6 +2547,19 @@ impl Gen {
             // (dwell counter, retail dword_0x10_16 — default 100).
             e.f68 = 0;
             e.f44 = 0;
+            // ⭐⭐ AND THE PIECE IS NOT SOLID. The ctor's own
+            // `event->struct_byte_0xc_12_15.byte[0] &= 0xF7`
+            // (EF:36998) clears the COLLIDE bit `NewEvent_4A050`
+            // hands out by default, so every projectile probe walks
+            // straight past a castle's defender stage —
+            // `sub_10780`'s first test is exactly `byte[0] & 8`
+            // (EF:3763). Leaving it set turned each piece into a
+            // 100000-life wall: mc2l6-rsg t=1657, rival 370's
+            // fireball detonates on piece slot 46 at (56576, 12544)
+            // and snaps to its `sub_65580`-lifted z (1754 + ayaw
+            // 100 = 1854, the tell) where retail's flies on for
+            // another 200 ticks.
+            e.flags &= !8;
         }
         let z = self.ground_z(x, y) as i16 + if lvl <= 1 { 384 } else { 224 };
         self.link(i, x, y, z);
@@ -2834,7 +3083,7 @@ mod tests {
             e.class64 = 3;
             e.model65 = 3;
             e.tick70 = 9;
-            e.row156 = 9; // native abs 68 = ROW_BASE + 9
+            e.row156 = 68; // the ctor's ABSOLUTE row
             e.f126 = 48;
             e.f32 = 0; // pitch 0
             e.id24 = 1;
@@ -3328,5 +3577,191 @@ mod tests {
             "a building outside the next footprint is untouched"
         );
         assert_eq!(g.ent[outside].f46, 7, "so is its link");
+    }
+
+    /// ⭐⭐⭐ `sub_605E0` DOES NOT *PASS* `RemoveCastleStage_385C0` AN
+    /// OPERAND — IT BUILDS ONE IN THE SHARED SCRATCH RECORD
+    /// `Entities_EA3E4[0]` AND LEAVES IT THERE.
+    ///
+    /// EF:61628-35 writes six fields into slot 0 and the shipped EXE
+    /// makes the copy unmistakable: `mov esi,ds:0x1a3e4` (a FIXED
+    /// global pointer to pool slot 0, so this is not a failed
+    /// allocation) / `lea edi,[esi+0x4c]` / `lea esi,[ebx+0x9a]` /
+    /// `movs dword` + `movs word` — **six bytes, x, y AND z** — then
+    /// `[edx+0x46]`, `[edx+0x1a]`, `[edx+0x40] = 0`, `[edx+0x10] = 0`,
+    /// `[edx+0x28]`, `call 0x5cdc0`, `dec [ebx+0x10]`
+    /// (NETHERW.EXE 0x84e5c-0x84eba).
+    ///
+    /// It is load-bearing because the RESIDUE is read by an unrelated
+    /// subsystem: `sub_13B00`'s rival build-site scout (EF:6070-6090)
+    /// borrows the same slot 0, writes only `id_0x1A_26`, `position.x`
+    /// and `position.y` into it, and then copies the WHOLE position
+    /// back out (`a1x->axis_0x9A_154x = v1x->position_0x4C_76`) — so
+    /// **every rival's build datum `site_z` is the site-z of the last
+    /// castle anywhere on the map that lost a level.** The port never
+    /// wrote slot 0, so `site_z` was permanently 0 and the Build-state
+    /// whiff hover (`z += v_14 * sign(z - (site_z + 512))`, row 67
+    /// `v_14 = -4`) servoed toward 512 instead of the real setpoint.
+    ///
+    /// ⚠ NO FIXTURE HOME: the importer re-seeds `ent[0]` from the
+    /// recording every pair, so the whole-take census is BYTE-IDENTICAL
+    /// with and without this law and only the free run can see it.
+    /// ⭐ **A LANE THE IMPORTER RE-SEEDS CAN CARRY AN UNBOUNDED
+    /// FREE-RUN DEBT AND GRADE PERFECTLY CLEAN.** Corpus receipt:
+    /// mc2l6-rival-spells-galore horizon 10,787 -> 11,663, and slot 0's
+    /// record changes exactly 20 times in 40,423 ticks — every one on
+    /// the tick a castle's `action45` goes 6->4, with rival 378's
+    /// `dest_z` following one tick later every time.
+    /// Ledger SESSION 95 wave 2 dig 3.
+    #[test]
+    fn a_castle_downgrade_leaves_its_site_in_the_shared_scratch_record() {
+        let mut g = flat_gen();
+        let i = g.new_event().expect("castle slot");
+        let (cx, cy) = (100u16 << 8, 100u16 << 8);
+        let site_z = 1184i16;
+        {
+            let e = &mut g.ent[i];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.f26 = 3; // level 3 -> downgrades to 2
+            e.f136 = 1_000;
+            e.f140 = 0;
+            e.id24 = 1;
+            e.x = cx;
+            e.y = cy;
+            e.act_life = 1;
+            e.dest_x = cx;
+            e.dest_y = cy;
+            e.site_z = site_z; // the castle's own axis_0x9A_154 z
+        }
+        g.link(i, cx, cy, g.ground_z(cx, cy) as i16);
+        assert_eq!(g.ent[0].z, 0, "slot 0 starts clean");
+
+        g.mc2_castle_downgrade(i, crate::patches::WorldPatches::RETAIL);
+
+        assert_eq!(
+            g.ent[0].z, site_z,
+            "the downgrade must leave the castle's site z standing in \
+             scratch slot 0 — that residue IS the next rival's build \
+             datum. A 0 here means the port is back to never writing \
+             slot 0 and every rival servos toward a 512 setpoint."
+        );
+        assert_eq!(
+            (g.ent[0].x, g.ent[0].y),
+            (cx, cy),
+            "x and y ride along in the same 6-byte copy"
+        );
+        assert_eq!(
+            g.ent[0].model65, 0,
+            "EXE 0x84ea2 mov BYTE PTR [edx+0x40],0x0"
+        );
+    }
+
+    /// ⭐⭐⭐ THE CASTLE-DEATH TOKEN PURGE IS GATED ON THE LEVEL'S
+    /// GRAPHICS BYTE, `terrain_2FECE.byte_0x2FED2 & 4`.
+    ///
+    /// `sub_605E0`'s level-0 arm (EF:61645-58; NETHERW.EXE file
+    /// `0x84f18` `test byte [eax+0x2fed2],4` / `0x84f1f je 0x84f61`)
+    /// reap-flags whatever record the rival owner's spell-2 book slot
+    /// names and zeroes the slot — but ONLY on a level carrying bit 2
+    /// of the level-graphics byte. Exactly two shipped MC2 levels do:
+    /// 022 (`gfx_type` 4) and 062 (`gfx_type` 7); every other level,
+    /// mc2l0/l3/l6/l24 included, carries 0.
+    ///
+    /// This law is FREE-RUN ONLY (the pair importer re-seats the reap
+    /// bit, so `verify-deltas` on mc2l22 is byte-identical either
+    /// way), which is why it is pinned here and not as a fixture.
+    /// The gate was a stub returning `true` when the purge was first
+    /// banked, and that stub — not the purge — is what cost
+    /// mc2l6-rsg 9,486 ticks and got the whole law shelved.
+    #[test]
+    fn mc2_castle_death_token_purge_is_gated_on_the_level_gfx_bit() {
+        use crate::engine::world::World;
+        use crate::ids::GameId;
+        use crate::mc2::rivals::{MC2_SPELLS, Mc2RivalConfig};
+
+        // A castle at level 0 owned by a RIVAL, with an occupied
+        // spell-2 book slot pointing at a victim record.
+        fn rig(gate: bool) -> (World, usize, usize) {
+            let planes = Planes {
+                height: vec![100; 0x10000],
+                tile_type: vec![5; 0x10000],
+                shading: vec![32; 0x10000],
+                angle: vec![5; 0x10000],
+                ceiling: Vec::new(),
+            };
+            let assets = FeatureAssets {
+                rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+                build_tab: Vec::new(),
+                build_dat: Vec::new(),
+                bldgprm: Vec::new(),
+                spells: Vec::new(),
+                mc2_sprite_ext: Vec::new(),
+            };
+            let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
+            w.set_mc2_castle_purge_level(gate);
+            let mut configs: [Option<Mc2RivalConfig>; 8] = Default::default();
+            configs[1] = Some(Mc2RivalConfig {
+                aggression: 128,
+                perception: 128,
+                reflexes: 128,
+                life: 0,
+                castle_level: 0,
+                start: [false; MC2_SPELLS],
+                start_level: [0; MC2_SPELLS],
+                blocked: [false; MC2_SPELLS],
+            });
+            w.set_mc2_wizards(&configs, 2);
+            let wiz = w.mc2_rivals[0].ent as usize;
+            assert_eq!(
+                (w.g.ent[wiz].class64, w.g.ent[wiz].model65),
+                (3, 1),
+                "the rival wizard is the (3,1) retail asks for at EF:61647"
+            );
+            // The victim: retail dereferences the book index with NO
+            // class/model test (EXE 0x84f36 `mov edi,[eax*4+0x1a3e4]`,
+            // straight into `DisableEntityDrawing04_57F10`).
+            let victim = w.g.new_event().expect("victim slot");
+            w.g.ent[victim].class64 = 10;
+            w.g.ent[victim].model65 = 45;
+            w.mc2_rivals[0].book.ent[2] = victim as u16;
+            // The castle that just took its last level.
+            let c = w.g.new_event().expect("castle slot");
+            {
+                let e = &mut w.g.ent[c];
+                e.class64 = 3;
+                e.model65 = 2;
+                e.f26 = 0; // `dword_0x10_16` — level 0
+                e.id24 = wiz as u16;
+            }
+            (w, c, victim)
+        }
+
+        // Gate CLEAR (every level but 022/062): the arm falls through
+        // — `je 0x84f61` — and neither write happens.
+        let (mut w, c, victim) = rig(false);
+        w.mc2_castle_death_token_purge(c);
+        assert_eq!(
+            w.g.ent[victim].flags & 0x400,
+            0,
+            "gfx_type bit 2 clear ⇒ NO reap flag: mc2l6-rsg is level 6              (gfx_type 0) and retail's `test byte [eax+0x2fed2],4`              falls through there. A reap here is the stub that cost              rsg 9,486 ticks."
+        );
+        assert_eq!(
+            w.mc2_rivals[0].book.ent[2], victim as u16,
+            "gfx_type bit 2 clear ⇒ the book slot is left standing"
+        );
+
+        // Gate SET (level 022, gfx_type 4): both writes land.
+        let (mut w, c, victim) = rig(true);
+        w.mc2_castle_death_token_purge(c);
+        assert_eq!(
+            w.g.ent[victim].flags & 0x400,
+            0x400,
+            "gfx_type bit 2 set ⇒ DisableEntityDrawing04_57F10 raises              byte[1] & 4 on the record the book slot names — the              tick-top `sub_57F20` frees it next tick. This is mc2l22's              t=1199 wall: retail flags slot 1 during t=1198."
+        );
+        assert_eq!(
+            w.mc2_rivals[0].book.ent[2], 0,
+            "gfx_type bit 2 set ⇒ EXE 0x84f4c `mov word [eax+0x337],0`"
+        );
     }
 }

@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc2l15",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 6996,
+   "file": "the-ceiling-pre-clamp-is-action-1s-alone.mgcr",
+   "source": "mc2l15",
+   "note": "THE CEILING PRE-CLAMP IS ACTION 1'S ALONE, AND ACTION 18'S CEILING ARRIVES THROUGH THE POST-MOVE CONTACT TEST: CastPosses_65F60 (action 1) spells BOTH clamps before its commit - the floor at EF:63262-64, then `if (isCaveLevel) { v4 = sub_10C60(&predicted) - array_0x52_82.fov; if (v4 < predicted.z) predicted.z = v4; }` at EF:63265-70. sub_674C0 (action 18, the leveled (9,17)) has ONLY the floor arm (EF:58993-95, then CopyEntityPosition_57CF0 at :58996): there is no isCaveLevel line anywhere between its move and its commit - an ENUMERATED ABSENCE. The consequence is an ORDERING INVERSION, not a missing clamp: action 18's ceiling reaches it through the post-move contact test (EF:59008-19), whose FIRST disjunct `terrainAlt > pos.z` is already false after the floor pre-clamp, so the cave arm evaluates and the CEILING wins. The port pre-clamped to the ceiling and then mc2_proj_land's contact test - where the FLOOR arm is tried first - saw z < ground and re-raised it. WITNESS mc2l15 pair 6996->6997 slot 130 (one row, and LOCAL): floor 5184, ceiling-fov 5034; retail parks the dying (9,17) at 5034, the port at 5184. `explain` shows no `life` change on that tick, which is what proves the CONTACT branch was taken rather than expiry. Kill switch MGC_NO_A18_CEILING_PRECLAMP restores the pre-dig behaviour. Worth +578 horizon (6996 -> 7574). Session 96."
+  }
+ ]
+}

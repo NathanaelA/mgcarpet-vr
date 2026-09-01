@@ -71,10 +71,10 @@
 //! always-on row-`0xe` buoyancy sink, the water/cave gate that zeroes
 //! target speed on CAVE refusal, the `sub_5DD50` 128-unit nudge, and
 //! the slow/mobilize debuff channels (the spider-web tint/stun).
-//! Deliberately unported here (cited, banked): the `sub_5DE30`
-//! possess/tornado leash (worklist item 7 — needs the grab spells) and
-//! the trailing cave-ambient/water-loop sound block (EF:59776-59850,
-//! presentation). MC2's tick makes NO flutter roll (MC1's :55294-99
+//! Deliberately unported here (cited, banked): the trailing
+//! cave-ambient/water-loop sound block (EF:59776-59850,
+//! presentation). `sub_5DE30`'s duel leash (worklist item 7) landed
+//! as block 7 — the world computes it, the mover applies it. MC2's tick makes NO flutter roll (MC1's :55294-99
 //! LCG is replaced by that sound block; the draw is carpet-private
 //! state, so omitting it moves no world golden).
 
@@ -519,6 +519,14 @@ pub struct Mc2Moved {
     pub speed_touched: bool,
 }
 
+/// DIG5 PROBE: `MGC_MC2_MOVE_TRACE=1` block-by-block mover trace.
+fn mc2_move_trace(f: impl FnOnce() -> String) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("MGC_MC2_MOVE_TRACE").is_ok()) {
+        println!("{}", f());
+    }
+}
+
 /// The faithful MC2 human move — `sub_5F380`'s command integration
 /// followed by `sub_5D530` in the original's statement order (trace
 /// docs/traces/mc2-flight-model.md). `ground` is `getTerrainAlt`;
@@ -529,7 +537,10 @@ pub struct Mc2Moved {
 /// (water / sealed / latched-and-colliding). `accel_over` and `knock`
 /// ride the same channels as [`mc1_move`] — the MC2 knock constants
 /// (cap 128, decay −4, snap <4; EF:59695-711) equal the MC1 channel's,
-/// and `moveBoost` IS that channel's retail home.
+/// and `moveBoost` IS that channel's retail home. `leash` is the DUEL
+/// pull the world armed for this dispatch
+/// ([`crate::engine::world::World::mc2_duel_enforce`] — `sub_5DE30`,
+/// applied at block 7 below).
 #[allow(clippy::too_many_arguments)]
 pub fn mc2_move(
     st: &mut Mc1State,
@@ -537,6 +548,7 @@ pub fn mc2_move(
     inp: &Mc1Input,
     accel_over: Option<f32>,
     knock: Option<(u16, i16)>,
+    leash: Option<(u16, i16)>,
     ground: &dyn Fn(u16, u16) -> i16,
     ceiling: &dyn Fn(u16, u16) -> Option<i16>,
     gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> Mc2GateOut,
@@ -663,6 +675,12 @@ pub fn mc2_move(
         st.act_speed
     };
     Gen::polar_step(&mut cand, st.yaw, st.eff_pitch, fwd);
+    mc2_move_trace(|| {
+        format!(
+            "  fwd yaw={} eff={} fwd={fwd} -> {cand:?}",
+            st.yaw, st.eff_pitch
+        )
+    });
 
     // (4) strafe at yaw+512, same scaling (EF:59681-93).
     if st.strafe != 0 {
@@ -674,6 +692,7 @@ pub fn mc2_move(
             st.strafe
         };
         Gen::polar_step(&mut cand, st.yaw.wrapping_add(512) & 0x7FF, 0, sf);
+        mc2_move_trace(|| format!("  strafe sf={sf} -> {cand:?}"));
     }
 
     // (5) the moveBoost knockback impulse (EF:59695-711) — the cap
@@ -693,14 +712,44 @@ pub fn mc2_move(
         ext.water_ctr -= 1;
     }
 
-    // (7) the sub_5DE30 possess/tornado leash — UNPORTED (banked,
-    // trace §6/worklist 7: needs the grab-spell machinery).
+    // (7) `sub_5DE30` (EF:59721) — THE DUEL LEASH, and it lives HERE
+    // rather than on the world's knock channel for two reasons the
+    // channel cannot honour. The yaw servo reads the yaw that block 0
+    // ABOVE just integrated and writes it back — `moveBoost` has no
+    // yaw authority at all — and the pull is a plain one-shot polar
+    // step onto the CANDIDATE, so the commit gate can still refuse it
+    // and nothing survives into the next tick (`moveBoost` caps at
+    // 128, decays −4 and keeps pulling for ~20 ticks after the lock
+    // breaks). Retail:
+    //
+    // ```text
+    //   v9 = a1x->yaw + sub_58350(a1x->yaw, v7, 5, 0x82);
+    //   HIBYTE(v9) &= 7u;  a1x->yaw = v9;
+    //   MoveEntity_57FA0(&predictedAxis, v8, a1x->pitch_0x1E_30, v6);
+    // ```
+    //
+    // — the step's heading is the RAW bearing `v8`, not the servoed
+    // yaw (the carpet is dragged sideways while it slews to face its
+    // opponent), and its pitch is the published aim pitch, so a duel
+    // fought up a hill pulls in three dimensions.
+    if let Some((bearing, pull)) = leash {
+        let step = Gen::turn_step(st.yaw, bearing, 0x82) as i32;
+        st.yaw = ((st.yaw as i32 + step) & 0x7FF) as u16;
+        Gen::polar_step(&mut cand, bearing, st.aim_pitch, pull);
+    }
 
     // (8) slow/mobilize decay (EF:59722-43).
     ext.tick_debuffs();
 
     // (9) the commit gate + vertical resolution (EF:59745-69).
+    mc2_move_trace(|| format!("  pre-gate cand={cand:?} knock={knock:?} leash={leash:?}"));
     let out = gate((st.x, st.y, st.z), cand);
+    mc2_move_trace(|| {
+        format!(
+            "  gate -> pass={:?} wet={} zero={}",
+            out.pass, out.wet, out.zero_speed
+        )
+    });
     if out.wet {
         ext.water_ctr += 1;
     }
@@ -1445,6 +1494,7 @@ mod tests {
             inp,
             None,
             None,
+            None,
             &flat_ground,
             &no_ceiling,
             &open_gate2,
@@ -1512,6 +1562,7 @@ mod tests {
             &idle,
             None,
             None,
+            None,
             &pad_ground,
             &no_ceiling,
             &open_gate2,
@@ -1527,6 +1578,7 @@ mod tests {
                 &mut st,
                 &mut ext,
                 &idle,
+                None,
                 None,
                 None,
                 &pad_ground,
@@ -1663,6 +1715,7 @@ mod tests {
             &Mc1Input::default(),
             None,
             None,
+            None,
             &flat_ground,
             &no_ceiling,
             &blocked,
@@ -1703,6 +1756,7 @@ mod tests {
                 &mut st,
                 &mut ext,
                 &inp,
+                None,
                 None,
                 None,
                 &flat_ground,
@@ -1747,6 +1801,7 @@ mod tests {
             &Mc1Input::default(),
             None,
             None,
+            None,
             &flat_ground,
             &no_ceiling,
             &blocked,
@@ -1775,6 +1830,7 @@ mod tests {
             &idle,
             None,
             None,
+            None,
             &flat_ground,
             &low_roof,
             &open_gate2,
@@ -1794,11 +1850,84 @@ mod tests {
             &idle,
             None,
             None,
+            None,
             &flat_ground,
             &pinch,
             &open_gate2,
             &never_stuck,
         );
         assert_eq!(st.z, 100, "the roof clamps raw, floor notwithstanding");
+    }
+
+    /// `sub_5DE30`'s TRANSPORT (EF:59924-29), block 7 — the half the
+    /// world's knock channel could never carry.
+    ///
+    /// ⚠ THIS LAW IS INVISIBLE TO A CONFORMANCE PAIR. The lock lives
+    /// in three Type_160 words (`word_0x146_326`, `dword_0x142_322`,
+    /// `word_0x14A_330`) that the MC2 import does not restore, so an
+    /// imported world never holds a duel and both pose samplers pass
+    /// `None` here. It is graded on the FREE RUN
+    /// (mc2l6-rival-spells-galore t=1377) and pinned here.
+    #[test]
+    fn the_duel_leash_servos_the_yaw_and_steps_the_candidate() {
+        // Idle carpet: no thrust, no strafe, so every unit of motion
+        // below belongs to the leash.
+        let mut st = Mc1State {
+            x: 0x8000,
+            y: 0x8000,
+            z: 256,
+            yaw: 1000,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        let idle = Mc1Input::default();
+        let (x0, y0) = (st.x, st.y);
+        mc2_move(
+            &mut st,
+            &mut ext,
+            &idle,
+            None,
+            None,
+            // Bearing 0 = due north (`polar_step`'s zero is −y), pull
+            // 120 = the tier cap `3 * minSpeed / 2`.
+            Some((0, 120)),
+            &flat_ground,
+            &no_ceiling,
+            &open_gate2,
+            &never_stuck,
+        );
+        // The servo is `sub_58350(yaw, bearing, 5, 0x82)` — capped at
+        // 130 per tick, so a 1000-unit error walks, it does not snap.
+        assert_eq!(st.yaw, 870, "yaw servoed 130 toward the bearing");
+        // …and the step rides the RAW bearing, not the servoed yaw:
+        // due north is pure −y with x untouched.
+        assert_eq!(st.x, x0, "no sideways drift on a due-north leash");
+        assert_eq!(st.y, y0.wrapping_sub(120), "the full pull, one tick");
+
+        // The SIGNED half: inside the held distance the leash is
+        // negative and shoves the caster back out.
+        let mut st = Mc1State {
+            x: 0x8000,
+            y: 0x8000,
+            z: 256,
+            yaw: 0,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        let y0 = st.y;
+        mc2_move(
+            &mut st,
+            &mut ext,
+            &idle,
+            None,
+            None,
+            Some((0, -120)),
+            &flat_ground,
+            &no_ceiling,
+            &open_gate2,
+            &never_stuck,
+        );
+        assert_eq!(st.yaw, 0, "already on the bearing: the servo is a no-op");
+        assert_eq!(st.y, y0.wrapping_add(120), "shoved AWAY from the opponent");
     }
 }

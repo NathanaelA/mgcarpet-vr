@@ -83,6 +83,10 @@ struct WorldInit {
     /// relief shading (remc2 Terrain.cpp:2030-2033).
     night_shade: bool,
     doom_level: bool,
+    /// MC2 castle-purge level bit (`byte_0x2FED2 & 4`): gates
+    /// `sub_605E0`'s level-0 rival spell-2 book purge (EF:61650).
+    /// Set on levels 022 and 062 only.
+    castle_purge_level: bool,
     /// Draw stand-in art for unported models (deliberate: MC2 default
     /// until its roster closes; the ledger stays truthful either way).
     placeholders: bool,
@@ -107,6 +111,7 @@ impl WorldInit {
             w.set_placeholders(self.placeholders);
             w.set_mc2_night_shade(self.night_shade);
             w.set_mc2_doom_level(self.doom_level);
+            w.set_mc2_castle_purge_level(self.castle_purge_level);
             if !self.stages.is_empty() {
                 w.set_mc2_stages(&self.stages);
             }
@@ -1035,6 +1040,10 @@ fn load_level(
                     // pyramid's ctor (remc2 EF:33968).
                     doom_level: is_mc2
                         && package.header.as_ref().is_some_and(|h| h.gfx_type & 2 != 0),
+                    // The castle-purge bit (gfx_type & 4) gates
+                    // `sub_605E0`'s level-0 rival arm (remc2 EF:61650).
+                    castle_purge_level: is_mc2
+                        && package.header.as_ref().is_some_and(|h| h.gfx_type & 4 != 0),
                     chassis,
                 };
                 let w = init.build();
@@ -8698,6 +8707,7 @@ fn run_flock_probe(
             stage_vars: Vec::new(),
             night_shade: init.night_shade,
             doom_level: init.doom_level,
+            castle_purge_level: init.castle_purge_level,
             placeholders: init.placeholders,
             chassis: init.chassis.clone(),
         };
@@ -9039,7 +9049,6 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         map_wide_ball_rolling: p.map_wide_ball_rolling.on(),
         possessed_footprint: p.possessed_footprint.on(),
         mc2_downgrade_overflow: p.mc2_downgrade_overflow.on(),
-        mc2_magic_mine: p.mc2_magic_mine.on(),
         castle_latch_bug: p.castle_latch_bug.on(),
     }
 }

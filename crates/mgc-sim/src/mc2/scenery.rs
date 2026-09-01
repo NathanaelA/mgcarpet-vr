@@ -13,6 +13,28 @@
 
 use crate::engine::features::Gen;
 
+/// A/B toggle for THE IMPORTED LEVEL-END LATCH
+/// (`MGC_NO_IMPORT_LEVEL_END_LATCH=1` restores the old wipe).
+///
+/// `retail_import_mc2` reads retail's own objective board
+/// (`struct_0x3659C[local]`, LevelStructs.h:190-96) and seeds
+/// `World::completed` from its `IsLevelEnd_0` byte — and then the
+/// cross-pair latch wipe a few hundred lines below, copied from the MC1
+/// arm which has no such board, set it back to `false`. Every MC2 pair
+/// therefore ticked with `completed == false`, and the ONE reader of
+/// that latch, `AddSwitch0B_04_6F150` (EF:54329-46) — the class-11
+/// model-4 LEVEL-END RELEASE, which fires `sub_4A1E0(id_0x1A_26, 1)`
+/// the first frame a class-3 model-0 wizard's board carries the latch —
+/// never fired. mc2l6-rsg t=30321 is the witness: retail's board reads
+/// `completed=1 states=[2,…]`, slot 271 `(11,4)` id 10 fires
+/// disposition 10 and lays the ending wave (an (11,12) X-marker, eight
+/// `(2,7)` falling props, the (14,3) checkpoint X and a (10,13) arrow)
+/// across slots 176..187; the port spawned nothing at all.
+pub(crate) fn no_import_level_end_latch() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_IMPORT_LEVEL_END_LATCH").is_some())
+}
+
 impl Gen {
     // ---- ctors (models 3-8) --------------------------------------------------
 
@@ -169,14 +191,24 @@ impl Gen {
                     let e = &self.ent[i];
                     (e.x, e.y, e.z, e.f84)
                 };
-                let fz = if z > 128 { z - 128 } else { 0 };
-                if let Some(f) = self.mc2_spawn_fire6(x, y, fz) {
+                if let Some(f) = self.mc2_spawn_fire6(x, y, z) {
                     self.ent[f].id24 = if (src as usize) < self.ent.len() && src != 0 {
                         self.ent[src as usize].id24
                     } else {
                         src
                     };
                     self.ent[f].f44 = (3 * fov) >> 2;
+                    // `v7 = v4x->position_0x4C_76.z` (EF:62428) is the
+                    // FLAME's z read back AFTER the ctor's terrain snap
+                    // (`getTerrainAlt_10C40(position)` EF:35471), NOT
+                    // the tree's own (stale, last-tick) z; the -128 is
+                    // then written OVER the snap (EF:62430-33):
+                    // `if (v7 <= 128) z = 0; else z = v7 - 128;`.
+                    // mc2l6-rsg t=7491 slot 279: retail 1042 = 1170-128
+                    // (1170 = terrain at the tree, which the ctor
+                    // already stamped); the tree's entry z was 1239.
+                    let fz = self.ent[f].z;
+                    self.ent[f].z = if fz <= 128 { 0 } else { fz - 128 };
                     let d = self.mc2_rand(i);
                     let burn = (d % 0x3C + 130) as i32;
                     self.ent[f].act_life = burn;

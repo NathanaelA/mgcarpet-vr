@@ -911,10 +911,6 @@ pub struct GameplayPatches {
     /// Retail's i32 math overflows at the level-7 rung — a maxed
     /// castle downgrade RAISES its capacity and scatters nothing.
     pub mc2_downgrade_overflow: PatchArm,
-    /// MC2 Magic Mine proximity trigger. Retail ships the spell dead —
-    /// nothing ever arms the trigger, so a mine floats, expires and
-    /// sinks without detonating on anyone.
-    pub mc2_magic_mine: PatchArm,
     /// MC2 mana dwellers share the wraith's proximity concealment:
     /// they materialize only inside retail's own ~19-tile fog band —
     /// a slant-distance sphere, so climbing out of the band conceals
@@ -952,7 +948,6 @@ impl Default for GameplayPatches {
             map_wide_ball_rolling: PatchArm::Patched,
             possessed_footprint: PatchArm::Patched,
             mc2_downgrade_overflow: PatchArm::Patched,
-            mc2_magic_mine: PatchArm::Patched,
             mc2_dweller_invisibility: PatchArm::Patched,
             win2_movie_score: PatchArm::Patched,
             castle_latch_bug: PatchArm::Patched,
@@ -971,7 +966,6 @@ impl GameplayPatches {
             map_wide_ball_rolling: PatchArm::Retail,
             possessed_footprint: PatchArm::Retail,
             mc2_downgrade_overflow: PatchArm::Retail,
-            mc2_magic_mine: PatchArm::Retail,
             mc2_dweller_invisibility: PatchArm::Retail,
             win2_movie_score: PatchArm::Retail,
             castle_latch_bug: PatchArm::Retail,
@@ -1218,7 +1212,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 24;
+const DEFAULTS_VERSION: u64 = 25;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

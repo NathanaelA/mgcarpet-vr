@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1hwl2",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 69,
+   "file": "the-castle-pre-clear-box-is-inclusive.mgcr",
+   "source": "mc1hwl2",
+   "note": "THE CASTLE PRE-CLEAR BOX IS INCLUSIVE: sub_12C50 (remc1 :17616-41, remc1hw :15748-72, both marked SYNCHRONIZED) razes a (10,45) dwelling when |dx| <= (castle.f80 + 256) + victim.f80, not `<`. THE PROOF IS THE JUMP MNEMONIC: HIDDEN.EXE 0x2B6AF-0x2B6E6, identical at CARPET.EXE 0x2B4AF-0x2B4E6, runs `mov 0x48(%ebx),%ax / sub %edi,%eax / cwtl / cltd / xor / sub` (the abs16 - the cwtl also confirms the port's `wrapping_sub as i16` form), then `cmp %ecx,%eax` and **jg** to the skip target: it SKIPS only when |dx| > limit, so it KILLS at equality. `jge` would have meant the port's `<`. WITNESS - an exact boundary hit at mc1hwl2 t=69->70, the human's castle-plant tick (wiz 0 / ent 395: castle 0 -> 284, and 284's own box grows f80/f82 184 -> 1664): victim slot 8 is a (10,45) dwelling at (19456,16896) with f80 = f82 = 2432, castle 284 sits at (15104,18176), so |19456 - 15104| = 4352 against a limit of 2432 + (1664 + 256) = 4352 EXACTLY - `<` FALSE, `<=` TRUE. Retail: `slot 8 (10,45) [DIED]: act_life 2000 -> -1`; the port held 2000. Worth +379 free-run horizon (69 -> 448); census 560 -> 558, removals only. A second witness for the same law exists at t=371, slot 9 (the other dwelling). Kill switch MGC_NO_PRECLEAR_INCLUSIVE=1 restores the exclusive `<` and regresses this pair (slot 8 life: retail -1 port 2000)."
+  }
+ ]
+}

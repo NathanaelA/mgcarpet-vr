@@ -50,6 +50,18 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 pub(crate) fn replay(path: &std::path::Path, args: &Args) -> i32 {
+    // The horizon shortcut answers "where does the free run first
+    // part?" and nothing else. `--segmented` exists precisely to keep
+    // measuring past that point, and `--pose-only` grades on a
+    // different lane, so both combinations are refused rather than
+    // silently reporting a truncated sweep as a whole one.
+    if args.stop_at_div && (args.segmented || args.pose_only) {
+        eprintln!(
+            "replay: --stop-at-divergence is the horizon query and cannot be combined \
+             with --segmented or --pose-only"
+        );
+        return 2;
+    }
     let family = match Recording::open(path).and_then(|r| r.header.family()) {
         Ok(f) => f,
         Err(e) => {
@@ -77,6 +89,80 @@ pub(crate) fn replay(path: &std::path::Path, args: &Args) -> i32 {
 }
 
 // ------------------------------------------------------------ the chain
+
+/// ⭐⭐⭐ THE KNOWN-DEVIATION ROSTER IN `replay` (player-ruled
+/// 2026-09-04, and owed since round 99): decide whether one divergent
+/// boundary is EXCUSED — every row on it matched by a rule whose
+/// `status` is `deviation`, i.e. retail behaviour the register says
+/// the port deliberately does not reproduce.
+///
+/// The rule is deliberately ALL-OR-NOTHING, and that is what makes a
+/// coarse rule safe: `mc2l22 (5,27) heading` can excuse the hydra's
+/// uninitialised-parity family without ever hiding a compound break,
+/// because one unexplained row on the same boundary demotes the whole
+/// thing back to `SegOpen::Deviation`.
+///
+/// Three lanes can NEVER be excused, whatever the roster says:
+///   * the POSE channel — its rows are the human's own mover lanes and
+///     carry no (class, model, slot) for a rule to scope against, so a
+///     roster rule cannot even be written for one;
+///   * an RNG boundary — a parted LCG stream is not a per-row fact
+///     about one entity, it is the whole world's future;
+///   * `status: capture` and `status: open` rows. Capture rows are the
+///     recording's limitation rather than the port's, but they are not
+///     a RULING; `open` rows are leads awaiting a fix round. Only
+///     `deviation` is a thing the player has decided stays.
+///
+/// Hits fold into [`RStats::roster_hits`] as (rows, boundaries) so the
+/// report can print the same visible per-rule table `verify-deltas`
+/// does — a rule that starts excusing an order of magnitude more is a
+/// signal, never a silent mask.
+fn roster_excuse(
+    stats: &mut RStats,
+    roster: Option<&crate::roster::Roster>,
+    take: &str,
+    t: u64,
+    pose: &[(&'static str, i64, i64)],
+    pd: &PairDiff,
+    ctx: &dyn Fn(u16) -> Option<(u8, u8, f64, f64)>,
+) -> bool {
+    use crate::roster::{RuleStatus, Tag};
+    let Some(r) = roster else { return false };
+    if !pose.is_empty() || pd.rng_want != pd.rng_got {
+        return false;
+    }
+    // The boundary t grades the pair (t-1 → t) — rules scope on the
+    // pair tick, the same key `verify-deltas` classifies under.
+    let tags = crate::verify::classify_pair(Some(r), take, t.saturating_sub(1), pd, ctx);
+    let mut idxs: Vec<usize> = Vec::new();
+    for tag in tags
+        .missing
+        .iter()
+        .chain(tags.extra.iter())
+        .chain(tags.fields.iter())
+    {
+        match tag {
+            Tag::Rule(i) if r.rules[*i].status == RuleStatus::Deviation => idxs.push(*i),
+            _ => return false,
+        }
+    }
+    if idxs.is_empty() {
+        return false;
+    }
+    let mut counted = std::collections::BTreeSet::new();
+    for i in idxs {
+        let e = stats
+            .roster_hits
+            .entry(r.rules[i].id.clone())
+            .or_insert((0, 0));
+        e.0 += 1;
+        if counted.insert(i) {
+            e.1 += 1;
+        }
+    }
+    stats.roster_ticks.push(t);
+    true
+}
 
 /// The chained human flight state — the driver's copy of what
 /// `Simulation` owns in the app (integer carpet + MC2 channels + the
@@ -622,6 +708,26 @@ enum SegOpen {
     Gap,
     /// A true incremental deviation (`--segmented` only).
     Deviation,
+    /// ⭐ A boundary whose EVERY row is a registered DEVIATION
+    /// (`conformance/known-deviations.json`, `status: deviation`) —
+    /// PLAYER-RULED retail behaviour the port deliberately does not
+    /// reproduce, so the reset is a property of the RULING, not a port
+    /// failure, and it does not count against certification.
+    ///
+    /// The re-anchor still HAPPENS, and that is the whole point: a
+    /// registered row is excused as a DEFECT, never as a divergence.
+    /// Its value propagates (a fitted RNG draw, a painted tile) and no
+    /// amount of ruling makes the port's downstream state retail's, so
+    /// the only sound way to keep measuring past one is to re-import
+    /// retail's state — which is exactly what a segmented reset is.
+    /// `--segmented` therefore needs no flag; a plain free run opts in
+    /// with `--resync-deviations`.
+    ///
+    /// ⚠ A boundary is excused only when EVERY row on it matches a
+    /// `deviation` rule. One unexplained row and the whole boundary is
+    /// a `Deviation` again — which is what stops a field-scoped rule
+    /// from ever hiding a compound break.
+    Roster,
     /// The PORT signalled a level restart (`World::take_restart` — the
     /// castle-less PERMADEATH respawn, MC1 case 0xF :48628-31 / MC2
     /// EF:37671-75). Retail's reload runs machinery whose inputs are
@@ -663,6 +769,20 @@ struct RStats {
     /// candidate), false = INHERITED (the pair is clean ⇒ the break
     /// rides earlier state — unit test / upstream dig).
     class_tags: BTreeMap<u64, bool>,
+    /// `--stop-at-divergence`: the boundary the run stopped on. Every
+    /// count in the report is truncated there, and both renderers say
+    /// so — the flag must never be mistakable for a full sweep.
+    truncated: Option<u64>,
+    /// ⭐ THE ROSTER LEDGER — per-rule hit counts for the boundaries
+    /// `SegOpen::Roster` excused, keyed by rule index. The roster's own
+    /// doctrine (roster.rs) is that a masking rule must be VISIBLE: a
+    /// rule that suddenly excuses an order of magnitude more boundaries
+    /// is a signal, so `replay` prints this table exactly the way
+    /// `verify-deltas` prints its own.
+    roster_hits: BTreeMap<String, (u64, u64)>,
+    /// Boundaries excused by the roster, in order — the companion list
+    /// to `reset clusters`, and never folded into it.
+    roster_ticks: Vec<u64>,
 }
 
 impl RStats {
@@ -738,6 +858,13 @@ impl RStats {
     fn render(&self, mode: &str) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "   mode: {mode}");
+        if let Some(t) = self.truncated {
+            let _ = writeln!(
+                out,
+                "   ⚠ STOPPED at the first divergence (--stop-at-divergence): \
+                 boundary {t} is the horizon, every COUNT below is truncated there"
+            );
+        }
         // THE CERTIFICATION LINE (segmented runs). A take certifies
         // when it free-runs as ONE segment, so the figure that matters
         // is resets the PORT forced — gap resets are the capture's
@@ -752,7 +879,7 @@ impl RStats {
             || self
                 .segs
                 .iter()
-                .any(|s| matches!(s.opened_by, SegOpen::Gap | SegOpen::Restart))
+                .any(|s| matches!(s.opened_by, SegOpen::Gap | SegOpen::Restart | SegOpen::Roster))
         {
             let gaps = self
                 .segs
@@ -764,10 +891,20 @@ impl RStats {
                 .iter()
                 .filter(|s| s.opened_by == SegOpen::Restart)
                 .count();
+            // The roster-excused count rides BESIDE the certification
+            // arithmetic and never inside it: `excess resets` stays the
+            // number of resets the PORT forced, which is what a take
+            // has to drive to zero. A registered deviation is not one.
+            let excused = self.roster_segs();
+            let excused_txt = if excused == 0 {
+                String::new()
+            } else {
+                format!(", {excused} roster-excused")
+            };
             let _ = writeln!(
                 out,
-                "   segments: {} total, {} gap-forced, {} restart-forced, {} DEVIATION-forced \
-                 (excess resets: {})",
+                "   segments: {} total, {} gap-forced, {} restart-forced, {} DEVIATION-forced\
+                 {excused_txt} (excess resets: {})",
                 self.segs.len(),
                 gaps,
                 restarts,
@@ -831,6 +968,35 @@ impl RStats {
                     );
                 }
             }
+            // THE ROSTER LEDGER — always visible when a rule fired, and
+            // itemised by rule, so a rule that starts excusing far more
+            // than its note claims is caught by reading the report
+            // rather than by noticing a number that quietly fell.
+            if !self.roster_hits.is_empty() {
+                let shown: Vec<String> = self
+                    .roster_ticks
+                    .iter()
+                    .take(24)
+                    .map(|t| t.to_string())
+                    .collect();
+                let _ = writeln!(
+                    out,
+                    "   roster-excused boundaries (registered DEVIATIONS, not defects): {}: {}{}",
+                    self.roster_ticks.len(),
+                    shown.join(", "),
+                    if self.roster_ticks.len() > shown.len() {
+                        format!(", … (+{} more)", self.roster_ticks.len() - shown.len())
+                    } else {
+                        String::new()
+                    }
+                );
+                for (id, (rows, bounds)) in &self.roster_hits {
+                    let _ = writeln!(
+                        out,
+                        "     {id}: {rows} row(s) over {bounds} boundary/ies"
+                    );
+                }
+            }
         }
         for (i, seg) in self.segs.iter().enumerate() {
             let _ = writeln!(
@@ -840,6 +1006,7 @@ impl RStats {
                     SegOpen::Seed => "seed",
                     SegOpen::Gap => "gap",
                     SegOpen::Deviation => "reset",
+                    SegOpen::Roster => "roster",
                     SegOpen::Restart => "restart",
                 },
                 seg.t0,
@@ -937,8 +1104,27 @@ impl RStats {
         out
     }
 
+    /// Was segment `i`'s horizon a ROSTER-EXCUSED boundary the run
+    /// then RE-ANCHORED on? Both halves matter: excusing a row is a
+    /// statement about blame, and re-anchoring is what makes the
+    /// measurement past it mean anything. A plain free run that
+    /// declines to resync (no `--resync-deviations`) keeps its horizon
+    /// — the deviating value has propagated and nothing downstream is
+    /// the port's own state any more.
+    fn excused_at(&self, i: usize) -> bool {
+        self.segs[i].horizon.is_some()
+            && self.segs.get(i + 1).map(|n| n.opened_by) == Some(SegOpen::Roster)
+    }
+
+    fn roster_segs(&self) -> usize {
+        self.segs
+            .iter()
+            .filter(|s| s.opened_by == SegOpen::Roster)
+            .count()
+    }
+
     fn clean(&self) -> bool {
-        self.segs.iter().all(|s| s.horizon.is_none())
+        (0..self.segs.len()).all(|i| self.segs[i].horizon.is_none() || self.excused_at(i))
     }
 
     /// `--brief` — ONE machine-readable line per take: the corpus
@@ -960,7 +1146,20 @@ impl RStats {
             .count();
         let graded: u64 = self.segs.iter().map(|s| s.graded).sum();
         let clean: u64 = self.segs.iter().map(|s| s.clean).sum();
-        let first = self.segs.iter().filter_map(|s| s.horizon).min();
+        // ⭐ `horizon`/`first` are the first UNEXCUSED divergence — a
+        // boundary the roster excused AND the run re-anchored on is not
+        // one ([`RStats::excused_at`]). That is the ruling in one
+        // field: a take whose only breaks are registered deviations
+        // reads `horizon=END`, which is what "certified except the
+        // registered rows" has to look like on the sweep line. Nothing
+        // is hidden — `roster=N` says how many were excused, and the
+        // full report itemises them by rule and by tick.
+        // Byte-stable for every take with no excused boundary, since
+        // `excused_at` is false throughout one.
+        let first = (0..self.segs.len())
+            .filter(|&i| !self.excused_at(i))
+            .filter_map(|i| self.segs[i].horizon)
+            .min();
         let sig = first
             .and_then(|t| self.segs.iter().find(|s| s.horizon == Some(t)))
             .map(|s| s.sig.clone())
@@ -1008,8 +1207,21 @@ impl RStats {
         } else {
             ""
         };
+        let stopped = match self.truncated {
+            None => String::new(),
+            Some(t) => format!(" stopped={t}"),
+        };
+        // Conditional like `paused` and `restarts`: a take with no
+        // registered-deviation boundary carries no field at all, so
+        // every baseline line in the corpus stays byte-stable.
+        let roster = self.roster_ticks.len();
+        let roster = if roster == 0 {
+            String::new()
+        } else {
+            format!(" roster={roster}")
+        };
         format!(
-            "BRIEF {take} mode={mode} terrain={terrain} end={end} segments={} gaps={gaps}{restarts} \
+            "BRIEF {take} mode={mode} terrain={terrain}{stopped} end={end} segments={} gaps={gaps}{restarts}{roster} \
              devs={devs} graded={graded}{paused} clean={clean} horizon={} first={} sig={sig}{tags}{artifact}\n",
             self.segs.len(),
             first.map_or_else(|| "END".to_string(), |t| t.saturating_sub(1).to_string()),
@@ -1070,6 +1282,10 @@ fn run_mc1(
         );
     }
     let (mut world, pristine) = crate::verify::build_world(&args.baked, &game, level)?;
+    // The known-deviation roster, the same file and the same `--no-roster`
+    // switch `verify-deltas` uses ([`roster_excuse`]).
+    let roster = crate::verify::load_roster(args)?;
+    let take = crate::verify::take_stem(path);
     let mut csv = open_csv(args)?;
     let mut shadow = crate::shadow::Shadow::from_env()?;
     let state_dump: Option<(u64, String)> = std::env::var("MGC_STATE_DUMP").ok().and_then(|s| {
@@ -1191,6 +1407,10 @@ fn run_mc1(
     let mut prev_measured: Option<(Vec<u8>, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>)> = None;
     let mut pair_cmd_prev = PlayerCommand::default();
     let mut last_dev: Option<u64> = None;
+    // `--stop-at-divergence`: armed at the boundary that broke, read at
+    // the END of that tick's body so the break's own bookkeeping (and
+    // its diagnostics) still run exactly as they do in a full sweep.
+    let mut stop_at: Option<u64> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
         // The terrain image tracks the take continuously (self-healing
@@ -1225,7 +1445,7 @@ fn run_mc1(
         }
         let st = decode_retail_mc1(state)?;
         let obs: ObsMc1 = match &tick.obs {
-            Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?,
+            Some(v) => serde_json::from_str(v.get()).map_err(|e| format!("obs: {e}"))?,
             None => return Err(format!("t={}: no obs channel", tick.t)),
         };
         let anchor = !matches!((&st_prev, &chain), (Some((pt, _)), Some(_)) if tick.t == pt + 1);
@@ -1693,6 +1913,24 @@ fn run_mc1(
                         && !(pose.is_empty() && pd.clean()));
                 emit_replay_csv(&mut csv, pt, &pose, &pd)?;
                 let boundary_clean = stats.grade(tick.t, &pose, &pd, args, dump);
+                // THE ROSTER PASS — the MC2 arm's twin
+                // ([`roster_excuse`]). MC1/HW carries registered
+                // deviations of its own (`mc1l32-stuck-explosion-wedge`).
+                let excused = !boundary_clean && {
+                    let rmap: BTreeMap<u16, &mgc_formats::mgcr::EntObsMc1> =
+                        obs.entities.iter().map(|e| (e.slot, e)).collect();
+                    let pmap: BTreeMap<u16, &mgc_formats::mgcr::EntObsMc1> =
+                        port.entities.iter().map(|e| (e.slot, e)).collect();
+                    let rctx = |slot: u16| {
+                        rmap.get(&slot)
+                            .or_else(|| pmap.get(&slot))
+                            .map(|e| (e.class, e.model, e.x, e.y))
+                    };
+                    roster_excuse(&mut stats, roster.as_ref(), &take, tick.t, &pose, &pd, &rctx)
+                };
+                if args.stop_at_div && !boundary_clean && !(excused && args.resync_deviations) {
+                    stop_at = Some(tick.t);
+                }
                 // `--brief`'s first-divergence signature, captured the
                 // moment a segment's horizon lands.
                 if stats.seg().horizon == Some(tick.t) && stats.seg().sig.is_empty() {
@@ -1711,12 +1949,14 @@ fn run_mc1(
                 // run keeps MEASURING past the first break instead of
                 // running wild, and every reset tick names itself as a
                 // fixture candidate.
-                if args.segmented && !boundary_clean {
+                if (args.segmented || (excused && args.resync_deviations)) && !boundary_clean {
                     // A dirty boundary in the restart window IS the
                     // seam (MC2's checkpoint restore lands a tick
                     // BEFORE the witnessed respawn key) — same
                     // re-anchor, restart-tagged, never a candidate.
-                    let kind = if restart_at.is_some_and(|a| tick.t >= a && tick.t - a <= 4) {
+                    let kind = if excused {
+                        SegOpen::Roster
+                    } else if restart_at.is_some_and(|a| tick.t >= a && tick.t - a <= 4) {
                         SegOpen::Restart
                     } else {
                         SegOpen::Deviation
@@ -1803,6 +2043,10 @@ fn run_mc1(
         // classify pair's `set_prev_fire`).
         pair_cmd_prev = fire_bits_mc1(&pst);
         st_prev = Some((tick.t, st));
+        if stop_at.is_some() {
+            stats.truncated = stop_at;
+            break;
+        }
         if let Some(limit) = args.limit {
             if stats.segs.iter().map(|s| s.stepped).sum::<u64>() >= limit {
                 break;
@@ -1939,6 +2183,9 @@ fn run_mc2(
     let replayed = crate::verify_mc2::mc2_take_replayed(path)?;
     let (mut world, pristine, things) =
         crate::verify_mc2::build_world_mc2(&args.baked, level, replayed)?;
+    // The known-deviation roster — see the MC1 arm and [`roster_excuse`].
+    let roster = crate::verify::load_roster(args)?;
+    let take = crate::verify::take_stem(path);
     let mut csv = open_csv(args)?;
     let mut shadow = crate::shadow::Shadow::from_env()?;
     // `MGC_STATE_DUMP=<t>:<path>` — the MC1 arm's INHERITED-head
@@ -1983,6 +2230,9 @@ fn run_mc2(
     let mut stats = RStats::default();
     let mut celltrace = CellTrace::from_env();
     let mut ktrace = KnockTrace::from_env();
+    // MGC_ALLOC_TRACE — the pool-allocator microscope (dig 98-Q13).
+    let alloctrace = crate::alloc_trace::AllocTrace::from_env();
+    let mut stagetrace = crate::alloc_trace::StageTrace::from_env();
     // MGC_MOB_TRACE=<slot>[;<slot>…]:<t0>:<t1> — see the emission site
     // below; same spelling as the MC1 arm's.
     let mtrace = std::env::var("MGC_MOB_TRACE").ok().and_then(|v| {
@@ -2007,6 +2257,10 @@ fn run_mc2(
     #[allow(clippy::type_complexity)]
     let mut prev_measured: Option<(Vec<u8>, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>)> = None;
     let mut last_dev: Option<u64> = None;
+    // `--stop-at-divergence`: armed at the boundary that broke, read at
+    // the END of that tick's body so the break's own bookkeeping (and
+    // its diagnostics) still run exactly as they do in a full sweep.
+    let mut stop_at: Option<u64> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
         // `--classify` keeps the PRE-apply planes: the pair check at
@@ -2038,7 +2292,7 @@ fn run_mc2(
         }
         let st = decode_retail_mc2(state)?;
         let obs: ObsMc2 = match &tick.obs {
-            Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?,
+            Some(v) => serde_json::from_str(v.get()).map_err(|e| format!("obs: {e}"))?,
             None => return Err(format!("t={}: no obs channel", tick.t)),
         };
         // The respawn witness folds EVERY record in stream order
@@ -2161,6 +2415,7 @@ fn run_mc2(
             fire_left: rec.fire_left,
             fire_right: rec.fire_right,
             mc2_select: rec.mc2_select,
+            mc2_ring_cast: rec.mc2_ring_cast,
             respawn: rec.respawn,
             demolish: rec.demolish,
             cheat: rec.cheat,
@@ -2285,10 +2540,21 @@ fn run_mc2(
                 // first tick the port's HISTORY parts from retail's —
                 // the only instrument that can explain a `--segmented`
                 // break whose pair diff at the same tick is CLEAN.
+                if let Some(at) = alloctrace.as_ref() {
+                    at.emit(&world, &st, slot, tick.t);
+                }
+                if let Some(sg) = stagetrace.as_mut() {
+                    sg.emit(&world, &st, tick.t);
+                }
                 if let Some(sh) = shadow.as_mut() {
                     sh.compare_ents_mc2(&world, &st, slot, &torn, tick.t);
                     sh.compare_wiz_mc2(&world, &st, tick.t);
                     sh.compare_free_mc2(&world, &st, slot, tick.t);
+                    // THE OBJECTIVE BOARD, free-run half: the port has
+                    // carried its own since the anchor, so the first
+                    // row is the tick its objective history parts —
+                    // and a stage-gated disposition rides that latch.
+                    sh.compare_board_mc2(&world, &st, tick.t);
                 }
                 let mut pd = compare_mc2_gated(&obs, &port, slot, &torn);
                 // The MC2 sprite lane, free-run half (see the MC1
@@ -2301,6 +2567,23 @@ fn run_mc2(
                         && !(pose.is_empty() && pd.clean()));
                 emit_replay_csv(&mut csv, pt, &pose, &pd)?;
                 let boundary_clean = stats.grade(tick.t, &pose, &pd, args, dump);
+                // THE ROSTER PASS — is every row on this boundary a
+                // registered DEVIATION? (see [`roster_excuse`]).
+                let excused = !boundary_clean && {
+                    let rmap: BTreeMap<u16, &mgc_formats::mgcr::EntObsMc2> =
+                        obs.entities.iter().map(|e| (e.slot, e)).collect();
+                    let pmap: BTreeMap<u16, &mgc_formats::mgcr::EntObsMc2> =
+                        port.entities.iter().map(|e| (e.slot, e)).collect();
+                    let rctx = |slot: u16| {
+                        rmap.get(&slot)
+                            .or_else(|| pmap.get(&slot))
+                            .map(|e| (e.class, e.model, e.x, e.y))
+                    };
+                    roster_excuse(&mut stats, roster.as_ref(), &take, tick.t, &pose, &pd, &rctx)
+                };
+                if args.stop_at_div && !boundary_clean && !(excused && args.resync_deviations) {
+                    stop_at = Some(tick.t);
+                }
                 if stats.seg().horizon == Some(tick.t) && stats.seg().sig.is_empty() {
                     let cm = |s: u16| {
                         obs.entities
@@ -2312,11 +2595,17 @@ fn run_mc2(
                     stats.seg().sig = sig;
                 }
                 // ---- THE SEGMENTED DOCTRINE (the MC1 arm's twin) ----
-                if args.segmented && !boundary_clean {
+                // `--resync-deviations` extends the re-anchor to a
+                // PLAIN free run, but only for an excused boundary:
+                // that is the whole instrument, and it is why the flag
+                // is not simply "ignore the roster rows".
+                if (args.segmented || (excused && args.resync_deviations)) && !boundary_clean {
                     // A dirty boundary in the restart window IS the
                     // seam (the checkpoint restore lands a tick
                     // BEFORE the witnessed respawn key).
-                    let kind = if restart_at.is_some_and(|a| tick.t >= a && tick.t - a <= 4) {
+                    let kind = if excused {
+                        SegOpen::Roster
+                    } else if restart_at.is_some_and(|a| tick.t >= a && tick.t - a <= 4) {
                         SegOpen::Restart
                     } else {
                         SegOpen::Deviation
@@ -2363,7 +2652,20 @@ fn run_mc2(
                             ..PlayerCommand::default()
                         };
                         match crate::verify_mc2::exec_pair_mc2(
-                            cw, &pristine, measured, &things, &pst, &st, &obs, cmd, prev_cmd, true,
+                            cw,
+                            &pristine,
+                            measured,
+                            &things,
+                            &pst,
+                            &st,
+                            &obs,
+                            cmd,
+                            prev_cmd,
+                            if crate::verify_mc2::mc2_pose_pair() {
+                                crate::verify::PairPose::Pair
+                            } else {
+                                crate::verify::PairPose::PinN1
+                            },
                         ) {
                             Ok((pdp, _, _)) => {
                                 stats.class_tags.insert(tick.t, !pdp.clean());
@@ -2394,6 +2696,10 @@ fn run_mc2(
             restart_at = None;
         }
         st_prev = Some((tick.t, st));
+        if stop_at.is_some() {
+            stats.truncated = stop_at;
+            break;
+        }
         if let Some(limit) = args.limit {
             if stats.segs.iter().map(|s| s.stepped).sum::<u64>() >= limit {
                 break;
@@ -2499,12 +2805,23 @@ fn pose_only_pair_mc2(
     let knock = consumed_knock(p0.knock_mag, p0.knock_dir, p1.knock_mag, p1.knock_dir);
     ch.ext.row = world.mc2_carpet_row();
     let w: &World = world;
+    // THE DUEL LEASH, off retail's own lock register — the three words
+    // `dword_0x142_322` / `word_0x146_326` / `word_0x14A_330` were in
+    // the capture all along; only the decoder was missing them. Armed
+    // while the register stands at BOTH ends of the pair, and read at
+    // the carpet's PRE-MOVE position like `sub_5DE30` does. See the
+    // twin note in `pose_lane.rs`.
+    let carpet_pre = (ch.s.x, ch.s.y, ch.s.z);
+    let leash = (p0.duel_target != 0 && p1.duel_target != 0)
+        .then(|| w.mc2_duel_leash_recorded(carpet_pre, p0.duel_target, p0.duel_hold))
+        .flatten();
     flight::mc2_move(
         &mut ch.s,
         &mut ch.ext,
         &inp,
         None,
         knock,
+        leash,
         &|x, y| w.ground_z_engine(x, y),
         &|x, y| w.player_cave_ceiling(x, y),
         &|cur, prop| w.player_mc2_gate(cur, prop),

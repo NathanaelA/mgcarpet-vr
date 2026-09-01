@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc2l30",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 262,
+   "file": "the-fools-merge-parent-test-reads-raw-0x28.mgcr",
+   "source": "mc2l30",
+   "note": "THE FOOL'S-MERGE PARENT TEST READS RAW @0x28 AND UNPARENTED IS 0 - WHICH ARM OF AN `if` THE RNG DRAW LIVES IN IS A LAW: NETHERW.EXE 0x5b73c-0x5b758 (sub_36F30, the m57 merge body) is `mov cl,[eax+0x46] / cmp cl,[edx+0x46] / jge 0x5b748` (the TIER contest), then `mov cx,[edx+0x28] / cmp cx,[eax+0x28] / je 0x5b76b` - PARENTS EQUAL jumps PAST the draw - and only then `imul bx,[eax+0x14],0x24a1`, the per-entity LCG. NewEvent_4A050 (Events.cpp:563-79) memsets the record and seeds id_0x1A_26 = slot (@0x1A, the port's f1a); it NEVER touches @0x28. The port's new_event seeds id24 = idx and obs_project_mc2 maps id24 == slot back to 0, which is right for the OBSERVATION and wrong for this COMPARISON, so two unparented spheres read as differently-parented and the port drew where retail did not. WITNESS mc2l30 pair 262->263: slots 118 and 121 are BOTH unparented (10,57) Fool's-Mana spheres (owner28 = 0, b46 = 0). Retail MERGES them - 118's mana 763 -> 1657 = 763 + 894, 121 freed and reused as a (10,14) - and its `rand` DOES NOT CHANGE (763 at both 262 and 263). The port drew once: lcg16(763) = 9377*763 + 9439 mod 65536 = 20666. Kill switch MGC_NO_M57_PARENT_ZERO restores the pre-dig behaviour and reproduces exactly `slot 118 rand: retail 763 port 20666`. RELATED BUT DISTINCT: the sibling law behind MGC_NO_PROBE_ID_UNFUSE un-fuses the OTHER half of the same id24 fusion (it maps the fused families back to @0x1A = the slot for sub_10780's self-exclusion) - same fusion, opposite halves. Worth +2710 horizon (262 -> 2972). Session 96."
+  }
+ ]
+}

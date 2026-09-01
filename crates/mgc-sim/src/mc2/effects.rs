@@ -16,6 +16,137 @@
 use crate::engine::features::{Gen, lcg32};
 use crate::mc1::mobs::MobCtx;
 
+/// A/B toggle for the whole Magic-Mine law cluster (the `sub_67960`
+/// carrier shape in `mc2/proj.rs` and `sub_3A8B0`'s arm step here):
+/// set `MGC_NO_MC2_MINE` to restore the pre-dig behaviour, where
+/// `sub_50840`'s ctor carried the tier lifespan and rolled the arm
+/// delay, and the mine never ran an arm sub-state.
+pub(crate) fn no_mc2_mine() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MINE").is_some())
+}
+
+/// ⭐⭐⭐ A/B toggle for THE MAGIC MINE'S RETAIL DETONATION — the
+/// player ruling that retired `docs/DEVIATIONS.md`'s three "better
+/// than retail" choices (the forced 1024 blast box, the `(9,0)` bolt
+/// stand-in and the hand-off to the lifespan teardown) together with
+/// the `gameplay.patches.mc2_magic_mine` option that gated them.
+/// Set `MGC_NO_MINE_RELAUNCH` and the newly-live column goes back to
+/// what the RETAIL arm did before the ruling: the owner-death entry
+/// guard, the recoil bob, the arm countdown, the proximity scan and
+/// `sub_3A8B0` case 5's relaunch are all skipped, so a swallowed mine
+/// wakes into state 3 and parks there until its lifespan runs out.
+pub(crate) fn no_mine_relaunch() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MINE_RELAUNCH").is_some())
+}
+
+/// A/B toggle for the mine ctor's BIRTH POSITION (`sub_50840`
+/// EF:36968/36981 — a straight copy of the carrier's own axis): set
+/// `MGC_NO_MINE_SPAWN_POS` to restore the port's invented ground snap.
+fn no_mine_spawn_pos() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MINE_SPAWN_POS").is_some())
+}
+
+/// A/B toggle for the mine's SINK STEP (`sub_3A8B0` case 9): set
+/// `MGC_NO_MINE_SINK_STEP` to restore the post-increment counter the
+/// remc2 hand-conversion reads, against its own raw Hex-Rays and the
+/// recording.
+fn no_mine_sink_step() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MINE_SINK_STEP").is_some())
+}
+
+/// ⭐⭐⭐ A/B toggle for DIG 98-Q25 — **`sub_28860`'s `case 8` EXPIRY
+/// WRITES THE ACTION AND KEEPS RUNNING.**
+///
+/// The Cymmerian brain (`sub_28860`, EF:18828) has TWO places that
+/// send the creature to state 204 and they are NOT the same
+/// statement:
+///
+/// * the death arm — `if (v2 == 2) { a1x->actionIndex_0x45_69 = 204; }`
+///   (EF:18899-18902) — is the `if` half of an `if/else`, so it skips
+///   the whole `byte_0x46_70` switch, the wander draw, `sub_1B8C0`
+///   and the water-sprite swap. The port models this correctly.
+/// * `case 8`'s countdown expiry — `v22 = a1x->dword_0x10_16 - 1;
+///   a1x->dword_0x10_16 = v22; if (v22 < 0) a1x->actionIndex_0x45_69
+///   = 204; break;` (EF:19003-19008) — is inside the `else` arm and
+///   ends in a plain `break`. **The wander, the move, the water swap
+///   and the speed reset all still run on that very tick.**
+///
+/// The port had copied the death arm's early `return` onto the
+/// countdown arm, so an expiring `case 8` Cymmerian froze in place
+/// for the tick retail spends moving. mc2l22 t=2669 is the witness:
+/// retail's slots 957 and 971 both step `scratch10 0 -> -1`,
+/// `action45 200 -> 204` **and** x/y/z, while the port kept x/y/z at
+/// their t=2668 values.
+///
+/// Set `MGC_NO_M25_C8_FALLTHROUGH` to restore the invented `return`.
+pub(crate) fn no_m25_c8_fallthrough() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M25_C8_FALLTHROUGH").is_some())
+}
+
+/// ⭐⭐⭐ ROUND 98 — **THE RECORDED MOVE BYTE IS RETAIL'S OWN
+/// POST-LATCH COMMAND WORD, SO THE PORT MUST NOT RE-DERIVE A PRESS
+/// EDGE FROM IT.**
+///
+/// `sub_5F380`'s whole cast tail is three flat `testb`/`call` pairs
+/// on `dword_0xA4_164x->entityIndex_0x0` — the consumed command word
+/// — with **no press latch, no previous-frame register and no edge
+/// test of any kind**. Byte-for-byte in the shipped `NETHERW.EXE`
+/// (file `0x83D7D-0x83DED`, linear `0x5F57D-0x5F5ED` by the code rule
+/// `0x34800 + linear − 0x10000`; the call target `0x83E60` is
+/// `sub_5F660` and `0x1a3e4` is `Entities_EA3E4`):
+///
+/// ```text
+/// 83d53  f6 00 10           testb $0x10,(%eax)   ; LEFT  fire bit
+/// 83d56  74 25              je    0x83d7d
+/// 83d75  e8 e6 00 00 00     call  0x83e60        ; sub_5F660(caster, token, 256)
+/// 83d7d  8b 83 a4 00 00 00  mov   0xa4(%ebx),%eax
+/// 83d83  f6 00 20           testb $0x20,(%eax)   ; RIGHT fire bit
+/// 83d86  74 25              je    0x83dad
+/// 83da5  e8 b6 00 00 00     call  0x83e60        ; sub_5F660(caster, token, 512)
+/// 83dad  8b 83 a4 00 00 00  mov   0xa4(%ebx),%eax
+/// 83db3  f6 00 40           testb $0x40,(%eax)   ; the CYCLE-RING bit
+/// 83de1  e8 7a 00 00 00     call  0x83e60
+/// 83ded  c3                 ret
+/// ```
+///
+/// The press/repeat decision lives one layer up, in
+/// `HandleMouseButtons_18F80` (PI:2027-76), whose OUTPUT is that word
+/// — and that word is exactly what the recorder captures as
+/// `players[].move_bits` (`recover_pair_mc2`'s `mb`, bits 0x10/0x20).
+/// So when the port is driven by a recording it must call the gate on
+/// the RAW BIT and let `sub_5F660`'s own per-model refusal do the
+/// rest; re-running the latch on top of an already-latched word is
+/// DOUBLE LATCHING, and it silently drops every press that lands on
+/// the frame after another press.
+///
+/// mc2l22 t=3424 is the witness. The human's possession token (slot
+/// 426, `byte_0x3B_59 == 1`, the CLICK-ONLY family) records the
+/// command word carrying `0x20` on t=3423 **and** t=3424; at 3423 the
+/// token is still armed (`word_0x2E_46` 1) so retail's gate refuses,
+/// and at 3424 it is 0 so retail arms (`word_0x2E_46` 0 → 2 after the
+/// same-tick countdown) and launches the `(9,1)` at slot 935. The
+/// port's `edge = fire && !prev_fire` was true at 3423 and **false at
+/// 3424**, so it never cast: `wiz 0 charge` retail 0 / port 3, one
+/// allocation short, and the whole tick's slot assignment slid — the
+/// arrow took 935, the trail's scorch ring took 874 and retail's
+/// `(10,11)` at 847 was never minted, which IS the wall signature
+/// `missing(10,11)slot847x1`.
+///
+/// Scoped to `strict_retail` — the conformance import/replay seat — so
+/// NATIVE play keeps modelling `HandleMouseButtons_18F80` itself (it
+/// owns a real mouse there, not a recorded command word).
+///
+/// Set `MGC_NO_MC2_COMMAND_WORD_CAST` to restore the double latch.
+pub(crate) fn no_mc2_command_word_cast() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_COMMAND_WORD_CAST").is_some())
+}
+
 impl Gen {
     // ---- ctors ---------------------------------------------------------------
 
@@ -270,6 +401,54 @@ impl Gen {
             // the action is what the m57 physics column keys on.
             self.ent[i].model65 = 57;
             self.ent[i].tick70 = 62;
+            // …AND ITS OWN `xsubtype`. `sub_50130` stamps
+            // `xtype_0x41_65 = 10` / **`xsubtype_0x42_66 = 57`**
+            // (EF:36638-39; shipped EXE file 0x7494f/0x74953 `mov
+            // BYTE PTR [eax+0x41],0xa` / `mov BYTE PTR [eax+0x42],
+            // 0x39`), where the shared `CreateManaSphere_500C0` takes
+            // 39 (EF:36615). That pair is the PARAMETER the merge
+            // partner search `sub_10A50` matches candidates against
+            // (EF:3908-15), so leaving the shared 39 here made a
+            // natively-spawned fool's sphere hunt m39 balls and be
+            // hunted by them. An IMPORTED m57 has always carried 57
+            // on this lane (`b42` → `f67`); this is the native half.
+            // (under the same `MGC_NO_M57_MERGE` A/B arm as the merge
+            // law it feeds — `crate::mc1::combat::no_m57_merge`.)
+            if !crate::mc1::combat::no_m57_merge() {
+                self.ent[i].f67 = 57;
+            }
+            // ⭐ THE BANKED HEAD, PAID (round 99, dig 99-3).
+            // `sub_50130` also stamps `byte_0x43_67 = 10` /
+            // `byte_0x44_68 = 1` (EF:36642-44), the two statements the
+            // shared `CreateManaSphere_500C0` (EF:36607) does NOT have
+            // — the sibling-pair split. The port homes them in
+            // `f68`/`f69`, and the (10,57) never reaches the class-9
+            // impact tail that reads that pair, so the lane is inert
+            // in the port and pure conformance state: `b44` was the
+            // ONLY ≠ row on the mc2l6-rsg free-run dumps of BOTH
+            // walls (slot 462 at t=26502, slot 614 at t=26510).
+            // `MGC_NO_M57_IMPACT_PAIR=1` reverts.
+            if !crate::mc1::combat::no_m57_impact_pair() {
+                self.ent[i].f68 = 10;
+                self.ent[i].f69 = 1;
+            }
+            // ⭐ AND THE THIRD STATEMENT OF THE SPLIT: the RECLAIMABLE
+            // bit. `sub_50130` closes with `byte[2] |= 2` — the
+            // recycle-victim membership the allocator's `sub_49F90`
+            // rebuild scans for (`Gen::rebuild_recycle(0x2_0000)`) —
+            // and `CreateManaSphere_500C0` does NOT have it, so every
+            // authored/economy sphere is unreclaimable and only the
+            // FOOL'S sphere is sacrificeable. Shipped `NETHERW.EXE`:
+            //     749a1: 8a 63 0e  mov  0xe(%ebx),%ah
+            //     749a9: 80 cc 02  or   $0x2,%ah
+            //     749ad: 88 63 0e  mov  %ah,0xe(%ebx)
+            // (no byte[0] bit-3 clear — retail's live m57 reads
+            // flags 0x2000C, bits 2/3/17, confirmed on the rsg
+            // free-run dumps of slots 462 and 614).
+            // `MGC_NO_M57_RECLAIM_BIT=1` reverts.
+            if !crate::mc1::combat::no_m57_reclaim_bit() {
+                self.ent[i].flags |= 0x2_0000;
+            }
             // The m57 ctor's own zero (sub_50130 EF:36643), not the
             // shared (10,39) ctor's 32 (EF:36618) — mc2l30 t=216:
             // five m57 births at speed 0 where the port kept 32.
@@ -316,60 +495,191 @@ impl Gen {
     }
 
     /// `sub_50840` (EF:36960) — the Magic Mine (spell 23) persistent
-    /// proximity mine `(10,78)`: sprite 66, sits on the ground, life =
-    /// the tier lifespan (1000/5000/10000). Placed by the carrier's
-    /// landing (mc2_proj_impact `(10,78)`); the owner is stamped by the
-    /// impact tail (id24). `f44` = the blast intensity (`byte_0x43`,
-    /// 1/2/4/8 by tier); `f26` = the random arm delay (16..65 ticks,
-    /// `rand%0x32 + 16`). Ticks via [`Gen::mc2_mine_tick`] (action 0x55)
-    /// — docs/spell-audit/magic-mine.md.
+    /// proximity mine `(10,78)`: sprite 66, SOLID, born exactly where
+    /// the (9,29) carrier died. Placed by the carrier's landing
+    /// (`mc2_proj_impact` `(10,78)`); the owner is stamped by the
+    /// impact tail into `word_0x32_50` (f52), NOT into `id_0x1A_26` —
+    /// the mine's own `@0x1A` stays `NewEvent`'s own-slot default.
+    /// Ticks via [`Gen::mc2_mine_tick`] (action 0x55) —
+    /// docs/spell-audit/magic-mine.md.
+    ///
+    /// ⭐⭐ **THE MINE'S LIFESPAN IS A FLAT 1000 — THERE IS NO TIER
+    /// LIFESPAN.** `sub_50840` writes `maxLife_0x4 = 1000` as a literal
+    /// (EF:36965) and `CopyMaxLifeToLife_49A20` mirrors it; the only
+    /// per-cast values its caller `sub_67960` passes down are
+    /// `word_0x32_50` (owner), `byte_0x46_70 = 0` and
+    /// `subSpellIndex_0x2A_42` (EF:59356-59). Feeding the carrier's
+    /// `subSpellIndex` in as a "1000/5000/10000 tier lifespan" was an
+    /// INVENTED WRITE: on mc2l6-rsg pair 13050→13051 the carrier's
+    /// payload is 0, so slot 775 was born `max_life 1 / life 0` against
+    /// retail's 1000 / 1000.
+    ///
+    /// ⭐⭐⭐ **AND IT IS BORN AT THE CARRIER'S POSITION, NOT ON THE
+    /// GROUND.** `sub_50840`'s ctor is `event->position_0x4C_76 =
+    /// *position` followed by `AddEventToMap_57D70(event, position)`
+    /// (EF:36968/36981) — a straight copy of the axis its caller
+    /// `sub_67960` hands it, which is the CARRIER's own
+    /// `position_0x4C_76` after that tick's move (EF:59354). The port
+    /// looked the ground height up and linked there instead, so every
+    /// mine started ~2000 units low and the float above spent the rest
+    /// of the take climbing. mc2l6-rsg t=13832 slot 767 is the witness
+    /// and it is that take's whole free-run wall: retail records the
+    /// new mine at `z` **3664** (the carrier's 3712 less this same
+    /// tick's one −48 float step), the port at **1718** (ground 1670
+    /// plus one +48 step). `MGC_NO_MINE_SPAWN_POS` restores the snap.
+    ///
+    /// ⭐ AND THE CTOR ROLLS NO RNG. `sub_50840` is fourteen straight
+    /// field writes with no `rand` anywhere; the arm delay is rolled by
+    /// sub-state **2** off the record's own stream (EF:29926-31).
+    ///
+    /// ⚠ FIELD HOMES. `byte_0x43_67` (the burst budget) is **f68** and
+    /// `byte_0x44_68` (the recoil counter) is **f69** — the `b43`/`b44`
+    /// lanes `port_ent_lanes_mc2` publishes and `import_ent_mc2` seats.
+    /// `subSpellIndex_0x2A_42` (the TIER INDEX) is **f44**, which is
+    /// what the importer seats for a (10,78) (`c10_2a_in_f140` excludes
+    /// it on purpose) — the native path used to write the tier into
+    /// f140 and the burst budget into f44, i.e. both lanes inverted
+    /// against the importer. Same witness: retail `f2a` 1 / `b43` 2,
+    /// port `f2a` 2 / `b43` 10 (the `NewEvent` default, never written).
     pub(crate) fn mc2_spawn_magic_mine(
         &mut self,
         x: u16,
         y: u16,
+        z: i16,
         tier: u8,
         lifespan: i32,
     ) -> Option<usize> {
         let i = self.new_event()?;
-        let gz = self.ground_z(x, y) as i16;
-        let blast = 1u16 << tier.min(3); // 0→1, 1→2, 2→4, 3→8
+        let revert = no_mc2_mine();
+        let at_z = if no_mine_spawn_pos() {
+            self.ground_z(x, y) as i16
+        } else {
+            z
+        };
         {
             let e = &mut self.ent[i];
             e.class64 = 10;
             e.model65 = 78;
             e.tick70 = 85; // action 0x55 = sub_3A8B0
-            e.max_life = lifespan.max(1) as u32;
-            e.f44 = blast; // blast intensity (byte_0x43)
-            e.flags = (e.flags & !0x2_0008) | 0x2_0000;
+            e.max_life = if revert {
+                lifespan.max(1) as u32
+            } else {
+                1000 // EF:36965, a literal
+            };
+            // `byte[0] |= 8` (EF:36969) — the mine is SOLID, which is
+            // what lets `sub_10780` hand it to `sub_68AC0`.
+            e.flags = (e.flags & !0x2_0000) | 0x2_0008;
         }
-        self.link(i, x, y, gz);
+        self.link(i, x, y, at_z);
         self.refill_life(i);
-        let r = self.ent_rand(i);
-        self.ent[i].f26 = ((r % 0x32) + 16) as i16; // arm delay 16..65
+        if revert {
+            self.ent[i].f44 = 1u16 << tier.min(3);
+            let r = self.ent_rand(i);
+            self.ent[i].f26 = ((r % 0x32) + 16) as i16;
+            self.mc2_set_sprite(i, 66);
+            return Some(i);
+        }
+        {
+            let e = &mut self.ent[i];
+            e.f44 = 0; // `subSpellIndex_0x2A_42 = 0` (EF:36970)
+            e.f36 = 0; // `word_0x36_54 = -1` — ARMED (port: f36 == 0)
+            e.f46 = 1; // `fontTypeIndex_0x3D_61 = 1` (EF:36973)
+            e.f68 = 1; // `byte_0x43_67 = 1` (EF:36974)
+            e.f69 = 0; // `byte_0x44_68 = 0` (EF:36975)
+            e.f52 = i as u16; // `word_0x32_50 = own slot` (EF:36976)
+        }
         self.mc2_set_sprite(i, 66);
         Some(i)
     }
 
     /// `sub_3A8B0` (EF:29749), class-10 action 0x55 — the Magic Mine
-    /// tick. Lifespan countdown (self-expire at 0), then a random arm
-    /// delay (`f26`), then a PROXIMITY scan every 16 ticks for an enemy
-    /// wizard/castle (class 3, model ≤ 1, or the out-of-pool human)
-    /// within 14 tiles (3584 units), excluding the owner. On a hit it
-    /// detonates. The exact `sub_6DCA0` detonation family + the
-    /// `word_0x36_54` armed gate are untraced (OPEN, magic-mine.md §6);
-    /// the port arms after the random delay and delivers a direct ch0
-    /// blast scaled by the tier intensity.
-    /// EXPIRY TEARDOWN (EF:30043-86). `byte_0x46_70` is NOT an engine
-    /// action index — MC2 dispatches on `actionIndex_0x45_69` (offset
-    /// 69, our `tick70`) — it is offset 70, our `f71`, and here it is a
-    /// sub-state machine switched on inside `sub_3A8B0` itself
-    /// (EF:29881). A mine whose lifespan runs out enters 6, which
-    /// clears the draw bit and (once `f69` is clear) advances to 7 with
-    /// a 10-tick timer; 7 counts down into 9 with a counter of 3; 9
-    /// SINKS the mine by an accelerating `32 * counter` per tick until
-    /// it meets the ground, then drops a class-10 puff — model 5 over
-    /// water, model 0 over land — and despawns.
+    /// tick, a nine-state machine on `byte_0x46_70` (our `f71`).
+    ///
+    /// ⭐⭐⭐ **THE TRIGGER IS NOT DEAD AND THE DETONATION IS A
+    /// RELAUNCH OF THE SWALLOWED SPELL.** `docs/DEVIATIONS.md` used to
+    /// carry three "better than retail" inventions here — a forced
+    /// 1024-unit blast box, a `(9,0)` bolt, and a hand-off to the
+    /// lifespan teardown — all adopted on the ruling that retail ships
+    /// this lane dead. It does not: `sub_68AC0` writes the armed gate
+    /// (`Gen::mc2_mine_swallow`), and case 5 below is retail's own
+    /// detonation. **A mine fires back WHATEVER SPELL YOU SHOT INTO
+    /// IT, at that spell's own tier**, owned by the mine's owner and
+    /// aimed at whoever tripped it. The three inventions are retired.
+    ///
+    /// The states, verbatim:
+    /// - **entry** (EF:29793-98) — the owner (`Entities[word_0x32_50]`)
+    ///   dead or reap-flagged ⇒ `DisableEntityDrawing04_57F10`;
+    /// - **the recoil bob** (EF:29800-38) — with `byte_0x44_68` live
+    ///   the mine sits `{0,153,307,445,491,512}[|b44|]` off its anchor
+    ///   along its own yaw, and the counter ramps 1..6 then flips to −5;
+    /// - **the countdown + float** (EF:29840-72), skipped in 7 and 9:
+    ///   `life--` into state 6 at zero, clamp up out of the ground,
+    ///   then ±48 toward ground+1024 with a 96-unit deadband;
+    /// - **0** (EF:29886-908) — re-arm to the TIER's lifespan, latch
+    ///   the anchor, seed the burst budget, → 1;
+    /// - **1** (EF:29910-16) — PARK until something writes
+    ///   `word_0x36_54`; `sub_68AC0`'s swallow is that writer;
+    /// - **2** (EF:29918-32) — go non-solid, take the owner off
+    ///   `@0x32`, size the burst from the swallowed tier's
+    ///   `fontType_0x1B`, roll the 16..65 arm delay, → 3;
+    /// - **3** (EF:29933-39) — the arm countdown, → 4;
+    /// - **4** (EF:29940-59) — every 16th of the record's OWN frames,
+    ///   the nearest class-3 model ≤ 1 within 3584 (3-D) on the
+    ///   tick-top roster `dword_38519`, excluding the owner, → 5;
+    /// - **5** (EF:29960-30042) — the relaunch, below;
+    /// - **6/7/9** (EF:30043-86) — hang, pause, sink, puff.
+    ///
+    /// ⚠ NOT PORTED (cosmetic, and ungraded on the class-10 lanes):
+    /// the draw-bit block at EF:29850-61, which hides an enemy's mine
+    /// unless the viewer holds a live `SpellsEnabled[12]`.
     pub(crate) fn mc2_mine_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        // EF:29793-98 — the mine belongs to its owner's life. A mine
+        // whose owner has died or been reap-flagged stops drawing and
+        // goes; `word_0x32_50` is the ctor's own slot until the
+        // carrier's tail stamps the caster, so a 0 here is not a
+        // resolvable owner and the guard sits out.
+        if !no_mine_relaunch() {
+            let own = self.ent[i].f52;
+            let gone = if own == crate::mc1::mobs::PLAYER_TARGET {
+                ctx.pdead
+            } else if own == 0 {
+                false
+            } else {
+                self.ent
+                    .get(own as usize)
+                    .is_none_or(|o| o.act_life < 0 || o.flags & 0x400 != 0)
+            };
+            if gone {
+                self.ent[i].flags |= 0x400;
+                return false;
+            }
+            // EF:29800-38 — the recoil bob. Off the LATCHED anchor
+            // (`axis_0x9A_154x`, our dest_x/dest_y/site_z) along the
+            // mine's own yaw, keeping the live z; the counter ramps
+            // 1..6 and then flips to −5 for the return swing.
+            let b44 = self.ent[i].f69 as i8;
+            if b44 != 0 {
+                let step: i16 = match b44.unsigned_abs() {
+                    1 => 0,
+                    2 => 153,
+                    3 => 307,
+                    4 => 445,
+                    5 => 491,
+                    _ => 512,
+                };
+                let (ax, ay, yaw, z) = {
+                    let e = &self.ent[i];
+                    (e.dest_x, e.dest_y, e.f30, e.z)
+                };
+                let mut pos = (ax, ay, z);
+                Self::polar_step(&mut pos, yaw, 0, step);
+                // `CopyEntityPosition_57CF0` — a relinking move, not a
+                // `link` (which no-ops on an already-linked record).
+                self.move_relink(i, pos.0, pos.1, z);
+                let n = b44.wrapping_add(1);
+                self.ent[i].f69 = if n > 6 { -5i8 as u8 } else { n as u8 };
+            }
+        }
         // EF:29840-45 — sub-states 7 and 9 skip the lifespan countdown.
         // The expiry test is post-decrement `<= 0`, and it enters the
         // teardown rather than despawning; the switch below then runs
@@ -397,7 +707,111 @@ impl Gen {
                 self.ent[i].z = (self.ent[i].z as i32 + step) as i16;
             }
         }
+        // ⭐⭐ SUB-STATE 0 IS THE ARM STEP, AND IT IS WHERE THE TIER
+        // LIFESPAN LIVES — NOT IN THE CTOR. `sub_3A8B0` case 0
+        // (EF:29886-908) runs on the mine's VERY FIRST tick (retail's
+        // ascending walk reaches the fresh slot in the same frame the
+        // carrier minted it) and writes
+        //     maxLife = life = SPELLS[23].subspell[subSpell].subSpellIndex_2
+        //     axis_0x9A = position
+        //     byte_0x43_67 = {1,2,4,8}[ SPELLS[23].subspell[..].life_0x1A ]
+        //     byte_0x46_70 = 1
+        // So a mine is born at `sub_50840`'s flat 1000 and re-armed to
+        // its tier's lifespan one tick later — which is exactly what
+        // the recording shows: mc2l6-rsg t=13832, slot 767 surfaces at
+        // life **5000** / max_life **5000**, having already paid the
+        // countdown above and been re-armed by this block, with
+        // `b43` **2** (tier 1's `life_0x1A` is 1) and its anchor
+        // `dest_*` latched to the birth position.
+        if self.ent[i].f71 == 0 && !no_mc2_mine() {
+            let sub = (self.ent[i].f44 as usize).min(2);
+            if let Some(row) = self.assets.spells.get(23).copied() {
+                let span = row.tiers[sub].sub_spell.max(0) as u32;
+                self.ent[i].max_life = span;
+                self.ent[i].act_life = span as i32;
+                self.ent[i].f68 = match row.tiers[sub].life {
+                    0 => 1,
+                    1 => 2,
+                    2 => 4,
+                    3 => 8,
+                    _ => self.ent[i].f68,
+                };
+            }
+            // `a1x->axis_0x9A_154x = a1x->position_0x4C_76` (EF:29890)
+            // — the anchor the recoil bob swings around.
+            let e = &mut self.ent[i];
+            e.dest_x = e.x;
+            e.dest_y = e.y;
+            e.site_z = e.z;
+            e.f71 = 1;
+        }
         match self.ent[i].f71 {
+            // EF:29910-13 — sub-state 1 PARKS until something writes
+            // the armed gate; `sub_68AC0` (the swallow) is that
+            // writer. Before the swallow was ported, nothing ever
+            // wrote it and the mine never left this state.
+            // ⚠ Gated on the SWALLOW's own switch: parking here with
+            // no writer for `f36` would strand the mine forever, so
+            // the two halves must arm and disarm together.
+            1 if !crate::mc2::proj::no_mine_swallow() => {
+                if self.ent[i].f36 != 0 {
+                    self.ent[i].f71 = 2;
+                }
+                false
+            }
+            // EF:29918-32 — the mine WAKES: drop the collide bit, take
+            // the owner id off `@0x32`, size the burst from the
+            // SWALLOWED tier's `fontType_0x1B`, and roll the arm delay.
+            // The draw is `(rand % 0x32) + 16` off the record's own
+            // stream and it is the mc2l6-rsg free-run wall to the
+            // digit: 9377*50718 + 9439 mod 65536 = 62909 = retail's
+            // slot-178 `rand` at t=13557.
+            2 if !crate::mc2::proj::no_mine_swallow() => {
+                self.ent[i].flags &= !8;
+                self.ent[i].id24 = self.ent[i].f52;
+                let (spell, tier) = self.mc2_mine_charge(i);
+                let ft = self
+                    .assets
+                    .spells
+                    .get(spell)
+                    .map_or(0, |r| r.tiers[tier].font_type);
+                self.ent[i].f46 = if ft & 1 != 0 { 6 } else { 1 };
+                let r = self.ent_rand(i);
+                self.ent[i].f26 = ((r % 0x32) + 16) as i16;
+                self.ent[i].f71 = 3;
+                false
+            }
+            // EF:29933-39 — the arm countdown.
+            3 if !no_mine_relaunch() => {
+                let v = self.ent[i].f26.wrapping_sub(1);
+                self.ent[i].f26 = v;
+                if v == 0 {
+                    self.ent[i].f71 = 4;
+                }
+                false
+            }
+            // EF:29940-59 — the proximity scan, every 16th of the
+            // record's OWN frames (`byte_0x3E_62 & 0xF`, our f63 — NOT
+            // the lifespan, which is what the port's reconstruction
+            // threw at it). The candidate set is the tick-top class-3
+            // roster `dword_38519` filtered to `model_0x40_64 <= 1`
+            // (wizards, never castles), the owner excluded BY SLOT, the
+            // metric `sub_583F0`'s 3-D distance under 3584, NEAREST
+            // wins with a strict `<` off a 0x10000 seed.
+            4 if !no_mine_relaunch() => {
+                if self.ent[i].f63 & 0xF == 0 {
+                    if let Some(v) = self.mc2_mine_scan(i, ctx) {
+                        self.ent[i].f71 = 5;
+                        self.ent[i].f146 = v;
+                    }
+                }
+                false
+            }
+            // EF:29960-30042 — the detonation.
+            5 if !no_mine_relaunch() => {
+                self.mc2_mine_detonate(i, ctx);
+                false
+            }
             // EF:30043-54 — clear the draw bit and wait for f69.
             6 => {
                 self.ent[i].flags &= !1;
@@ -405,7 +819,7 @@ impl Gen {
                     self.ent[i].f71 = 7;
                     self.ent[i].f26 = 10;
                 }
-                return false;
+                false
             }
             // EF:30055-62 — the 10-tick pause before the sink.
             7 => {
@@ -414,12 +828,38 @@ impl Gen {
                     self.ent[i].f71 = 9;
                     self.ent[i].f26 = 3;
                 }
-                return false;
+                false
             }
             // EF:30073-85 — the accelerating sink, then the puff.
+            //
+            // ⭐⭐⭐ THE SINK STEPS BY THE **PRE**-INCREMENT COUNTER, AND
+            // THE DECOMPILE'S CONVERTED LINE HAS IT BACKWARDS. remc2's
+            // hand-conversion reads `dword_0x10_16++; z -= 32 *
+            // dword_0x10_16;` but its own commented-out raw Hex-Rays
+            // above it (EF:30074-76) reads
+            //     `v12 = dword_0x10_16; dword_0x10_16 = v12 + 1;
+            //      LOWORD(v12) = z - 32 * v12;`
+            // — the OLD value. The recording settles it: mc2l6-rsg
+            // t=14025→14026, slot 772 steps `scratch10` 3 → 4 while
+            // `z` goes 3466 → **3370**, a −96 = 32×3 step, not the
+            // −128 the converted line predicts. (THE DECOMPILE IS NOT
+            // RAW DECOMPILER OUTPUT — remc2-source-corruption-class.)
+            //
+            // ⭐ AND THE SHIPPED EXE SETTLES IT INDEPENDENTLY.
+            // `NETHERW.EXE` file `0x5F654` (linear `0x3AE54`):
+            //     8b 43 10   mov  0x10(%ebx),%eax   ; the counter
+            //     89 c2      mov  %eax,%edx         ; edx = the OLD value
+            //     40         inc  %eax
+            //     89 43 10   mov  %eax,0x10(%ebx)   ; store the new one
+            //     c1 e2 05   shl  $0x5,%edx         ; edx = OLD * 32
+            //     0f bf 43 50 movswl 0x50(%ebx),%eax ; z
+            //     29 d0      sub  %edx,%eax         ; z -= OLD * 32
+            // The copy to `edx` precedes the `inc`. THE SHIPPED EXE
+            // OUTRANKS THE LISTING.
             9 => {
-                self.ent[i].f26 += 1;
-                let step = 32 * self.ent[i].f26 as i32;
+                let n = self.ent[i].f26;
+                self.ent[i].f26 = n + 1;
+                let step = 32 * if no_mine_sink_step() { n + 1 } else { n } as i32;
                 self.ent[i].z = (self.ent[i].z as i32 - step) as i16;
                 let (x, y) = (self.ent[i].x, self.ent[i].y);
                 let g = self.ground_z(x, y);
@@ -431,112 +871,223 @@ impl Gen {
                 let z = self.ent[i].z;
                 self.spawn_effect(model, x, y, z);
                 self.ent[i].flags |= 0x400;
-                return false;
+                false
             }
-            _ => {}
+            _ => false,
         }
-        // The `mc2_magic_mine` patch: the arming + proximity trigger
-        // below is the port's reconstruction of a lane retail SHIPS
-        // DEAD — nothing is known to write the `word_0x36_54` armed
-        // gate (magic-mine.md §6), so a retail mine floats, expires
-        // and sinks without ever detonating on anyone. The retail arm
-        // keeps it dead.
-        if !ctx.patches.mc2_magic_mine || ctx.strict {
-            return false;
-        }
-        if self.ent[i].f26 > 0 {
-            self.ent[i].f26 -= 1; // arming
-            return false;
-        }
-        if self.ent[i].act_life & 0xF != 0 {
-            return false; // scan cadence: every 16 ticks
-        }
-        let (mx, my, own) = {
-            let e = &self.ent[i];
-            (e.x, e.y, e.id24)
-        };
-        // A rival-owned mine triggers on the out-of-pool human; a
-        // player-owned mine scans the pool for rival avatars/castles.
-        // Remember WHICH wizard tripped it — the detonation spits at it.
-        let mut victim = (own != crate::mc1::mobs::PLAYER_TARGET
-            && Self::isqrt(Self::dist2_sq(mx, my, ctx.px, ctx.py) as u32) < 3584)
-            .then_some(crate::mc1::mobs::PLAYER_TARGET);
-        if victim.is_none() {
-            for j in 1..self.ent.len() {
-                if j == i {
-                    continue;
-                }
-                let e = &self.ent[j];
-                if e.class64 != 3
-                    || e.model65 > 1
-                    || e.act_life < 0
-                    || e.flags & 0x400 != 0
-                    || e.id24 == own
-                {
-                    continue;
-                }
-                if Self::isqrt(Self::dist2_sq(mx, my, e.x, e.y) as u32) < 3584 {
-                    victim = Some(j as u16);
-                    break;
-                }
-            }
-        }
-        if let Some(v) = victim {
-            self.mc2_mine_detonate(i, ctx, v);
-        }
-        false
     }
 
-    /// The mine's detonation: a ch0 area blast scaled by the tier
-    /// intensity (`f44` = 1/2/4/8) plus the big-explosion visual, then
-    /// despawn. APPROX for the untraced `sub_6DCA0` relaunch (OPEN); the
-    /// owner-immunity rides `area_write` (the mine's id24). The trip
-    /// awards the owner one spell-23 XP (`sub_6D8B0(id, 23, 1)`,
-    /// EF:29979) through the `mc2_cast_xp` mail — the world tick's drain
-    /// re-applies `sub_6D8B0`'s own human-only guard, so a rival mine's
-    /// award is filtered there (like every other pool-side award site).
-    fn mc2_mine_detonate(&mut self, i: usize, ctx: &MobCtx, victim: u16) {
-        let (x, y, z, blast, owner) = {
+    /// The spell a mine has SWALLOWED and the tier it was cast at —
+    /// `word_0x36_54` / `word_0x34_52`, written together by
+    /// `sub_68AC0` (EF:55438-40). The port's armed gate carries the
+    /// retail value with a forced high bit (armed ⟺ `f36 == 0`), so
+    /// that swallowing spell 0 still disarms; mask it back off here.
+    fn mc2_mine_charge(&self, i: usize) -> (usize, usize) {
+        let e = &self.ent[i];
+        ((e.f36 & 0x7FFF) as usize, (e.f54 as usize).min(2))
+    }
+
+    /// `sub_3A8B0` case 4's proximity scan (EF:29942-56).
+    fn mc2_mine_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
+        let (mx, my, mz, own) = {
             let e = &self.ent[i];
-            (e.x, e.y, e.z, e.f44 as u32, e.id24)
+            (e.x, e.y, e.z, e.f52)
         };
-        let dmg = blast.saturating_mul(250);
-        // THE BLAST NEEDS A BOX. `ent_overlap` sums BOTH parties'
-        // extents, and the mine ctor never set f80/f82/f84 — so the
-        // blast was a POINT and a wizard standing right beside it took
-        // nothing (player-reported), which the 1024 hover then made
-        // unmissable. Retail's real blast is the untraced `sub_6DCA0`
-        // relaunch (magic-mine.md §6 Q2); 1024 (4 tiles) is our
-        // stand-in. Restored after the write so the box does not
-        // linger through the sink.
-        let saved = {
-            let e = &mut self.ent[i];
-            let s = (e.f80, e.f82, e.f84);
-            e.f80 = 1024;
-            e.f82 = 1024;
-            e.f84 = 1024;
-            s
+        let d3 = |x: u16, y: u16, z: i16| -> i32 {
+            let dz = (z as i32) - (mz as i32);
+            Self::isqrt(
+                (Self::dist2_sq(mx, my, x, y) as i64 + (dz as i64) * (dz as i64))
+                    .min(u32::MAX as i64) as u32,
+            ) as i32
         };
-        self.area_write(i, 0, dmg, ctx, false, false);
-        {
-            let e = &mut self.ent[i];
-            (e.f80, e.f82, e.f84) = saved;
+        let mut best: Option<(u16, i32)> = None;
+        // The out-of-pool human is a class-3 model-0 record on retail's
+        // `dword_38519` like any other; the roster's entry test is
+        // `life_0x8 >= 0` (EF:39975), which he takes here as `pdead_top`.
+        if own != crate::mc1::mobs::PLAYER_TARGET && !ctx.pdead_top {
+            let d = d3(ctx.px, ctx.py, ctx.pz);
+            if d < 3584 {
+                best = Some((crate::mc1::mobs::PLAYER_TARGET, d));
+            }
         }
-        // ...and it SPITS at whatever tripped it. magic-mine.md §5
-        // step 4 calls the detonation a "relaunch" (`sub_6DCA0`), i.e.
-        // a spell LAUNCH and not a bare area write, and the player
-        // expected a projectile from mine to wizard. The exact family
-        // for spell 23 is OPEN, so we reuse the (9,0) bolt.
-        // DELIBERATE — see docs/DEVIATIONS.md.
-        self.mc2_atk_bolt(i, victim, ctx);
-        self.mc2_cast_xp.0.push((owner, 23, 1));
-        self.mc2_spawn_big_explosion(x, y, z);
-        // Instead of vanishing on the spot, hand the spent mine to the
-        // SAME teardown retail runs at lifespan expiry (f71 = 6 -> 7 ->
-        // 9): it hangs a moment, sinks to the ground and goes out in a
-        // puff. The 7/9 states are excluded from the hover block above,
-        // so the sink is not fought by the float.
-        self.ent[i].f71 = 6;
+        for c in 0..self.wiz_chain.visible_len() {
+            let j = self.wiz_chain.list[c] as usize;
+            let e = &self.ent[j];
+            // `ix->model_0x40_64 <= 1u && ix != v33x` — the owner is
+            // excluded by RECORD IDENTITY, not by owner tag.
+            if e.model65 > 1 || j as u16 == own {
+                continue;
+            }
+            let d = d3(e.x, e.y, e.z);
+            if d < 3584 && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((j as u16, d));
+            }
+        }
+        best.map(|(s, _)| s)
+    }
+
+    /// ⭐⭐⭐ `sub_3A8B0` case 5 (EF:29960-30042) — THE DETONATION IS A
+    /// RELAUNCH OF THE SWALLOWED SPELL, NOT A BLAST. Retail hands
+    /// `sub_6DCA0` the mine's OWNER as the caster, the mine's own
+    /// position as the muzzle, the swallowed spell index
+    /// (`word_0x36_54`) and the swallowed tier's subspell row
+    /// (`word_0x34_52`), with `a5 = 0` (no caster speed boost) and
+    /// `a6 = 1` (the cast sound, positioned at the OWNER). Then:
+    /// ```text
+    ///     v19x->id_0x1A_26   = a1x->word_0x32_50;   // the mine's owner owns the bolt
+    ///     v19x->word_0x96_150 = a1x->word_0x96_150; // aimed at the tripper
+    ///     sub_655C0(v19x, Entities[v17]);           // desired roll/fov at the tripper
+    ///     v20x->yaw_0x1C_28   = v20x->roll_0x20_32; // ...applied immediately
+    ///     v20x->pitch_0x1E_30 = v20x->fov_0x22_34;
+    ///     v20x->position.z   += a1x->array_0x52_82.yaw;   // the MINE's muzzle lift
+    ///     a1x->yaw_0x1C_28    = bolt.yaw + 0x400;         // the mine kicks 180 off
+    /// ```
+    /// `word_0x36_54 == 7 && life_0x1A == 2` (Lightning III) fires
+    /// **two** bolts, fanned ±113 exactly like the cast site's own
+    /// twin. Each landed bolt spends one `fontTypeIndex_0x3D_61`; at
+    /// zero the burst ends, `byte_0x43_67` drops one, and the mine
+    /// either RE-ARMS (back to state 2, a fresh delay and a fresh
+    /// burst) or enters the teardown. The XP award is retail's —
+    /// `sub_6D8B0(owner->id, 0x17u, 1)` (EF:29979), routed through
+    /// `mc2_cast_xp` so the world tick re-applies the human-only guard.
+    ///
+    /// ⚠ RETIRED INVENTIONS (docs/DEVIATIONS.md): the forced
+    /// `f80/f82/f84 = 1024` blast box around one `area_write`, the
+    /// `mc2_atk_bolt` `(9,0)` stand-in, the `mc2_spawn_big_explosion`
+    /// and the `f71 = 6` hand-off to the lifespan teardown. Retail
+    /// does none of them: no area write anywhere in case 5, and a
+    /// spent mine reaches state 6 only through `byte_0x43_67`.
+    fn mc2_mine_detonate(&mut self, i: usize, ctx: &MobCtx) {
+        // EF:29962 — `dword &= 0xFF7FFFFE`: the draw bit and @0x17.
+        self.ent[i].flags &= !0x0080_0001;
+        let v17 = self.ent[i].f146;
+        // EF:29965-70 — the tripper must still be there, alive and
+        // un-reaped, or the burst is over.
+        let tripper = if v17 == 0 {
+            None
+        } else if v17 == crate::mc1::mobs::PLAYER_TARGET {
+            (!ctx.pdead).then_some((ctx.px, ctx.py, ctx.pz))
+        } else {
+            self.ent
+                .get(v17 as usize)
+                .filter(|t| t.act_life >= 0 && t.flags & 0x400 == 0)
+                .map(|t| (t.x, t.y, t.aim_z()))
+        };
+        let mut done = tripper.is_none();
+        if let Some((tx, ty, tz)) = tripper {
+            let owner = self.ent[i].f52;
+            // `sub_6D8B0(v33x->id_0x1A_26, 0x17u, 1)` (EF:29979) — a
+            // wizard record's `@0x1A` is its own slot, so the owner tag
+            // IS the award target. Rival awards are filtered by
+            // `sub_6D8B0`'s own human-only guard in the mail drain.
+            self.mc2_cast_xp.0.push((owner, 23, 1));
+            let (spell, tier) = self.mc2_mine_charge(i);
+            let row = self.assets.spells.get(spell).copied();
+            let mut sub = row.map_or(crate::mc2::spells::Mc2SubSpell::default(), |r| {
+                r.tiers[tier]
+            });
+            // The 0x15/0x19 arms divide the payload by the charge
+            // (`subSpellIndex_2 / life_0x1A`, EF:44189-219).
+            if matches!(spell, 21 | 25) && sub.life > 0 {
+                sub.sub_spell /= sub.life as i32;
+            }
+            // `v34 = word_0x36_54 == 7 && life_0x1A == 2` ⇒ TWO bolts.
+            let twin = spell == 7 && sub.life == 2;
+            let shots = usize::from(twin) + 1;
+            // The `sub_6DCA0` cast sound (EF:44232-33), keyed to the
+            // OWNER's slot: fireball 9, lightning charged 9 /
+            // uncharged 23, everything else 15.
+            let v6 = match spell {
+                0 => 9u8,
+                7 if matches!(sub.life, 1 | 2) => 9,
+                7 => 23,
+                _ => 15,
+            };
+            for k in 0..shots {
+                let Some(arm) = crate::engine::world::World::mc2_dispatch_arm(spell, sub.life)
+                else {
+                    break; // no band arm ⇒ `sub_6DCA0` returns null
+                };
+                let (mx, my, mz) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.z)
+                };
+                let Some(p) = self.mc2_spawn_cast_proj(arm.subtype, mx, my, mz) else {
+                    break; // pool full: retail's `if (v19x)` skips it all
+                };
+                let yaw = Self::angle_between(mx, my, tx, ty);
+                let dh = Self::isqrt(Self::dist2_sq(mx, my, tx, ty) as u32) as i32;
+                let pitch = Self::pitch_toward(mz, tz, dh);
+                {
+                    let e = &mut self.ent[p];
+                    e.f68 = arm.impact.0;
+                    e.f69 = arm.impact.1;
+                    e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+                    if arm.charge {
+                        e.f71 = sub.life.max(0) as u8;
+                    }
+                    // a5 = 0: no caster boost, the clamp only
+                    // (EF:44226-31).
+                    e.f126 = e.f126.clamp(384, 0x2000);
+                    e.id24 = owner; // EF:29988
+                    e.f146 = v17; // EF:29989
+                    e.f34 = yaw; // `sub_655C0` — the DESIRED aim
+                    e.f36 = pitch;
+                    e.f30 = yaw; // EF:29991-92 — applied at once
+                    e.f32 = pitch;
+                }
+                // EF:29994 — the muzzle lift is the MINE's own
+                // `array_0x52_82.yaw`, and it lands AFTER the aim.
+                let lift = self.ent[i].f78 as i16;
+                self.ent[p].z = self.ent[p].z.wrapping_add(lift);
+                // EF:29993/29996 — the mine kicks a half-turn off the
+                // shot and steps its recoil counter (1..5).
+                self.ent[i].f30 = yaw.wrapping_add(0x400) & 0x7FF;
+                let b44 = self.ent[i].f69 as i8;
+                self.ent[i].f69 = if b44 == 0 {
+                    1
+                } else {
+                    b44.wrapping_add(1).min(5) as u8
+                };
+                // EF:30013-19 — Lightning III's pair fans ±113.
+                if twin {
+                    let e = &mut self.ent[p];
+                    let y2 = if k != 0 {
+                        e.f30.wrapping_sub(113)
+                    } else {
+                        e.f30.wrapping_add(113)
+                    };
+                    e.f30 = y2 & 0x7FF;
+                }
+                self.mc2_mine_snd(v6, owner);
+                // EF:30021-24 — one shot off the burst budget.
+                let c = (self.ent[i].f46 as u8).wrapping_sub(1);
+                self.ent[i].f46 = c as i16;
+                if c == 0 {
+                    done = true;
+                }
+            }
+        }
+        if done {
+            // EF:30028-40 — drop the lock, spend one `byte_0x43_67`,
+            // and either RE-ARM (state 2 rolls a fresh delay and a
+            // fresh burst) or enter the teardown.
+            self.ent[i].f146 = 0;
+            let b43 = self.ent[i].f68.wrapping_sub(1);
+            self.ent[i].f68 = b43;
+            self.ent[i].f71 = if b43 != 0 { 2 } else { 6 };
+        }
+    }
+
+    /// `PrepareEventSound_6E450(a1x - Entities, -1, v6)` where `a1x` is
+    /// the OWNER wizard `sub_6DCA0` was handed — the cast sound rides
+    /// the owner's slot, not the mine's.
+    fn mc2_mine_snd(&mut self, id: u8, owner: u16) {
+        if owner == crate::mc1::mobs::PLAYER_TARGET {
+            self.snd_player(id);
+        } else if (owner as usize) < self.ent.len() {
+            self.snd(id, owner as usize);
+        }
     }
 
     /// `sub_4FE40` (EF:36506) — the (10,34) MC2 TELEPORTER pad
@@ -698,7 +1249,8 @@ impl Gen {
             self.ent[i].flags |= 0x400;
             return;
         }
-        self.ent[i].frame88 = self.ent[i].frame88.saturating_add(1);
+        // sub_585A0 (EF:23173) — capped by the sprite's own count.
+        self.mc2_anim_step(i);
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
             self.snd(27, i);

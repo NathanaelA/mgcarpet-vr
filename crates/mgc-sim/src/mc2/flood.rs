@@ -46,19 +46,139 @@
 //!   cleared for everyone else) is the draw latch — our release
 //!   clears [`F_TOSSED`] for everyone (the observable single-player
 //!   effect: victims become shoveable again).
-//! - The deep-sink skip (`word_160_0xe_14 < -64`, EF:29106 — the
+//! - ~~The deep-sink skip (`word_160_0xe_14 < -64`, EF:29106 — the
 //!   victim's Type_160 z-velocity) has no ported home; the z pull
-//!   always applies before the ground clamp.
+//!   always applies before the ground clamp.~~ **PAID 2026-09-04
+//!   (round 98, dig Q31).** The premise was false: `word_160_0xe_14`
+//!   is `Mc2BehaviorRow::v_14`, the very z step `Gen::mc2_alt_core`
+//!   reads on every creature move. Landed in `flood_shove` behind
+//!   `MGC_NO_FLOOD_GROUND_SNAP`, byte-verified at `NETHERW.EXE`
+//!   0x5E53C-0x5E549.
 //! - Cave arms (second-heightmap easing + the mapAngle bit-3 seal) are
 //!   not yet ported (TODO).
 //! - `mana_0x90_144 = 0` in phase 1 (EF:28548) has no ported reader
 //!   on this column and is skipped.
 
+use super::behavior::BEHAVIOR;
 use super::morph::{auto_flat, dist2d};
 use super::sin_lut::SIN_DB750;
 use crate::engine::features::{Gen, tile};
 use crate::mc1::combat::MailTarget;
 use crate::mc1::mobs::MobCtx;
+
+/// A/B kill switch for the MISSING REAP GATE (round 98, dig Q31):
+/// `MGC_NO_FLOOD_NO_REAP_GATE=1` restores the pre-2026-09-04 shape,
+/// where `flood_shove`'s chain walk skipped every victim carrying the
+/// reap mark. Retail's walk has no such term (`NETHERW.EXE` 0x5E40A).
+pub(crate) fn flood_no_reap_gate_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_FLOOD_NO_REAP_GATE").is_none())
+}
+
+/// A/B kill switch for the DEEP-SINK GROUND SNAP (round 98, dig Q31):
+/// `MGC_NO_FLOOD_GROUND_SNAP=1` restores the pre-2026-09-04 shape,
+/// where every shoved victim took the z pull before the ground clamp.
+pub(crate) fn flood_ground_snap_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_FLOOD_GROUND_SNAP").is_none())
+}
+
+/// ⭐⭐⭐ A/B kill switch for THE CHAIN CURSOR THE SHOVE RE-READS
+/// (round 99, dig 99-3): `MGC_NO_FLOOD_CHAIN_REWALK=1` restores the
+/// pre-2026-09-04 shape, where `flood_shove` cached the map-chain
+/// `next` pointer BEFORE moving the victim.
+///
+/// Retail's `sub_39B60` chain walk is a bare `for (i = mapEntityIndex
+/// [cell]; ; i = victim->oldMapEntity_0x16_22)`, and the C `for`
+/// increment is evaluated AFTER the body — i.e. after
+/// `CopyEntityPosition_57CF0(victim, &predicted)` may have RE-LINKED
+/// the victim into a different cell's chain. `AddEventToMap_57D70`
+/// pushes at the HEAD and parks the cell's previous head in the
+/// victim's own `@0x16`, so a shove that crosses a tile edge makes the
+/// walk CONTINUE DOWN THE DESTINATION CELL'S CHAIN — every entity
+/// there is shoved by this cell's iteration too, and again when the
+/// sweep reaches that cell itself.
+///
+/// Shipped `NETHERW.EXE` (sub_39B60 = runtime 0x39B60, file 0x5E360;
+/// the region's rule is file = runtime + 0x24800, cross-checked on
+/// five call targets — `call 0x5e7a0`=sub_39FA0, `call 0x35440`=
+/// getTerrainAlt_10C40, `call 0x7cc90`=EuclideanDistXYZ_58490,
+/// `call 0x7c7a0`=MoveEntity_57FA0, `call 0x7c4f0`=
+/// CopyEntityPosition_57CF0):
+/// ```text
+///   5e58c: 68 98 b3 01 00        push $0x1b398        ; &predictedAxis
+///   5e591: 53                    push %ebx            ; the VICTIM
+///   5e592: e8 59 df 01 00        call 0x7c4f0         ; CopyEntityPosition_57CF0
+///   5e597: eb 0a                 jmp  0x5e5a3         ; -> LABEL_25
+///   …                                                 ; %ebx never reloaded
+///   5e5e4: 31 c0                 xor  %eax,%eax
+///   5e5e6: 66 8b 43 16           mov  0x16(%ebx),%ax  ; NEXT, off the MOVED victim
+///   5e5ea: 8b 1c 85 e4 a3 01 00  mov  0x1a3e4(,%eax,4),%ebx
+///   5e5f1: 3b 1d e4 a3 01 00     cmp  0x1a3e4,%ebx
+///   5e5f7: 0f 85 0d fe ff ff     jne  0x5e40a         ; loop
+/// ```
+pub(crate) fn flood_chain_rewalk_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_FLOOD_CHAIN_REWALK").is_none())
+}
+
+/// ⭐⭐ THE QUAKE LATCH'S SECOND HOME — THE RELEASE CLEARS byte[0]
+/// BIT 0 TOO. Retail's action-74 release (LABEL_25, EF:29062-75) is a
+/// three-term interrogation of the victim followed by two masks, and
+/// the port carried only the second. VERIFIED in the shipped
+/// NETHERW.EXE (linear 0x39DAD = file 0x5E5AD, region rule
+/// file = linear + 0x24800; bytes read by the main session
+/// 2026-09-04, and this block butts directly onto 0x5E5E6, the
+/// chain-rewalk cite above):
+///   5e5ad: 75 35          jne  0x5e5e4                 ; action != 74
+///   5e5af: f6 43 0e 10    test BYTE PTR [ebx+0xe],0x10 ; F_QUAKE_GRAB
+///   5e5b5: 80 7b 3f 03    cmp  BYTE PTR [ebx+0x3f],0x3 ; class == 3
+///   5e5bb: 80 7b 40 00    cmp  BYTE PTR [ebx+0x40],0x0 ; model == 0
+///   5e5d6: 80 4b 0c 01    or   BYTE PTR [ebx+0xc],0x1  ; LOCAL wizard
+///   5e5dc: 80 63 0c fe    and  BYTE PTR [ebx+0xc],0xfe ; EVERYONE ELSE
+///   5e5e0: 80 63 0e ef    and  BYTE PTR [ebx+0xe],0xef
+/// Since `import_ent_mc2` now fills BOTH homes of retail's single
+/// byte[0] bit 0 (`MGC_NO_MC2_TOSSED_IMPORT`), every imported quake
+/// victim arrived with bit 0 set and NOTHING ever cleared it — and
+/// `mc2_awake_one`'s hidden `if flags & 1 { return }` gate (EF:55515)
+/// then returned before the proximity test forever, freezing the
+/// (10,57) ground mana spheres at their imported x/y/z. rsg
+/// t=26588→26603 slot 676: `b39` retail 16 / port 0, zero writes to
+/// `f58`, and `MGC_WRITE_TRACE=676:flags` named the survivor
+/// (`0x9002000D -> 0x2000D by slot 481 (10,67)`).
+/// ⚠ The port CLEARS bit 0 for everyone, collapsing retail's
+/// local-wizard `or $1` arm — the same single-player-observable
+/// collapse `DEVIATIONS.md` already registers for this release under
+/// "flood.rs::flood_shove (action-74 visibility juggle)", now
+/// extended to bit 0. Ledger ROUND 99 dig 99-10.
+pub(crate) fn no_quake_release_bit0() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_QUAKE_RELEASE_BIT0").is_some())
+}
+
+/// The mirror absence on the SET side: `sub_3A200`'s
+/// `or edx,0x100001` (NETHERW.EXE 0x5EA16 — the binary's ONLY
+/// occurrence of those six bytes) writes byte[0] bit 0 AND byte[2]
+/// bit 4 in one instruction. `flood_shove_hit` stamped only
+/// `F_TOSSED | F_QUAKE_GRAB`, so a NATIVE toss left the awake gate
+/// open and the port woke spheres retail keeps asleep. The two laws
+/// are complementary — neither alone is the whole latch.
+/// Ledger ROUND 99 dig 99-10.
+pub(crate) fn no_quake_toss_bit0() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_QUAKE_TOSS_BIT0").is_some())
+}
+
+/// A/B toggle for THE QUAKE MAIL IS A BARE `+=`, NOT THE AREA WRITE
+/// PROTOCOL: set `MGC_NO_QUAKE_MAIL_ACCUM` to restore the pre-dig
+/// behaviour, where both of `sub_3A200`'s / `sub_39F60`'s mailbox
+/// stamps went through [`crate::mc1::mobs::Gen::mail_write`] and so
+/// OVERWROTE the amount whenever a reader had already cleared the
+/// source. Ledger ROUND 99 dig 99-8.
+fn quake_mail_accum_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_QUAKE_MAIL_ACCUM").is_some())
+}
 
 /// Retail byte[0] bit0 in the quake band — the tossed/handled latch
 /// `sub_3A200` sets (dword |= 0x100001) and the action-74 release
@@ -238,6 +358,9 @@ impl Gen {
     /// pitch-512 spin is presentation-skipped (module doc).
     fn flood_shove_hit(&mut self, i: usize, j: usize) {
         self.ent[j].flags |= F_TOSSED | F_QUAKE_GRAB;
+        if !no_quake_toss_bit0() {
+            self.ent[j].flags |= 1;
+        }
         let (class, model) = (self.ent[j].class64, self.ent[j].model65);
         let mut forced = false;
         let mut suppressed = false;
@@ -255,7 +378,27 @@ impl Gen {
             // (NOT .max(1)).
             let amt = (self.ent[j].act_life + 1).max(0) as u32;
             let id = self.ent[i].id24;
-            self.mail_write(MailTarget::Pool(j), 0, amt, id);
+            if quake_mail_accum_off() {
+                self.mail_write(MailTarget::Pool(j), 0, amt, id);
+            } else {
+                // ⭐⭐⭐ THIS IS NOT THE AREA WRITE PROTOCOL. Retail's
+                // two statements are a BARE `+=` and a BARE `=`:
+                // `NETHERW.EXE` 0x5EA9B (linear 0x3A200 + 0x24800)
+                //   8b 43 08   mov 0x8(%ebx),%eax    ; victim life
+                //   8b 73 5e   mov 0x5e(%ebx),%esi   ; victim mail0 AMT
+                //   40         inc %eax
+                //   01 c6      add %eax,%esi         ; AMT += life+1
+                //   89 73 5e   mov %esi,0x5e(%ebx)
+                //   66 8b 41 1a mov 0x1a(%ecx),%ax
+                //   66 89 43 62 mov %ax,0x62(%ebx)   ; SRC = id
+                // — there is no test of the source word 0x62 anywhere
+                // in the block (EF:29435-37). `Gen::mail_write`'s
+                // stale-source branch OVERWRITES, so every quake kill
+                // mail landing on a consumed mailbox threw the residue
+                // away.
+                self.ent[j].mail[0].0 = self.ent[j].mail[0].0.wrapping_add(amt);
+                self.ent[j].mail[0].1 = id;
+            }
             // +1 per near-guaranteed kill (EF:29437).
             if id == crate::mc1::mobs::PLAYER_TARGET {
                 self.mc2_cast_xp.0.push((id, 20, 1));
@@ -282,6 +425,7 @@ impl Gen {
         };
         let cx = (ex.wrapping_add(128) >> 8) as u8;
         let cy = (ey.wrapping_add(128) >> 8) as u8;
+        let mut steps = 0usize;
         for row in 0..26u8 {
             let ty = cy.wrapping_sub(13).wrapping_add(row);
             for col in 0..26u8 {
@@ -293,7 +437,35 @@ impl Gen {
                 let mut j = self.map_entity[tile(tx, ty)] as usize;
                 while j != 0 {
                     let next = self.ent[j].next20 as usize;
-                    if j != i && self.ent[j].flags & 0x400 == 0 {
+                    // ⭐⭐⭐ AN INVENTED GUARD: THE SHOVE LOOP HAS NO
+                    // REAP TEST. `sub_39B60`'s chain walk is
+                    // `for (i = mapEntityIndex[cell]; ...; i = next)
+                    //  { if (sub_39FA0(flood, Entities[i])) ... }` and
+                    // NOTHING else — `NETHERW.EXE` 0x5E40A-0x5E419 is
+                    // `push %ebx / mov 0x14(%ebp),%edx / push %edx /
+                    //  call 0x5e7a0 / test %al,%al / je LABEL_25`, with
+                    // no flag load in between; and `sub_39FA0` itself
+                    // (0x5E7A0-0x5E88A, a jump table over `class - 1`,
+                    // disassembled in full) tests ONLY
+                    // `testb $0x21,0xc(%edx)` — byte[0] bits 0 and 5,
+                    // the tossed and invisible latches. There is no
+                    // `testb $0x4,0xd(...)` anywhere in either, i.e. no
+                    // `flags & 0x400` reap term. A record reap-flagged
+                    // EARLIER IN THE SAME POOL WALK is still on the map
+                    // chain (`sub_57F20` unlinks it on the NEXT frame's
+                    // pre-walk), so retail shoves the fresh corpse and
+                    // the port did not.
+                    // WITNESS mc2l6-rsg t=26,325: creature slot 99 is
+                    // reap-flagged by its own tick (slot 99 < flood 496
+                    // in the ascending walk) and retail's flood then
+                    // pushes it (11684,9866) -> (11656,9984), snaps it
+                    // to the terrain at 119 — and on the SECOND visit
+                    // of the same 26x26 sweep the now-low `v5` = 82
+                    // takes the close band, stamping `byte[2] bit4`
+                    // (the grab) and drawing the 1-in-7 roll
+                    // (`rand 10536 -> 42759`). The port's slot 99 sat
+                    // still with no grab and no draw.
+                    if (self.ent[j].flags & 0x400 == 0 || flood_no_reap_gate_law()) && j != i {
                         let d = dist2d(ex, ey, self.ent[j].x as i32, self.ent[j].y as i32);
                         let v5 = self.ent[j].z as i32 - refz;
                         if self.flood_shovable(i, j) && d < 3328 && v5 < 4096 {
@@ -309,11 +481,62 @@ impl Gen {
                                 let yaw = Self::angle_between(vx, vy, ex, ey);
                                 let mut pos = (vx, vy, vz);
                                 Self::polar_step(&mut pos, yaw, 0, v6 as i16);
-                                let pull = (48 * (((4096 - v5) << 8) >> 12)) >> 8;
-                                pos.2 = (pos.2 as i32 - pull) as i16;
+                                // ⭐⭐⭐ THE VERTICAL LEG IS A THREE-WAY
+                                // SPLIT, AND THE PORT CARRIED ONE ARM.
+                                // Retail takes the terrain altitude at
+                                // the STEPPED point FIRST and only then
+                                // asks who the victim is (EF:29092-108;
+                                // `NETHERW.EXE` 0x5E4E7-0x5E58C):
+                                //   0x5e4e7 call 0x35440        ; getTerrainAlt(predicted)
+                                //   0x5e4ec movswl %ax,%ecx     ; v8 = ground
+                                //   0x5e4ef mov 0x3f(%ebx),%ah  ; victim class
+                                //   0x5e4f5 cmp $0x3,%ah   ; jne 0x5e53c
+                                //   0x5e4fa cmpb $0x0,0x40(%ebx) ; jne 0x5e53c
+                                //   <arm 1: WIZARD — pull, then clamp>
+                                //   0x5e53c mov 0xa0(%ebx),%eax  ; the victim's Type_160 row
+                                //   0x5e542 movswl 0xe(%eax),%eax ; word_160_0xe_14, SIGNED
+                                //   0x5e546 cmp $0xffffffc0,%eax  ; -64
+                                //   0x5e549 jl  0x5e585           ; -> LABEL_40, NO PULL
+                                //   <arm 3: pull, then clamp>
+                                //   0x5e581 cmp %ecx,%eax ; jge 0x5e58c
+                                //   0x5e585 mov %cx,0x1b39c       ; predicted.z = ground
+                                // So a victim that is NOT a class-3
+                                // model-0 wizard and whose behaviour row
+                                // sinks faster than -64 per tick is
+                                // PLANTED ON THE TERRAIN OUTRIGHT — the
+                                // smooth pull is for flyers (and the
+                                // wizard body), never for a walker. The
+                                // difference is not cosmetic: the pull
+                                // arm can only ever LOWER z toward the
+                                // clamp, so a walker dragged UPHILL kept
+                                // the pre-step altitude and hung above
+                                // the slope. 40 of the 157 shipped rows
+                                // are below -64 (every -128/-256/-512
+                                // walker).
+                                // ⚠ `word_160_0xe_14` DOES have a
+                                // ported home and always did — it is
+                                // `Mc2BehaviorRow::v_14`, the z step
+                                // `Gen::mc2_alt_core` uses on every
+                                // creature move. The module header and
+                                // docs/DEVIATIONS.md both claimed
+                                // otherwise; both corrected.
                                 let ground = self.ground_z(pos.0, pos.1);
-                                if (pos.2 as i32) < ground {
+                                let wizard = {
+                                    let e = &self.ent[j];
+                                    e.class64 == 3 && e.model65 == 0
+                                };
+                                let deep_sink = BEHAVIOR
+                                    [self.ent[j].row156 as usize]
+                                    .v_14
+                                    < -64;
+                                if !wizard && deep_sink && flood_ground_snap_law() {
                                     pos.2 = ground as i16;
+                                } else {
+                                    let pull = (48 * (((4096 - v5) << 8) >> 12)) >> 8;
+                                    pos.2 = (pos.2 as i32 - pull) as i16;
+                                    if (pos.2 as i32) < ground {
+                                        pos.2 = ground as i16;
+                                    }
                                 }
                                 self.move_relink(j, pos.0, pos.1, pos.2);
                             }
@@ -322,9 +545,28 @@ impl Gen {
                         // for EVERY entity in the disc.
                         if action74 && self.ent[j].flags & F_QUAKE_GRAB != 0 {
                             self.ent[j].flags &= !(F_TOSSED | F_QUAKE_GRAB);
+                            if !no_quake_release_bit0() {
+                                self.ent[j].flags &= !1;
+                            }
                         }
                     }
-                    j = next;
+                    // ⭐⭐⭐ THE CURSOR IS RE-READ OFF THE MOVED VICTIM
+                    // (`NETHERW.EXE` 0x5e5e6, disassembled at
+                    // [`flood_chain_rewalk_law`]). A shove that crosses
+                    // a tile edge re-heads the victim in the DESTINATION
+                    // cell, so retail's walk carries on down THAT chain.
+                    j = if flood_chain_rewalk_law() {
+                        self.ent[j].next20 as usize
+                    } else {
+                        next
+                    };
+                    // Retail has no bound here; ours only exists so a
+                    // pathological cycle cannot hang the harness. It
+                    // has never fired.
+                    steps += 1;
+                    if steps > 1_000_000 {
+                        break;
+                    }
                 }
             }
         }
@@ -405,7 +647,16 @@ impl Gen {
             self.ent[j].flags |= F_QUAKE_GRAB;
             self.ent[j].f50 = 30; // the grab timer = the blast shake
             self.ent[j].f40 = i as u16; // owner = self slot
-            self.mail_write(MailTarget::Pool(j), 0, amt, id);
+            // ⭐ THE SECOND CALL PATH OF THE SAME LAW. EF:29348-49 is
+            // the identical bare pair — `jx->dword_0x5E_94 +=
+            // a1x->subSpellIndex_0x2A_42;` … `jx->word_0x62_98 =
+            // a1x->id_0x1A_26;` — with no test of the source word.
+            if quake_mail_accum_off() {
+                self.mail_write(MailTarget::Pool(j), 0, amt, id);
+            } else {
+                self.ent[j].mail[0].0 = self.ent[j].mail[0].0.wrapping_add(amt);
+                self.ent[j].mail[0].1 = id;
+            }
         }
         // +2 per grabbed CASTLE (EF:29374 `v8 += 2`; buildings do
         // NOT count).

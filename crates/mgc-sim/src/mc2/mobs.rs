@@ -101,6 +101,226 @@ const VILLAGER_BASE: u8 = 104;
 /// The arrow's action/state (= its model; :35031).
 const ARROW_STATE: u8 = 13;
 
+/// A/B toggle for the SUMMON-LEASE / SCRATCH-LANE SPLIT: set
+/// `MGC_NO_SUMMON_LEASE_SPLIT` to restore the pre-dig behaviour, where
+/// the port's single `f26` lane carried retail's `word_0x2E_46`
+/// SUMMON LEASE for the whole life of a StageVar2 12/13/14/16/17
+/// class-5 record — including after it left the StageVar2 state — so
+/// every combat handler that reads `dword_0x10_16` (@0x10) read the
+/// lease instead. `sub_1E580` (the ONLY @0x2E reader on those five
+/// kinds) is dispatched from action `8*model + 7` alone, so @0x2E is
+/// live on that state and DEAD everywhere else.
+pub(crate) fn no_summon_lease_split() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_SUMMON_LEASE_SPLIT").is_some())
+}
+
+/// A/B toggle for THE VILLAGE HOUSE'S PERIODIC POPULATION SPAWN —
+/// `GetRandManaSphere_38270`'s **SECOND** CALL SITE. Set
+/// `MGC_NO_MC2_HOUSE_POP=1` to restore the pre-dig behaviour, where
+/// `AddHouse0A_2D_38330` never ran the block at all: the helper was
+/// ported as [`Gen::mc2_rand_occupant`] but reached from the COLLAPSE
+/// path alone (EF:28121, [`World::mc2_house_collapse`]) — a law landed
+/// on one call path is not landed.
+pub(crate) fn no_mc2_house_pop() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HOUSE_POP").is_some())
+}
+
+/// `MGC_NO_MC2_BUILDING_XTYPE_ZERO=1` restores the pre-dig
+/// [`Gen::mc2_spawn_building`], which left `xtype_0x41_65` at
+/// `NewEvent_4A050`'s fresh-record 0xFF instead of the ctor's own
+/// `= 0` (EF:32796, shipped `NETHERW.EXE` file 0x6E3BD) — so a
+/// villager-built shrine fired the phantom disposition 255 on death.
+/// (Round 104, dig W3-S.)
+fn no_mc2_building_xtype_zero() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BUILDING_XTYPE_ZERO").is_some())
+}
+
+/// A/B toggle for the (10,78) MAGIC-MINE HOMING BEACON `sub_68940`
+/// (EF:55315, shipped EXE 0x8D140): set `MGC_NO_MINE_BEACON` to
+/// restore the pre-dig behaviour, where a class-9 flyer's one-shot
+/// acquisition ran `sub_67CB0` alone.
+#[allow(dead_code)]
+pub(crate) fn no_mine_beacon() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MINE_BEACON").is_some())
+}
+
+/// A/B toggle for the victim probe's placement of the OUT-OF-POOL
+/// HUMAN INSIDE HIS OWN TILE (`MGC_NO_PLAYER_CELL_TAIL=1` restores
+/// the pre-dig order, where the human was tested BEFORE the pool
+/// records linked in that tile). Retail's `sub_10780` walks the tile
+/// chain and returns the FIRST overlapping record; the chain is
+/// HEAD-INSERTION on cell entry (`AddEventToMap_57D70` EF:40315-27:
+/// `entity->oldMapEntity_0x16_22 = mapEntityIndex[cell];
+/// mapEntityIndex[cell] = entity`) and `CopyEntityPosition_57CF0`
+/// (EF:40282-99) relinks only ACROSS tiles — so a pool record that
+/// flew into the human's tile after he parked there is walked BEFORE
+/// him.
+pub(crate) fn no_player_cell_tail() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_PLAYER_CELL_TAIL").is_some())
+}
+
+/// ARROW-VOLLEY PROBE (`MGC_ARROW_VOLLEY_TRACE=1`): the (5,15) guard volley gate and
+/// every (9,13) mint — the instrument that showed the port firing a
+/// guard arrow retail does not (mc2l22 pair 1887, guard 719).
+pub(crate) fn arrow_volley_trace_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("MGC_ARROW_VOLLEY_TRACE").is_ok())
+}
+
+/// A/B toggle for the MC2 SPRITE FRAME COUNT (`byte_0x5D_93`, our
+/// [`crate::engine::features::Ent::frames89`], the raw-shadow `b5d`
+/// lane): set `MGC_NO_MC2_FRAMES89` to restore the pre-dig behaviour,
+/// where the MC2 column never wrote the lane at all and every MC2
+/// record carried 0 where retail carries the sprite's frame count.
+pub(crate) fn no_mc2_frames89() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FRAMES89").is_some())
+}
+
+/// `x_BYTE_D8A2E[38]` (EF:2297) — DRAW TYPE -> animation frame count.
+/// Verified byte-for-byte against the shipped `NETHERW.EXE` at file
+/// offset **0xEE22E** (the data segment sits 0xF000 BELOW the code
+/// mapping, i.e. `off = 0x24800 + linear - 0xF000` for data, not the
+/// code rule `0x24800 + linear`); `SetEntityIndex_49C90` reads it as
+/// `mov 0x8a2e(%eax),%al` at file 0x6E4BA.
+///
+/// Same table as MC1's [`crate::mc1::mobs::FRAME_COUNTS`] plus a
+/// trailing 0: types 0/1 = single view, 2..=16 = that many animation
+/// frames, 17..=21 = multi-VIEW families (one frame each), 22..=36 =
+/// animated multi-view (2..16 frames), 37 = none.
+pub(crate) const D8A2E_FRAMES: [u8; 38] = [
+    1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, //
+    1, 1, 1, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0,
+];
+
+/// `particlesParameters_D951C[row].byte_12` AS IT STANDS AT PLAY TIME.
+///
+/// ⚠ THE SHIPPED TABLE'S `byte_12` COLUMN IS ALL ZEROES — verified in
+/// both the decompile (`Type_WORD_D951C.cpp`) and the shipped
+/// `NETHERW.EXE` (file 0xEED1C, 347 x 14 bytes; every other column
+/// matches the decompile exactly, only the two relocated pointer words
+/// `word_2`/`word_4` differ). The column is FILLED AT BOOT by
+/// `sub_71410_process_tmaps` (EF:44878-909), which decompresses each
+/// row's sprite and copies the sprite header's FLAGS HIGH BYTE:
+/// `particlesParameters_D951C[i].byte_12 = *(x_BYTE*)(v1 + 1)`
+/// (EF:44906) — exactly MC1's `draw_type` column, which MC1 ships
+/// pre-baked ([`crate::mc1::sprite_stats`] documents the same
+/// `flags >> 8` identity).
+///
+/// So this table is the retail BOOT PASS evaluated once, against
+/// **TMAPS0-0 (the DAY bank)** — the same day-sourced law
+/// `Bundle::mc2_extent_dims` / [`crate::mc2::derive_sprite_extents`]
+/// already carry for the sibling `speed_6`/`rotSpeed_8` derivation in
+/// that very loop: retail derives the particle-param table ONCE at
+/// boot and never recomputes it, so night and cave levels run day-art
+/// frame counts (the banks genuinely differ — sprite 426 is draw type
+/// 11 in the day bank and 0 in night/cave). Row 346 is the loop's
+/// terminator (`speed_6 == 0 && rotSpeed_8 == 0`) and is never
+/// reached, so it keeps the shipped 0.
+///
+/// Regenerated/asserted by
+/// `mc2_sprite_draw_types_match_the_day_bank_flag_high_bytes` below.
+/// Only SEVEN rows resolve to a count other than 1: 7, 222, 237 -> 16
+/// and 244, 332, 333, 334 -> 11.
+pub(crate) const MC2_SPRITE_DRAW_TYPE: [u8; 347] = [
+    20, 20, 17, 17, 17, 17, 17, 36, 21, 21, 21, 21, 21, 21, 21, 21, 21, 17, 21, 21,
+    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 0, 17, 17, 17, 0,
+    17, 21, 21, 0, 17, 21, 17, 17, 17, 17, 17, 21, 21, 21, 21, 21, 21, 21, 21, 21,
+    0, 0, 17, 17, 17, 0, 0, 21, 21, 21, 21, 21, 21, 21, 21, 17, 21, 1, 17, 0,
+    0, 0, 17, 0, 0, 17, 17, 17, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
+    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
+    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
+    21, 21, 21, 21, 21, 21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 19, 21, 21, 17, 17,
+    17, 20, 20, 19, 17, 17, 20, 17, 17, 21, 21, 21, 1, 21, 21, 21, 21, 20, 20, 20,
+    0, 20, 36, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 17, 16, 20, 20,
+    17, 20, 20, 17, 11, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+    17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 0, 20, 0, 17, 17, 17, 17, 17, 17, 17,
+    1, 21, 1, 17, 1, 17, 17, 17, 17, 17, 17, 17, 17, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 0, 0, 17, 17, 0, 17, 21,
+    21, 21, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 11, 11, 11, 17, 17, 17, 0, 0,
+    21, 17, 17, 17, 17, 17, 0,
+];
+
+/// Retail's frame count for a particle-param row:
+/// `x_BYTE_D8A2E[particlesParameters_D951C[row].byte_12]`
+/// (`SetEntityIndex_49C90` EF:32834 / `sub_49D50` EF:32851).
+pub(crate) fn mc2_sprite_frames(row: usize) -> u8 {
+    let dt = MC2_SPRITE_DRAW_TYPE.get(row).copied().unwrap_or(0) as usize;
+    D8A2E_FRAMES.get(dt).copied().unwrap_or(0)
+}
+
+/// A/B toggle for the `sub_585A0` FRAME CAP: set
+/// `MGC_NO_MC2_FRAME_CAP` to restore the pre-dig behaviour, where the
+/// four MC2 ports of `sub_585A0` ran an UNCAPPED `frame88 += 1` (they
+/// had to: `frames89` was 0 on the whole column, so retail's gate
+/// would have frozen every animation).
+pub(crate) fn no_mc2_frame_cap() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FRAME_CAP").is_some())
+}
+
+/// ⭐⭐⭐ A/B toggle for `ApplyTerrainModification_37240`'s OPENING
+/// STATEMENT — the build site adopts the BUILDING's footprint box on
+/// the first countdown tick.
+///
+/// ```c
+/// // EF:27234-36, ApplyTerrainModification_37240
+/// v50 = 0;
+/// if (event->maxLife_0x4 == event->life_0x8)
+///     SetShiftByCastle_49EC0(event, event->byte_0x46_70);
+/// if (!IsNextEvent0A_2A_37740(event)) { … }
+/// ```
+///
+/// Shipped `NETHERW.EXE` 0x5BA40 (`sub_37240` linear 0x37240,
+/// `off = 0x34800 + linear − 0x10000`):
+///
+/// ```text
+///   5ba4e  8b 53 04         mov    0x4(%ebx),%edx    ; maxLife_0x4
+///   5ba54  3b 53 08         cmp    0x8(%ebx),%edx    ; life_0x8
+///   5ba57  75 0e            jne    0x5ba67
+///   5ba59  0f be 43 46      movsbl 0x46(%ebx),%eax   ; byte_0x46_70 (SIGNED)
+///   5ba5f  e8 5c 2c 01 00   call   0x6e6c0           ; SetShiftByCastle_49EC0
+/// ```
+///
+/// and `SetShiftByCastle_49EC0` itself at file 0x6E6C0 — a 6-byte
+/// BUILD00 row (`4*n − n`, doubled), `width` at +4 and `height` at +5:
+///
+/// ```text
+///   6e6fc  c1 e0 08         shl  $0x8,%eax
+///   6e6ff  05 00 05 00 00   add  $0x500,%eax          ; +1280
+///   6e704  d1 e8            shr  $1,%eax
+///   6e706  66 89 43 54      mov  %ax,0x54(%ebx)       ; pitch  = ((w<<8)+1280)>>1
+///   6e70f  66 c7 43 52 00 00   movw $0x0,0x52(%ebx)   ; yaw    = 0
+///   6e71a  66 c7 43 58 00 01   movw $0x100,0x58(%ebx) ; fov    = 256
+///   6e722  66 89 43 56      mov  %ax,0x56(%ebx)       ; roll   = ((h<<8)+1280)>>1
+/// ```
+///
+/// The port's `mc2_building_tick` never carried the opener, so a
+/// raising building kept whatever quad its class-10 SPRITE ctor left
+/// on `f78/f80/f82/f84` — and those four words are not rotation
+/// speeds at all on a building, they are the AABB half-extents
+/// `sub_10630`/`sub_106C0` measure it by.
+///
+/// WITNESS — mc2l22 pair 44510→44511, slot 853, a `(10,45)` shrine at
+/// `action 51`, `b46 = 13`, `life 30 == max_life 30`. Retail rewrites
+/// `ayaw/apitch/aroll/afov` **200/194/194/200 → 0/768/768/256** on
+/// that exact tick (BUILD00 row 13 is 1×1: `((1<<8)+1280)>>1 = 768`)
+/// while `f5a` STAYS 177 — proof it is not a re-sprite. The port kept
+/// `Gen::mc2_set_sprite(177)`'s derived quad.
+///
+/// `MGC_NO_MC2_BUILD_SITE_FOOTPRINT_BOX=1` restores the old behaviour.
+pub(crate) fn no_mc2_build_site_footprint_box() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BUILD_SITE_FOOTPRINT_BOX").is_some())
+}
+
 impl Gen {
     // ---- shared MC2 helpers ------------------------------------------------
 
@@ -126,9 +346,22 @@ impl Gen {
     /// row and derive the rot/extent quad from it (/2). No RNG.
     pub(crate) fn mc2_set_sprite(&mut self, i: usize, idx: u16) {
         let (s6, r8) = self.mc2_params_ext(idx as usize);
+        let frames = mc2_sprite_frames(idx as usize);
         let e = &mut self.ent[i];
         e.type86 = idx;
         e.frame88 = 0;
+        // ⭐ ROUND 98 — `SetEntityIndex_49C90`'s THIRD LINE
+        // (EF:32834, shipped NETHERW.EXE file 0x6E4AE-0x6E4C0:
+        // `mov 0x9528(,%eax,2),%al` with `eax = 7*idx` reads
+        // `D951C + 14*idx + 12` = byte_12, then `mov 0x8a2e(%eax),%al`
+        // / `mov %al,0x5d(%ebx)`). The MC1 twin has always done this
+        // (`mc1/mobs.rs` `set_sprite`); the MC2 column never did, so
+        // every MC2 record carried 0 in the lane where retail carries
+        // the count -- the single biggest ungraded family in the
+        // pair census.
+        if !no_mc2_frames89() {
+            e.frames89 = frames;
+        }
         e.f78 = r8 / 2; // array.yaw
         e.f80 = s6 / 2; // array.pitch
         e.f82 = s6 / 2; // array.roll
@@ -160,6 +393,38 @@ impl Gen {
         e.f84 *= 2;
     }
 
+    /// `sub_585A0` (EF:40438) — the ONE animation-frame advance the
+    /// whole MC2 engine has, verbatim from the shipped `NETHERW.EXE`
+    /// at file **0x7CDA0**:
+    ///
+    /// ```text
+    ///   mov  0x5c(%edx),%al      ; animationFrame_0x5C_92
+    ///   cmp  0x5d(%edx),%al      ; vs byte_0x5D_93 (the frame count)
+    ///   jae  <out>               ; UNSIGNED >= -> no step
+    ///   mov  0x5c(%edx),%bl ; inc %bl ; mov %bl,0x5c(%edx)
+    /// ```
+    ///
+    /// i.e. `if frame88 < frames89 { frame88 += 1 }` — NOT the port's
+    /// old uncapped `+= 1`, and NOT `frame88 + 1 < frames89`. Retail
+    /// calls it from EF:11983 (m9 materialize), 22758 ((10,0) fire),
+    /// 22852 ((10,86) cave drip), 23173 (splash), 23553/23567, 24855
+    /// (the duel tether) and 28229.
+    ///
+    /// ⭐ Only reachable because `mc2_set_sprite` now stamps
+    /// `frames89`: with the lane at 0 the gate would freeze every
+    /// animation, which is why the four port sites open-coded an
+    /// uncapped increment. Retail's own captures agree — across 80
+    /// sampled `mc2l6-rsg` states the ONLY records with a nonzero
+    /// `+0x5C` are `(10,0)` (sprite row 7, count 16), at 7/8/9.
+    pub(crate) fn mc2_anim_step(&mut self, i: usize) {
+        let e = &mut self.ent[i];
+        if no_mc2_frame_cap() {
+            e.frame88 = e.frame88.saturating_add(1);
+        } else if e.frame88 < e.frames89 {
+            e.frame88 += 1;
+        }
+    }
+
     /// `SetEntityShiftRot_49EA0` (:32874): pitch = roll = shift,
     /// fov = fov.
     pub(crate) fn mc2_shift_rot(&mut self, i: usize, shift: u16, fov: u16) {
@@ -176,7 +441,7 @@ impl Gen {
 
     /// `sub_580E0` (:40372): sink by the row's zStep while above
     /// ground, clamp to ground + hover.
-    fn mc2_alt_core(z: &mut i16, ground: i16, hover: i16, z_step: i16) {
+    pub(crate) fn mc2_alt_core(z: &mut i16, ground: i16, hover: i16, z_step: i16) {
         if *z > ground {
             *z = z.wrapping_add(z_step);
         }
@@ -597,14 +862,23 @@ impl Gen {
         best.map(|(s, _)| s)
     }
 
+    /// A/B toggle for the SEPARATION-BOX SPAN law (dig C2, session
+    /// 96): set `MGC_NO_PACKBOX_SPAN` to restore the pre-2026-09-03
+    /// WRAPPING 16-bit box test on the non-`sub_1DDA0` call paths.
+    pub(crate) fn packbox_span_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_PACKBOX_SPAN").is_none())
+    }
+
     /// The same-model AVOIDANCE override in chase/flee re-aims
     /// (:9643-56): first packmate closer than array.pitch on both
     /// axes steers us away from it.
     pub(crate) fn mc2_avoid_packmate(&mut self, i: usize) {
-        self.mc2_avoid_packmate_at(i, false);
+        self.mc2_avoid_packmate_at(i, Self::packbox_span_law());
     }
 
-    /// `cast16` — THE SEPARATION BOX IS SEAM-BLIND IN THE HELD WALK.
+    /// `cast16` — THE SEPARATION BOX IS SEAM-BLIND, AND IT IS SEAM-
+    /// BLIND ON **EVERY** WALK, NOT JUST `sub_1DDA0`'s.
     /// `sub_1DDA0`'s box test (EF:10404-09) sign-casts each u16
     /// position to int16 BEFORE the plain-int subtraction, so two
     /// packmates straddling the x/y 0x8000 map-CENTER seam read an
@@ -612,11 +886,27 @@ impl Gen {
     /// villager 66 (x 32745) vs 54 (x 32867, sign-cast NEGATIVE) —
     /// wrapped |dx| = 122 < apitch 128 but retail keeps the pure
     /// waypoint aim 507 where the wrapped test wrote the away-bearing
-    /// 1388. The chase/flee (:9644-46) and m15 (:15304-05) walks
-    /// subtract the raw u16s with NO cast (plain — blind only across
-    /// the 0/65535 map EDGE); the port's wrapped difference stands in
-    /// for those until a witness separates plain from wrapped (no
-    /// shipped take carries an edge-straddling pack).
+    /// 1388.
+    ///
+    /// ⭐⭐⭐ THE SHIPPED EXE SETTLES THE OTHER WALKS TOO, AND THEY
+    /// AGREE. This doc used to say the chase/flee (:9644-46) and m15
+    /// (:15304-05) walks "subtract the raw u16s with NO cast" and
+    /// that the port's WRAPPED difference stood in for them. That is
+    /// false: every one of them emits the same
+    ///   `movsx eax,word[..+0x4c] ; movsx edx,word[..+0x4c]
+    ///    sub eax,edx ; cdq/xor/sub ; cmp ; jnl`
+    /// pair — sign-extend BOTH coordinates to 32 bits, THEN subtract,
+    /// so the span never wraps. Four independent sites, disassembled
+    /// (`off = 0x34800 + linear − 0x10000`):
+    ///   `sub_1C980` chase/flee  +0x1CAEA (file 0x4196A)
+    ///   `sub_24190` m15         +0x24330 (file 0x491B0)
+    ///   `sub_1E700` summon crowd-steer +0x1E918 (file 0x43718)
+    ///   `sub_27120` m22 anti-stack     +0x27168 (file 0x4B968)
+    /// The contrast is real and it is with the DISTANCE primitives,
+    /// not with these: `sub_583F0` (3-D distance) genuinely subtracts
+    /// in 16 bits (`mov ax,[esi] ; sub ax,[ecx] ; movsx eax,dx` at
+    /// +0x583FB) and DOES wrap. ⭐⭐ Which primitive the call site
+    /// picks is the law.
     pub(crate) fn mc2_avoid_packmate_at(&mut self, i: usize, cast16: bool) {
         let (ex, ey, pitch, model, id) = {
             let e = &self.ent[i];
@@ -1059,8 +1349,12 @@ impl Gen {
             self.ent[b].f144 = owner;
             let d1 = self.mc2_rand(b);
             let yaw = ((d1 % 0x71) as i32 + heading as i32 - 56) as u16 & 0x7FF;
+            // ⚠ YAW ONLY — the roll (`roll_0x20_32`, our `f34`) stays
+            // at the allocator's 0. `TransformEntityToManaSphere_36BA0`
+            // (EF:26903) writes `yaw_0x1C_28` and nothing else; the
+            // pairing of the two IS a real MC2 idiom, but it belongs to
+            // the cave fan (EF:26221-22 writes both), not here.
             self.ent[b].f30 = yaw;
-            self.ent[b].f34 = yaw;
             let d2 = self.mc2_rand(b);
             let speed = (d2 % 0x30 + 16) as i16;
             // Retail WRITES the roll onto the sphere's actSpeed@0x82
@@ -1241,6 +1535,10 @@ impl Gen {
         self.link(i, x, y, z);
         self.refill_life(i);
         self.mc2_set_sprite_x2(i, 195);
+        // ARROW-VOLLEY PROBE (`MGC_ARROW_VOLLEY_TRACE=1`): every (9,13) mint.
+        if arrow_volley_trace_on() {
+            eprintln!("DIG4 arrow slot={i} at ({x},{y},{z})");
+        }
         Some(i)
     }
 
@@ -1633,7 +1931,7 @@ impl Gen {
         // victim throws the arrow back (model 13 passes the engine's
         // whitelist unconditionally).
         if let Some(h) = hit
-            && self.mc2_rebound_deflect(i, h, ctx)
+            && self.mc2_rebound_deflect(i, h, ctx, (0x2D, 22))
         {
             return;
         }
@@ -1696,9 +1994,15 @@ impl Gen {
                     self.ent[i].flags |= 0x400;
                     return;
                 }
+                // `KillTownie_23680` EF:14677-79 arms the KILLER's
+                // wizard, whoever it is (`wanted_any_wizard`).
                 let killer = self.ent[i].f38;
-                if killer == PLAYER_TARGET {
-                    self.mc2_arm_wanted(PLAYER_TARGET);
+                if if crate::mc2::roster::wanted_any_wizard() {
+                    self.mc2_is_wizard(killer)
+                } else {
+                    killer == PLAYER_TARGET
+                } {
+                    self.mc2_arm_wanted(killer);
                 }
                 self.mc2_prekill(i, VILLAGER_BASE);
             }
@@ -1729,8 +2033,12 @@ impl Gen {
             1 => {
                 // A wizard hit arms its wanted timer (:14561-63).
                 let src = self.ent[i].f40;
-                if src == PLAYER_TARGET {
-                    self.mc2_arm_wanted(PLAYER_TARGET);
+                if if crate::mc2::roster::wanted_any_wizard() {
+                    self.mc2_is_wizard(src)
+                } else {
+                    src == PLAYER_TARGET
+                } {
+                    self.mc2_arm_wanted(src);
                 }
                 self.ent[i].f146 = src;
                 self.ent[i].tick70 = VILLAGER_BASE + 6; // 110
@@ -1909,6 +2217,23 @@ impl Gen {
             e.tick70 = 0;
             e.max_life = 8;
             e.f140 = 400; // subSpellIndex = sub_10C80's ch0 amount
+            // ⭐ `NewEvent_4A050`'s 100 IS `subSpellIndex_0x2A_42`
+            // (Events.cpp:569), NOT `word_0x2C_44` — the memset above
+            // it leaves @0x2C at 0 and `NewAdd0A00_4E320` (EF:35332-52)
+            // never writes it. The port's allocator seeds that 100 into
+            // `f44`, and `f44` IS this model's @0x2C home
+            // (`port_ent_lanes_mc2`), so every newborn fire carried a
+            // flicker of 100 where retail has 0 (mc2l22: 61 rows,
+            // t=10914..10932, every (10,0) minted in the window).
+            // Inert on the fire itself — its first acting tick
+            // re-stamps the flicker before `sub_580E0` reads it — but
+            // the same allocator seed is LIVE on every other model
+            // whose f44 is @0x2C: the (2,7)/(2,8) falling props' fall
+            // velocity, the (5,21) devil's jump impulse, the (5,22)
+            // worm segment orbit, (10,16), (10,76)/(10,77) and the
+            // class-15 tokens. Fixed here at the one site the corpus
+            // measures; the sweep is the main session's.
+            e.f44 = 0; // word_0x2C_44 — memset-clean at birth
             e.f56 = 0;
             e.flags = (e.flags & !0x2_0008) | 0x2_0000;
         }
@@ -2050,9 +2375,9 @@ impl Gen {
                 self.ent[i].z = c;
             }
         }
-        // sub_585A0: frame advance (the renderer's 22..=36 band caps
-        // by the sprite's span; retail caps by x_BYTE_D8A2E).
-        self.ent[i].frame88 = self.ent[i].frame88.saturating_add(1);
+        // sub_585A0 (EF:22758): frame advance, CAPPED by the sprite's
+        // own count.
+        self.mc2_anim_step(i);
         dirty
     }
 
@@ -2210,7 +2535,31 @@ impl Gen {
             // castle. Second consumer: the type-2 objective latch
             // (EF:40771-79) — a castle-crushed building COMPLETES it.
             e.f46 = prm.chain as i16;
-            // `mana_0x90_144 = 0` (EF:32796), then the productive kind
+            // ⭐ `xtype_0x41_65 = 0` (EF:32796), the instruction
+            // IMMEDIATELY BEFORE the mana zero below — shipped
+            // `NETHERW.EXE` file 0x6E3BD (linear 0x49BBD):
+            //   6e3bd  c6 43 41 00              mov BYTE PTR [ebx+0x41],0
+            //   6e3c1  c7 83 90 00 00 00 00 ..  mov DWORD PTR [ebx+0x90],0
+            // A building's xtype is its ON-DEATH DISPOSITION
+            // (`if (event->xtype_0x41_65) sub_4A1E0(xtype, 1)`,
+            // EF:28172-73), and only the THING spawn writes a real one
+            // (`v3x->xtype_0x41_65 = entity->par2_16`, EF:33091 — the
+            // `(10, 45)` arm of `World::spawn_postinit`). Every OTHER
+            // path — the villager's build, the degradation-chain
+            // successor — must leave it ZERO. Dropping this line left
+            // `NewEvent_4A050`'s fresh-record default 0xFF standing, so
+            // every villager-built shrine fired disposition 255 the
+            // tick it died: a fire with no authored rows, but
+            // `sub_4A1E0` opens with `sub_49F90` (EF:32966), whose
+            // ghost loop frees EVERY reap-flagged record and whose
+            // descending rebuild re-ranks the free stack to hand out
+            // the LOWEST slot. On mc2l22 that is six phantom fires —
+            // t=17855, 23311, 25785, 43381, 44414, 45582 — each a
+            // segment head.
+            if !no_mc2_building_xtype_zero() {
+                e.f66 = 0;
+            }
+            // `mana_0x90_144 = 0` (EF:32797), then the productive kind
             // (`byte_2 & 8 == 0`) re-derives it off the rate at
             // EF:32808. Retail leaves `maxMana_0x8C_140` (f136)
             // untouched on a building — the uniform import restores it
@@ -2284,9 +2633,33 @@ impl Gen {
                         let protected = matches!(m, 6 | 8 | 10 | 16 | 22 | 23 | 27)
                             || (m == 25 && self.ent[j].tick70 == 200);
                         if !protected {
+                            // ⭐ `sub_57390` EF:39801-03 (shipped
+                            // `NETHERW.EXE` 0x7BC1F-0x7BC2D):
+                            // `life = -1; word_0x24_36 = a2;
+                            //  word_0x26_38 = a2;`. The port stamped
+                            // `f36`/`f38` — one home SHORT. `f38` IS
+                            // `word_0x24_36`, but `word_0x26_38` is
+                            // `f40` (the mapping is fixed by
+                            // `mc2_state_head`'s own `f38 = f40`,
+                            // mirroring retail's `word_0x24_36 =
+                            // word_0x26_38` at EF:16137), and `f36` is
+                            // `word_0x22_34` — an m27-only lane this
+                            // arm can never reach, since m27 is
+                            // protected. So the ATTACKER half of the
+                            // killer pair was never written and
+                            // everything reading it off a corpse read
+                            // 0 — including `sub_28CE0`'s split, which
+                            // seeds each mini's `word_0x24_36` from
+                            // the parent's `word_0x26_38` (EF:19168),
+                            // so the minis thought nobody killed their
+                            // parent and wandered instead of hunting.
                             self.ent[j].act_life = -1;
-                            self.ent[j].f36 = owner;
                             self.ent[j].f38 = owner;
+                            if crate::mc2::roster::clear_tile_attacker_stamp() {
+                                self.ent[j].f40 = owner;
+                            } else {
+                                self.ent[j].f36 = owner;
+                            }
                         }
                     }
                     _ => {}
@@ -2331,6 +2704,131 @@ impl Gen {
         })
     }
 
+    /// ⭐⭐⭐ `sub_68940` (EF:55315; shipped EXE 0x8D140) — THE MAGIC
+    /// MINE IS A HOMING BEACON FOR ITS OWNER'S OWN SPELLS, and it runs
+    /// BEFORE the generic acquisition on every class-9 one-shot lock:
+    /// `if (sub_68940(a1x) || sub_67CB0(a1x))` (EF:62907 `sub_65820`,
+    /// EF:63092 `sub_65C20`, EF:63450 `sub_662E0`, EF:63589
+    /// `sub_66610`). A wizard plants a (10,78) and every qualifying
+    /// bolt he casts inside a ±0xAA yaw cone bends onto it — the whole
+    /// point of the Magic Mine spell, and the reason the port's own
+    /// `mc2/proj.rs` header lists this pair as OPEN ("needs the (10,78)
+    /// beacon column"). That column landed with `mc2_spawn_magic_mine`
+    /// / `mc2_mine_tick`; this is its consumer.
+    ///
+    /// The gates, read off the shipped EXE statement for statement:
+    /// - model ∈ {1,2,3,4,5,8,9,0xC,0x16,0x17,0x1A,0x1C,0x1E}
+    ///   (0x8D15B-0x8D1AC, the same ladder `sub_68AC0` repeats);
+    /// - `a1x->id_0x1A_26 != 0` and `Entities[owner]->class == 3`
+    ///   (0x8D1B2-0x8D1D2) — a WIZARD-owned shot only;
+    /// - walk the tick-top roster `dword_38535` (`0x8D1DE: mov
+    ///   0x9687(%ebx),%ebx` = [`Gen::paint_chain`]) for `model == 78`;
+    /// - `mine->word_0x32_50 == owner` (0x8D1F9) — HIS OWN mine (the
+    ///   port already stamps that lane: mc2l6-rsg t=13545 slot 178
+    ///   reads `f32` 343 on BOTH sides);
+    /// - `mine->word_0x36_54 == -1` (0x8D201) — armed. The port has no
+    ///   home for @0x36 on class 10 (`f56` is @0x38 there) and neither
+    ///   half of retail's own machine ever leaves −1: `sub_50840` seeds
+    ///   it and `sub_3A8B0` PARKS at case 1 because case 1 advances only
+    ///   when it is not −1 (`mc2/effects.rs`); `sub_68AC0` is the only
+    ///   consumer and is itself unported. Always-armed here, by that
+    ///   citation.
+    /// - `dist3d(mine, OWNER) < BEHAVIOR[owner.row].v_28` — the range is
+    ///   measured from the WIZARD, not from the bolt (0x8D218-0x8D235
+    ///   pushes `owner+0x4C` then `mine+0x4C`), and it is the owner's
+    ///   own behaviour row, exactly [`Gen::mc2_owner_lock_range`];
+    /// - nearest mine wins (`v8` starts 0x10000, strict `<`);
+    /// - `sub_582B0(bolt.yaw, angle(bolt, mine)) < 0xAA` (0x8D261) —
+    ///   a ±170-unit cone, half the map's turn but far WIDER than
+    ///   `sub_67CB0`'s 0x71, which is why the beacon wins locks the
+    ///   generic scan cannot even see.
+    ///
+    /// On a hit: `word_0x96_150 = mine` and `sub_655C0` (the desired
+    /// aim at the mine's `aim_z`) — and NOTHING else: no `sub_68BD0`
+    /// dodge alert, no `sub_5EF70` wizard alarm.
+    ///
+    /// mc2l6-rsg t=13545 is the corpus row: the human's charged meteor
+    /// leaves at his own cast attitude (yaw 335, pitch 40 — the bolt's
+    /// `axis_0x9A_154x` ray is 10240 units along exactly that), and
+    /// retail's record shows it flying at yaw **183** / pitch **2017**
+    /// with `word_0x96_150` = **178**, a (10,78) at (17213, 14243) —
+    /// bearing 184 from the muzzle, 151 units off the cast yaw, i.e.
+    /// outside `sub_67CB0`'s 0x71 cone and inside this one.
+    #[allow(dead_code)] // wiring lives in `mc2/proj.rs` — see DIG G2 report
+    pub(crate) fn mc2_mine_beacon(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        if no_mine_beacon() {
+            return false;
+        }
+        let (model, own, px, py, pz, yaw) = {
+            let e = &self.ent[i];
+            (e.model65, e.id24, e.x, e.y, e.z, e.f30)
+        };
+        if !matches!(
+            model,
+            1 | 2 | 3 | 4 | 5 | 8 | 9 | 0x0C | 0x16 | 0x17 | 0x1A | 0x1C | 0x1E
+        ) {
+            return false;
+        }
+        if own == 0 {
+            return false;
+        }
+        // `Entities[owner]->class_0x3F_63 == 3`. The out-of-pool human
+        // IS a class-3 wizard record in retail, so he qualifies and his
+        // raw pose is the measuring point (`sub_583F0` reads
+        // `position_0x4C_76` with no `sub_65580` raise).
+        let (ox, oy, oz) = if own == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz)
+        } else {
+            match self.ent.get(own as usize) {
+                Some(o) if o.class64 == 3 => (o.x, o.y, o.z),
+                _ => return false,
+            }
+        };
+        let range = self.mc2_owner_lock_range(own);
+        let mut best: Option<u16> = None;
+        let mut bestd: i64 = 0x10000;
+        for c in 0..self.paint_chain.visible_len() {
+            let v = self.paint_chain.list[c] as usize;
+            let e = &self.ent[v];
+            // ⚠ THE ARMED GATE NOW HAS A HOME. Retail's beacon scan
+            // requires `ix->word_0x36_54 == -1` (EF:55366) — a mine
+            // that has already swallowed a spell bends nothing. The
+            // old doc-comment's "always armed here, by that citation"
+            // premise is obsolete: `sub_68AC0` writes the gate and the
+            // importer now carries it (armed ⟺ `f36 == 0`).
+            if e.model65 != 78 || e.f52 != own || e.f36 != 0 {
+                continue;
+            }
+            let dz = (e.z as i64) - (oz as i64);
+            let d = Self::isqrt(
+                (Self::dist2_sq(ox, oy, e.x, e.y) as i64 + dz * dz).min(u32::MAX as i64) as u32,
+            ) as i64;
+            if d >= range || d >= bestd {
+                continue;
+            }
+            if Self::arc_err(yaw, Self::angle_between(px, py, e.x, e.y)) >= 0xAA {
+                continue;
+            }
+            best = Some(v as u16);
+            bestd = d;
+        }
+        let Some(t) = best else {
+            return false;
+        };
+        let (tx, ty, tz) = {
+            let e = &self.ent[t as usize];
+            (e.x, e.y, e.aim_z())
+        };
+        let dh = Self::isqrt(Self::dist2_sq(px, py, tx, ty) as u32) as i32;
+        let ty2 = Self::angle_between(px, py, tx, ty);
+        let tp = Self::pitch_toward(pz, tz, dh);
+        let e = &mut self.ent[i];
+        e.f146 = t;
+        e.f34 = ty2;
+        e.f36 = tp;
+        true
+    }
+
     /// `ApplyTerrainModification_37240` (:27181), the 30-tick build
     /// action (state 51): first countdown tick clears the footprint
     /// (sub_57390), every tick lerps the height plane toward the
@@ -2354,16 +2852,26 @@ impl Gen {
     /// The instant-placement sibling (`sub_36FC0`, same arm at
     /// :27114-27137) has no ported caller yet (`sub_5C950` stage
     /// machinery — unported).
-    /// `human` = (previous-tick settled pose, carpet slot) for the
-    /// `sub_377A0` completion pass — None on the load-time carousel
-    /// (an APPROX like the concurrent raise: retail would mint for a
-    /// wizard overlapping at load; the recording's seed state
-    /// already carries those).
+    /// `human` = (the carpet's pose AS OF THIS WALK SLOT, carpet
+    /// slot, alive-at-tick-top) for the `sub_377A0` completion pass
+    /// — None on the load-time carousel (an APPROX like the
+    /// concurrent raise: retail would mint for a wizard overlapping
+    /// at load; the recording's seed state already carries those).
     pub(crate) fn mc2_building_tick(
         &mut self,
         i: usize,
-        human: Option<((u16, u16, i16), u16)>,
+        human: Option<((u16, u16, i16), u16, bool)>,
     ) -> bool {
+        // EF:27234-36 — the opener, ahead of everything including the
+        // `IsNextEvent0A_2A_37740` carousel: on the FIRST countdown
+        // tick the site swaps its sprite-derived quad for the
+        // BUILDING's own AABB half-extents.
+        // [`no_mc2_build_site_footprint_box`].
+        if !no_mc2_build_site_footprint_box() && self.ent[i].act_life == self.ent[i].max_life as i32
+        {
+            let row = self.ent[i].f71;
+            self.mc2_castle_box_quad(i, row);
+        }
         let bldg = self.ent[i].f71 as usize;
         let Some(def) = self.assets.build_tab.get(bldg).copied() else {
             self.ent[i].tick70 = 52;
@@ -2430,29 +2938,76 @@ impl Gen {
             self.mc2_pad_edge_ring(tlx, tly, (h / 2) as u8, (w / 2) as u8, 2);
             self.mc2_pad_edge_ring(tlx, tly, (h / 2) as u8, (w / 2) as u8, 5);
             // `sub_377A0` (:27304, the action-51 completion tail):
-            // every class-3 wizard whose box overlaps the finished
-            // building gets a (10,42) painter minted ON THE WIZARD
-            // (see `mc2_spawn_wizard_painter`). The overlap is the
-            // 2-D `CompareAxisWithShift_10750` — extents sum, no z.
-            // The chain read of the wizard's record is PRE-move for
-            // every building below the carpet slot (all of mc2l0's),
-            // so the human tests at the previous settled pose; pool
-            // class-3 records test in ascending-slot order (the
-            // chain-order approximation of `dword_38519`).
+            // EVERY member of the class-3 live list `dword_38519`
+            // whose box overlaps the finished building gets the
+            // CASTLE re-paint `sub_5FBD0` — a (10,42) painter minted
+            // ON THAT RECORD (see `mc2_spawn_wizard_painter`). The
+            // list is NOT a castle list: retail rebuilds it at the
+            // tick top (EF:39975) as an ASCENDING pool walk over
+            // slots 1..1000 keeping every class-3 record with
+            // `life >= 0`, model unchecked — so the human carpet
+            // (3,0) and the rival wizards (3,1) are on it beside the
+            // castles (3,2), and a building finishing under a wizard
+            // "re-paints its castle" with the wizard's `@0x10` as
+            // the rung (the registered out-of-bounds row on a human
+            // who has died: `@0x10` = the 1200 respawn timer). The
+            // overlap is the 2-D `CompareAxisWithShift_10750` —
+            // extents sum, no z.
+            //
+            // ⭐ ORDER IS THE LAW: painters pop the free stack in
+            // list order, so the owner/slot pairing is the ascending
+            // slot order WITH THE HUMAN AT ITS OWN SLOT. Testing the
+            // human after the pool walk permuted the owners wherever
+            // several members overlapped the same building
+            // (mc2l22 t=12,969 a 3-cycle, t=15,345 / 15,836 swaps;
+            // rsg t=39,231 a swap — human 343 before rival 424).
+            // The human's record is read AS OF THE BUILDING'S WALK
+            // SLOT: pre-move for a building below the carpet slot
+            // (all of mc2l0's), post-move above it (all of rsg's:
+            // 616 / 694 / 749 over carpet 343) — the caller hands in
+            // the mid-walk `ctx` pose. A dead human (`life < 0` at
+            // the tick top) is not on the list.
             let (bx, by, bw, bh) = {
                 let e = &self.ent[i];
                 (e.x, e.y, e.f80 as i32, e.f82 as i32)
             };
             let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
-            // Gated on the same switch as the human arm below: the
-            // import-side pad reconstruct (pads.rs, the only
-            // human:None caller) replays a build retail already
-            // finished — its sub_377A0 pass must not re-mint the
-            // (10,42) painters or re-stamp f46 (mc2l30 t=402: a
-            // phantom painter off the free stack every pair, castle
-            // f2c 0→4; mc2l0-sg t=7283: seven at once).
-            if human.is_some() {
-                for w in 1..self.ent.len() {
+            // Gated on `human`: the import-side pad reconstruct
+            // (pads.rs, the only human:None caller) replays a build
+            // retail already finished — its sub_377A0 pass must not
+            // re-mint the (10,42) painters or re-stamp f46 (mc2l30
+            // t=402: a phantom painter off the free stack every
+            // pair, castle f2c 0→4; mc2l0-sg t=7283: seven at once).
+            if let Some((pose, slot, alive)) = human {
+                let pw = (self.mc2_params_ext(44).0 / 2) as i32;
+                let slot = slot as usize;
+                // A native world has no pooled carpet (slot 0):
+                // retail's human sits SOMEWHERE in the walk, and
+                // with no slot to place it the human tests after
+                // the pool — the pre-fix order, kept for native
+                // play (the painter is a row-0 no-op there anyway).
+                let human_in_walk = slot != 0;
+                let human_hit = alive && wd(pose.0, bx) < bw + pw && wd(pose.1, by) < bh + pw;
+                let n = self.ent.len().max(slot + 1);
+                for w in 1..n {
+                    if human_in_walk && w == slot {
+                        // The out-of-pool carpet, tested where its
+                        // pool slot sits in retail's walk. Its spare
+                        // axis @0x9A is unwritten on the wizard body
+                        // — (0,0,0), row 0 (@0x10).
+                        if human_hit {
+                            self.mc2_spawn_wizard_painter(
+                                (0, 0, 0),
+                                0,
+                                crate::mc1::mobs::PLAYER_TARGET,
+                                slot as u16,
+                            );
+                        }
+                        continue;
+                    }
+                    if w >= self.ent.len() {
+                        continue;
+                    }
                     let e = &self.ent[w];
                     if e.class64 != 3 || e.flags & 0x400 != 0 {
                         continue;
@@ -2471,18 +3026,8 @@ impl Gen {
                         }
                     }
                 }
-            }
-            if let Some((pose, slot)) = human {
-                let pw = (self.mc2_params_ext(44).0 / 2) as i32;
-                if wd(pose.0, bx) < bw + pw && wd(pose.1, by) < bh + pw {
-                    // The human's spare axis @0x9A is unwritten on
-                    // the wizard body — (0,0,0), row 0 (@0x10).
-                    self.mc2_spawn_wizard_painter(
-                        (0, 0, 0),
-                        0,
-                        crate::mc1::mobs::PLAYER_TARGET,
-                        slot,
-                    );
+                if !human_in_walk && human_hit {
+                    self.mc2_spawn_wizard_painter((0, 0, 0), 0, crate::mc1::mobs::PLAYER_TARGET, 0);
                 }
             }
             return true;
@@ -2684,11 +3229,195 @@ impl Gen {
                 self.ent[i].type86 = 177 + crate::mc2::color_art(team) as u16;
             }
         }
+        // ⭐⭐⭐ THE PERIODIC POPULATION SPAWN — AN ABSENCE IN AN
+        // ENUMERATED CALL-SITE LIST. `GetRandManaSphere_38270` has
+        // exactly TWO call sites in retail: the building COLLAPSE
+        // (EF:28121, ported at [`World::mc2_house_collapse`]) and the
+        // tail of THIS handler (EF:28043-58), which was missing — so a
+        // full enterable house never shed a settler in the port.
+        // `grep mc2_rand_occupant` returned one caller, not two.
+        //
+        // Shipped `NETHERW.EXE`, `AddHouse0A_2D_38330` (runtime 0x38330
+        // = file 0x5CB30, prologue `53 56 57 55 89 e5`):
+        //   0x5CCF2  f6 43 3e 1f   test BYTE PTR [ebx+0x3e],0x1f   f63 % 32
+        //   0x5CCF6  0f 85 89..    jne  0x5cd85                    (skip)
+        //   0x5CCFC  0f be 43 46   movsx eax,BYTE PTR [ebx+0x46]   bldgprm row
+        //   0x5CD00  f6 04 85 c2 93 00 00 01  test [eax*4+0x93c2],0x1  enterable
+        //   0x5CD0E  66 8b 8b 84.. mov cx,WORD PTR [ebx+0x84]      minSpeed
+        //   0x5CD15  66 83 f9 05 / 7e 6a   cmp cx,5 / jle           minSpeed > 5
+        //   0x5CD1E  3b 43 10 / 75 62      cmp eax,[ebx+0x10] / jne minSpeed == @0x10
+        //   0x5CD23  66 69 43 14 a1 24 / 05 df 24 00 00            ONE entity-LCG draw
+        //   0x5CD41  f7 f1         div ecx                          rand % minSpeed
+        //   0x5CD4A  89 c1 c1 f9 04 / 29 c8 / 83 e8 02              ms - (ms>>4) - 2
+        //   0x5CD54  39 c2 / 7e 2d cmp edx,eax / jle                spawn on `>`
+        //   0x5CD58  predictedAxis = position; `mov ax,[ebx+0x54]`   x += apitch
+        //   0x5CD7D  e8 ee fc ff ff  call 0x5ca70 = GetRandManaSphere_38270
+        // and the callee at file 0x5CA70 draws a SECOND time and routes
+        // `% 12` through the jump table located BY CONTENT at file
+        // 0x5CA40 (arm base 0x282A8, `file = addr + 0x34800`):
+        // 0,1 -> (5,4) action 0x21=33 · 2,3 -> (5,14) 0x71=113 ·
+        // 4..8 -> (5,13) 0x69=105 · 9..11 -> (5,12) 0x61=97 — exactly
+        // [`Gen::mc2_rand_occupant`]'s existing arms.
+        //
+        // WITNESS (mc2l22, building slot 744, `min_speed` 6,
+        // `scratch10` = @0x10 = 6, `b46` 19, `apitch` 194): retail's
+        // `f63` wraps 255 -> 0 at t=61429 and its `rand` steps
+        // 39154 -> 4240 across the single tick 61429->61430 — that is
+        // EXACTLY TWO 9377/9439 draws (39154 -> 23825 -> 4240), the gate
+        // draw and the occupant draw. 23825 % 6 = 5 > 6-0-2 = 4 so the
+        // gate opens, and 4240 % 12 = 4 selects the (5,13) villager —
+        // which is precisely the `(5,13)` retail mints at slot 897 with
+        // `action45 105`. The port drew NOTHING and minted NOTHING.
+        if !no_mc2_house_pop() && self.ent[i].f63 & 0x1F == 0 {
+            let bldg = self.ent[i].f71 as usize;
+            let enterable = self
+                .assets
+                .bldgprm
+                .get(bldg)
+                .is_some_and(|b| b.flags & 1 != 0);
+            if enterable {
+                // `cmp cx,5 / jle` then `movsx eax,cx / cmp eax,[ebx+0x10]`:
+                // a full house only.
+                let ms = self.ent[i].f128 as i32;
+                if ms > 5 && ms == self.ent[i].f26 as i32 {
+                    let r = self.mc2_rand(i);
+                    // `div ecx` is UNSIGNED on the zero-extended word;
+                    // `sar ecx,4` and the compare are signed, and ms > 5.
+                    if (r % ms as u32) as i32 > ms - (ms >> 4) - 2 {
+                        let (x, y, z, off) = {
+                            let e = &self.ent[i];
+                            (e.x, e.y, e.z, e.f80)
+                        };
+                        self.mc2_rand_occupant(i, x.wrapping_add(off), y, z);
+                    }
+                }
+            }
+        }
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         self.ent[i].z = self.ground_z(x, y) as i16;
     }
 
     // ---- dispatch + awake --------------------------------------------------
+
+    /// A/B toggle for THE HIVE SPLIT'S ID INHERITANCE (dig 98-Q24).
+    /// `MGC_NO_M9_SPLIT_INHERITS_ID=1` restores the pre-2026-09-04
+    /// behaviour, where the `(5,9)` minted by a hive's consume sweep
+    /// kept `NewEvent_4A050`'s own-slot `id_0x1A_26` seed instead of
+    /// its parent's id.
+    ///
+    /// THE LAW — and it is a SPLIT IN A SIBLING PAIR, verified on both
+    /// arms in the shipped `NETHERW.EXE`:
+    /// - `sub_20940` (the GROUNDED hive, EF:12409-11; file
+    ///   **0x45428-0x4543B**: `call 0x6e990` =
+    ///   `IfSubtypeCallCreatingManaSphere_4A190(&pos, 5, 9)` ·
+    ///   `mov 0x1a(%ebx),%dx` · `mov %dx,0x1a(%eax)`) copies the
+    ///   parent's id **UNCONDITIONALLY**.
+    /// - `sub_203D0` (the WALKING hive, EF:12213-16; file
+    ///   **0x450F2-0x45117**: `call 0x6e990` ·
+    ///   `movswl 0x1a(%ebx),%edx` · `mov 0x1a3e4(,%edx,4),%edx` ·
+    ///   `cmpb $0x3,0x3f(%edx)` · `mov 0x1a(%ebx),%dx` ·
+    ///   `mov %dx,0x1a(%eax)`) copies it **only when
+    ///   `Entities[parent->id]->class_0x3F_63 == 3`** — i.e. only a
+    ///   hive that already belongs to a wizard/castle/balloon passes
+    ///   the badge on; a wild hive's walking split does not.
+    ///
+    /// The port folded both retail bodies onto one `m9_consume_scan`
+    /// helper and carried NEITHER copy, so every hive split minted a
+    /// stranger. The id is what `sub_10C80`'s damage sweep bills and
+    /// what `m9_cone_scan`'s `id != my_id` gate excuses, so a split
+    /// child with the wrong badge retaliates at the wrong slot.
+    pub(crate) fn m9_split_inherits_id_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M9_SPLIT_INHERITS_ID").is_none())
+    }
+
+    /// A/B toggle for the CONTROLLED-SLOT SNAP (dig 98-Q22).
+    /// `MGC_NO_SV_CONTROLLED_SLOT_SNAP=1` restores the pre-2026-09-04
+    /// behaviour, where a StageVar2 13/16/17 creature that left the
+    /// `8*model+7` slot never came back to it and only the ALLIANCE
+    /// arm (14) carried a partial paraphrase.
+    pub(crate) fn sv_controlled_slot_snap_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_SV_CONTROLLED_SLOT_SNAP").is_none())
+    }
+
+    /// ⭐⭐⭐ `sub_12500`'s CONTROLLED-SLOT SNAP — a TICK-TOP PRE-PASS
+    /// THE PORT NEVER RAN.
+    ///
+    /// `UpdateEntities_57730` opens its unpaused half with
+    /// `sub_12780()` and then walks **all 29 per-model class-5 roster
+    /// chains**, calling `sub_12500` on every member whose
+    /// `StageVar1_0x48_72` or `StageVar2_0x49_73` is non-zero
+    /// (EF:40095-40101). Byte-for-byte in the shipped `NETHERW.EXE`
+    /// at file `0x7C1A9-0x7C1E4`:
+    /// `call 0x36f80` (sub_12780) · `cmpb $0x0,0x48(%ebx)` /
+    /// `cmpb $0x0,0x49(%ebx)` · `call 0x36d00` (sub_12500) ·
+    /// `mov (%ebx),%ebx` (next_0) · `cmp $0x1d,%esi` (29 chains).
+    ///
+    /// `sub_12500` itself opens with an outer phase gate and a
+    /// `StageVar2 - 1 <= 0x10` jump table, and the arm shared by
+    /// **13 (Summon Army), 14 (Alliance), 16 and 17 (the doomsday
+    /// pyramid's summon pair)** is four instructions
+    /// (`NETHERW.EXE` 0x36d8b-0x36da2):
+    /// ```text
+    ///   36d0c  mov  0x45(%ebx),%al      ; actionIndex
+    ///   36d14  and  $0x7,%al
+    ///   36d1f  cmp  $0x4,%si  / jb      ; phase < 4  -> proceed
+    ///   36d25  cmp  $0x5,%si  / jbe     ; phase 4..5 -> return
+    ///   36d8b  cmp  $0x2,%si  / je      ; attack     -> return
+    ///   36d91  cmp  $0x6,%si  / je      ; flee       -> return
+    ///   36d97  mov  0x40(%ebx),%al      ; model
+    ///   36d9a  shl  $0x3,%al            ; *8
+    ///   36d9d  add  $0x7,%al            ; +7
+    ///   36d9f  mov  %al,0x45(%ebx)      ; actionIndex = 8*model + 7
+    /// ```
+    /// i.e. **a controlled creature is dragged back into its
+    /// controlled slot at the top of every frame from phases 0, 1, 3
+    /// and 7 — every state except attack (2), flee (6) and the
+    /// prekill/kill pair (4/5).** That is how a Summon-Army creature
+    /// whose victim dies mid-fight is handed straight back to
+    /// `sub_1E580` instead of falling into the model's own idle
+    /// brain.
+    ///
+    /// ⭐ **A LAW LANDED ON ONE CALL PATH IS NOT LANDED**: the port
+    /// carried this snap ONLY inside [`Gen::mc2_alliance_clock`]
+    /// (StageVar2 14), mid-walk instead of at the tick top and gated
+    /// `phase < 2` instead of `phase not in {2,4,5,6}` — so 13, 16
+    /// and 17 had none of it, and 14's own phase-3 case was missing.
+    ///
+    /// WITNESS (`recordings/mc2l6-rival-spells-galore.mgcr`): slots
+    /// 53 and 102 are `(5,16)` Summon-Army wyverns (StageVar2 13,
+    /// parent 343) attacking rival 378. 378 dies; at t=20,748 both
+    /// drop out of the attack slot to `action45 = 129`; at t=20,749
+    /// retail's pre-pass snaps both to `8*16+7 = 135` and runs
+    /// `sub_1E580`, spending the no-lock **−5** lease (`f2e`
+    /// 249→244 / 214→209) and clearing `target96` 378→0. The port
+    /// ran m16's own state-1 idle instead.
+    pub(crate) fn mc2_controlled_slot_snap(&mut self) {
+        if !Self::sv_controlled_slot_snap_law() {
+            return;
+        }
+        for m in 0..self.mob_chains.list.len() {
+            let members: Vec<u16> = self.mob_chains.visible(m).to_vec();
+            for s in members {
+                let i = s as usize;
+                if i == 0 || i >= self.ent.len() {
+                    continue;
+                }
+                // The jump-table arm shared by 0xD/0xE/0x10/0x11.
+                if !matches!(self.ent[i].site_z, 13 | 14 | 16 | 17) {
+                    continue;
+                }
+                let phase = self.ent[i].tick70 & 7;
+                // Outer gate (0x36d1f): phases 4 and 5 never react.
+                // Inner gate (0x36d8b): attack (2) and flee (6) hold.
+                if matches!(phase, 2 | 4 | 5 | 6) {
+                    continue;
+                }
+                self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(7);
+            }
+        }
+    }
 
     /// The MC2 class-5 per-state dispatch (`sub_57730`'s class-5
     /// table, :40116/:1242) — the MovementVerb::Mc2 arm. Unknown
@@ -2804,7 +3533,21 @@ impl Gen {
         // on a loop (plus the distinct Morph cast sound 60). Play the
         // model's characteristic cry on a ~24-tick loop, anchored at
         // the creature (= the player pose).
-        if self.ent[i].f26 <= 0 {
+        // ⛔ DIG 98-Q20 — StageVar2 12 IS NOT A TENANT OF EITHER WORD.
+        // `sub_1D5D0`'s `case 0xC` arm is `sub_1E4D0`, and the shipped
+        // `NETHERW.EXE` (file 0x42CD0-0x42D77) is twelve instructions:
+        // the parent-liveness test, the three position words, the
+        // per-model z offset, `CopyEntityPosition_57CF0`, then
+        // `mov %dx,0x20(%esi)` / `mov %dx,0x1c(%esi)`. **No store to
+        // +0x2E and none to +0x10.** So a metamorph puppet keeps its
+        // ctor's `slot % 100` in @0x10 for its whole life, and this
+        // cry loop — a PORT INVENTION with no retail counterpart — was
+        // overwriting it. Park it in the (retail-dead) @0x2E home
+        // instead, where nothing reads it.
+        // ⚠ This also refutes the importer's own comment, which listed
+        // 12 among the "five StageVar2 charm/latch kinds" that own
+        // @0x2E and cited `sub_1E4D0` as counting it down.
+        if self.ent[i].lease() <= 0 {
             let cry = match self.ent[i].model65 {
                 16 => 39, // Wyvern
                 25 => 37, // Cymmerian
@@ -2812,34 +3555,304 @@ impl Gen {
                 _ => 43,  // FireFly (19)
             };
             self.snd(cry, i);
-            self.ent[i].f26 = 24;
+            self.ent[i].set_lease(24);
         } else {
-            self.ent[i].f26 -= 1;
+            self.ent[i].add_lease(-1);
         }
     }
 
-    /// `sub_1E580` (EF:10689), StageVar2 == 13 — the SUMMON-ARMY allied
-    /// creature: free-roam AI that hunts enemy wizards for the caster
-    /// (no player input). Acquire the nearest enemy wizard (class 3,
-    /// model ≤ 1, not our team); with none, follow the caster; face and
-    /// move toward it via the creature move core; once in engage range,
-    /// hand off to the model's normal `+2` attack state (the landed
-    /// class-5 combat). Self-expires after its 250-tick life (`f26`) with
-    /// a fire puff. The idle-follow + acquire resolve the caster to the
-    /// out-of-pool human via `ctx` (docs/spell-audit/summon-creatures.md).
+    /// A/B toggle for the SUMMON-ARMY core law (dig A5, session 96):
+    /// set `MGC_NO_SUMMON_CORE` to restore the pre-2026-09-03
+    /// paraphrase, where StageVar2 13 aimed at its target EVERY tick
+    /// and BEFORE the move core, had no wander jink, no crowd
+    /// steer-away, a 2-D `< 1536` engage test and a −1/tick lease.
+    fn summon_core_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_SUMMON_CORE").is_none())
+    }
+
+    /// `Entities[word_0x96_150]` read RAW. `sub_1E580`/`sub_1E700`
+    /// test the LOCK POINTER only (`> Entities[0]`, i.e. non-zero) and
+    /// never the target's life or reap bit, so a summon keeps aiming
+    /// at a corpse until the 8-tick re-acquire drops the lock.
+    pub(crate) fn mc2_summon_lock_pos(&self, t: u16, ctx: &MobCtx) -> Option<(u16, u16, i16)> {
+        if t == 0 {
+            return None;
+        }
+        if t == PLAYER_TARGET {
+            return Some((ctx.px, ctx.py, ctx.pz));
+        }
+        let j = t as usize;
+        if j >= self.ent.len() {
+            return None;
+        }
+        let e = &self.ent[j];
+        Some((e.x, e.y, e.z))
+    }
+
+    /// The lock-staleness test at `sub_1E580` EF:10712-16 (EXE
+    /// 0x42DEB): `life <= 0 || byte[1] & 4` clears the lock — note the
+    /// `<= 0`, and note that there is NO class or model re-check.
+    fn mc2_summon_lock_ok(&self, t: u16, ctx: &MobCtx) -> bool {
+        if t == PLAYER_TARGET {
+            return !ctx.pdead;
+        }
+        let j = t as usize;
+        if j == 0 || j >= self.ent.len() {
+            return false;
+        }
+        let e = &self.ent[j];
+        e.act_life > 0 && e.flags & 0x400 == 0
+    }
+
+    /// `sub_16FC0` (EF:8500, EXE 0x3B7C0) — the nearest LIVING class-3
+    /// record of model 0 or 1 whose `id_0x1A_26` matches NEITHER
+    /// argument's. `sub_1E580` passes the PARENT twice (EXE 0x42E14
+    /// `push eax; push eax`), so it reads "the nearest wizard not on
+    /// the caster's team". The chain it walks (`dword_38519`) is
+    /// rebuilt every frame from the pool behind a `life >= 0` filter
+    /// (EF:39972-81) — which is why a take whose rivals are all dead
+    /// never locks one and every summon runs the parent-fallback leg.
+    /// ⚠ The port's human lives OUTSIDE the pool, so it is offered
+    /// separately through `ctx` as `PLAYER_TARGET`; retail's human
+    /// carpet is an ordinary chain record.
+    fn mc2_nearest_rival_wizard(&self, i: usize, ctx: &MobCtx) -> u16 {
+        let (mx, my, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.id24)
+        };
+        let mut best = i32::MAX;
+        let mut out = 0u16;
+        for j in 1..self.ent.len() {
+            let e = &self.ent[j];
+            if e.class64 != 3
+                || e.model65 > 1
+                || e.id24 == own
+                || e.flags & 0x400 != 0
+                || e.act_life < 0
+            {
+                continue;
+            }
+            let d = Self::dist2_sq(mx, my, e.x, e.y);
+            if d < best {
+                best = d;
+                out = j as u16;
+            }
+        }
+        if own != PLAYER_TARGET && !ctx.pdead {
+            let d = Self::dist2_sq(mx, my, ctx.px, ctx.py);
+            if d < best {
+                out = PLAYER_TARGET;
+            }
+        }
+        out
+    }
+
+    /// `sub_1E700` (EF:10755, EXE 0x42F00) — the CONTROLLED-SUMMON
+    /// CORE. ⭐⭐⭐ **THE SUMMON-ARMY SLOT AND THE PYRAMID-SUMMON SLOT
+    /// ARE THE SAME RETAIL FUNCTION**: `sub_1D5D0`'s dispatch
+    /// (EF:10013-16) puts `case 0xD:` and `case 0x10:` on ONE arm,
+    /// both calling `sub_1E580`, so every law landed on the pyramid's
+    /// StageVar2-16 path was owed to StageVar2 13 as well.
+    ///
+    /// Three details the port's StageVar2-13 paraphrase did not have:
+    /// - the aim is on the **8-tick phase throttle**
+    ///   (`!(byte_0x3E_62 & 7)`, EXE 0x42F94 `test byte [ebx+0x3e],7`)
+    ///   and it runs **AFTER** `sub_1B8C0`, so this tick's turn commit
+    ///   spends LAST tick's `roll`;
+    /// - a **64-tick wander jink** on top of the aim (EF:10781-85);
+    /// - the same-model **crowd steer-away** off the tick-top roster
+    ///   (EF:10787-95 — the `bytearray_38403[model]` walk that
+    ///   [`Gen::mc2_avoid_packmate`] already models).
+    ///
+    /// The recording dates all three. mc2l6-rival-spells-galore slot
+    /// 495, a (5,19) firefly in `8*19+7` with StageVar2 13 and
+    /// parentId 343 (the human's carpet): `roll` HOLDS at 492 for six
+    /// ticks t=15656..15661 and moves only on the tick entered with
+    /// `byte_0x3E_62 == 64` — `& 7 == 0` and `& 0x3F == 0` together —
+    /// landing on 1448 after two rand draws; `yaw` then chases it at
+    /// the row's full turn cap (row 88 `v_2` = 113): 492 → 605 → 718.
+    /// Aiming every tick instead turned the full cap EVERY tick, which
+    /// is 275 of the take's (5,19) heading rows, 77 of its (5,16)
+    /// (row 84, cap 68) and 69 of its (5,25) (row 92, cap 113).
+    fn mc2_summon_core(&mut self, i: usize, ctx: &MobCtx) {
+        match self.mc2_state_head(i) {
+            0 => {
+                self.mc2_move_core(i);
+                if self.ent[i].f63 & 7 != 0 {
+                    return;
+                }
+                let t = self.ent[i].f146;
+                let Some((tx, ty, _)) = self.mc2_summon_lock_pos(t, ctx) else {
+                    return;
+                };
+                // ⭐⭐⭐ THE BLOCKED-TICK AIM GATE (EF:10817, EXE
+                // 0x43068 `testb $0x4,0xe(%ebx)`). `byte[2] & 4` is
+                // retail dword bit 18, but the PORT's flag word remaps
+                // it to bit 27 (`F_BLOCKED`), so the literal
+                // `1 << 18` here tested a bit nothing ever writes and
+                // the gate was always open. See
+                // `mc2::stagevars::summon_blocked_mask`.
+                if self.ent[i].flags & crate::mc2::stagevars::summon_blocked_mask() == 0 {
+                    let (mx, my) = (self.ent[i].x, self.ent[i].y);
+                    self.ent[i].f34 = Self::angle_between(mx, my, tx, ty);
+                    if self.ent[i].f63 & 0x3F == 0 {
+                        self.mc2_wander_turn(i);
+                    }
+                }
+                self.mc2_avoid_packmate(i);
+            }
+            1 => {
+                // The hit arm (EF:10847-62): move, then retarget the
+                // attacker unless it is a same-species peer or the
+                // parent; flee rows hand to `+6`, others to `+2`.
+                // ⚠ retail also fires `sub_6D8B0(parentId, 0x13, 1)`
+                // — the caster's spell-19 XP report — which the port
+                // has no home for yet.
+                self.mc2_move_core(i);
+                let (atk, own, cls, mdl) = {
+                    let e = &self.ent[i];
+                    (e.f40, e.id24, e.class64, e.model65)
+                };
+                let same_species = atk != PLAYER_TARGET
+                    && (atk as usize) < self.ent.len()
+                    && self.ent[atk as usize].class64 == cls
+                    && self.ent[atk as usize].model65 == mdl;
+                if atk != 0 && !same_species && atk != own {
+                    self.ent[i].f146 = atk;
+                    let flee =
+                        BEHAVIOR[self.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0;
+                    self.ent[i].tick70 =
+                        mdl.wrapping_mul(8).wrapping_add(if flee { 6 } else { 2 });
+                }
+            }
+            _ => {
+                // The dead arm (EF:10864-66) stamps the latch and
+                // does NOT return — control lands back on the
+                // caller's engage check.
+                self.ent[i].set_lease(1);
+            }
+        }
+    }
+
+    /// `sub_1E580` (EF:10689, EXE 0x42D80), StageVar2 == 13 — the
+    /// SUMMON-ARMY allied creature. The lease (`word_0x2E_46` → `f26`)
+    /// is zeroed outright by a dead or missing PARENT and otherwise
+    /// spends **one** per tick on the StageVar2-13 arm alone
+    /// (EXE 0x42DB4 `cmp byte [ebx+0x49],0xd`); the lock is
+    /// re-acquired through `sub_16FC0(parent, parent)` on the 8-tick
+    /// throttle; and with NO lock the handler points `word_0x96_150`
+    /// at the parent, runs the core, restores the null lock and spends
+    /// **four more** lease (EF:10725-30, EXE 0x42E88-0x42EB3).
+    ///
+    /// ⭐ That −5/tick is what mc2l6-rival-spells-galore records:
+    /// slot 495's `f2e` falls 245, 240, 235, 230, 225, 220 while
+    /// `target96` stays 0 the whole time. All three rivals are dead by
+    /// then (slots 370/378/383, life −349/−1080/−457) and the class-3
+    /// chain is built `life >= 0` only, so `sub_16FC0` — which skips
+    /// every record sharing the parent's id — finds nobody.
+    ///
+    /// The engage handoff is on the SAME 8-tick throttle, uses
+    /// `sub_583F0`'s **3-D** distance against the row's `v_28`
+    /// (EXE 0x42E60-0x42E7C), and does NOT clear StageVar2 — the port
+    /// used a 2-D distance against a hardcoded 1536 and zeroed
+    /// `site_z`.
     fn mc2_summon_creature_tick(&mut self, i: usize, ctx: &MobCtx) {
-        // Life countdown (word_0x2E_46 → f26): expire with a puff.
-        self.ent[i].f26 -= 1;
-        if self.ent[i].f26 <= 0 {
+        if !Self::summon_core_law() {
+            self.mc2_summon_creature_tick_legacy(i, ctx);
+            return;
+        }
+        let parent = self.ent[i].id24;
+        if self.mc2_target(parent, ctx).is_none() {
+            self.ent[i].set_lease(0);
+        } else {
+            self.ent[i].add_lease(-1);
+        }
+        if self.ent[i].lease() <= 0 {
             let (x, y, z) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+            // ⭐ THE LAPSED SUMMON DROPS **TWO** RECORDS, PUFF FIRST.
+            // `sub_1E580`'s expiry arm is an ENUMERATED pair
+            // (EF:10745-46): `if (StageVar2 == 13)
+            // _4A190(&pos, 10, 73);` and only then
+            // `_4A190(&pos, 10, 0);`. The `(10,73)` half is
+            // StageVar2-13 EXCLUSIVE — the pyramid-summon twin
+            // (StageVar2 16) reaches the same arm and drops the fire
+            // alone. Minting only the fire lost a record AND pushed
+            // every later free-stack pop one slot off.
+            if !crate::mc2::roster::no_summon_nodes() && self.ent[i].site_z == 13 {
+                self.mc2_spawn_summon_puff(x, y);
+            }
+            self.mc2_spawn_fire(x, y, z);
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        let mut target = self.ent[i].f146;
+        if target != 0 && !self.mc2_summon_lock_ok(target, ctx) {
+            self.ent[i].f146 = 0;
+            target = 0;
+        }
+        if target == 0 && self.ent[i].f63 & 7 == 0 {
+            target = self.mc2_nearest_rival_wizard(i, ctx);
+            self.ent[i].f146 = target;
+        }
+        if target == 0 {
+            self.ent[i].f146 = parent;
+            self.mc2_summon_core(i, ctx);
+            let v5 = self.ent[i].lease();
+            self.ent[i].f146 = 0;
+            self.ent[i].set_lease(v5 - 4);
+            return;
+        }
+        self.mc2_summon_core(i, ctx);
+        if self.ent[i].f63 & 7 == 0
+            && let Some(tp) = self.mc2_summon_lock_pos(target, ctx)
+        {
+            let me = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+            let reach = BEHAVIOR[self.ent[i].row156 as usize].v_28.max(0) as u32;
+            if Self::mc2_dist3(me, tp) < reach {
+                self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(2);
+                // ⭐ THE LANE CHANGES HANDS AT THE ENGAGE. The port
+                // keeps retail's `word_0x2E_46` lease and its
+                // `dword_0x10_16` scratch in the SAME `f26`, and the
+                // lease is only ever read by `sub_1E580` on the
+                // StageVar2 state we are leaving here. Every combat
+                // handler on the state we are entering reads @0x10 —
+                // m16's 15-bolt burst counter (`sub_24510` EF:15470-74),
+                // m19's hover altitude, m17's dive index — and retail's
+                // @0x10 on a freshly hatched summon is its ctor value.
+                // Leaving 250 there made a summoned wyvern fire a (9,0)
+                // homing bolt EVERY tick for the rest of its life.
+                // ⭐ DIG 98-Q20 — WITH `lease2e` THIS LINE IS DEAD.
+                // Retail clears nothing here (`sub_1E580` EF:10735-39
+                // writes only `actionIndex`); round 97's patch had to
+                // zero `f26` because the port homed the lease THERE.
+                // The second field makes the clear unnecessary, which
+                // is the A/B proof that 97's law was a symptom patch:
+                // with the field on, `f26` already holds the ctor's
+                // `slot % 100` that retail's combat brain reads.
+                if !no_summon_lease_split() && crate::engine::features::no_summon_lease_field() {
+                    self.ent[i].f26 = 0;
+                }
+            }
+        }
+    }
+
+    /// The pre-2026-09-03 StageVar2-13 paraphrase, kept behind
+    /// `MGC_NO_SUMMON_CORE` as the A/B arm for the dig above.
+    fn mc2_summon_creature_tick_legacy(&mut self, i: usize, ctx: &MobCtx) {
+        // Life countdown (word_0x2E_46): expire with a puff.
+        self.ent[i].add_lease(-1);
+        if self.ent[i].lease() <= 0 {
+            let (x, y, z) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+            if !crate::mc2::roster::no_summon_nodes() && self.ent[i].site_z == 13 {
+                self.mc2_spawn_summon_puff(x, y);
+            }
             self.mc2_spawn_fire(x, y, z);
             self.ent[i].flags |= 0x400;
             return;
         }
         let own = self.ent[i].id24;
         let (mx, my) = (self.ent[i].x, self.ent[i].y);
-        // Re-acquire on the throttle (byte_0x3E_62 & 7) or when the lock
-        // is stale — nearest ENEMY wizard by 2-D distance.
         let mut target = self.ent[i].f146;
         let valid = target != 0
             && target != crate::mc1::mobs::PLAYER_TARGET
@@ -2869,8 +3882,6 @@ impl Gen {
             }
             self.ent[i].f146 = target;
         }
-        // Face + move toward the target, or follow the caster (the human,
-        // resolved via ctx) when there is none.
         let (tx, ty) = if target != 0 && (target as usize) < self.ent.len() {
             (self.ent[target as usize].x, self.ent[target as usize].y)
         } else {
@@ -2879,8 +3890,6 @@ impl Gen {
         let yaw = Self::angle_between(mx, my, tx, ty);
         self.ent[i].f34 = yaw;
         self.mc2_move_core(i);
-        // In engage range → hand off to the model's `+2` attack state
-        // (leaving the controlled slot: StageVar2 → 0).
         if target != 0 {
             let d = Self::isqrt(Self::dist2_sq(mx, my, tx, ty) as u32);
             if d < 1536 {
@@ -2995,9 +4004,9 @@ impl Gen {
             e.class64 == 5 && e.model65 == 10 && e.flags & 0x400 == 0 && e.act_life >= 0
         });
         if parent.is_none() {
-            self.ent[i].f26 = 0;
+            self.ent[i].set_lease(0);
         }
-        if self.ent[i].f26 <= 0 {
+        if self.ent[i].lease() <= 0 {
             let (x, y, z) = {
                 let e = &self.ent[i];
                 (e.x, e.y, e.z)
@@ -3037,11 +4046,11 @@ impl Gen {
             // `word_0x96_150` lock retail clobbers back to 0 two
             // lines later anyway, EF:10729).
             if self.mc2_state_head(i) == 2 {
-                self.ent[i].f26 = 1;
+                self.ent[i].set_lease(1);
             } else {
                 self.mc2_move_core(i);
             }
-            self.ent[i].f26 -= 4;
+            self.ent[i].add_lease(-4);
             return;
         }
         // The `sub_1E700` core. NOTE the dead arm does NOT return:
@@ -3056,7 +4065,7 @@ impl Gen {
         // "frozen forever", 2026-08-05).
         match self.mc2_state_head(i) {
             2 => {
-                self.ent[i].f26 = 1;
+                self.ent[i].set_lease(1);
             }
             1 => {
                 self.mc2_move_core(i);
@@ -3083,7 +4092,11 @@ impl Gen {
                 if self.ent[i].f63 & 7 == 0 {
                     if let Some((tx, ty, _)) = self.mc2_doom_target_pos(target, ctx) {
                         let (mx, my) = (self.ent[i].x, self.ent[i].y);
-                        if self.ent[i].flags & (1 << 18) == 0 {
+                        // Same gate as `mc2_summon_core` — `sub_1D5D0`
+                        // (EF:10013-16) sends StageVar2 13 and 16 to
+                        // ONE retail function, so the pyramid summon
+                        // carries the identical blocked-tick fence.
+                        if self.ent[i].flags & crate::mc2::stagevars::summon_blocked_mask() == 0 {
                             self.ent[i].f34 = Self::angle_between(mx, my, tx, ty);
                             if self.ent[i].f63 & 0x3F == 0 {
                                 self.mc2_wander_turn(i);
@@ -3184,7 +4197,14 @@ impl Gen {
             self.snd(6, j);
             let e = &mut self.ent[j];
             e.site_z = 14;
-            e.f26 = dur;
+            // ⭐ DIG 98-Q20 — THE PROOF THAT ONE WORD CANNOT SERVE
+            // BOTH. `sub_3A650` (EF:29682-90) writes `word_0x2E_46`
+            // AND `word_0x30_48` on a victim whose
+            // `actionIndex & 7 == 2` — a creature in a combat state
+            // whose handlers read `dword_0x10_16` — and does NOT move
+            // it out of that state. Homing the two in one `f26` blew
+            // away the victim's live combat scratch on the charm tick.
+            e.set_lease(dur);
             if e.tick70 & 7 == 2 {
                 e.f146 = 0;
             } else {
@@ -3222,13 +4242,23 @@ impl Gen {
                     && e.act_life >= 0
             });
         }
-        self.ent[i].f26 -= 1;
-        if self.ent[i].f26 <= 0 || parent_dead {
+        self.ent[i].add_lease(-1);
+        if self.ent[i].lease() <= 0 || parent_dead {
             self.ent[i].site_z = 10;
             self.ent[i].f146 = 0;
             self.mc2_allied.0.remove(&(i as u16));
             return;
         }
+        // ⚠ DIG 98-Q22 — THIS IS A MIS-SITED PARAPHRASE OF
+        // [`Gen::mc2_controlled_slot_snap`], WHICH NOW RUNS THE REAL
+        // LAW. `sub_1E9C0` writes no `actionIndex` here; the snap is
+        // `sub_12500`'s, it runs at the TICK TOP over the roster
+        // chains (not mid-walk), it serves StageVar2 13/14/16/17 (not
+        // 14 alone), and its gate is "every phase but 2/4/5/6" (not
+        // `< 2`). Left standing because removing it is a separate,
+        // separately measurable law — it only differs for a record
+        // that enters phase 0/1 DURING this walk, which retail would
+        // not snap until the next frame. 🏦 BANKED.
         if self.ent[i].tick70 & 7 < 2 {
             self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(7);
         }
@@ -3454,6 +4484,552 @@ impl Gen {
 #[cfg(test)]
 mod tests {
     use crate::engine::features::Gen;
+
+    fn w3v_flat_gen() -> Gen {
+        use crate::chassis::ChassisParams;
+        use crate::engine::features::{FeatureAssets, Planes};
+        use crate::verbs::VerbSet;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+
+    fn w3v_ctx() -> crate::mc1::mobs::MobCtx {
+        crate::mc1::mobs::MobCtx {
+            px: 0,
+            py: 0,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+
+    /// ⭐ ROUND 104 — **THE TANK'S HIT LATCHES ITS ATTACKER AS ITS
+    /// TARGET.** `sub_252E0`, the m18 head, ends `if (result >= 1) {
+    /// if (result <= 1) a1x->word_0x96_150 = a1x->word_0x26_38; else
+    /// if (result == 2) a1x->actionIndex_0x45_69 = 148; }`
+    /// (EF:16139-49; shipped `NETHERW.EXE` 0x49B77-0x49B97). The port
+    /// split `sub_252E0` into `Gen::m18_head` plus the shared
+    /// `Gen::mc2_state_head` and carried only the DEATH half, so a
+    /// roaming tank — whose walk arm `sub_25050` zeroes
+    /// `word_0x96_150` on every clean tick (EF:15960) — entered the
+    /// barrage machine with NO target, and `sub_254E0`'s 22-unit
+    /// ((4 << 11) / 360) turn never ran. mc2l22 t=11725 slot 956,
+    /// t=18771 slot 26, t=25371 slot 5: heading off by exactly one
+    /// 22-unit step, in both directions, with every other lane
+    /// bit-exact.
+    #[test]
+    fn a_damaged_tank_latches_its_attacker_as_its_target() {
+        let mut g = w3v_flat_gen();
+        let ctx = w3v_ctx();
+        let i = g.new_event().expect("tank slot");
+        {
+            let e = &mut g.ent[i];
+            e.class64 = 5;
+            e.model65 = 18;
+            e.tick70 = 145; // M18_BASE + 1 — the walk (`sub_25050`)
+            e.f71 = 0;
+            e.max_life = 36_000;
+            e.act_life = 36_000;
+            e.f26 = 600;
+            e.f146 = 0; // the walk zeroes it on every clean tick
+            e.mail[0] = (1_600, 300); // a hit from slot 300
+        }
+        let (x, y) = (100u16 << 8, 100u16 << 8);
+        let z = g.ground_z(x, y) as i16;
+        g.link(i, x, y, z);
+        g.m18_tick(i, &ctx);
+        assert_eq!(
+            g.ent[i].f146, 300,
+            "sub_252E0's result==1 arm latches word_0x26_38 into word_0x96_150"
+        );
+        assert_eq!(g.ent[i].tick70, 144, "the walk's hit arm enters state 0…");
+        assert_eq!(g.ent[i].f71, 1, "…sub-state 1, the watch");
+    }
+
+
+    /// ⭐ ROUND 104 — **THE FOOTPRINT CLEAR STAMPS BOTH HALVES OF THE
+    /// KILLER PAIR.** `sub_57390` (EF:39801-03) is
+    /// `life_0x8 = -1; word_0x24_36 = a2; word_0x26_38 = a2;`. The
+    /// port wrote `f36`/`f38` — one home short: `f38` IS
+    /// `word_0x24_36`, but `word_0x26_38` is `f40`, and `f36` is
+    /// `word_0x22_34`, a lane only the m27 tree body uses and one
+    /// this arm can never reach (m27 is on the protected list). So
+    /// every corpse the build footprint made carried a ZERO attacker,
+    /// and `sub_28CE0`'s Cymmerian split — which seeds each mini's
+    /// `word_0x24_36` from the parent's `word_0x26_38` (EF:19168) —
+    /// hatched three minis that thought nobody killed their parent.
+    /// mc2l22 t=13405 slot 318 is the witness: retail `f24`/`f26`
+    /// both 0 -> 424, the port only `f24`.
+    #[test]
+    fn the_footprint_clear_stamps_the_attacker_half_of_the_killer_pair() {
+        let mut g = w3v_flat_gen();
+        let victim = g.new_event().expect("victim slot");
+        {
+            let e = &mut g.ent[victim];
+            e.class64 = 5;
+            e.model65 = 25;
+            e.tick70 = 202; // NOT the protected 200 (`actionIndex != -56`)
+            e.act_life = 4_300;
+            e.id24 = 7; // owned by wizard 7, so the owner test does not skip it
+        }
+        let (x, y) = (100u16 << 8, 100u16 << 8);
+        let z = g.ground_z(x, y) as i16;
+        g.link(victim, x, y, z);
+        let t = crate::engine::features::tile((x >> 8) as u8, (y >> 8) as u8);
+        g.mc2_building_clear_tile(t, 9); // builder 9 != owner 7
+        assert_eq!(g.ent[victim].act_life, -1, "life_0x8 = -1");
+        assert_eq!(g.ent[victim].f38, 9, "word_0x24_36 = a2");
+        assert_eq!(
+            g.ent[victim].f40, 9,
+            "word_0x26_38 = a2 — the half the port dropped"
+        );
+        assert_eq!(
+            g.ent[victim].f36, 0,
+            "word_0x22_34 is NOT part of the stamp"
+        );
+    }
+
+
+    /// ⭐⭐⭐ ROUND 98 — **THE MC2 COLUMN NEVER SEEDED `byte_0x5D_93`.**
+    ///
+    /// `x_BYTE_D8A2E` is the SAME table MC1 ships pre-baked as
+    /// [`crate::mc1::mobs::FRAME_COUNTS`] (MC2 appends one trailing
+    /// 0). Two independently extracted binaries agreeing on 37 bytes
+    /// is the cross-engine anchor for the table.
+    #[test]
+    fn the_mc2_frame_count_table_is_mc1s() {
+        assert_eq!(
+            super::D8A2E_FRAMES[..37],
+            crate::mc1::mobs::FRAME_COUNTS[..],
+            "x_BYTE_D8A2E[0..37] == MC1's byte_90AD8"
+        );
+        assert_eq!(super::D8A2E_FRAMES[37], 0, "MC2's extra trailing entry");
+    }
+
+    /// PROVENANCE: `particlesParameters_D951C[].byte_12` is FILLED AT
+    /// BOOT from the sprite's own flags high byte
+    /// (`sub_71410_process_tmaps`, EF:44906 —
+    /// `particlesParameters_D951C[i].byte_12 = *(x_BYTE*)(v1 + 1)`,
+    /// byte 1 of the decompressed TMAPS entry = `flags >> 8`), once,
+    /// against the DAY bank (the same load pass whose sibling
+    /// derivation [`crate::mc2::derive_sprite_extents`] is already
+    /// day-sourced). This re-derives [`super::MC2_SPRITE_DRAW_TYPE`]
+    /// from the baked day sprite index so the table can never drift
+    /// from the shipped art. Self-skips without a baked bundle.
+    #[test]
+    fn mc2_sprite_draw_types_are_the_day_banks_flag_high_bytes() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../baked/assets/mc2-day");
+        let Ok(bundle) = mgc_formats::bundle::Bundle::load(&dir) else {
+            return;
+        };
+        let Some((index, _)) = bundle.sprites.as_ref() else {
+            return;
+        };
+        let flags: std::collections::HashMap<u32, u16> =
+            index.sprites.iter().map(|e| (e.id, e.flags)).collect();
+        // `sub_71410_process_tmaps` walks rows until the first with
+        // BOTH speed_6 and rotSpeed_8 zero; rows from there on keep
+        // the shipped 0.
+        let term = super::SPRITE_PARAMS
+            .iter()
+            .position(|p| p.speed_6 == 0 && p.rot_speed_8 == 0)
+            .expect("the loop terminator row");
+        for (row, p) in super::SPRITE_PARAMS.iter().enumerate() {
+            let want = if row >= term {
+                0
+            } else {
+                (flags[&(p.word_0 as u32)] >> 8) as u8
+            };
+            assert_eq!(
+                super::MC2_SPRITE_DRAW_TYPE[row], want,
+                "row {row} (sprite {})",
+                p.word_0
+            );
+        }
+        // Only seven rows animate; everything else is a single frame.
+        let odd: Vec<(usize, u8)> = (0..super::MC2_SPRITE_DRAW_TYPE.len())
+            .map(|r| (r, super::mc2_sprite_frames(r)))
+            .filter(|&(_, f)| f != 1)
+            .collect();
+        assert_eq!(
+            odd,
+            vec![(7, 16), (222, 16), (237, 16), (244, 11), (332, 11), (333, 11), (334, 11)]
+        );
+    }
+
+    /// The stamp itself, and `sub_585A0`'s cap on top of it. Retail's
+    /// own captures pin both: across 80 sampled `mc2l6-rsg` master
+    /// images every live record with a set sprite carries
+    /// `+0x5D == 1` EXCEPT the `(10,0)` fire (sprite row 7) at 16,
+    /// and `+0x5C` is nonzero on `(10,0)` ALONE — 7, 8, 9 — i.e. the
+    /// cap is real and the port's uncapped `frame88 += 1` was not.
+    #[test]
+    fn the_sprite_stamp_carries_the_frame_count_and_sub_585a0_caps_on_it() {
+        let planes = crate::engine::features::Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = crate::engine::features::FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut g = Gen::new(
+            planes,
+            assets,
+            1,
+            crate::chassis::ChassisParams::MC2,
+            crate::verbs::VerbSet::MC2,
+        );
+        let i = g.new_event().expect("a pool slot");
+        g.mc2_set_sprite(i, 7);
+        assert_eq!(g.ent[i].type86, 7);
+        assert_eq!(g.ent[i].frames89, 16, "row 7 is draw type 36 -> 16 frames");
+        assert_eq!(g.ent[i].frame88, 0);
+        for want in 1..=16u8 {
+            g.mc2_anim_step(i);
+            assert_eq!(g.ent[i].frame88, want);
+        }
+        g.mc2_anim_step(i);
+        assert_eq!(g.ent[i].frame88, 16, "sub_585A0 stops AT the count");
+
+        // A single-frame row steps exactly once and then stops.
+        let j = g.new_event().expect("a pool slot");
+        g.mc2_set_sprite(j, 8);
+        assert_eq!(g.ent[j].frames89, 1);
+        g.mc2_anim_step(j);
+        g.mc2_anim_step(j);
+        assert_eq!(g.ent[j].frame88, 1);
+    }
+
+    fn q22_gen() -> Gen {
+        let planes = crate::engine::features::Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = crate::engine::features::FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(
+            planes,
+            assets,
+            1,
+            crate::chassis::ChassisParams::MC2,
+            crate::verbs::VerbSet::MC2,
+        )
+    }
+
+    /// The MC2 shape of the tick-top chain rebuild (world.rs:4642 —
+    /// `reset(29)`); `Gen::rebuild_mob_chains` is the MC1-sized (20)
+    /// test helper and drops every model above 19.
+    fn q22_rebuild_mc2_chains(g: &mut Gen) {
+        g.mob_chains.reset(29);
+        for s in 1..g.ent.len() {
+            let e = &g.ent[s];
+            if e.class64 == 5
+                && e.act_life >= 0
+                && !matches!(e.tick70, 0xB4 | 0xE8 | 0xEA)
+                && (e.model65 as usize) < 29
+            {
+                g.mob_chains.list[e.model65 as usize].push(s as u16);
+            }
+        }
+    }
+
+    fn q22_ctx() -> crate::mc1::mobs::MobCtx {
+        crate::mc1::mobs::MobCtx {
+            px: 40 * 256,
+            py: 40 * 256,
+            pz: 400,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// ⭐⭐⭐ DIG 98-Q22 — **`sub_12500`'s CONTROLLED-SLOT SNAP.**
+    ///
+    /// `UpdateEntities_57730` walks all 29 per-model class-5 roster
+    /// chains before the entity loop and calls `sub_12500` on every
+    /// member with a StageVar (EF:40095-40101; `NETHERW.EXE`
+    /// 0x7C1A9-0x7C1E4). Its `0xD/0xE/0x10/0x11` jump-table arm
+    /// (`NETHERW.EXE` 0x36D8B-0x36DA2) drags the record back to
+    /// `8*model + 7` from every phase except attack (2), flee (6) and
+    /// the prekill/kill pair (4/5, refused by the outer gate at
+    /// 0x36D1F). The port ran this NOWHERE — only a partial mid-walk
+    /// paraphrase inside `mc2_alliance_clock`, for StageVar2 14 alone
+    /// and only from phases 0/1.
+    ///
+    /// Non-vacuous: `MGC_NO_SV_CONTROLLED_SLOT_SNAP=1` fails the first
+    /// assert.
+    #[test]
+    fn a_controlled_creature_is_dragged_back_to_its_own_slot_every_tick() {
+        let mut g = q22_gen();
+        // One wyvern per phase, all StageVar2 13 (Summon Army).
+        let mut slots = Vec::new();
+        for phase in 0u8..8 {
+            let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+            g.ent[i].site_z = 13;
+            g.ent[i].tick70 = 16 * 8 + phase;
+            slots.push((phase, i));
+        }
+        // A StageVar2 == 0 creature is never on this arm at all.
+        let plain = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+        g.ent[plain].site_z = 0;
+        g.ent[plain].tick70 = 16 * 8 + 1;
+
+        q22_rebuild_mc2_chains(&mut g);
+        g.mc2_controlled_slot_snap();
+
+        for (phase, i) in slots {
+            let want = if matches!(phase, 2 | 4 | 5 | 6) {
+                16 * 8 + phase
+            } else {
+                16 * 8 + 7
+            };
+            assert_eq!(
+                g.ent[i].tick70, want,
+                "phase {phase}: 2/4/5/6 hold, everything else snaps to 8*model+7"
+            );
+        }
+        assert_eq!(g.ent[plain].tick70, 16 * 8 + 1, "StageVar2 0 is untouched");
+    }
+
+    /// The same arm serves 14/16/17, and it is the model's OWN base —
+    /// `mov 0x40(%ebx),%al ; shl $0x3,%al ; add $0x7,%al`.
+    #[test]
+    fn the_controlled_slot_snap_serves_all_four_stagevar2_kinds() {
+        let mut g = q22_gen();
+        let mut made = Vec::new();
+        for (model, sv2) in [(16u8, 13u8), (25, 14), (2, 16), (19, 17), (16, 12)] {
+            let i = g
+                .mc2_spawn_creature_model(model, 40 * 256, 40 * 256, 400)
+                .expect("a pool slot");
+            g.ent[i].site_z = sv2 as i16;
+            g.ent[i].tick70 = model.wrapping_mul(8).wrapping_add(1);
+            made.push((model, sv2, i));
+        }
+        q22_rebuild_mc2_chains(&mut g);
+        g.mc2_controlled_slot_snap();
+        for (model, sv2, i) in made {
+            // 12 (metamorph) is NOT on the arm — its own handler owns
+            // the record and `sub_12500`'s table sends it elsewhere.
+            let want = if sv2 == 12 {
+                model.wrapping_mul(8).wrapping_add(1)
+            } else {
+                model.wrapping_mul(8).wrapping_add(7)
+            };
+            assert_eq!(g.ent[i].tick70, want, "model {model} StageVar2 {sv2}");
+        }
+    }
+
+    /// ⭐⭐⭐ DIG 98-Q22 — **`sub_24510` AIMS AT THE CORPSE AND ONLY
+    /// THEN NOTICES IT IS ONE.**
+    ///
+    /// The lock is guarded by a bare POINTER compare
+    /// (`NETHERW.EXE` 0x48E08 `cmp %ecx,%eax` / `jbe`), the roll aim
+    /// lands at 0x48E43 (`mov %ax,0x20(%ebx)`), and the life/reap test
+    /// is BELOW it at 0x48E47/0x48E4D — only then does 0x48E53 stamp
+    /// `actionIndex = 129`. The port had fused both guards into
+    /// `mc2_target`, so a wyvern whose victim died this frame kept a
+    /// stale `roll` and its heading servo chased the wrong bearing for
+    /// the rest of the take.
+    ///
+    /// Non-vacuous: `MGC_NO_M16_AIM_BEFORE_DEAD=1` leaves `f34` at its
+    /// stale value and the first assert fails.
+    #[test]
+    fn the_wyvern_aims_at_its_victims_corpse_before_it_drops_the_attack() {
+        let mut g = q22_gen();
+        // The victim: a class-3 carpet, already dead, due north-east.
+        let v = g.new_event().expect("a pool slot");
+        g.ent[v].class64 = 3;
+        g.ent[v].model65 = 1;
+        g.link(v, 60 * 256, 60 * 256, 400);
+        g.ent[v].act_life = -1;
+
+        let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+        g.ent[i].tick70 = 16 * 8 + 2; // the attack slot
+        g.ent[i].f146 = v as u16;
+        g.ent[i].f63 = 0; // the 8-tick aim throttle is OPEN
+        g.ent[i].f34 = 0; // a stale bearing the port would have kept
+        let stale = g.ent[i].f34;
+
+        g.m16_tick(i, &q22_ctx());
+
+        let (mx, my) = (g.ent[i].x, g.ent[i].y);
+        let want = Gen::angle_between(mx, my, g.ent[v].x, g.ent[v].y);
+        assert_ne!(want, stale, "the fixture must actually move the bearing");
+        assert_eq!(
+            g.ent[i].f34, want,
+            "0x48E43 stores the aim BEFORE 0x48E47 reads the corpse's life"
+        );
+        assert_eq!(
+            g.ent[i].tick70,
+            16 * 8 + 1,
+            "0x48E53 then drops the attack to actionIndex 129"
+        );
+    }
+
+    /// Build a hive + one edible neighbour of the model its bucket
+    /// selects, and return `(hive, prey, pool length before the
+    /// split)`. Row 80's `v_26 = 25` and `f63` is the per-model spawn
+    /// ordinal, so a freshly built world's first hive has
+    /// `(f63 / 25) % 3 == 0` ⇒ bucket model 4.
+    fn q24_hive_and_prey(g: &mut Gen) -> (usize, usize) {
+        let hive = g.mc2_spawn_m9(40 * 256, 40 * 256, 400).expect("a hive");
+        assert_eq!(
+            [4u8, 12, 13][((g.ent[hive].f63 as i16 / 25) % 3) as usize],
+            4,
+            "the bucket this test feeds"
+        );
+        // The prey only has to satisfy the sweep's own filter
+        // (class 5, the bucket model, alive, not reaped, and not one
+        // of the three excused `tick70`s), so build it by hand —
+        // model 4 lives in the other roster wave.
+        let prey = g.new_event().expect("a prey slot");
+        g.ent[prey].class64 = 5;
+        g.ent[prey].model65 = 4;
+        g.ent[prey].tick70 = 4 * 8 + 1;
+        g.ent[prey].act_life = 100;
+        let hz = g.ent[hive].z;
+        g.link(prey, 40 * 256 + 400, 40 * 256, hz);
+        (hive, prey)
+    }
+
+    /// The one new `(5,9)` the split minted, given the pool contents
+    /// before it ran.
+    fn q24_new_hive(g: &Gen, before: &[usize]) -> usize {
+        let fresh: Vec<usize> = (1..g.ent.len())
+            .filter(|s| {
+                g.ent[*s].class64 == 5 && g.ent[*s].model65 == 9 && !before.contains(s)
+            })
+            .collect();
+        assert_eq!(fresh.len(), 1, "the consume sweep splits exactly once");
+        fresh[0]
+    }
+
+    fn q24_live_hives(g: &Gen) -> Vec<usize> {
+        (1..g.ent.len())
+            .filter(|s| g.ent[*s].class64 == 5 && g.ent[*s].model65 == 9)
+            .collect()
+    }
+
+    /// ⭐⭐⭐ DIG 98-Q24 — **THE GROUNDED HIVE'S SPLIT HANDS THE CHILD
+    /// ITS OWN BADGE, UNCONDITIONALLY.**
+    ///
+    /// `sub_20940` (EF:12409-11), shipped `NETHERW.EXE`
+    /// **0x45428-0x4543B**:
+    /// `call 0x6e990` (`IfSubtypeCallCreatingManaSphere_4A190(&pos,
+    /// 5, 9)`) · `mov 0x1a(%ebx),%dx` · `mov %dx,0x1a(%eax)` — no
+    /// gate of any kind between the call and the store. The port's
+    /// `m9_consume_scan` threw the new record away
+    /// (`let _ = self.mc2_spawn_m9(..)`), so the child kept
+    /// `NewEvent_4A050`'s own-slot seed.
+    ///
+    /// Non-vacuous: `MGC_NO_M9_SPLIT_INHERITS_ID=1` leaves the child's
+    /// `id24` at its own slot and the first assert fails.
+    #[test]
+    fn the_grounded_hive_split_always_inherits_its_parents_id() {
+        let mut g = q22_gen();
+        let (hive, _prey) = q24_hive_and_prey(&mut g);
+        // A badge that is NOT a class-3 record — the walking arm would
+        // refuse this one, the grounded arm must not.
+        g.ent[hive].id24 = hive as u16;
+        let before = q24_live_hives(&g);
+        g.m9_consume_scan(hive, true);
+        let child = q24_new_hive(&g, &before);
+        assert_eq!(
+            g.ent[child].id24, hive as u16,
+            "sub_20940 copies @0x1A with no gate (NETHERW.EXE 0x45434-0x4543B)"
+        );
+        assert_ne!(
+            child, hive,
+            "the fixture must actually mint a new record"
+        );
+    }
+
+    /// ⭐⭐⭐ …AND ITS SIBLING `sub_203D0` DOES NOT — **A SPLIT IN A
+    /// SIBLING PAIR.**
+    ///
+    /// The walking hive's identical five statements (EF:12213-16) are
+    /// fenced in the shipped `NETHERW.EXE` at **0x450FE-0x45117**:
+    /// `movswl 0x1a(%ebx),%edx` · `mov 0x1a3e4(,%edx,4),%edx`
+    /// (`Entities[parent->id]`) · `cmpb $0x3,0x3f(%edx)` — the badge
+    /// is passed on only when it already names a class-3 record
+    /// (wizard / castle / balloon). A WILD hive's walking split keeps
+    /// its own slot; a wizard-owned one does not.
+    #[test]
+    fn the_walking_hive_split_inherits_only_a_class_three_badge() {
+        // (a) a wild hive — the badge names itself, class 5 ⇒ refused.
+        let mut g = q22_gen();
+        let (hive, _) = q24_hive_and_prey(&mut g);
+        g.ent[hive].id24 = hive as u16;
+        let before = q24_live_hives(&g);
+        g.m9_consume_scan(hive, false);
+        let child = q24_new_hive(&g, &before);
+        assert_eq!(
+            g.ent[child].id24, child as u16,
+            "cmpb $0x3,0x3f(%edx) fails ⇒ NewEvent_4A050's own-slot seed stands"
+        );
+
+        // (b) the same hive wearing a class-3 owner's badge ⇒ copied.
+        let mut g = q22_gen();
+        let (hive, _) = q24_hive_and_prey(&mut g);
+        let wiz = g.new_event().expect("a pool slot");
+        g.ent[wiz].class64 = 3;
+        g.ent[wiz].model65 = 1;
+        g.link(wiz, 90 * 256, 90 * 256, 400);
+        g.ent[hive].id24 = wiz as u16;
+        let before = q24_live_hives(&g);
+        g.m9_consume_scan(hive, false);
+        let child = q24_new_hive(&g, &before);
+        assert_eq!(
+            g.ent[child].id24, wiz as u16,
+            "a class-3 badge passes the gate and is inherited"
+        );
+    }
 
     /// **THE 180° TURN TIE-BREAK IS SIGNED, NOT WRAPPED.** Retail's
     /// `sub_582F0` (Sound.cpp:6580; MC1's `sub_42240_42580` :52664 is

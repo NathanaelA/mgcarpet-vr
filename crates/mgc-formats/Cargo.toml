@@ -9,7 +9,7 @@ authors.workspace = true
 [dependencies]
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 # `deflate` is for saves only (`mgcs.rs`): `.mgcl` members stay Stored
 # so identical content keeps producing identical bytes. A save payload
 # is ~570 KiB of mostly-repetitive terrain and pool, and has no

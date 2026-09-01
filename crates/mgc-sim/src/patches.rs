@@ -71,10 +71,6 @@ pub struct WorldPatches {
     /// into a NEGATIVE cut — a maxed castle downgrade *raises* its
     /// cap and scatters nothing.
     pub mc2_downgrade_overflow: bool,
-    /// MC2 Magic Mine proximity trigger. Retail never writes the
-    /// `word_0x36_54` armed gate (magic-mine.md §6) — a shipped mine
-    /// floats, expires and sinks without ever detonating on anyone.
-    pub mc2_magic_mine: bool,
     /// MC1 Create Castle placement validation. Retail (the "latch
     /// bug", certified on mc1l32-castle-bug.mgcr): the castle ball
     /// spawns at the HAND muzzle (sub_55EF0 — ±256 units at yaw∓512,
@@ -103,7 +99,6 @@ impl WorldPatches {
         map_wide_ball_rolling: false,
         possessed_footprint: false,
         mc2_downgrade_overflow: false,
-        mc2_magic_mine: false,
         castle_latch_bug: false,
     };
 
@@ -119,7 +114,6 @@ impl WorldPatches {
         map_wide_ball_rolling: false,
         possessed_footprint: true,
         mc2_downgrade_overflow: true,
-        mc2_magic_mine: true,
         castle_latch_bug: true,
     };
 }

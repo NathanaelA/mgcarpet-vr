@@ -44,6 +44,161 @@ fn no_ball_merge_fix() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_BALL_MERGE_FIX").is_some())
 }
 
+/// `MGC_NO_M57_MERGE=1` restores the pre-dig (10,57) arm: the fool's
+/// sphere never merges at all (the `is_fool` early return in
+/// [`Gen::ball_merge_candidates`]) and the partner filter is the
+/// hardcoded `(10,39)` pair instead of retail's seeker-parameterised
+/// `xtype`/`xsubtype` test. A/B arm only.
+/// A/B toggle for the fool's-sphere merge PARENT test: set
+/// `MGC_NO_M57_PARENT_ZERO` to restore the pre-dig behaviour, where
+/// `sub_36F30`'s `@0x28` comparison ran on the port's `id24` (seeded
+/// to the slot by `new_event`) instead of retail's raw 0.
+pub(crate) fn no_m57_parent_zero() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M57_PARENT_ZERO").is_some())
+}
+
+/// `MGC_NO_MC2_AREA_WINDOW=1` restores the pre-dig behaviour of
+/// [`Gen::area_write`]'s player probe, in which an invented `mc2 ||`
+/// short-circuit skipped the TILE-WINDOW gate on all three MC2 area
+/// primitives. Retail has no player arm at all: `sub_116A0`
+/// (`NETHERW.EXE` 0x35EA0..0x360F7) reaches EVERY victim through
+/// `mapEntityIndex_15B4E0` — centre `(pos+128)>>8` at 0x35F52, radius
+/// `(pitch+255)>>8` at 0x35F87, bucket `movswl 0x8b4e0(,%eax,2)` at
+/// 0x35FDB, `ret` at 0x360F7 — and the AABB `sub_106C0` is the SECOND
+/// gate, never the first. Added 2026-09-04: the law had landed without
+/// a switch, so its fixture's A/B required a source revert.
+pub(crate) fn no_mc2_area_window() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AREA_WINDOW").is_some())
+}
+
+/// A/B toggle for the MC2 POSSESSION-PULSE FORCE FLAG: set
+/// `MGC_NO_MC2_CLAIM_PULSE_FORCE` to restore the pre-dig behaviour,
+/// where the (10,12) WEAK claim pulse broadcast its ctor's `+44`
+/// (64000) on ch1 and MC2's ball intake read that as a FORCED claim,
+/// stealing through the `byte[2] & 0x20` claim lock. Citation at the
+/// write site in [`Gen::possess_flash_tick`].
+pub(crate) fn mc2_claim_pulse_force_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CLAIM_PULSE_FORCE").is_none())
+}
+
+pub(crate) fn no_m57_merge() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M57_MERGE").is_some())
+}
+
+/// A/B toggle for the MC2 BALL-MERGE OWNER LADDER: set
+/// `MGC_NO_MC2_BALL_OWNER_LADDER` to restore the pre-dig
+/// approximation, in which two OWNED spheres resolved the survivor's
+/// colour on the BALL manas (`fj > fi`) instead of retail
+/// `sub_36D50`'s class-10 arms + the owner wizards'
+/// `maxMana_0x8C_140` contest. Citation at the call site in
+/// [`Gen::mc2_ball_owner_contest`].
+pub(crate) fn no_mc2_ball_owner_ladder() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BALL_OWNER_LADDER").is_some())
+}
+
+/// `MGC_NO_M57_IMPACT_PAIR=1` reverts the (10,57) ctor's
+/// `byte_0x43_67 = 10` / `byte_0x44_68 = 1` stamp (`sub_50130`
+/// EF:36642-44), which the shared `CreateManaSphere_500C0` twin does
+/// not carry. See the call site in [`Gen::mc2_spawn_mana_sphere`].
+pub(crate) fn no_m57_impact_pair() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M57_IMPACT_PAIR").is_some())
+}
+
+/// `MGC_NO_M57_RECLAIM_BIT=1` reverts the (10,57) ctor's
+/// `struct_byte_0xc_12_15.byte[2] |= 2` recycle-victim membership
+/// (`sub_50130` EF:36645), which the shared `CreateManaSphere_500C0`
+/// twin does not carry. See [`Gen::mc2_spawn_mana_sphere`].
+pub(crate) fn no_m57_reclaim_bit() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M57_RECLAIM_BIT").is_some())
+}
+
+/// `MGC_NO_M57_TRAP_FALLTHROUGH=1` restores the pre-dig (10,57) claim
+/// arm, which returned out of `ball_tick` whenever the ch1 latch was
+/// set. Retail's `else if (w68 && sub_36680(a1x))` only skips the
+/// mover when `sub_36680` returns NONZERO — see the call site in
+/// [`Gen::ball_tick`]. A/B arm only.
+pub(crate) fn no_m57_trap_fallthrough() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M57_TRAP_FALLTHROUGH").is_some())
+}
+
+/// `MGC_NO_M57_TICK_RESIZE=1` restores the pre-dig (10,57) tail, which
+/// ran the (10,39) BALL's PER-TICK `SetManaSphereColorAndRot_36920` on
+/// the fool's sphere as well.
+///
+/// `sub_35FB0` (EF:26318-26614), the m57's action-0x3E tick, calls it
+/// from exactly ONE place — the merge arm at EF:26595 — and the
+/// shipped `NETHERW.EXE` agrees. A byte scan of every `E8 rel32` in
+/// the image finds precisely FIVE call sites targeting linear
+/// `0x36920`:
+///
+/// ```text
+///   file 0x5A73E / lin 0x35F3E   TransformArcherToMana_35940 — the BALL's per-tick
+///   file 0x5ADDC / lin 0x365DC   sub_35FB0 — the m57's MERGE, the only one
+///   file 0x74922, 0x749C2        the two sphere ctors
+///   file 0x911AC                 sub_6C870, the Fool's Mana cast
+/// ```
+///
+/// and the merge site sits *inside* the `jz`:
+///
+/// ```text
+///   0x5ADC4  53 E8 86A4FDFF        push ebx ; call 0x10A50   (find merge partner)
+///   0x5ADCA  83C404 85C0 7413      add esp,4 ; test eax,eax ; jz +0x13
+///   0x5ADD1  50 53 E8 58090000     push eax ; push ebx ; call 0x36F30  (the merge)
+///   0x5ADD9  83C408
+///   0x5ADDC  53 E8 3F030000        push ebx ; call 0x36920  (the resize)
+/// ```
+///
+/// An ENUMERATED LIST — the absence is the law. A/B arm only.
+pub(crate) fn no_m57_tick_resize() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M57_TICK_RESIZE").is_some())
+}
+
+/// `MGC_NO_CASTLE_BIND_LEVEL=1` restores the pre-dig at-castle probe:
+/// [`World::regen_boost`] took the bare `player_castle()` scan, so the
+/// castle-rate boost armed on the tick the (3,2) record is BORN.
+/// Retail's probe is gated on the wizard's BOUND castle register
+/// `wizext+50` (`:55346-52`), which is written only by the LEVEL-UP
+/// COMMIT `sub_47960_47CA0` (`:56484`, the same statement block that
+/// increments the castle's `+26`) and cleared by the last downgrade
+/// (`sub_47A70_47DB0` `:56534`, `if (!(a1+26)) owner->var_50 = 0`) —
+/// i.e. `var_50 != 0` ⟺ the bound castle's LEVEL is ≥ 1. A/B arm
+/// only.
+pub(crate) fn no_castle_bind_level() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_CASTLE_BIND_LEVEL").is_some())
+}
+
+/// `MGC_NO_CASTLE_BIND_REGISTER=1` restores the bare pool scan at
+/// every reader routed through [`World::player_castle_bound`] — the
+/// generalisation of the at-castle law to the whole `wizext+50`
+/// reader list (the demolish `:55838`, the token gate `:64923`, the
+/// castle mail redirect `:55357`, the objective `:52122`, the
+/// respawn seat `:54859` and its `sub_47DD0` re-price `:55034`, the
+/// teleport resolve `:65574`, the create-vs-upgrade split `:65893`,
+/// the shield token's store check, the win trigger `:67299` and the
+/// HUD panel `:27214`). A/B arm only.
+pub(crate) fn no_castle_bind_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_CASTLE_BIND_REGISTER").is_some())
+}
+
+/// `MGC_NO_PROBE_ID_UNFUSE=1` restores the pre-dig victim-probe
+/// self-gate that compared the port's FUSED `id24` on both sides.
+/// A/B arm only — see [`Gen::probe_self_id`].
+pub(crate) fn no_probe_id_unfuse() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_PROBE_ID_UNFUSE").is_some())
+}
+
 /// `MGC_NO_PROBE_WINDOW_PLAYER=1` restores the projectile probe's
 /// unconditional player AABB arm — the pre-dig [`Gen::victim_scan`]
 /// tail that reached the human from anywhere its box overlapped,
@@ -283,6 +438,20 @@ impl Gen {
     /// and MC2's sub_10C80/sub_116A0 return the hit count — the
     /// spellbook reports and the (10,9) earthquake gate consume it;
     /// MC1 callers ignore it).
+    ///
+    /// ⭐ `#[track_caller]` IS AN INSTRUMENT, NOT A BEHAVIOUR. It costs
+    /// a hidden `&Location` argument and lets the `^player-post` line
+    /// below name **which spell body** posted the mail. Every area
+    /// spell in both games funnels through this one function, so
+    /// without it the trace says "some (10,0) posted 250" and the dig
+    /// then greps for the amount; with it the line reads
+    /// `<- crates/mgc-sim/src/mc2/mobs.rs:2237:22` and the search is
+    /// over. (Round 99 needed exactly that twice.) The attribute
+    /// changes no value the sim computes and no branch it takes —
+    /// measured: the 28-take corpus sweep, the 422-fixture suite and a
+    /// whole-take `verify-deltas --csv` are all BYTE-IDENTICAL with
+    /// and without this hunk.
+    #[track_caller]
     pub(crate) fn area_write(
         &mut self,
         i: usize,
@@ -301,7 +470,30 @@ impl Gen {
         // Does this call run MC2's BUILDING FOOTPRINT pass (below)?
         // It is `sub_10C80`'s ch0 arm alone — and where it runs, the
         // tile scan must skip (10,45) so the two never double up.
-        let fp_pass = ch == 0 && !shake && mc2;
+        // ⭐⭐⭐ MC2 HAS THREE ch0 AREA PRIMITIVES AND ONLY ONE WALKS
+        // THE BUILDING LIST. `sub_10C80` (EF:3953) has both halves —
+        // the `dword_38527` pass (EF:4076-4105) and the matching
+        // `(class != 10 || model != 45)` ring exclusion (EF:4135).
+        // `sub_11400` (EF:4208) has NEITHER, and `sub_116A0` (EF:4305)
+        // has neither either. The shipped EXE agrees: `sub_10C80` @
+        // 0x35480 loads `0x9677` (38519) AND `0x967f` (38527) and
+        // compares `$0x2d`; `sub_11400` @ 0x35c00 loads only `0x9677`
+        // and never compares 0x2d.
+        //
+        // `sub_11400`'s ONLY two call sites in the binary are the
+        // (10,6) standing fire's tick, EF:23111 and EF:23152 — a
+        // bijection with the port's only two `building_tenth` MC2
+        // callers (`mc2/effects.rs` in `mc2_fire6_tick`). So
+        // `building_tenth` IS `sub_11400`'s fingerprint, and a fire
+        // reaches a building through the TILE CHAIN alone, at the
+        // building's anchor cell — not through its summed AABB.
+        // The port paid every overlapped building 50 a tick forever:
+        // mc2l22 t=9745 slot 873 retail life flat 8000, port 7950,
+        // and 98.3% of the family's life divergence is a multiple of
+        // the (10,6) ctor's 50. Turning `fp_pass` off here is
+        // self-completing — the tile ring's (10,45) skip is already
+        // gated on it, so the anchor-cell reach comes back with it.
+        let fp_pass = ch == 0 && !shake && !building_tenth && mc2;
         // The castle pre-pass (ch0 only) — :17322-33, and it is a walk
         // of BUCKET[0] ([`Gen::wiz_chain`], the tick-top class-3
         // roster) filtered to `+65 == 2`, not a pool sweep. Same
@@ -477,6 +669,70 @@ impl Gen {
                 count += 1;
             }
         }
+        // ---- MC2 CHANNELS 3/4: `sub_10C80`'s CLASS-3 ARM ------------
+        //
+        // `if (a2 < 3 || a2 > 4)` (EF:3995) splits the MC2 primitive:
+        // channels 3 (steal) and 4 (duel) run their OWN walk
+        // (EF:4034-4060), and it is not the ring pass below with a
+        // class filter bolted on — it has NONE of that pass's tests.
+        // Verbatim:
+        //
+        //     if (a1x->id != nx->id && nx->class == 3 && sub_106C0(a1x, nx)) {
+        //         v11x = nx + a2;                       // channel a2
+        //         if (!v11x->word_0x62_98) {            // SOURCE FREE?
+        //             v11x->dword_0x5E_94 = a3;         // the payload
+        //             v3++;
+        //             v11x->word_0x62_98 = a1x->id;     // the source
+        //         }
+        //     }
+        //
+        // No `byte[0] & 8` damageable test, no `+28` channel mask, no
+        // `+66/+67` filter, no castle exclusion — and the write is
+        // FREE-ONLY: a pending letter is left alone, never
+        // accumulated onto (the ch0 protocol above is the opposite).
+        // Window = `array_0x52_82.pitch` (= f80) rounded up, centre
+        // `(pos + 128) >> 8` (EF:4035-38), overlap = `sub_106C0` =
+        // the 3-D `sub_10630` box (EF:3712) = `ent_overlap`.
+        //
+        // The human is a class-3 record in retail's tile chain; the
+        // port keeps it out-of-pool, so the same free-only write goes
+        // through `player_mail` under the AABB probe MC2 already uses
+        // for every channel.
+        //
+        // mc2l6-rsg t=8675: the human's Steal-Mana burst (slot 102,
+        // f71 = tier 1) stamps rival 378 `mail3 = (1, 343)` and 378's
+        // own dispatch drains 4000 the same tick (`sub_61050`).
+        if mc2 && matches!(ch, 3 | 4) {
+            let r = (self.ent[i].f80 as i32 + 255) >> 8;
+            let (cx, cy) = ((wx as i32 + 128) >> 8, (wy as i32 + 128) >> 8);
+            let mut victims: Vec<usize> = Vec::new();
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let mut j = self.map_entity[tile((cx + dx) as u8, (cy + dy) as u8)] as usize;
+                    while j != 0 {
+                        let next = self.ent[j].next20 as usize;
+                        if self.ent[j].id24 != id
+                            && self.ent[j].class64 == 3
+                            && self.ent_overlap(i, j)
+                        {
+                            victims.push(j);
+                        }
+                        j = next;
+                    }
+                }
+            }
+            for j in victims {
+                if self.ent[j].mail[ch].1 == 0 {
+                    self.ent[j].mail[ch] = (amt, id);
+                    count += 1;
+                }
+            }
+            if id != PLAYER_TARGET && self.player_overlap(i, ctx) && self.player_mail[ch].1 == 0 {
+                self.player_mail[ch] = (amt, id);
+                count += 1;
+            }
+            return count;
+        }
         // THE SCAN RADIUS. Retail is the x half-extent rounded UP,
         // `(+80 + 255) >> 8`, in every variant of both games (MC1
         // sub_120B0 :17267 and :17342, sub_124F0 :17431, sub_127E0
@@ -517,7 +773,8 @@ impl Gen {
         // find them: `&& (class != 10 || model != 45)` sits at
         // EF:4135 right beside the castle exclusion, and for the same
         // reason. Only in the variant that runs pass 2 — `sub_116A0`
-        // carries neither, and MC1 has neither.
+        // carries neither, `sub_11400` (the (10,6) standing fire's own
+        // writer) carries neither, and MC1 has neither.
         let mut victims: Vec<(usize, u32)> = Vec::new();
         // THE WINDOW CENTRE, AND IT IS NOT THE SAME ON CHANNEL 0.
         // Channels 1+ round to the NEAREST tile, `(pos + 128) >> 8`
@@ -606,10 +863,34 @@ impl Gen {
         // mc1l0 t=565-570 castle window: at t=568 fires 692/694
         // overlap the carpet's AABB but their windows stop one tile
         // short of tile (117,96) — retail's recorded residue is 3×400,
-        // not 5 (the t=606 castle-gulp Δ=800, whole story). MC2 keeps
-        // the pure AABB probe (unmeasured; its sub_10C80 player reach
-        // is not this code path's pinned lane).
-        let player_in_window = mc2 || {
+        // not 5 (the t=606 castle-gulp Δ=800, whole story).
+        // ⭐⭐⭐ MC2 CARRIES THE WINDOW GATE TOO — its area writers
+        // have NO player arm at all. `sub_10C80` (EF:3953),
+        // `sub_11400` (EF:4208) and `sub_116A0` (EF:4305) reach EVERY
+        // victim through `mapEntityIndex_15B4E0`, so the human's own
+        // pool record is billed only when the writer's
+        // `[-v10..v10]` tile window covers the tile it is LINKED at
+        // (`sub_41CF0`: `(x>>8, y>>8)`) — the AABB `sub_106C0` is the
+        // SECOND gate, never the first. Verified in the shipped
+        // binary: sub_116A0 = NETHERW.EXE 0x35EA0..0x360F7 and its
+        // whole body is the castle-list walk + the grid window
+        // (centre `(pos+128)/256` at 0x35F52-84, radius
+        // `(pitch+255)/256` at 0x35F87-9E, bucket
+        // `movsx eax,[eax*2+0x8B4E0]` at 0x35FDB, list step
+        // `[ebx+0x16]` at 0x360B4) — then `ret`. No carpet arm.
+        //
+        // The exemption this replaces (`mc2 ||`) was an INVENTED
+        // widening: it let any MC2 area writer bill the wizard from
+        // outside its own scan, and it is false exactly when it
+        // matters. mc2l24 t=134: the (10,9) dome in slot 91 at
+        // (33920,50048) has pitch 2816, so v10 = 11 and its window is
+        // tiles y 185..=207 — the wizard at y=47193 is linked at tile
+        // 184, ONE TILE SHORT, while its AABB (|dy| 2855 < 2816+121)
+        // says yes. Retail bills nothing; the port billed 1200 and
+        // the knock (1200/10 clamped 80) threw the carpet off pose.
+        // `MGC_NO_MC2_AREA_WINDOW=1` restores the pre-dig `mc2 ||`
+        // widening for the A/B (see `no_mc2_area_window`).
+        let player_in_window = no_mc2_area_window() && mc2 || {
             let (ptx, pty) = ((ctx.px >> 8) as u8, (ctx.py >> 8) as u8);
             (-r..=r).any(|dx| (ctx_ + dx) as u8 == ptx)
                 && (-r..=r).any(|dy| (cty_ + dy) as u8 == pty)
@@ -624,7 +905,7 @@ impl Gen {
             {
                 let e = &self.ent[i];
                 eprintln!(
-                    "[mail] t={t} ^player-post from slot {i} ({},{}) at ({},{},{}) f80={} f84={} f78={} ctx=({},{},{})",
+                    "[mail] t={t} ^player-post from slot {i} ({},{}) at ({},{},{}) f80={} f84={} f78={} ctx=({},{},{}) amt={amt} <- {}",
                     e.class64,
                     e.model65,
                     e.x,
@@ -635,7 +916,8 @@ impl Gen {
                     e.f78,
                     ctx.px,
                     ctx.py,
-                    ctx.pz
+                    ctx.pz,
+                    std::panic::Location::caller()
                 );
             }
             self.mail_write(MailTarget::Player, ch, amt, id);
@@ -1407,8 +1689,20 @@ impl Gen {
         // the possess acquire then scored against itself.
         let fz = if tgt as usize == i { e.aim_z() } else { e.z };
         let pitch = Self::pitch_toward(fz, tz, dh);
-        let row = &BEHAVIOR[e.row156 as usize];
-        let (v2, v6) = (row.v_2, row.v_6);
+        // ⚠ THE ROW LIVES IN THE ENGINE'S OWN TABLE. `row156` is an
+        // index into whichever behavior table the column owns —
+        // `unk_98F38` (0-based) on MC1, `str_D7BD6` (ABSOLUTE, base 59)
+        // on MC2 — and MC2 records reach this shared homer. Reading
+        // MC1's 31-row table with an MC2 index was a silent wrong-row
+        // read before the allocator seeded row 59, and an out-of-bounds
+        // panic after it.
+        let (v2, v6) = if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+            let row = &crate::mc2::behavior::BEHAVIOR[e.row156 as usize];
+            (row.v_2, row.v_6)
+        } else {
+            let row = &BEHAVIOR[e.row156 as usize];
+            (row.v_2, row.v_6)
+        };
         self.ent[i].f34 = yaw;
         self.ent[i].f36 = pitch;
         let ty_ = Self::turn_step(self.ent[i].f30, yaw, v2);
@@ -1416,6 +1710,56 @@ impl Gen {
         let tp = Self::turn_step(self.ent[i].f32, pitch, v6);
         self.ent[i].f32 = (self.ent[i].f32 as i32 + tp as i32) as u16 & 0x7FF;
         true
+    }
+
+    /// ⭐⭐⭐ `sub_10780`'s SELF-EXCLUSION COMPARES `@0x1A` ON BOTH
+    /// SIDES — `a1x->id_0x1A_26 != v5x->id_0x1A_26` (EF:3769) — and
+    /// the port's `id24` is a **FUSION** of retail's `@0x1A` (the
+    /// record's own id, `NewEvent`'s default = its slot) and `@0x28`
+    /// (`parentId`, the owner). `obs_project_mc2` already enumerates
+    /// the families where the fusion holds the OWNER (world/
+    /// conformance.rs `let translated`): class-15 tokens, the (10,42)
+    /// and (10,57) spheres, and the (5,·) pyramid puppets. For those
+    /// records the probe was reading the OWNER where retail reads the
+    /// SELF ID, so any projectile sharing their owner flew straight
+    /// through them.
+    ///
+    /// mc2l6-rsg t=11664 is the witness: the human's fireball at slot
+    /// 55 steps onto his OWN Fool's-Mana sphere (10,57) at slot 547
+    /// — all three AABB axes pass by 64/50/103 against half-sums of
+    /// 132/132/134 — and retail detonates, teleporting the bolt onto
+    /// the sphere's raised centre (`sub_65580`: z 1281 + box.fov 84 =
+    /// **1365**, retail's recorded value) and minting the (10,0)
+    /// impact at slot 510. Retail compares `343 != 547`; the port
+    /// compared `343 != 343` and skipped, so slot 510 went to that
+    /// tick's newly cast fireball and slot 729 — retail's — never
+    /// existed.
+    ///
+    /// The (5,·) puppet arm needs a parent-class lookup and is not
+    /// exercised by this take; it is left for a measured follow-up.
+    ///
+    /// ⭐⭐ AND THE MAGIC MINE (10,78) IS THE NEXT MEMBER. Its ctor
+    /// `sub_50840` never touches `@0x1A` (EF:36960-82 — fourteen field
+    /// writes, none of them the id) and the carrier tail that arms it,
+    /// `sub_67960`, stamps the owner into `word_0x32_50` INSTEAD
+    /// (EF:59356), so retail's mine keeps `NewEvent`'s own-slot id:
+    /// mc2l6-rsg t=13544 slot 178 reads `f1a` **178** against the
+    /// port's fused **343**. Without the unfuse the caster's own bolt
+    /// compares `343 != 343` and flies through the mine, and
+    /// `sub_68AC0` — the whole Magic Mine mechanic
+    /// ([`Gen::mc2_mine_swallow`]) — is never handed it.
+    fn probe_self_id(&self, j: usize) -> u16 {
+        let c = &self.ent[j];
+        if !no_probe_id_unfuse()
+            && matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2)
+            && c.id24 as usize != j
+            && (matches!((c.class64, c.model65), (15, _) | (10, 42) | (10, 57))
+                || ((c.class64, c.model65) == (10, 78)
+                    && !crate::mc2::proj::no_mine_swallow()))
+        {
+            return j as u16;
+        }
+        c.id24
     }
 
     /// sub_11980 (:16988) from a projectile: first overlapped victim
@@ -1455,13 +1799,23 @@ impl Gen {
         let ptile = tile((ctx.px >> 8) as u8, (ctx.py >> 8) as u8);
         let player_ordered = !no_probe_window_player()
             && !(!ctx.strict && matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2));
+        // ⭐⭐⭐ INSIDE HIS OWN CELL THE HUMAN IS THE CHAIN'S TAIL, NOT
+        // ITS HEAD. `AddEventToMap_57D70` (EF:40315-27) is a HEAD
+        // insertion — `oldMapEntity_0x16_22 = mapEntityIndex[cell]`
+        // then `mapEntityIndex[cell] = entity` — and
+        // `CopyEntityPosition_57CF0` (EF:40282-99) relinks only when
+        // the tile CHANGES, so a tile chain is ordered
+        // most-recently-entered FIRST and a parked record sinks to the
+        // tail. The carpet is an ordinary member of it, so anything
+        // that flew into the human's tile after he settled there is
+        // walked BEFORE him.
+        let player_cell_tail = !crate::mc2::mobs::no_player_cell_tail();
         for &t in &cells {
-            if player_ordered
+            let player_here = player_ordered
                 && t == ptile
                 && id != PLAYER_TARGET
-                && Self::filter_admits(f66, f67, 3, 0)
-                && self.player_overlap(i, ctx)
-            {
+                && Self::filter_admits(f66, f67, 3, 0);
+            if player_here && !player_cell_tail && self.player_overlap(i, ctx) {
                 return Some(MailTarget::Player);
             }
             let mut j = self.map_entity[t] as usize;
@@ -1493,7 +1847,7 @@ impl Gen {
                 // tick before (slots 58/59/60 at 768/768/1280,
                 // ground z 0), each landing at victim z + its ayaw
                 // 37 — the port flew all five straight through.
-                if c.id24 != id
+                if self.probe_self_id(j) != id
                     && c.flags & 8 != 0
                     && (ctx.strict || c.class64 != 14)
                     && Self::filter_admits(f66, f67, c.class64, c.model65)
@@ -1502,6 +1856,9 @@ impl Gen {
                     return Some(MailTarget::Pool(j));
                 }
                 j = c.next20 as usize;
+            }
+            if player_here && player_cell_tail && self.player_overlap(i, ctx) {
+                return Some(MailTarget::Player);
             }
         }
         // The player probe. `sub_11980` has NO player arm: it returns
@@ -4586,7 +4943,45 @@ impl Gen {
         // this handler only reaches an MC2 world down the MC1-spell
         // fallback, where every arm is already approximate.
         self.anim_advance(i);
-        let amt = self.ent[i].f44 as u32;
+        // ⭐⭐⭐ MC2: THE CH1 AMOUNT IS `sub_112D0`'s FORCE ARGUMENT,
+        // NOT THE PULSE'S `+44`. Retail's possession pulse is a
+        // SIBLING PAIR that differs in exactly one literal —
+        // `PossesHitMana_320E0` (EF:23546, the (10,12) WEAK claim)
+        // calls `sub_112D0(entity, 0)` and `sub_32120` (EF:23559, the
+        // (10,70) FORCED steal) calls `sub_112D0(entity, 1)` — and
+        // `sub_112D0` (EF:4162) stamps the victim
+        //     v5x->str_0x5E_94.word_0x68_104  = a1x->id_0x1A_26;
+        //     v5x->str_0x5E_94.dword_0x64_100 = a2;
+        // i.e. the ch1 AMOUNT **is** that 0/1 flag, verbatim. The MC2
+        // ball intake reads it as the claim's force
+        // (EF:26069-94 `if (dword_0x64_100)` → steal past the
+        // `byte[2] & 0x20` claim lock AND set it; else the weak arm,
+        // which a locked sphere refuses).
+        //
+        // The port already had the FORCED half right —
+        // `mc2_steal_pulse_tick` (mc2/effects.rs) passes 1 — but
+        // routed the WEAK (10,12) pulse through THIS handler, which
+        // broadcasts MC1's `sub_120B0(a1x, 1, +44)` amount, the
+        // ctor's 64000. Nonzero = forced, so **every weak possession
+        // pulse stole through the claim lock**. mc2l22 pair
+        // 22887→22888: the (10,12) at slot 465 stamps sphere 919
+        // `mail1 = (64000, human)` and 919's own tick then takes the
+        // forced arm — `player_ent` 530 -> the human and the
+        // owner-keyed sprite row `f5a` 128 -> 112, where retail's
+        // locked sphere keeps rival 530. `MGC_NO_MC2_CLAIM_PULSE_FORCE=1`
+        // restores the pre-dig 64000.
+        //
+        // MC1 keeps `+44`: `sub_120B0(a1x, 1, +44)` (:28437) really
+        // does broadcast the ctor value, and MC1's ch1 intake
+        // (:29439-48) reads the SOURCE alone, so the amount is inert
+        // there — a different retail primitive, not a shared one.
+        let amt = if mc2_claim_pulse_force_law()
+            && matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2)
+        {
+            0
+        } else {
+            self.ent[i].f44 as u32
+        };
         self.area_write(i, 1, amt, ctx, false, false);
         false
     }
@@ -5326,14 +5721,22 @@ impl Gen {
         // order (GetManaSphereIndexFromId EF:26800 routes through
         // TransformPlayerColorIndex — crate::mc2::COLOR_ART).
         let mc2 = matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
-        // OPEN (mc2l4 corpus): a RIVAL-claimed sphere renders the
-        // NEUTRAL family in retail (sprite 56 = 52+4 with a live
-        // class-3 owner in +148) while the human's spheres color
-        // 105+size (mc2l0) — the wizard spawn stamps ext color =
-        // slot for BOTH (EF:43710), so the neutral derive's
-        // mechanism is unresolved. Conformance-invisible: the
-        // sprite lane isn't compared and the rotation quad below
-        // depends only on SIZE. The port keeps team colors.
+        // ✅ RESOLVED — and the note that used to stand here was
+        // WRONG TWICE, which is why it hid the law for a whole corpus.
+        // It read: "a RIVAL-claimed sphere renders the NEUTRAL family
+        // in retail (sprite 56 = 52+4 with a live class-3 owner in
+        // +148) … the neutral derive's mechanism is unresolved.
+        // Conformance-invisible: the sprite lane isn't compared."
+        // (1) `f5a` IS GRADED (`conformance.rs`, `("f5a", r.f5a)`) —
+        //     and on mc2l6-rsg it was the take's certification wall.
+        // (2) The mechanism was never in this colour derive, which is
+        //     bit-exact against `GetManaSphereColorIndexFromEntityId_369F0`
+        //     and `GetManaSphereIndexFromId_36A50`. It is in WHICH TICK
+        //     FUNCTION CALLS THIS: the (10,57) has no per-tick resize
+        //     at all (see [`no_m57_tick_resize`]), so the observation
+        //     "sprite 56 with a live class-3 owner" was the m57 simply
+        //     keeping its unowned ctor stamp. PHASE, NOT ARITHMETIC.
+        // The team-colour derive below is correct for the (10,39).
         let base = match self.owner_team(self.ent[i].f144) {
             Some(team) => {
                 let art = if mc2 {
@@ -6276,6 +6679,86 @@ impl Gen {
         }
     }
 
+    /// The MC2 ball-merge OWNER LADDER (`sub_36D50` EF:26919-26996,
+    /// shipped `NETHERW.EXE` file 0x5B550-0x5B71D), the both-owned
+    /// tail only — the caller has already handled the two unowned arms
+    /// (EF:26933/:26944, the FIRST of which is the only one that
+    /// carries the absorbed ball's `byte[2] & 0x20` claim lock
+    /// across).
+    ///
+    /// ⭐⭐⭐ THE CONTEST OPERAND IS THE OWNER RECORD'S
+    /// `maxMana_0x8C_140` — NOT the ball manas. The port scored the
+    /// contest on `fj > fi` ("the larger contributor"), a documented
+    /// approximation that stood because no graded take had two owned
+    /// spheres merge. mc2l22 has ten of them and every one is a
+    /// `player_ent_idx` + `f5a` pair row (`f5a` is
+    /// `ball_resize`'s `mc2_ball_color(f144) + size`, so the colour
+    /// base moves with the owner and the row is free evidence).
+    ///
+    /// ⭐⭐ AND THE CLASS-10 ARMS COME FIRST (EF:26951/:26956/:26964,
+    /// EXE `cmp byte [edx+0x3f],0xa` at 0x5B603, 0x5B629, 0x5B662). A
+    /// `(10,40)` mana-pit bank tag is a legal `playerEntityIndex`, and
+    /// its `maxMana` is ENORMOUS — slot 61 at mc2l22 t=21958 holds
+    /// 1,068,282 against the human's 930,914, slot 102 at t=23251
+    /// holds 17,453,411 against rival 530's 9,494 — so a bare maxMana
+    /// contest hands every merge to the pit. Retail asks the CLASS
+    /// first: a class-10 owner loses to any non-class-10 owner, and
+    /// two class-10 owners leave the survivor's own owner standing.
+    ///
+    /// ⚠ The maxMana test is STRICT `>` on the SURVIVOR's side and
+    /// SIGNED (EF:26978; EXE 0x5B6AC `mov esi,[edx+0x8c]; cmp
+    /// esi,[eax+0x8c]; jng`), so equal ceilings hand the sphere to the
+    /// ABSORBED side — the same asymmetry MC1's `sub_277D0` twin
+    /// carries. `v3x == v4x` (EF:26973, EXE 0x5B68E `cmp edx,eax`) is
+    /// the same-owner short-circuit; retail recovers the index by
+    /// `(ptr - base)/168` (EXE 0x5B6E4 `idiv esi` with esi = 0xA8),
+    /// which is the `playerEntityIndex` it already held.
+    ///
+    /// ⚠ The human is `PLAYER_TARGET`, not a pool index: retail reads
+    /// its ceiling off the carpet record `Entities_EA3E4[424]`, the
+    /// port off the player column (`ctx.pmana_max`) — the same
+    /// indirection MC1's [`Gen::mc1_ball_owner_contest`] uses.
+    fn mc2_ball_owner_contest(
+        &self,
+        oi: u16,
+        oj: u16,
+        fi: i32,
+        fj: i32,
+        ctx: &MobCtx,
+    ) -> u16 {
+        if no_mc2_ball_owner_ladder() {
+            return if fj > fi { oj } else { oi };
+        }
+        let is_c10 = |g: &Self, o: u16| {
+            o != crate::mc1::mobs::PLAYER_TARGET
+                && (o as usize) < g.ent.len()
+                && g.ent[o as usize].class64 == 10
+        };
+        let w136 = |g: &Self, o: u16| -> i32 {
+            if o == crate::mc1::mobs::PLAYER_TARGET {
+                ctx.pmana_max.min(i32::MAX as u32) as i32
+            } else if (o as usize) < g.ent.len() {
+                g.ent[o as usize].f136
+            } else {
+                0
+            }
+        };
+        let (ci, cj) = (is_c10(self, oi), is_c10(self, oj));
+        if ci && cj {
+            oi // EF:26951 — neither side is a wizard: survivor keeps its tag
+        } else if ci {
+            oj // EF:26956 — a bank tag loses to a real owner
+        } else if cj {
+            oi // EF:26964 — ... and symmetrically
+        } else if oi == oj {
+            oi // EF:26973 `v3x == v4x`
+        } else if w136(self, oi) > w136(self, oj) {
+            oi // EF:26978 — STRICT: a tie hands it to the absorbed side
+        } else {
+            oj
+        }
+    }
+
     fn ball_merge_candidates(
         &self,
         i: usize,
@@ -6284,7 +6767,24 @@ impl Gen {
         is_fool: bool,
     ) -> Vec<usize> {
         let mut out = Vec::new();
-        if decaying || !grounded || is_fool {
+        // ⭐⭐⭐ THE (10,57) MERGES, AND IT MERGES WHILE DECAYING.
+        // Retail's m57 tick `sub_35FB0` reaches the SAME partner
+        // search the ball does — EF:26591-96 `v27x = sub_10A50(a1x);
+        // if (v27x) { sub_36F30(a1x, v27x);
+        // SetManaSphereColorAndRot_36920(a1x); }` — and the shipped
+        // EXE (file 0x5adc5 `call 0x35250` = sub_10A50, 0x5add3
+        // `call 0x5b730` = sub_36F30, 0x5addc `call 0x5b120` =
+        // SetManaSphereColorAndRot) carries NO `byte[1] & 0x20` test
+        // in front of it: the ball's decay gate (EF:26268) is the
+        // BALL's alone, so a decaying fool's sphere still absorbs.
+        // The `is_fool` early return was an invented guard and it is
+        // 70% of mc2l6-rsg's (10,57) residue (mana/f5a/applied_yaw/
+        // applied_pitch rows plus the un-freed partner as `extra`).
+        if no_m57_merge() {
+            if decaying || !grounded || is_fool {
+                return out;
+            }
+        } else if !grounded || (decaying && !is_fool) {
             return out;
         }
         if no_ball_merge_fix() {
@@ -6307,6 +6807,34 @@ impl Gen {
                 ((e.y as u32 + 128) >> 8) as u8,
                 ((e.f80 as i32 + 255) >> 8).max(0),
             )
+        };
+        // ⭐⭐⭐ THE MEMBERSHIP TEST IS A PARAMETER, NOT A CONSTANT.
+        // Both partner searches read the SEEKER's OWN `xtype`/
+        // `xsubtype` (@0x41/@0x42 = `f66`/`f67`) against the
+        // candidate's class/model, with `-1` as a wildcard on either
+        // half — MC2 `sub_10A50` (EF:3908-15; shipped EXE file
+        // 0x352d9-0x35301: `movsx eax,[esi+0x41]` vs `[ebx+0x3f]`,
+        // `[esi+0x42]` vs `[ebx+0x40]`) and MC1 `sub_11D10`
+        // (sub_main.cpp:17161-64, `sClass_29861_66` /
+        // `sModel_29862_67`) are the same four lines. The port pinned
+        // the pair to `(10, 39)`, which is right for every sphere ctor
+        // that stamps `xsubtype = 39` and WRONG for `sub_50130`
+        // (EF:36631; EXE file 0x74953 `mov BYTE PTR [eax+0x42],0x39`
+        // = 57), whose fool's sphere therefore looks for m57 partners
+        // and no others. The extra `tick70 != 62` clause has to go
+        // with it: it is exactly the m57 lane, so keeping it would
+        // still hide every m57 partner from an m57 seeker. The
+        // (class, model) test alone already keeps the two families
+        // apart in both directions.
+        let (sc, sm) = {
+            let e = &self.ent[i];
+            (e.f66, e.f67)
+        };
+        let admits = |c: &crate::engine::features::Ent| {
+            if no_m57_merge() {
+                return c.model65 == 39 && c.tick70 != 62;
+            }
+            sc == 0xFF || (sc == c.class64 && (sm == 0xFF || sm == c.model65))
         };
         // ⭐⭐⭐ THE RINGS ARE A DATA FILE, NOT A FORMULA. Retail's
         // partner search `sub_11D10` (:17127-73) walks rings through
@@ -6342,12 +6870,7 @@ impl Gen {
             while j != 0 {
                 let c = &self.ent[j];
                 let next = c.next20 as usize;
-                if j != i
-                    && c.class64 == 10
-                    && c.model65 == 39
-                    && c.tick70 != 62
-                    && c.flags & 0x400 == 0
-                {
+                if j != i && admits(c) && c.flags & 0x400 == 0 {
                     out.push(j);
                 }
                 j = next;
@@ -6431,7 +6954,8 @@ impl Gen {
         // and the native sphere. MC1 balls are action 41 → untouched.
         let is_fool = mc2 && (self.ent[i].model65 == 57 || self.ent[i].tick70 == 62);
         if is_fool && self.ent[i].mail[1].1 != 0 {
-            if self.mc2_fools_retaliate(i, ctx) {
+            let spent = self.mc2_fools_retaliate(i, ctx);
+            if spent {
                 // EF:26363-65: the consume poof, then the soft kill
                 // (tick-top reap) — the sphere survives this tick in
                 // the pool exactly as retail's disabled entity does.
@@ -6442,8 +6966,30 @@ impl Gen {
                 self.mc2_spawn_fire(x, y, z);
                 self.ent[i].flags |= 0x400;
             }
-            // Claimed → retail's else-if never reaches the mover.
-            return false;
+            // ⭐⭐⭐ THE `&&` IS SHORT-CIRCUIT AND BOTH ARMS FALL INTO
+            // THE MOVER. Retail's chain is
+            //     if (byte[1] & 8) …
+            //     else if (w68 && sub_36680(a1x)) { poof; disable; }
+            //     else { the whole mover }
+            // so a LATCHED sphere whose `sub_36680` returns 0 — every
+            // tier-1 tick before the 8th, the first tier-2/3 tick, the
+            // owner-clears arm, and the tier > 3 fallthrough — runs
+            // the mover THAT SAME TICK. Shipped NETHERW.EXE
+            // 0x5a7d6-0x5a7e8:
+            //     cmp word [ebx+0x68],0x0 ; jz  0x5a80a
+            //     push ebx ; call 0x5ae80 ; test al,al ; jz 0x5a80a
+            // — BOTH `jz` land on 0x5a80a, the `cmp word [ebx+0x7a]`
+            // that opens the mover. The port's unconditional
+            // `return false` here was an INVENTED GUARD (its comment
+            // "retail's else-if never reaches the mover" reads the
+            // `&&` as if only `w68` gated it), and it FROZE every
+            // mid-trap sphere: mc2l6-rsg pair 13600→13601, sphere 316
+            // carries dest (0,4) with `b39` 16 and retail rolls it
+            // y 16895 → 16899 / z 1349 → 1350 while the port held
+            // both. `MGC_NO_M57_TRAP_FALLTHROUGH=1` restores it.
+            if spent || no_m57_trap_fallthrough() {
+                return false;
+            }
         }
         // ch1 collection claim (:29439-45): the ball takes the
         // claimant as owner — only on an owner CHANGE (the possess
@@ -6505,8 +7051,17 @@ impl Gen {
         // flash + the merge's owned-beats-unowned adoption.
         let mut kicked = false;
         if self.ent[i].mail[4].1 != 0 {
-            let m = self.ent[i].mail[4].1 as usize;
-            self.ent[i].mail[4] = (0, 0);
+            let (amt, m) = self.ent[i].mail[4];
+            let m = m as usize;
+            if mc2 {
+                // EF:26109 (ball) / EF:26383 (m57): retail clears ONLY
+                // the SOURCE `word_0x7A_122`; the AMOUNT `word_0x76_118`
+                // stays on the record (mc2l22 t=8291 slot 484: retail
+                // still reads w76 = 42 after the intake).
+                self.ent[i].mail[4].1 = 0;
+            } else {
+                self.ent[i].mail[4] = (0, 0);
+            }
             // Retail MC2's ch4 intake (w7A, EF:26097-110) forces one
             // moving tick even on a settled sphere (the v35 latch).
             kicked = true;
@@ -6526,12 +7081,40 @@ impl Gen {
                 // 2048.
                 let raw = Self::angle_between(bx, by, mx, my);
                 self.ent[i].f30 = raw;
-                let dir = (raw & 0x7FF) as usize;
-                let ivx = ((4 * crate::mc1::tables::SIN[dir]) >> 16) as i16;
-                let ivy = (-((4 * crate::mc1::tables::COS[dir]) >> 16)) as i16;
-                let e = &mut self.ent[i];
-                e.dest_x = (e.dest_x as i16).wrapping_add(ivx) as u16;
-                e.dest_y = (e.dest_y as i16).wrapping_add(ivy) as u16;
+                if mc2 {
+                    // ⭐ MC2 REPLACES THE ACCUMULATOR, MC1 NUDGES IT.
+                    // `TransformArcherToMana_35940` EF:26102-08 (and the
+                    // (10,57) twin `sub_35FB0` EF:26376-82):
+                    //
+                    //     predictedAxis = {0,0,0};
+                    //     MoveEntity_57FA0(&predictedAxis, yaw, 0, word_0x76_118);
+                    //     axis_0x9A_154x.x = predictedAxis.x;
+                    //     axis_0x9A_154x.y = predictedAxis.y;
+                    //
+                    // — the velocity becomes polar(yaw, AMOUNT) outright,
+                    // where AMOUNT is the aura's `min(dist, 42)` (sub_38D80
+                    // EF:28369-73). The MC1 arm below adds a fixed 4-unit
+                    // impulse and never reads the amount. mc2l22 pair
+                    // 8290→8291, slot 484 (yaw 1639, w76 42, dest_in
+                    // (−38,−11)): retail steps (−40,−13) → (49690,48978);
+                    // the +4 arm stepped (−42,−12) → (49688,48979) — the
+                    // (10,39) x/y family on every aura-dragged tick.
+                    // The m57 twin also zeroes actSpeed first (EF:26373).
+                    if is_fool {
+                        self.ent[i].f126 = 0;
+                    }
+                    let mut v = (0u16, 0u16, 0i16);
+                    Self::polar_step(&mut v, raw, 0, amt as i16);
+                    self.ent[i].dest_x = v.0;
+                    self.ent[i].dest_y = v.1;
+                } else {
+                    let dir = (raw & 0x7FF) as usize;
+                    let ivx = ((4 * crate::mc1::tables::SIN[dir]) >> 16) as i16;
+                    let ivy = (-((4 * crate::mc1::tables::COS[dir]) >> 16)) as i16;
+                    let e = &mut self.ent[i];
+                    e.dest_x = (e.dest_x as i16).wrapping_add(ivx) as u16;
+                    e.dest_y = (e.dest_y as i16).wrapping_add(ivy) as u16;
+                }
             }
         }
         // MC2's HOMING intake (`word_0x7A_122`, EF:26097-110) — the
@@ -6555,6 +7138,14 @@ impl Gen {
         // re-arm +58. That is precisely the reported regression.
         if mc2 && let Some(aura) = self.mc2_aura_claim.0.remove(&(i as u16)) {
             kicked = true;
+            // EF:26372 — the m57's w7A intake ALSO zeroes actSpeed
+            // (the ball's EF:26097-99 does not). The port splits that
+            // one retail intake across two arms (mail[4] above and the
+            // aura claim map here), so both halves must carry it or a
+            // pulled sphere keeps flying.
+            if is_fool {
+                self.ent[i].f126 = 0;
+            }
             // ⭐ AND THE SPHERE WRITES ITS OWN HEADING BEFORE IT FLIES
             // — `yaw_0x1C_28 = sub_581E0_maybe_tan2(&a1x->position,
             // &Entities[w7A]->position)` (EF:26101), and only THEN
@@ -6622,6 +7213,14 @@ impl Gen {
         // scratch record, so the class test fails there anyway; the
         // bounds check is ours, guarding a Vec retail indexes raw.)
         if self.ent[i].flags & 0x40 != 0 {
+            // EF:26388 — the (10,57) tether arm opens by ZEROING
+            // actSpeed, one statement the (10,39) twin (EF:26113) does
+            // not have. A sphere grabbed mid-throw drops its launch
+            // speed for good, so it can never resume the flight arm
+            // when the tether later strays.
+            if is_fool {
+                self.ent[i].f126 = 0;
+            }
             let b = self.ent[i].f146 as usize;
             let live = b != 0 && b < self.ent.len();
             let step = if live && self.ent[b].class64 == 3 && self.ent[b].model65 == 3 {
@@ -6673,6 +7272,32 @@ impl Gen {
             // first arm (:29464-90) and MC2's (EF:26111-72) both end
             // without it — the sprite row rides stale until the ball
             // next runs the moving arm.
+            return false;
+        }
+        // ⭐⭐⭐ THE (10,57) THROWN-SPHERE FLIGHT ARM — `sub_35FB0`
+        // EF:26457-26524, the ONE structural difference between the
+        // m57 tick and the (10,39) ball's `TransformArcherToMana_35940`
+        // that this handler services. The ball goes straight from the
+        // tether arm to the settle arm:
+        //
+        //     if (byte[0] & 0x40) { tether }            // EF:26111
+        //     else if (byte_0x39_57 || v35) { settle }  // EF:26173
+        //
+        // while the m57 nests a THIRD arm inside the else:
+        //
+        //     else { v13 = actSpeed;
+        //            if (v13) { FLIGHT }                // EF:26458-26524
+        //            else if (byte_0x39_57 || v31) { settle } }  // EF:26526
+        //
+        // Routing action 62 into `ball_tick` gave every thrown sphere
+        // the SETTLE arm, whose step is `axis_0x9A` (dest, 0 on a
+        // thrown sphere) — so the six spheres Fool's Mana throws each
+        // tick hovered on the caster's own x/y and pogoed straight up
+        // and down. mc2l22 free run from t=9786, slot 900: retail
+        // walks speed 328/324/320/316… and x 15808/16100/16388/16673…,
+        // the port holds speed 328 and x 15512 FOREVER.
+        if is_fool && self.ent[i].f126 != 0 {
+            self.mc2_fool_flight(i);
             return false;
         }
         // The ballistic arm is `else if (+58)` (sub_27030 :29518): +58
@@ -6778,9 +7403,7 @@ impl Gen {
                 let e = &self.ent[i];
                 (
                     e.f84 as i32,
-                    crate::mc2::behavior::BEHAVIOR
-                        [crate::mc2::behavior::ROW_BASE + e.row156 as usize]
-                        .v_12 as i32,
+                    crate::mc2::behavior::BEHAVIOR[e.row156 as usize].v_12 as i32,
                 )
             };
             if self.cave_poke(fov, hover, x, y) {
@@ -6908,25 +7531,104 @@ impl Gen {
         for j in self.ball_merge_candidates(i, decaying, grounded, is_fool) {
             if self.ent_overlap(i, j) {
                 let (fi, fj) = (self.ent[i].f140, self.ent[j].f140);
-                // MC2 owner rule (retail `sub_36D50` EF:26919): the
-                // surviving ball takes the OWNER (colour) of the larger
-                // contributor — an unowned ball defers to an owned
-                // partner, two owned balls resolve to the bigger (NOT
-                // the survivor's own owner, which colours a merged ball
-                // as "the last ball merged"). (Retail breaks the
-                // owned-vs-owned tie on the owner wizards' maxMana; ball
-                // mana is the observable proxy and is what the
-                // single-owner economy levels turn on.)
-                if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+                // MC2 owner rule (retail `sub_36D50` EF:26919): an
+                // unowned ball defers to an owned partner (and ONLY
+                // that arm carries the partner's claim lock across,
+                // EF:26937); two OWNED balls go to the ladder in
+                // [`Gen::mc2_ball_owner_contest`] — class-10 bank tags
+                // lose first, then the owner records' `maxMana`. NOT
+                // the survivor's own owner, which would colour a merged
+                // ball as "the last ball merged".
+                if is_fool && !no_m57_merge() {
+                    // ⭐⭐⭐ THE FOOL'S SPHERE HAS ITS OWN MERGE BODY.
+                    // The ball's grounded arm calls `sub_36D50`
+                    // (EF:26269) and the m57's calls **`sub_36F30`**
+                    // (EF:26594; shipped EXE file 0x5add3 `call
+                    // 0x5b730`) — a different function, not a variant:
+                    // no owner ladder at all, a TIER contest on
+                    // `byte_0x46_70` (f71) with a coin flip from the
+                    // SURVIVOR's own per-entity LCG when the tiers tie
+                    // and the parents differ, and the loser's whole
+                    // identity — parentId @0x28 (id24), owner @0x94
+                    // (f144), tier @0x46 (f71), subSpell @0x2A (f44) —
+                    // moving across on a win. EXE 0x5b73c-0x5b792 is
+                    // the whole body: `mov cl,[eax+0x46]; cmp
+                    // cl,[edx+0x46]; jge` … `imul bx,[eax+0x14],0x24a1;
+                    // add ebx,0x24df` … `and ebx,1`, then the four
+                    // copies and `add [eax+0x90]` before the hard free.
+                    // Note the draw is the ENTITY stream (`rand_0x14`),
+                    // not the global RNG, so this consumes no tick draw.
+                    // ⭐⭐⭐ THE PARENT TEST IS ON RETAIL'S RAW `@0x28`,
+                    // AND AN UNPARENTED SPHERE READS **0**, NOT ITS OWN
+                    // SLOT. `NewEvent_4A050` (Events.cpp:563-79) memsets
+                    // the record and seeds `id_0x1A_26 = slot` — `@0x1A`,
+                    // the port's `f1a`. It never touches `parentId_0x28`.
+                    // The port's `new_event` seeds `id24 = idx` instead
+                    // and `obs_project_mc2` maps `id24 == slot` back to 0,
+                    // which is right for the OBSERVATION and wrong for
+                    // this COMPARISON. Shipped EXE 0x5b748-52:
+                    //     mov cx,[edx+0x28] ; cmp cx,[eax+0x28]
+                    //     je  0x5b76b       ; <-- PAST the draw
+                    //     imul bx,[eax+0x14],0x24a1
+                    // so equal parents skip the LCG entirely.
+                    // Witness mc2l30 pair 262->263: slots 118 and 121 are
+                    // both unparented (10,57)s, retail's `rand` HOLDS at
+                    // 763 across the merge, the port drew
+                    // lcg16(763) = 9377*763 + 9439 = 20666 — exactly what
+                    // `--dump 262` prints. mc2l30 horizon 262 -> 2,972.
+                    // ⭐ SIBLING: `Gen::probe_self_id`
+                    // (`MGC_NO_PROBE_ID_UNFUSE`) un-fuses the OTHER half
+                    // of the same `id24` fusion — it maps the fused
+                    // families back to `@0x1A` = the slot for
+                    // `sub_10780`'s self-exclusion. This one wants
+                    // `@0x28` = 0. Same fusion, opposite halves.
+                    let parent = |g: &Self, k: usize| {
+                        if no_m57_parent_zero() || g.ent[k].id24 as usize != k {
+                            g.ent[k].id24
+                        } else {
+                            0
+                        }
+                    };
+                    let (pi, pj) = (parent(self, i), parent(self, j));
+                    let take = if self.ent[i].f71 >= self.ent[j].f71 {
+                        if pj != pi {
+                            self.ent_rand(i) & 1 != 0
+                        } else {
+                            false
+                        }
+                    } else {
+                        true
+                    };
+                    if take {
+                        let (pid, own, tier, sub) = {
+                            let d = &self.ent[j];
+                            (
+                                // retail copies a raw 0 across; the port's
+                                // "unparented" is its own slot
+                                if no_m57_parent_zero() || d.id24 as usize != j {
+                                    d.id24
+                                } else {
+                                    i as u16
+                                },
+                                d.f144,
+                                d.f71,
+                                d.f44,
+                            )
+                        };
+                        let s = &mut self.ent[i];
+                        s.id24 = pid;
+                        s.f144 = own;
+                        s.f71 = tier;
+                        s.f44 = sub;
+                    }
+                } else if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
                     let (oi, oj) = (self.ent[i].f144, self.ent[j].f144);
                     let winner = if oi == 0 {
                         oj
                     } else if oj == 0 {
                         oi
-                    } else if fj > fi {
-                        oj
                     } else {
-                        oi
+                        self.mc2_ball_owner_contest(oi, oj, fi, fj, ctx)
                     };
                     self.ent[i].f144 = winner;
                     // Mana Lock across merges (EF:26936-40): ONLY the
@@ -6943,6 +7645,15 @@ impl Gen {
                     self.mc1_ball_owner_contest(i, j, ctx);
                 }
                 self.ent[i].f140 = fi + fj;
+                // EF:26595 / EXE 0x5addc `call 0x5b120` — the m57's
+                // merge is the ONLY caller of
+                // `SetManaSphereColorAndRot_36920` inside `sub_35FB0`,
+                // and it is unconditional. The shared tail below is
+                // the BALL's gated resize (EF:26286), which a decaying
+                // sphere skips, so the fool's arm re-derives here.
+                if is_fool && !no_m57_merge() {
+                    self.ball_resize(i);
+                }
                 // MC1's sub_277D0 frees the absorbed ball through
                 // sub_41E90_421D0 (:52514-20) — the HARD free (unlink,
                 // class 0, slot straight back on the stack), not the
@@ -6979,11 +7690,170 @@ impl Gen {
         // merged/claimed balls visibly grow/recolor in the original.
         // MC2 gates it off while decaying UNLESS the claim latch
         // fired this tick (EF:26286 `!(byte[1] & 0x20) || v36`).
-        if !(mc2 && decaying) || claimed {
+        //
+        // ⭐⭐⭐ AND THE (10,57) HAS NO SUCH TERM AT ALL. EF:26287 lives
+        // in `TransformArcherToMana_35940` (EF:26015-26317), the
+        // (10,39) BALL's action-0x29 tick. The m57 runs `sub_35FB0`
+        // (EF:26318-26614), whose ONLY `SetManaSphereColorAndRot` is
+        // the merge arm already fired above (EF:26595) — confirmed
+        // against the shipped EXE's five call sites, see
+        // [`no_m57_tick_resize`]. An enumerated list; the absence is
+        // the law. So an m57 keeps whatever sprite its ctor stamped
+        // while it was still UNOWNED, and a rival that claims one
+        // never recolors it. mc2l6-rsg t=13796: retail stamps
+        // `player_ent 0 -> 378` on slot 24 and leaves `f5a` at 56
+        // (52 wild + size 4, mana 3689) for the rest of the take,
+        // while the (10,39) in slot 804 — SAME owner, one tick later —
+        // does go `f5a 53 -> 138` (105 + 8*color_art(2) + size 1). The
+        // port recoloured the m57 to 141, and that one field was the
+        // take's certification wall.
+        let m57_no_resize = is_fool && !no_m57_tick_resize();
+        if (!(mc2 && decaying) || claimed) && !m57_no_resize {
             self.ball_resize(i);
         }
         self.ball_decay_tail(i);
         false
+    }
+
+    /// `sub_35FB0`'s FLIGHT arm (EF:26457-26524) — the (10,57)
+    /// THROWN sphere, the half of the m57 tick the (10,39) ball has
+    /// no counterpart for. Fool's Mana (`sub_6C870` EF:57888-57922)
+    /// launches six of these at `actSpeed = (tokenLCG & 0x7F) +
+    /// clamp(4*caster.actSpeed, 140, 280)` on a ±85 yaw fan at the
+    /// caster's pitch; everything below is what carries them.
+    ///
+    /// Verbatim, in retail's order:
+    ///
+    /// ```c
+    /// v13 = a1x->actSpeed_0x82_130;
+    /// if (v13) {
+    ///   if (v13 <= 0)      { if (v13 < -4) actSpeed = v13 + 4; }
+    ///   else if (v13 > 4)  { actSpeed = v13 - 4; }              // EF:26461-69
+    ///   predictedAxis = a1x->position;
+    ///   MoveEntity_57FA0(&predictedAxis, yaw, pitch, actSpeed);  // EF:26472-73
+    ///   v14 = a1x->word_0x2C_44 - 16; a1x->word_0x2C_44 = v14;
+    ///   if (v14 < -128) a1x->word_0x2C_44 = -128;
+    ///   predictedAxis.z += a1x->word_0x2C_44;                    // EF:26474-78
+    ///   if (isCaveLevel && sub_11E70(a1x, &predictedAxis)) {
+    ///       predictedAxis = a1x->position; actSpeed = 0;
+    ///       a1x->word_0x2C_44 = -128;                            // EF:26479-86
+    ///   } else CopyEntityPosition_57CF0(a1x, &predictedAxis);    // EF:26489
+    ///   v15 = getTerrainAlt_10C40(&predictedAxis);
+    ///   if (v15 <= predictedAxis.z) { …cave ceiling kick… }      // EF:26491-507
+    ///   else {
+    ///       a1x->actSpeed_0x82_130 = 0;
+    ///       a1x->position.z = v15;                               // EF:26511-12
+    ///       if (sub_104D0_terrain_tile_is_water(&a1x->position) == 1) {
+    ///           a1x->word_0x2C_44 = 0;
+    ///           v16x = _4A190(&a1x->position, 10, 5);
+    ///           if (v16x) PrepareEventSound_6E450(v16x, -1, 27);  // EF:26513-19
+    ///       } else a1x->word_0x2C_44 = 128;                       // EF:26522
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// Three details a paraphrase loses:
+    ///
+    /// 1. **The decel NEVER crosses zero** (EF:26461-69 only steps when
+    ///    `|v| > 4`), so a thrown sphere does not "run out of speed"
+    ///    and drop into the settle arm — the ONLY exit is the LANDING
+    ///    at EF:26511. mc2l22 slot 900 rides 328→324→…→4 and then
+    ///    holds 4 until it hits the ground.
+    /// 2. **Gravity DECREMENTS BEFORE IT IS ADDED** here (EF:26474-78),
+    ///    where the settle arm adds first and decrements after
+    ///    (EF:26542-46) — a flat 16-unit phase difference between the
+    ///    two arms on the very first airborne tick.
+    /// 3. **The cave-ceiling kick's `predictedAxis.z = v17` is DEAD**
+    ///    (EF:26505): the position was already committed at EF:26489
+    ///    and nothing reads the scratch axis afterwards, so unlike the
+    ///    settle arm's ceiling clamp (EF:26579-87, committed at
+    ///    EF:26588) the flight arm's ceiling contact changes only
+    ///    `actSpeed` and `word_0x2C_44`, never the sphere's z.
+    fn mc2_fool_flight(&mut self, i: usize) {
+        // EF:26461-69 — decelerate 4/tick, never through zero.
+        let v13 = self.ent[i].f126;
+        if v13 <= 0 {
+            if v13 < -4 {
+                self.ent[i].f126 = v13 + 4;
+            }
+        } else if v13 > 4 {
+            self.ent[i].f126 = v13 - 4;
+        }
+        // EF:26472-73 — the 3-D step off the LAUNCH pose (yaw AND
+        // pitch), at the POST-decel speed.
+        let (x0, y0, z0) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let mut pos = (x0, y0, z0);
+        let (yaw, pitch, spd) = {
+            let e = &self.ent[i];
+            (e.f30, e.f32, e.f126)
+        };
+        Self::polar_step(&mut pos, yaw, pitch, spd);
+        // EF:26474-78 — gravity: DECREMENT FIRST, floor −128, THEN add.
+        let g = (self.ent[i].f46 - 16).max(-128);
+        self.ent[i].f46 = g;
+        pos.2 = pos.2.wrapping_add(g);
+        // EF:26479-86 — the cave-wall arm: revert the whole step, stop
+        // dead, slam the lift to −128, and DO NOT commit the position.
+        let mut commit = true;
+        if self.is_cave() {
+            let (fov, hover) = {
+                let e = &self.ent[i];
+                (
+                    e.f84 as i32,
+                    crate::mc2::behavior::BEHAVIOR[e.row156 as usize].v_12 as i32,
+                )
+            };
+            if self.cave_poke(fov, hover, pos.0, pos.1) {
+                pos = (x0, y0, z0);
+                self.ent[i].f126 = 0;
+                self.ent[i].f46 = -128;
+                commit = false;
+            }
+        }
+        if commit {
+            self.move_relink(i, pos.0, pos.1, pos.2);
+        }
+        // EF:26491 — the terrain read is on the PREDICTED axis, which
+        // by here is the sphere's own committed position either way.
+        let ground = self.ground_z(pos.0, pos.1) as i16;
+        if ground <= pos.2 {
+            // EF:26494-507 — still airborne. In a cave a sphere that
+            // pokes the rock takes a random ±1/±2 skid and its lift is
+            // forced downward; the `predictedAxis.z = v17` beside it is
+            // dead (see the doc comment), so z is NOT clamped here.
+            if self.is_cave() {
+                let cap =
+                    (self.ceiling_z(pos.0, pos.1) as i16).wrapping_sub(self.ent[i].f84 as i16);
+                if cap < pos.2 {
+                    let r = self.ent_rand(i);
+                    let s = ((r & 3) as i32 - 2) as i16;
+                    self.ent[i].f126 = if s == 0 { 1 } else { s };
+                    self.ent[i].f46 = -self.ent[i].f46.abs();
+                }
+            }
+        } else {
+            // EF:26509-23 — THE LANDING. actSpeed 0 hands the sphere to
+            // the settle arm from the next tick on; the lift is re-armed
+            // at +128 (the bounce) on land, or ZEROED on water with a
+            // (10,5) splash and its sound 27.
+            self.ent[i].f126 = 0;
+            self.ent[i].z = ground;
+            let (lx, ly) = {
+                let e = &self.ent[i];
+                (e.x, e.y)
+            };
+            if self.cap_bit(lx, ly) == 1 {
+                self.ent[i].f46 = 0;
+                if let Some(s) = self.mc2_spawn_splash(lx, ly, ground) {
+                    self.snd(27, s);
+                }
+            } else {
+                self.ent[i].f46 = 128;
+            }
+        }
     }
 
     /// The apocalypse-rain DECAY channel (`byte[1] |= 0x20` — port

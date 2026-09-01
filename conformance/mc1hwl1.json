@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1hwl1",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 345,
+   "file": "a-plus-146-of-zero-is-the-scratch-record.mgcr",
+   "source": "mc1hwl1",
+   "note": "A +146 OF 0 IS THE SCRATCH RECORD (HIDDEN WORLDS column, HIDDEN.EXE): MC1HW's shared chase core sub_1A120 (remc1hw/sub_main.cpp:20211-15, line-for-line identical to remc1/sub_main.cpp:21654-58) forms its target pointer with NO validity test of any kind - it MOVES FIRST (`sub_196E0(a1x);`, unconditional), forms `v12 = pool + 164 * a1x->var_u16_29941_146;` with no index-zero test and no class test, re-bears off it (`if ((+63 & 3) == 0) +34 = sub_42150_42490(..., v12 + 72);`) and only THEN tests `*(int*)(v12+12) < 0 || (*(_BYTE*)(v12+17) & 4)`. sub_1BB20 (m4) is literally `sub_1A120(a1x, 24, sub_1A990)`. So a militiaman handed +146 = 0 keeps hunting the SCRATCH RECORD AT SLOT 0 - he walks, and his target yaw becomes the bearing to the ORIGIN. The port's invented `+146 == 0` early return and `class64 == 0` conjunct froze him instead. WITNESS mc1hwl1 t=345->346, slot 33 (5,4): it is promoted 25 -> 26 at t=345 with f146 = 0, f126 = 30 and NO rand draw (the pack-death handoff, not an acquisition), so the graded pair imports it ALREADY in chase 26 with +146 = 0 - a pure chase tick with no handoff inside the window, which is why this is the cleanest pin for the law (mc1l37's copy bundles the handoff). Retail then STAYS in chase 26 for >= 8 ticks and WALKS: x 21998 -> 22021, y 18694 -> 18713, z 1473 -> 1472, f30/heading 384 -> 703 (f63 194 -> 195, so no re-bear on this tick), re-bearing f34 17 -> 1227 at t=348 - 1227 being the bearing to (0,0). The port dropped back to 25 at t=346 and never moved again. NON-VACUITY: MGC_NO_M4_SCRATCH_TARGET=1 regresses this pair (slot 33 x, y, z and heading). Worth +2,582 horizon on mc1hwl1 (345 -> 2,927). Ledger SESSION 96."
+  }
+ ]
+}

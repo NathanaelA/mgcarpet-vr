@@ -48,10 +48,552 @@ use crate::world::PLAYER_LIFE_MAX;
 /// (EF:37926).
 const NOTIFY_TICKS_LEVELUP: u16 = 200;
 const NOTIFY_TICKS_SELECT: u16 = 20;
+
+/// A/B toggle for the Fool's-Mana retaliation AIM PHASE (`sub_36770`
+/// EF:26683-86 / `sub_36850` EF:26717-25 aim BEFORE the muzzle lift,
+/// and `sub_655C0` raises the target through `sub_65580`): set
+/// `MGC_NO_FOOLS_AIM_PHASE` to restore the pre-dig behaviour, where
+/// the bolt aimed from its own lifted muzzle at an unraised human.
+fn no_fools_aim_phase() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_FOOLS_AIM_PHASE").is_some())
+}
+
+/// A/B toggle for THE FOOL'S-MANA FIREBALL'S ABSENT `id_0x1A_26`
+/// (`sub_36770` EF:26671-96 vs its sibling `sub_36850` EF:26700-27):
+/// set `MGC_NO_FOOLS_BOLT_STRANGER` to restore the pre-dig behaviour,
+/// where the fireball inherited the sphere's fused `id24`.
+pub(crate) fn no_fools_bolt_stranger() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_FOOLS_BOLT_STRANGER").is_some())
+}
+
+/// A/B toggle for THE FOOL'S-MANA WATER-SPLASH ARM (`sub_36770`'s
+/// tail, EF:26690-95). The arm is **spawn + sound only, at the
+/// SPHERE's own position** — shipped `NETHERW.EXE` file
+/// `0x5B014-0x5B045` in full:
+///
+/// ```text
+///   5b014: 6a 05          push $0x5          ; subtype 5
+///   5b016: 6a 0a          push $0xa          ; class 10
+///   5b018: 57             push %edi          ; &a1x->position_0x4C_76
+///   5b019: e8 ..          call _4A190
+///   5b01e: 83 c4 0c       add  $0xc,%esp
+///   5b021: 85 c0          test %eax,%eax
+///   5b023: 74 23          je   0x5b048       ; -> ret
+///   5b025..5b039          <pool index of the new record>
+///   5b03a: 6a 1b          push $0x1b         ; sound 27
+///   5b03c: 6a ff          push $-1
+///   5b03f: 50             push %eax
+///   5b040: e8 ..          call PrepareEventSound_6E450
+/// ```
+///
+/// — **not one store on the new record**, so the splash keeps
+/// `NewEvent_4A050`'s ctor seed `id_0x1A_26 = <own pool index>`
+/// (Events.cpp:570) and belongs to nobody, exactly like the
+/// retaliation fireball above it ([`no_fools_bolt_stranger`]). The
+/// port stamped the sphere's fused `id24` on it; set
+/// `MGC_NO_FOOLS_SPLASH_ARM` to restore that.
+///
+/// ⛔ THE Z HALF OF THIS ARM IS A NON-LAW, CHECKED AND DROPPED.
+/// `%edi` is `lea 0x4c(%esi)` computed once at `0x5AF7D` off the
+/// SPHERE and pushed for BOTH `_4A190` calls, so retail does place
+/// the splash at the sphere's UNLIFTED z while the port passed the
+/// fireball's lifted one — but the (10,5) ctor `NewAdd0A05_4E570`
+/// (EF:35436-54) ends with
+/// `position.z = getTerrainAlt_10C40(&position)`, and the port's
+/// `Gen::mc2_spawn_splash` carries the same snap
+/// (`mc2/effects.rs:211`). The argument is discarded on both columns.
+///
+/// ⚠ UNWITNESSED in the current corpus (no take splashes a fool's
+/// retaliation) — landed on the disassembly alone, as the same
+/// absence class the witnessed `MGC_NO_FOOLS_BOLT_STRANGER` law
+/// proved one instruction earlier.
+fn no_fools_splash_arm() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_FOOLS_SPLASH_ARM").is_some())
+}
+
+/// A/B toggle for THE LIGHTNING RETALIATION'S `id_0x1A_26`
+/// (`sub_36850`, shipped `NETHERW.EXE` `0x5B093`
+/// `66 8b 40 1a  mov 0x1a(%eax),%ax` / `0x5B097`
+/// `66 89 43 1a  mov %ax,0x1a(%ebx)`, EF:26714). `%eax` is `a1x`, the
+/// SPHERE, so the bolt copies the sphere's **`@0x1A`** — which for
+/// every (10,57) is its own pool slot (`sub_50130`, file `0x74930`,
+/// writes @0x45/@0x3F/@0x40/@0x41/@0x42/@0x2C/@0x14/@0x82/@0x38/
+/// @0x39/@0x3A/@0x43/@0x90/@0x44 and `0xe |= 2`, and **never @0x1A**,
+/// so `NewEvent_4A050`'s own-index seed stands) — and NOT its
+/// `parentId_0x28_40`.
+///
+/// The port's `id24` FUSES `@0x1A` and `@0x28` and the importer
+/// resolves it `@0x28`-else-`@0x1A`, so writing `owner` here handed
+/// the thunder bolt the Fool's-Mana CASTER, giving it the caster's
+/// whole friendly-fire immunity. `Gen::probe_self_id` already unfuses
+/// the same lane for (10,57) on the read side (`if id24 != j { j }`),
+/// which is exactly the value written here.
+/// Set `MGC_NO_FOOLS_LIGHTNING_ID` to restore the pre-dig behaviour.
+/// ⚠ UNWITNESSED: no tier-2/3 Fool's Mana is claimed anywhere in the
+/// recording corpus.
+fn no_fools_lightning_id() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_FOOLS_LIGHTNING_ID").is_some())
+}
+
+/// A/B toggle for the CASTLE-DEATH TOKEN PURGE (`sub_605E0`'s level-0
+/// rival arm, EF:61645-61658): when a rival castle reaches level 0 on
+/// a level whose `byte_0x2FED2 & 4` is set, retail reap-flags whatever
+/// record its owner's spell-2 book slot names and zeroes the slot.
+///
+/// ⭐ **THE COMPANION WAS THE LEVEL GATE, AND IT WAS A STUB.** This
+/// law was banked OFF in round 96 as "measured net-negative"
+/// (mc2l22 +1 tick, mc2l6-rsg −9,486) — but that measurement was taken
+/// with [`World::mc2_castle_purge_level`] hard-wired to `true`, so the
+/// arm fired on mc2l6-rsg, which is level **6** (`gfx_type` 0) and
+/// where retail's `test byte [eax+0x2fed2],4` FALLS THROUGH. With the
+/// real gate wired the arm is inert everywhere but levels 022 and 062,
+/// and the regression is gone.
+///
+/// Set `MGC_NO_MC2_CASTLE_DEATH_TOKEN_PURGE` to restore the pre-dig
+/// behaviour (no purge at all).
+fn no_mc2_castle_death_token_purge() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_DEATH_TOKEN_PURGE").is_some())
+}
+
+/// A/B toggle for the MC2 HUMAN shield's per-tick CHARGED re-stamp
+/// (`sub_6A480` EF:56513 — `parent.byte[1] |= 0x40` on EVERY afforded
+/// tick of a `life_0x1A == 0` tier): set `MGC_NO_SHIELD_RESTAMP` to
+/// restore the pre-dig behaviour, where `mc2_spell_fire` latched
+/// `player.shield` once at the cast and the first absorb spent it for
+/// the rest of the window.
+/// ⚠⚠⚠ THIS LANE HAD NO KILL SWITCH FOR A WHOLE SESSION AND IT COST A
+/// GOLDEN BISECT. `MGC_NO_TOKEN_SLOT_BACKREF=1` restores the pre-dig
+/// `word_0x26_38`, which carried a SPELL INDEX (or nothing at all on
+/// the fire path).
+///
+/// Retail's `@0x26` carries the (15,x) token's **POOL SLOT**: both of
+/// its readers index `Entities_EA3E4` with it — the impact XP award
+/// `sub_6D8B0(a1x->id, Entities[a1x->word_0x26_38]->model_0x40_64, 1)`
+/// (EF:62985), for which slot and index happen to be interchangeable
+/// because a (15,N) token's model IS N; and the Magic Mine's swallow
+/// `sub_68AC0` (EF:55441-44), which reads `v5x->model_0x40_64` AND
+/// `v5x->byte_0x46_70` off it and re-arms `v5x->word_0x2E_46 = 1`.
+/// The second reader is unreachable from an index, which is why the
+/// lane must carry the slot; [`Gen::mc2_token_model`] resolves it back
+/// for the first.
+///
+/// ⚠ Landing it changed `mc2_slice`'s window-D golden — ten human
+/// fireballs' `f40` 0 → 152 — with NO observable change (the
+/// layout-independent projection holds on all six windows). Because
+/// the write was ungated, no kill-switch A/B could attribute that
+/// move; it took a per-entity hash probe against a HEAD build.
+fn no_token_slot_backref() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_TOKEN_SLOT_BACKREF").is_some())
+}
+
+fn no_shield_restamp() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_SHIELD_RESTAMP").is_some())
+}
+
+/// ⭐⭐⭐ THE METAMORPH PUPPET IS BORN **HIDDEN** — AN ABSENCE IN AN
+/// ENUMERATED LIST, ON THE RECORD THE CALLER'S TAIL STAMPS AND THE
+/// CTOR DOES NOT. `sub_6A030`'s spawn-success arm (EF:56325-48) ends
+/// with THREE flag writes, not one; the port carried only the second:
+/// ```text
+///   8e928  80 49 0c 01   or  BYTE PTR [ecx+0xc],0x1   ; the PUPPET
+///   8e92c  8a 56 0c      mov dl,BYTE PTR [esi+0xc]
+///   8e92f  80 ca 21      or  dl,0x21                  ; the CASTER
+///   8e938  88 56 0c      mov BYTE PTR [esi+0xc],dl
+///   8e93b  66 8b 40 38   mov ax,WORD PTR [eax+0x38]   ; wizext playerColor
+///   8e942  66 3b 42 0c   cmp ax,WORD PTR [edx+0xc]    ; == LevelIndex_0xc?
+///   8e946  74 08         je  0x8e950
+///   8e948  80 61 0c fe   and BYTE PTR [ecx+0xc],0xfe  ; NON-local: undo it
+///   8e94c  80 4e 0c 01   or  BYTE PTR [esi+0xc],0x1
+/// ```
+/// `ecx` is the record `IfSubtypeCallCreatingManaSphere_4A190` just
+/// returned — the same pointer that took `[ecx+0x49]=0xc` (StageVar2
+/// 12), `[ecx+0x45]=8*model+7` and `[ecx+0x28]`/`[ecx+0x1a]` six
+/// instructions earlier — so the `|= 1` lands on the PUPPET, and it
+/// SURVIVES for a LOCAL caster (the `je` skips the `&= 0xfe`).
+/// `sub_4C310`, the (5,16) ctor itself (EF:34163-97), contains no such
+/// write, so this is the caller's tail and nowhere else — the same
+/// shape as round 98's `MGC_NO_SUMMON_HEAD_BEARING`.
+///
+/// Retail's byte[0] bit 0 is the HIDDEN latch, and it is what
+/// [`crate::Gen::mc2_awake_one`] returns on (EF:55515) BEFORE the
+/// 0x2400000 proximity test. Without it the port's puppet re-armed
+/// `byte_0x39_57 = 16` every 17 ticks forever, and the AWAKE GATE in
+/// [`crate::Gen::mc2_aim_scan`] (`kx->byte_0x39_57`, EF:54811) then
+/// admitted it as a lock candidate for every class-9 flyer in range.
+///
+/// WITNESS mc2l6-rival-spells-galore t=28,033: the human's metamorph
+/// puppet is slot 171, minted at t=27,925 with retail `flags 13`
+/// (bit 0 SET) against the port's 12. Retail's `byte_0x39_57` counts
+/// 64 → 0 and then STAYS 0; the port's cycles 16 → 0 → 16. Rival
+/// 378's freshly minted (9,0) at slot 306 therefore acquired
+/// `target96 = 171` on its BIRTH tick, re-aimed 1730/104 → 1734/113
+/// and flew off the launch bearing, where retail's bolt carries
+/// `target96 = 0` and flies dead straight (−302, −204, −120 per tick,
+/// yaw and pitch frozen) for its whole life.
+///
+/// Set `MGC_NO_METAMORPH_PUPPET_HIDDEN` to restore the pre-dig
+/// behaviour. Round 99 dig 99-18.
+pub(crate) fn no_metamorph_puppet_hidden() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_METAMORPH_PUPPET_HIDDEN").is_some())
+}
+
+/// A/B toggle for the LAUNCH AIM POINT (`MGC_NO_MC2_LAUNCH_AXIS=1`
+/// reverts): the `axis_0x9A_154x` stamp every human cast thunk writes
+/// on the flyer it spawns. See [`super::cast::World::mc2_launch`].
+pub(crate) fn no_launch_axis() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_LAUNCH_AXIS").is_some())
+}
+
+/// A/B toggle for the `subSpellIndex_0x2A_42` ABSENCE on the three
+/// direct arms whose retail thunk never writes it
+/// (`MGC_NO_MC2_LAUNCH_2A_ABSENCE=1` restores the old unconditional
+/// write). See [`super::cast::World::mc2_launch`].
+pub(crate) fn no_launch_2a_absence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_LAUNCH_2A_ABSENCE").is_some())
+}
+
+/// A/B toggle for the ROUND-98 EXTENSION of the launch aim point to
+/// the **whole class-15 fire table** — the band arms (spells 0 and 7,
+/// `sub_693F0`/`sub_6A5C0`) and the two direct arms 98-1 left out
+/// (spell 9 `sub_6AB00`, spell 13 `sub_6B3E0`).
+/// See [`mc2_launch_axis_reach`].
+///
+/// ⚠ **UN-PARKED AND WITNESSED, round 98 close.** It shipped parked for
+/// about an hour because its dig measured only `mc2l6-rival-spells-galore`
+/// **pairs 0..2000** and saw zero rows — a WINDOW artefact, not an absence.
+/// Spells 0/7/9/13 are Fireball / Lightning / Meteor / Steal Mana, i.e. four
+/// of the commonest offensive casts, and the MC2 spells-galore take exercises
+/// all of them. Re-measured on `recordings/mc2l0-spells-galore.mgcr`, whole
+/// take, one binary, `MGC_RAW_SHADOW=1` row-set diff:
+/// **fixed 1,251 / introduced 0**, and *every* fixed row is
+/// `(9,0) dest_x` / `dest_y` / `dest_z` — precisely the lane this stamps.
+/// ⭐ **A "no exemplar in the corpus" verdict is only as wide as the window it
+/// was measured on.** Before parking a law for want of a witness, re-measure
+/// it on a take that exercises the mechanic — the galores exist for this.
+pub(crate) fn no_launch_axis_band() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_LAUNCH_AXIS_BAND").is_some())
+}
+
+/// A/B toggle for the ROUND-104 EXTENSION of the launch aim point to
+/// the **terrain-tail eight** — the class-15 fire handlers whose
+/// `axis_0x9A_154x` step is `4096` at **pitch 0** and then
+/// `z = getTerrainAlt(dest)` (spells 15/16/17/18/20/21/23/25).
+/// `MGC_NO_MC2_LAUNCH_AXIS_GROUND=1` restores the old
+/// "the helper cannot express a terrain lookup" exclusion on BOTH
+/// the human and the rival column. See [`mc2_launch_axis_reach`].
+pub(crate) fn no_launch_axis_ground() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_LAUNCH_AXIS_GROUND").is_some())
+}
+
+/// A/B toggle for the RIVAL column's `subSpellIndex_0x2A_42` ABSENCE
+/// (`MGC_NO_RIVAL_LAUNCH_2A_ABSENCE=1` reverts). Separate from
+/// [`no_launch_2a_absence`] so the twin call paths stay independently
+/// attributable. See `mc2/rivals.rs` `mc2_rival_emit`.
+pub(crate) fn no_rival_launch_2a_absence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_RIVAL_LAUNCH_2A_ABSENCE").is_some())
+}
+
+/// A/B toggle for the RIVAL column's LAUNCH AIM POINT
+/// (`MGC_NO_RIVAL_LAUNCH_AXIS=1` reverts): `mc2/rivals.rs`
+/// `mc2_rival_emit` is the twin call path of [`World::mc2_launch`] —
+/// the class-15 fire handlers are caster-generic, so the rival funnel
+/// takes the same `axis_0x9A_154x` stamp. See
+/// [`mc2_launch_axis_reach`] for the table and its citations.
+pub(crate) fn no_rival_launch_axis() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_RIVAL_LAUNCH_AXIS").is_some())
+}
+
+/// A/B toggle for the CLASS-9 BIRTH `roll`/`fov` ABSENCE
+/// (`MGC_NO_MC2_LAUNCH_ROLL_ABSENCE=1` restores the old birth stamp).
+/// See [`mc2_launch_axis_reach`]'s sibling note and
+/// [`super::cast::World::mc2_launch`].
+pub(crate) fn no_launch_roll_absence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_LAUNCH_ROLL_ABSENCE").is_some())
+}
+
+/// ⭐⭐⭐ THE LAUNCH AIM POINT IS A WHOLE-TABLE LAW, NOT A FOUR-ARM
+/// ONE. Every class-15 spell "fire" handler in the shipped MC2 binary
+/// copies the CASTER's own `position_0x4C_76` into the flyer's
+/// `axis_0x9A_154x` (@0x9A) and steps it along the launch bearing with
+/// `MoveEntity_57FA0`. Enumerating every `axis_0x9A_154x =` in the
+/// class-15 band of `EventsFunctions.cpp` and pairing each with its
+/// `Events.cpp` action-dispatch group (five handlers per spell, the
+/// last one being the fire) gives the COMPLETE table — twenty sites,
+/// one per spell, with exactly ONE spell missing (Fool's Mana):
+///
+/// | spell | handler | EF | reach | pitch |
+/// |---|---|---|---|---|
+/// | 0 fireball   | `sub_693F0` | 55871 | 0x4000 | caster |
+/// | 1 possess L0 | `sub_69900` | 56059 | 10240  | caster |
+/// | 1 possess L1+| `sub_69640` | 55976 | 0x4000 | caster |
+/// | 2 castle     | `sub_69AB0` | 56140 | 4096   | 0 + terrain alt |
+/// | 7 lightning  | `sub_6A5C0` | 56622/56675 | 0x4000 | caster |
+/// | 9            | `sub_6AB00` | 56816 | 10240  | caster |
+/// | 13 steal     | `sub_6B3E0` | 57214 | 0x4000 | caster |
+/// | 14 duel      | `sub_6B610` | 57310 | 10240  | caster |
+/// | 15/16/17/18/20/21/25 | `sub_6B870`/`6BAB0`/`6BCF0`/`6BF30`/`6C3E0`/`6C620`/`6CFA0` | 57382/57455/57527/57597/57750/57827/58161 | 4096 | 0 + terrain alt |
+/// | 19 army      | `sub_6C170` | 57673 | 0x4000 | caster |
+/// | 22 fool's    | `sub_6C870` | —     | NONE   | — |
+/// | 23 mine      | `sub_6CAC0` | 57996 | 4096   | 0 + terrain alt |
+/// | 24 alliance  | `sub_6CD20` | 58077 | 0x4000 | caster |
+///
+/// ⭐ VERIFIED IN THE SHIPPED `NETHERW.EXE`, not just the decompile:
+/// `sub_693F0` at file **0x8DBF0** ends its spawn tail with
+/// `0x8DD47 lea 0x9a(%edi),%edi` / `0x8DD4D lea 0x4c(%ebx),%esi` /
+/// `movsl ; movsw` (the six-byte `axis = caster.position` copy) then
+/// `0x8DD61 push $0x4000` with pitch `0x1e(%ebx)+wizext@0x1a` and yaw
+/// `0x1c(%ebx)+wizext@0x18` into `call 0x7c7a0` (= `MoveEntity_57FA0`,
+/// linear 0x57FA0). `sub_69900` at file **0x8E100** carries the same
+/// pair at `0x8E1B3`/`0x8E1B9` with `0x8E1D6 push $0x2800` = **10240**.
+///
+/// This helper returns `(reach, use_pitch)` for the arms that end in a
+/// plain polar step. The seven `4096 / pitch 0 / z = getTerrainAlt`
+/// arms and the castle ball are DELIBERATELY EXCLUDED: their tail is
+/// a terrain lookup this helper cannot express, and the port already
+/// uses `dest_x`/`dest_y`/`site_z` on the (9,10) castle ball as its
+/// own flight target (`mc2/rivals.rs` `e.dest_x = tx << 8`), so a
+/// generic stamp there would clobber a landed lane.
+///
+/// ⭐⭐⭐ ROUND 104 — **THAT EXCLUSION WAS THE LAST HOLE, AND IT WAS
+/// EIGHT SPELLS WIDE.** The helper CAN express the terrain tail: it
+/// is a third flag, not a different shape. All eight sites are the
+/// same three statements, byte for byte:
+///
+/// ```text
+///   v->axis_0x9A_154x = caster->position_0x4C_76;
+///   MoveEntity_57FA0(&v->axis_0x9A_154x,
+///                    caster->wizext->nextEntity_0x18_24
+///                        + caster->yaw_0x1C_28, 0, 4096);
+///   v->axis_0x9A_154x.z = getTerrainAlt_10C40(&v->axis_0x9A_154x);
+/// ```
+///
+/// EF:57382-83 (15) · 57455-56 (16) · 57527-28 (17) · 57597-98 (18) ·
+/// 57750-51 (**20**) · 57827-28 (21) · 57996-97 (23, the mine) ·
+/// 58161-62 (25). The handler-to-spell map is the address ladder
+/// itself — the class-15 dispatch groups run five entries per spell
+/// in ascending order (`Events.cpp:3609-3800`), and the anchors
+/// `sub_6B610` = 14 (duel), `sub_6C170` = 19 (army), `sub_6C870` = 22
+/// (Fool's Mana), `sub_6CD20` = 24 (alliance) pin it with no slack:
+/// `6B870`=15 `6BAB0`=16 `6BCF0`=17 `6BF30`=18 `6C3E0`=20 `6C620`=21
+/// `6CAC0`=23 `6CFA0`=25. `sub_6C3E0`'s own body confirms it — its
+/// `sub_6DCA0` call passes the band index **`0x14u` = 20**
+/// (EF:57739).
+///
+/// The **castle ball (spell 2, `sub_69AB0` EF:56140-45) stays
+/// excluded** and is the ONE member of the family whose tail differs:
+/// it lands the terrain read in a temporary, writes `byte_0x43_67`/
+/// `byte_0x44_68` between, and — decisively — the whole block is the
+/// `CastleEntityIndex <= Entities[0]` (castle-LESS) arm, the `else`
+/// of which stamps `word_0x96_150` and no axis at all. The port's
+/// castle ball already drives its flight off `dest_x`/`site_z`.
+///
+/// WITNESS: mc2l22 t=63319, the take's LAST head. The human casts
+/// GRAVITY WELL (spell 20) from (19801, 50761, 4724) at yaw 75;
+/// retail records the `(9,22)` at slot 816 with
+/// `dest (20735, 46773, 2324)` — horizontal leg exactly **4096** at
+/// **pitch 0**, and `2324` is `getTerrainAlt` at that point, not any
+/// polar z. The port left all three at zero.
+///
+/// `MGC_NO_MC2_LAUNCH_AXIS_GROUND=1` reverts exactly this extension
+/// (both columns), leaving the pitch-carrying arms untouched.
+///
+/// Returns `(reach, use_pitch, ground_snap)`.
+pub(crate) fn mc2_launch_axis_reach(spell: usize, life: i8) -> Option<(i16, bool, bool)> {
+    match spell {
+        // sub_693F0 EF:55871 / sub_6A5C0 EF:56622,56675 — the band's
+        // own fire blocks, both 0x4000 at the caster's live pitch.
+        0 | 7 => Some((0x4000, true, false)),
+        // sub_69640 EF:55976 (leveled) vs sub_69900 EF:56059 (basic):
+        // the possession pair splits on the tier's `life_0x1A`, and
+        // so does its reach.
+        1 if life == 0 => Some((10240, true, false)),
+        1 => Some((0x4000, true, false)),
+        9 => Some((10240, true, false)),      // sub_6AB00 EF:56816
+        13 => Some((0x4000, true, false)),    // sub_6B3E0 EF:57214
+        19 | 24 => Some((0x4000, true, false)), // sub_6C170 / sub_6CD20
+        // ⭐ THE TERRAIN-TAIL EIGHT — reach 4096 at pitch 0, then
+        // `z = getTerrainAlt(dest)`. sub_6B870 / sub_6BAB0 /
+        // sub_6BCF0 / sub_6BF30 / sub_6C3E0 / sub_6C620 / sub_6CAC0 /
+        // sub_6CFA0, EF:57382 / 57455 / 57527 / 57597 / 57750 /
+        // 57827 / 57996 / 58161.
+        15 | 16 | 17 | 18 | 20 | 21 | 23 | 25 if !no_launch_axis_ground() => {
+            Some((4096, false, true))
+        }
+        _ => None,
+    }
+}
+
+/// ⭐⭐⭐ A/B toggle for the MC2 HUMAN shield's **ARMED** stage — the
+/// fourth and last wizard-buff column to get the two-stage absorb.
+///
+/// `sub_6A480` (EF:56496-541) keys on the TIER's `life_0x1A`, not on
+/// the tier index: `life == 0` re-stamps `parent.byte[1] |= 0x40`
+/// (CHARGED) on every afforded tick, `life == 1` stamps
+/// `parent.byte[2] |= 0x40` (ARMED) on the FIRST tick only, and a
+/// tier declaring anything else stamps NEITHER. SPELLS.DAT gives
+/// spell 6 `life_0x1A` = 0/0/1, so Shield III is the ARMED stage.
+///
+/// `sub_5EFA0`'s absorb (EF:60676-93) opens on the VICTIM's own flag
+/// word — `if (byte[1] & 0x40 || byte[2] & 0x40)` — and then splits:
+///
+/// ```text
+///   byte[1] & 0x40  (CHARGED): v10 = dword_0x5E_94 / 4;
+///                              mana -= v10; dword_0x5E_94 = v10;
+///                              byte[1] &= 0xBF;              // spent
+///   else            (ARMED):   dword &= 0xFFBFBFFF;          // both off
+///                              dword_0x5E_94 = 0;            // hit NULLED
+///                              byte[1] |= 0x40;              // -> CHARGED
+/// ```
+///
+/// The port's human column had only the CHARGED arm and no ARMED
+/// lane at all (`Player` carried one `shield` bool), so a human
+/// Shield III quartered its first hit where retail nulls it outright
+/// and then quarters the NEXT one.
+///
+/// Set `MGC_NO_MC2_SHIELD_ARMED` to restore the single-stage
+/// behaviour (the cast latches `player.shield` for every tier and the
+/// import seat ignores `byte[2] & 0x40`).
+pub(crate) fn no_mc2_shield_armed() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SHIELD_ARMED").is_some())
+}
+
+/// ⭐⭐⭐ **SHIELD III DECREMENTS ITS BURST COUNTER *BEFORE* IT BILLS,
+/// SO IT NEVER PAYS — AND NEVER PINS THE REGEN ON ITS LAST TICK.**
+///
+/// `sub_6A480`'s two arms are the same four statements in a DIFFERENT
+/// ORDER, and the order is the whole law (EF:56513-15 vs 56525-28; shipped
+/// `NETHERW.EXE` @ file `0x8ECDD` / `0x8ED0B`, `off = 0x34800 +
+/// linear − 0x10000`):
+///
+/// ```text
+///   life_0x1A == 0 :  byte[1] |= 0x40 ; sub_68DE0 ; word_0x2E_46--
+///                     8ecf5 mov %ah,0xd(%esi) / 8ecf8 call 0x8d5e0 / 8ecfd dec
+///   life_0x1A == 1 :  [if 46==48] byte[2] |= 0x40 ; word_0x2E_46-- ; sub_68DE0
+///                     8ed25 orb $0x40,0xe(%esi) / 8ed29..8ed30 dec / 8ed34 call 0x8d5e0
+/// ```
+///
+/// `sub_68DE0` (EF:55569) keys its FULL-COST debit on
+/// `word_0x2E_46 == word_0x30_48`. In the tier-2 arm that compare runs
+/// on the ALREADY-DECREMENTED counter, so it is false by construction:
+/// **Shield III's 10,000 is never charged.** It falls into the else —
+/// `if (v2 && manaRegen > 0) manaRegen = 0` — which pins the regen on
+/// the ARM tick (where the tier-0/1 arm would have parked `-maxMana`),
+/// and, because `v2` is the post-decrement counter, does NOT pin on
+/// the tick the window ENDS on.
+///
+/// SPELLS.DAT gives spell 6 `life_0x1A` = 0 / 0 / 1, so this is
+/// Shield III alone. Witness — mc2l6-rival-spells-galore, all three of
+/// its `sel[6] == 2` windows:
+/// - t=22531 is the arm (`f2e` 301 → **300**, `byte[2] |= 0x40`
+///   visible as the carpet's `flags` 269 → 4194573): retail's `d88`
+///   goes 739 → **0** and `mana` 1474488 → 1475227 → 1475227 → …,
+///   FLAT. The port stamped `d88 = −10000` and landed on 1465227 —
+///   the recorded −10,000 wall at t=22532, repeated at t=22731 and
+///   t=23117.
+/// - t=22721 is the re-press CANCEL (`move_bits` 0 → 16,
+///   `sub_5F660` case 0xE pins `f2e` to 1, `f2e` 111 → **0**): retail
+///   takes the decrement first, `sub_68DE0` sees `v2 == 0`, does NOT
+///   pin, and the wizard's freshly recomputed `d88` 739 stands —
+///   `mana` 1475165 → 1475904 at t=22722. The port pinned and held,
+///   which is exactly the recorded −739 wall at t=22722.
+///
+/// ⚠ FREE-RUN-ONLY LANE: `manaRegen_0x88_136` is not in `EntObsMc2`,
+/// and the pair importer (`mc2_applied_mana_delta`) reconstructs the
+/// delta from retail's OWN post-tick `f2e`/`f30` — where the arm tick
+/// already reads `300 != 301` (mid-burst pin) and the last tick reads
+/// `0` (skipped). The import seat is therefore ALREADY right; only the
+/// live token pass was wrong, so no pair can assert this and the lane
+/// is a unit test (`tests/mc2_shield_billing.rs`).
+///
+/// `MGC_NO_MC2_SHIELD3_PREDECREMENT=1` restores the shared skeleton
+/// (bill on the arm tick, pin on every later tick).
+pub(crate) fn no_mc2_shield3_predecrement() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SHIELD3_PREDECREMENT").is_some())
+}
+
+/// ⭐⭐⭐ **THE WIZARD'S PURSE IS THE ENTITY WORD; `Mc2Rival::mana` IS
+/// ONLY A MIRROR.** Retail has exactly ONE storage cell for a wizard's
+/// mana — `type_entity_0x6E8E::mana_0x90_144` (@0x90, our `Ent::f140`)
+/// — and every statement that moves it is a read-modify-write ON THAT
+/// CELL: the housekeeping regen is `a1x->mana_0x90_144 +=
+/// a1x->manaRegen_0x88_136` (EF:5426, `sub_12A70`) and the rebound
+/// deflect's victim debit is `a2x->mana_0x90_144 -= a1x->
+/// mana_0x90_144 >> 2` (EF:55274, `sub_68740`). The port keeps the
+/// purse in the brain record `Mc2Rival::mana` and *publishes* it with
+/// an ASSIGNMENT at the tail of the regen (`mc2/rivals.rs`,
+/// `self.g.ent[i].f140 = r.mana`), so any entity-side write made by
+/// ANOTHER slot's handler is silently reverted on the wizard's next
+/// tick.
+///
+/// This is the same shape the target word already carries at the top
+/// of [`World::mc2_rival_alive`] — "THE ENTITY WORD IS THE TARGET; the
+/// brain record only MIRRORS it" — one field short.
+///
+/// WITNESS (mc2l22 free run, `MGC_WRITE_TRACE=611:f140`): rival 611
+/// (3,1) is deflected by the (9,3) at slot 969 on t=3629 and retail's
+/// `explain` reads `focus slot 611 … mana 534 -> 34` with the bolt
+/// re-owned (`f1a 424 -> 611`) and re-homed (`target96 611 -> 424`) —
+/// the port's own deflect debit matches it exactly, writing
+/// `ent[611].f140 = 34` from slot 969's dispatch. Retail's t=3630 then
+/// leaves the purse alone (`manaRegen` is 0 there), while the port's
+/// t=3630 regen republishes the untouched shadow: `WRITE t=3630 slot
+/// 611 f140 34 -> 534 by slot 611 (3,1) f70=1`. That is the take's
+/// wall, `slot 611 mana: retail 34 port 534`, exactly +500 = the
+/// quarter of the bolt's own 2000.
+///
+/// `MGC_NO_MC2_WIZ_PURSE_IS_ENTITY=1` restores the pre-dig behaviour
+/// (the brain record is the master and the entity a write-only
+/// mirror).
+pub(crate) fn no_mc2_wiz_purse_is_entity() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WIZ_PURSE_IS_ENTITY").is_some())
+}
+
 /// The plain-toast ink: retail draws it in the CLRD-0 code `0xF00` =
 /// RGB(255,0,0) resolved to the nearest palette index (remc2
 /// EF:22128). We carry the intended truecolor red.
 const NOTIFY_RED: [u8; 3] = [255, 0, 0];
+
+/// ⭐⭐⭐ **WHICH SPELLS PIN THE REGEN MID-BURST IS AN ENUMERATED
+/// LIST.** `sub_68DE0` is not part of a shared skeleton — each of the
+/// 26 manifestation handlers places its own call. Twenty put it AFTER
+/// the `word_0x2E_46 == word_0x30_48` block, so every afforded tick
+/// clamps a positive `manaRegen` to 0. These do NOT:
+///
+/// - `sub_6BCF0` (17), `sub_6BF30` (18), `sub_6C620` (21),
+///   `sub_6C870` (22), `sub_6CAC0` (23) and `sub_6CFA0` (25) close the
+///   block one brace LATER, with the call INSIDE it (EF:57510 opens
+///   and EF:57531 calls, for 17) — they debit on the arm frame and
+///   then leave the purse alone for the rest of their window;
+/// - the CASTLE (2), whose `word_0x2E_46` is an upgrade LOCK and not
+///   a countdown, so `sub_69AB0` only reaches `sub_68DE0` on the
+///   fresh-cast sentinel.
+///
+/// HEAL (5) is off this list entirely: `sub_6A300` (EF:56432-77)
+/// never calls `sub_68DE0` at all and stamps its own inline
+/// accumulating debit.
+///
+/// Read by BOTH the live token pass and the conformance import's
+/// `mc2_applied_mana_delta` — ⭐⭐⭐ a law landed on one call path is
+/// not landed.
+pub(crate) const NO_MID_BURST_REGEN_PIN: [usize; 7] = [2, 17, 18, 21, 22, 23, 25];
 
 /// The 26-spell `str_611` subset for one wizard (spell-XP trace §0).
 /// All arrays are keyed by spell index 0..25 (`spell_t`).
@@ -205,7 +747,7 @@ pub(crate) struct DispatchArm {
 /// str_D7BD6 index — a 255 would panic the BEHAVIOR lookup),
 /// sprite). model = subtype throughout except 0x1C (model 28 rides
 /// the fireball body). All creators: mana 50, no RNG.
-const CREATORS: [(u8, u8, i16, u32, u8, u16); 19] = [
+const CREATORS: [(u8, u8, i16, u32, u8, u16); 20] = [
     (0, 0, 384, 21, 64, 340), // fireball (SummonFireball_4D2E0 EF:34729)
     // The BASIC possession bolt (`SummonManaPosession_4D3B0` EF:34764)
     // — tier `life_0x1A` 0 only, launched by `sub_69900` (EF:56039).
@@ -213,10 +755,16 @@ const CREATORS: [(u8, u8, i16, u32, u8, u16); 19] = [
     // differ ONLY in action (1 vs 18) and in the ShiftRot fov factor
     // (5/2 vs 2 — see `mc2_spawn_cast_proj`).
     (1, 1, 384, 10, 61, 209),
-    (2, 2, 384, 21, 60, 211),   // earthquake shot (sub_4D470 EF:34788)
-    (3, 3, 384, 21, 60, 76),    // meteor shot (sub_4D500 EF:34810)
-    (4, 4, 384, 21, 60, 210),   // volcano shot (sub_4D590 EF:34832)
-    (5, 5, 384, 21, 60, 211),   // crater shot (sub_4D620 EF:34854)
+    (2, 2, 384, 21, 60, 211), // earthquake shot (sub_4D470 EF:34788)
+    (3, 3, 384, 21, 60, 76),  // meteor shot (sub_4D500 EF:34810)
+    (4, 4, 384, 21, 60, 210), // volcano shot (sub_4D590 EF:34832)
+    (5, 5, 384, 21, 60, 211), // crater shot (sub_4D620 EF:34854)
+    // The DUEL DART (`sub_4D740` EF:34898) — spawned only by
+    // `sub_6B610` (EF:57291), never by the `sub_6DCA0` band, which is
+    // why it was missing from this table until mc2l6-rsg t=1326
+    // recorded one at slot 855 (max_life 21 = 0x2000/384, sprite 213,
+    // row 60, action 7).
+    (7, 7, 384, 21, 60, 213),   // duel dart (sub_4D740 EF:34898)
     (8, 8, 384, 21, 63, 214),   // (sub_4D7D0 EF:34920)
     (9, 9, 384, 9, 63, 216),    // thunder bolt (sub_4D860 EF:34942)
     (12, 12, 384, 5, 60, 216),  // charged thunder (sub_4DA20 EF:35009)
@@ -395,7 +943,7 @@ impl Gen {
         claimer: u16,
         ctx: &MobCtx,
     ) {
-        let (x, y, z, owner, payload, heading) = {
+        let (x, y, z, owner, payload, heading, raw_z) = {
             let e = &self.ent[i];
             // The MUZZLE LIFT (`position.z += array_0x52_82.fov`,
             // EF:26688 fireball / EF:26718 lightning): the bolt leaves
@@ -434,6 +982,7 @@ impl Gen {
                 e.id24,
                 e.f44 as i32,
                 e.f30,
+                e.z,
             )
         };
         let Some(pr) = self.mc2_spawn_cast_proj(subtype, x, y, z) else {
@@ -442,31 +991,113 @@ impl Gen {
         // The fireball's water-spawn splash (EF:26690-95, inside the
         // spawn-success arm): a (10,5) splash + sound 27 when the
         // sphere sits on water.
+        //
+        // ⭐ SPAWN + SOUND ONLY — an ABSENCE in an enumerated store
+        // list, disassembled in full at [`no_fools_splash_arm`]: the
+        // splash takes NO `id_0x1A_26`, so like the fireball above it
+        // it is a stranger to everyone, its OWN slot included.
         if subtype == 0 && self.cap_bit(x, y) == 1 {
             if let Some(s) = self.mc2_spawn_splash(x, y, z) {
-                self.ent[s].id24 = owner;
+                if no_fools_splash_arm() {
+                    self.ent[s].id24 = owner;
+                }
                 self.snd(27, s);
             }
         }
+        // ⭐⭐⭐ THE AIM IS TAKEN AT THE **UNLIFTED** z, AND THE MUZZLE
+        // LIFT IS APPLIED AFTER IT. Both retaliation spawners spell the
+        // order out and both put the lift LAST:
+        //   sub_36770  sub_655C0(v1x, v2x);                    EF:26683
+        //              v1x->yaw   = v1x->roll;                 EF:26684
+        //              v1x->pitch = v1x->fov;                  EF:26685
+        //              v1x->position.z += a1x->array_0x52_82.fov; EF:26686
+        //   sub_36850  sub_655C0(v1x, v3x);                    EF:26717
+        //              … v2x->pitch = v2x->fov;                EF:26721
+        //              v2x->position.z += a1x->array_0x52_82.fov; EF:26725
+        // and `sub_655C0` reads `a1x->position_0x4C_76` (EF:62775-76),
+        // which is still the SPHERE's own z at that point. Aiming from
+        // the lifted origin tilts every retaliation bolt further down.
+        //
+        // ⭐ AND `sub_655C0` RAISES THE TARGET: its first statement is
+        // `sub_65580(a2x)` (EF:62774), `position.z += array_0x52_82.yaw`
+        // unless model 2 (EF:62755-56) — the port's out-of-pool human is
+        // a raised victim exactly like the pool branch, and its `ayaw`
+        // IS `PLAYER_HH` (mc2l24 t=1024 slot 116 records ayaw = 100).
+        //
+        // mc2l24 pair 1024→1025 slot 70 is both halves at once: sphere
+        // 78 at (22273, 26950, **2856**) with afov 42, human 116 at
+        // (23386, 30122, 2037) ayaw 100 → dh 3361, dz 2856 − 2137 =
+        // 719 ⇒ retail's pitch **68**. Aiming from the lifted 2898 at
+        // the unraised 2037 gives dz 861 ⇒ the port's 82.
+        let (asrc, praise) = if no_fools_aim_phase() {
+            (z, 0i16)
+        } else {
+            (raw_z, crate::mc1::combat::PLAYER_HH as i16)
+        };
         let (yaw, pitch) = if claimer == PLAYER_TARGET {
-            let (tx, ty, tz) = (ctx.px, ctx.py, ctx.pz);
+            let (tx, ty, tz) = (ctx.px, ctx.py, ctx.pz.wrapping_add(praise));
             let yaw = Self::angle_between(x, y, tx, ty);
             let dh = Self::isqrt(Self::dist2_sq(x, y, tx, ty) as u32) as i32;
-            (yaw, Self::pitch_toward(z, tz, dh))
+            (yaw, Self::pitch_toward(asrc, tz, dh))
         } else if (claimer as usize) < self.ent.len()
             && self.ent[claimer as usize].flags & 0x400 == 0
         {
             let t = &self.ent[claimer as usize];
-            let (tx, ty, tz) = (t.x, t.y, t.z.wrapping_add(t.f78 as i16));
+            // `sub_65580` — the model-2 exemption is the castle's.
+            let tz = if no_fools_aim_phase() {
+                t.z.wrapping_add(t.f78 as i16)
+            } else {
+                t.aim_z()
+            };
+            let (tx, ty) = (t.x, t.y);
             let yaw = Self::angle_between(x, y, tx, ty);
             let dh = Self::isqrt(Self::dist2_sq(x, y, tx, ty) as u32) as i32;
-            (yaw, Self::pitch_toward(z, tz, dh))
+            (yaw, Self::pitch_toward(asrc, tz, dh))
         } else {
             (heading, 0)
         };
         {
             let e = &mut self.ent[pr];
-            e.id24 = owner;
+            // ⭐⭐⭐ A SPLIT IN A SIBLING PAIR: THE FIREBALL IS A
+            // STRANGER TO EVERYONE. `sub_36850` (the LIGHTNING
+            // retaliation) writes `v1x->id_0x1A_26 = a1x->id_0x1A_26`
+            // (EF:26714) — the SPHERE's own `@0x1A`, not its
+            // `parentId_0x28_40`. `sub_36770` (the FIREBALL,
+            // EF:26671-96) contains NO `id_0x1A_26` statement at all,
+            // so its flyer keeps `NewEvent_4A050`'s ctor seed
+            // `id_0x1A_26 = <own pool index>` (Events.cpp:570) — which
+            // `Gen::new_event` already lays down.
+            //
+            // The port stamped the sphere's `id24` on BOTH arms, and
+            // on a (10,57) that fused field carries retail's
+            // `parentId_0x28_40` = the wizard who cast the Fool's
+            // Mana. Owner immunity then spared everything of that
+            // wizard's, and the loudest reader is `sub_10C80`'s ch0
+            // CASTLE pre-pass (EF:4062-72), whose only gate is
+            // `iix->id_0x1A_26 != a1x->id_0x1A_26` — so a retaliation
+            // fireball retail bills against the caster's OWN castle
+            // (the castle's `sub_106C0` box is ~26 tiles wide) cost
+            // the port nothing.
+            // WITNESS mc2l6-rsg t=16600: bolt 187 (born 16597 off
+            // sphere 530) — retail `@0x1A` 187, port 343; castle 63
+            // (`id24` 343) takes `mail0 = (500, 187)` in retail and
+            // none in the port, and its life forks 156100/156600 at
+            // t=16601. That is the take's frontier wall.
+            // ⭐ AND EVEN THE SIBLING'S COPY IS OF `@0x1A`, NOT
+            // `parentId`. `sub_36850` copies the SPHERE's `@0x1A`
+            // (0x5B093/0x5B097), which for a (10,57) is its own pool
+            // slot — see [`no_fools_lightning_id`]. Writing `owner`
+            // (the port's fused `id24` = the Fool's-Mana caster) gave
+            // the thunder bolt the caster's friendly-fire immunity.
+            if no_fools_bolt_stranger() {
+                e.id24 = owner;
+            } else if subtype != 0 {
+                e.id24 = if no_fools_lightning_id() {
+                    owner
+                } else {
+                    i as u16
+                };
+            }
             e.f68 = impact.0;
             e.f69 = impact.1;
             e.f44 = payload.clamp(0, u16::MAX as i32) as u16;
@@ -914,6 +1545,39 @@ impl World {
         self.mc2_set_hand(hand != 0, spell as i8);
         let m = self.mc2_book.ent[s] as usize;
         self.mc2_set_spell(m, t);
+        // ⭐⭐⭐ ARMING TELEPORT II IS WHAT SETS THE RETURN POINT.
+        // `CopyAxisForSpellWithLife_6D830` (EF:58203-12) is called by
+        // this very handler ONE STATEMENT AFTER `SetSpell_6D5E0`
+        // (EF:37921-22):
+        //   if (entity->model_0x40_64 == 10
+        //       && Entities[entity->parentId] > Entities[0]
+        //       && SPELLS[10].subspell[spellId].life_0x1A == 1)
+        //       entity->axis_0x9A_154x = Entities[parentId]->position;
+        // so the T1 save/return toggle's anchor is stamped at EQUIP
+        // time, not at the castle hop. mc2l22 t=13242: the human equips
+        // Teleport II and retail rewrites token 219's dest_x/y/z
+        // 34970/64159/5523 -> 32979/50259/6008 — the carpet's position
+        // at the top of that tick — while `word_0x96_150` stays 1;
+        // seven ticks later the cast restores exactly that axis.
+        // ⚠ The two halves are NOT separable: the return-leg read alone
+        // adds a head at 16242 because the imported axis goes stale
+        // without this stamp. One switch covers both.
+        if !crate::engine::world::mc2_teleport_save_axis_off()
+            && m != 0
+            && self.g.ent[m].model65 == 10
+            && self
+                .g
+                .assets
+                .spells
+                .get(10)
+                .is_some_and(|r| r.tiers[(t as usize).min(2)].life == 1)
+        {
+            let (px, py, pz) = self.human_pose;
+            let e = &mut self.g.ent[m];
+            e.dest_x = px;
+            e.dest_y = py;
+            e.site_z = pz;
+        }
         self.g.snd_player(14);
         // The change-spell toast (EF:37925): the chosen TIER's own name
         // ("Possession" / "Mana Magnet" / "Thunderstorm"), so a level-N
@@ -1061,6 +1725,133 @@ impl World {
         self.mc2_set_spell(m, self.mc2_book.sel[spell]);
     }
 
+    /// `sub_61050`'s TIER FORK (EF:62130-62199) — the `life_0x1A`
+    /// switch the port had never taken, on BOTH victim columns.
+    ///
+    /// ```text
+    ///   v4 = SPELLS[13].subspell[tier].life_0x1A;        // 0, 0, 1 shipped
+    ///   if (!v4)         { v33 = subSpellIndex_2; v35 = 1; }        // FLAT
+    ///   else if (v4 > 2u){ goto LABEL_23; }                         // v33 = 0
+    ///   else {
+    ///     v6x = Entities[a1x->dword_0xA4_164x->CastleEntityIndex];  // VICTIM's
+    ///     v7x = Entities[v34x->dword_0xA4_164x->CastleEntityIndex]; // CASTER's
+    ///     if (v6x <= Entities[0] || v7x <= Entities[0] || v6x->mana <= 0)
+    ///          v35 = 1;                       // → the FLAT arm, amount = pct
+    ///     else { v9 = v6x->mana * pct;
+    ///            v6x->mana -= v6x->mana * pct / 100;     // the VICTIM's CASTLE
+    ///            v33 = v9 / 100;                          // …scattered, not paid
+    ///            while (v33 > 0) { chunk = min(v33, 500); … } }
+    ///     if (!v35) goto LABEL_23;            // v33 == 0 — NOTHING moves
+    ///   }
+    /// ```
+    ///
+    /// Returns the amount that moves WIZARD-TO-WIZARD at LABEL_23
+    /// (EF:62202-09). ⭐⭐⭐ **THE CASTER IS NOT CREDITED THE SAME
+    /// AMOUNT — IT IS NOT CREDITED AT ALL.** The tier-3 arm takes a
+    /// PERCENTAGE off the VICTIM'S CASTLE, leaves both wizards' purses
+    /// alone, and re-emits the stolen store as loose (10,39) spheres in
+    /// a ring around the CASTER'S OWN castle; the thief has to fly out
+    /// and collect them. The port ran retail's NO-CASTLE FALLBACK for
+    /// tier 2 in every case, i.e. moved a flat 10 (the percent read as
+    /// an amount) and never touched a castle.
+    ///
+    /// mc2l6-rsg t=19303→19304 is the corpus's ONE tier-2 steal (the
+    /// only (10,25) burst in 40,422 ticks with `b46 == 2`; the other
+    /// 172 rows are tiers 0/1). The human (343) steals from rival 378:
+    /// castle 466's store **8580 → 7722** (= 8580 − 8580·10/100 = 858),
+    /// the human's purse UNCHANGED at 1,449,370, 378's purse on its own
+    /// −100 rhythm, and TWO (10,39) spheres born the same tick carrying
+    /// **500 and 358** (= 858 in 500-chunks) at ~9,592 units from castle
+    /// 63 — the caster's castle, whose `array_0x52_82` extents are
+    /// (6784, 6784) and `isqrt(6784² + 6784²) = 9594`. Both spheres
+    /// carry `playerEntityIndex = 0`, which is `life_0x1A == 1`'s arm
+    /// (EF:62185-86) — tier 3 of spell 13 is NOT the caster-owned `== 2`
+    /// case, so nothing about them is bound to the thief.
+    pub(crate) fn mc2_steal_resolve(&mut self, victim: u16, caster: u16, tier: u8) -> u32 {
+        let row = self.g.assets.spells.get(13).copied().unwrap_or_default();
+        let sub = row.tiers[(tier as usize).min(2)];
+        let flat = sub.sub_spell.max(0) as u32;
+        // `if (v4 > 2u) goto LABEL_23` — v35 stays 0 AND v33 stays 0,
+        // so nothing moves at all (unreachable on the shipped table).
+        if !(0..=2).contains(&sub.life) {
+            return 0;
+        }
+        if sub.life == 0 {
+            return flat; // tiers 1/2: the flat 2000 / 4000
+        }
+        // EF:62135-38 — BOTH castles must resolve and the VICTIM's
+        // store must be POSITIVE, else `v35 = 1` and the flat arm runs
+        // with `subSpellIndex_2` (10 on tier 3) read as an AMOUNT.
+        // `rival_castle` is the shared owner scan — PLAYER_TARGET is
+        // the human's own `id24`, so it serves both columns.
+        let (Some(vc), Some(cc)) = (self.rival_castle(victim), self.rival_castle(caster)) else {
+            return flat;
+        };
+        let store = self.g.ent[vc].f140;
+        if store <= 0 {
+            return flat;
+        }
+        // EF:62144-48 — the product is 64-bit and the quotient
+        // truncates; the castle keeps `store - store*pct/100`.
+        let pct = sub.sub_spell as i64;
+        let taken = (store as i64 * pct / 100) as i32;
+        self.g.ent[vc].f140 = store - taken;
+        // EF:62147/62149 — the emission RING is the CASTER's castle's
+        // horizontal extents, `radix_3d(pitch² + roll²)`.
+        let (cx, cy, radius) = {
+            let e = &self.g.ent[cc];
+            let (ap, ar) = (e.f80 as i32, e.f82 as i32);
+            (e.x, e.y, Gen::isqrt((ap * ap + ar * ar) as u32) as i16)
+        };
+        // EF:62183-86 — only `life_0x1A == 2` binds the sphere to the
+        // thief; tier 3 of spell 13 is 1, so the spheres are UNOWNED.
+        let owner = if sub.life == 2 { caster } else { 0 };
+        // The victim's OWN entity LCG carries the ring draw (`a1x` is
+        // the victim), EF:62158-59. The human's carpet is a pool record
+        // under conformance; native play has none, and the fallback
+        // keeps the scatter random rather than degenerate.
+        let vslot = if victim == PLAYER_TARGET {
+            self.mc2_carpet_slot as usize
+        } else {
+            victim as usize
+        };
+        let mut left = taken;
+        while left > 0 {
+            // EF:62152-56 — at most 500 per sphere, remainder last.
+            let chunk = left.min(500);
+            left -= chunk;
+            let ring_yaw = if vslot != 0 && vslot < self.g.ent.len() {
+                (self.g.ent_rand(vslot) & 0x7FF) as u16
+            } else {
+                self.g.rand = self.g.rand.wrapping_mul(9377).wrapping_add(9439);
+                (self.g.rand & 0x7FF) as u16
+            };
+            let mut pos = (cx, cy, 0i16);
+            Gen::polar_step(&mut pos, ring_yaw, 0, radius);
+            // EF:62163-65 — `HIBYTE(alt) += 4`, i.e. ground + 1024.
+            pos.2 = (self.g.ground_z(pos.0, pos.1) as i16).wrapping_add(4 << 8);
+            let Some(sp) = self.g.mc2_spawn_mana_sphere(39, pos.0, pos.1, pos.2) else {
+                continue;
+            };
+            // EF:62170-81 — TWO draws on the SPHERE's OWN LCG.
+            let r1 = self.g.ent_rand(sp);
+            let yaw = ring_yaw.wrapping_add((r1 % 0x71) as u16).wrapping_sub(56) & 0x7FF;
+            let r2 = self.g.ent_rand(sp);
+            let speed = ((r2 % 0x30) + 16) as i16;
+            let mut vel = (0u16, 0u16, 0i16);
+            Gen::polar_step(&mut vel, yaw, 0, speed);
+            let e = &mut self.g.ent[sp];
+            e.f30 = yaw;
+            e.f126 = speed;
+            e.dest_x = vel.0;
+            e.dest_y = vel.1;
+            e.f46 = 128; // word_0x2C_44 (EF:62180 — the ctor's own value)
+            e.f140 = chunk;
+            e.f144 = owner;
+        }
+        0
+    }
+
     /// `sub_69300` (EF:55792-826) — the m26 wraith SPELL-STEAL: yank
     /// the equipped jar out of the given hand (1 = right, 2 = left,
     /// the roll's 4/5 in [`Gen::m26_tick`]). The empty-hand and
@@ -1140,10 +1931,27 @@ impl World {
     /// however long the button is held. Measured on mc2l4 0+4000: 409
     /// recorded press edges, 404 retail possession arms, and the port
     /// (once its edge lane was alive) 408.
-    pub(crate) fn mc2_cast_input(&mut self, edge: (bool, bool), held: (bool, bool)) {
+    pub(crate) fn mc2_cast_input(
+        &mut self,
+        edge: (bool, bool),
+        held: (bool, bool),
+        ring: Option<u8>,
+    ) {
         if self.player.state != LifeState::Alive {
             return;
         }
+        // ⭐⭐⭐ ROUND 98 — THE RECORDED MOVE BYTE IS ALREADY RETAIL'S
+        // POST-LATCH COMMAND WORD. `sub_5F380`'s cast tail is three
+        // flat `testb`/`call` pairs on `entityIndex_0x0` with NO edge
+        // test at all (`NETHERW.EXE` 0x83D53-0x83DED — full citation
+        // and the mc2l22 t=3424 witness on
+        // [`crate::mc2::effects::no_mc2_command_word_cast`]), so under
+        // the conformance seat the trigger is the RAW BIT and only
+        // `mc2_cast_gate`'s per-model refusal may drop it. Re-deriving
+        // a press edge from an already-latched word is double
+        // latching, and it eats every press landing one frame after
+        // another press.
+        let word_cast = self.strict_retail && !crate::mc2::effects::no_mc2_command_word_cast();
         let fires = |w: &World, spell: i8, edge: bool, held: bool| {
             if spell < 0 {
                 return false;
@@ -1151,6 +1959,9 @@ impl World {
             let m = w.mc2_book.ent[spell as usize] as usize;
             if m == 0 {
                 return false;
+            }
+            if word_cast {
+                return held;
             }
             // `byte_0x3B_59 == 1` is the CLICK-ONLY family; every
             // other value takes the repeat arm (PI:2043 vs PI:2050 —
@@ -1162,6 +1973,26 @@ impl World {
         }
         if fires(self, self.mc2_book.right, edge.1, held.1) {
             self.mc2_cast_gate(self.mc2_book.right as usize, true);
+        }
+        // ⭐⭐⭐ THE THIRD ARM (EF:60858-62). `if (w & 0x40) sub_5F660(
+        // a1x, SpellEnabled[spellIndex_D94FF[spellIndex_0x458_1112]],
+        // 256)` — the cycle-ring SHORTCUT casts the spell under the
+        // ring cursor WITHOUT equipping it, consulting neither hand,
+        // and stamps the LEFT hand bit (256) like the left button.
+        // `spellIndex_D94FF` (GameUI.cpp:59) is the identity over
+        // 0..25, so the index IS the recorded `ring_cursor`. It is a
+        // BARE `testb` on the same already-latched command word the
+        // two hands ride, so there is no edge/repeat leg here:
+        // `mc2_cast_gate` is the whole body, exactly as retail's third
+        // `call` is. mc2l22 t=63318 records `move_bits = 64` outright
+        // with both hands holding spells 9 and 1, and retail arms the
+        // (15,20) Gravity Well token (`f2e` 0 -> 27) — the take's last
+        // divergence head.
+        if !crate::engine::world::no_mc2_ring_cast_bit()
+            && let Some(spell) = ring
+            && (spell as usize) < self.mc2_book.ent.len()
+        {
+            self.mc2_cast_gate(spell as usize, false);
         }
     }
 
@@ -1400,13 +2231,65 @@ impl World {
                 // (galore t=6279, `player.mana` off by one +1153 regen
                 // step when the collapse suppressed it anyway).
                 let v14_collapse = spell == 3 && self.mc1_v14;
-                if v14_collapse {
+                // ⭐⭐ THE DUEL FIZZLE IS `sub_6B610`'s OWN `LABEL_19`,
+                // AND LABEL_19 SKIPS THE WHOLE ELSE — including
+                // `sub_68DE0` (EF:57277-57285). Retail's predicate is
+                // exactly `word_0x2E_46 <= word_0x30_48 - 28 &&
+                // !wizext->word_0x146_326`, with NO lower guard: the
+                // port's extra `f26 > 1` blocked the arm in precisely
+                // the case that matters, because the RETRIGGER FAMILY
+                // pins `f26` to 1 first (`sub_5F660` case 0xE,
+                // EF:60914-27 — duel is one of the six spells whose
+                // re-press CANCELS instead of refusing).
+                //
+                // mc2l6-rsg t=1347 is both halves at once: the player
+                // re-presses cast 21 ticks into a 195-tick duel window,
+                // `sub_5F660` pins the counter to 1, the token's own
+                // tick then reads `1 <= 167` with no lock and takes
+                // LABEL_19 — so the mana-regen clamp never runs and the
+                // wizard's freshly recomputed `d88` 713 stands. Retail
+                // steps mana 1416916 → 1417629 at t=1348; the port
+                // suppressed on the collapse tick and held. Same law as
+                // the afford arm and the speed brake right above.
+                let duel_fizzle = spell == 14
+                    && self.mc2_duel.is_none()
+                    && (self.g.ent[m].f26 as i32) <= self.g.ent[m].f28.max(1) as i32 - 28;
+                // ⭐⭐⭐ THE SHIELD-III STATEMENT ORDER — see
+                // [`no_mc2_shield3_predecrement`]. `sub_6A480`'s
+                // `life_0x1A == 1` arm (EF:56525-28) decrements `word_0x2E_46`
+                // BEFORE calling `sub_68DE0`, so the counter that
+                // function compares against `word_0x30_48` is already
+                // one lower: the full-cost debit is unreachable and
+                // the else-arm's regen pin is keyed on `f26 - 1`.
+                let shield3_predecrement = spell == 6
+                    && !no_mc2_shield3_predecrement()
+                    && self
+                        .g
+                        .assets
+                        .spells
+                        .get(spell)
+                        .map_or(Mc2SubSpell::default(), |r| {
+                            r.tiers[(self.g.ent[m].f71 as usize).min(2)]
+                        })
+                        .life
+                        == 1;
+                if v14_collapse || duel_fizzle {
                     self.g.ent[m].f26 = 1;
                 } else if afford {
                     if first {
                         self.mc2_spell_fire(spell, m, p, ctx);
-                        let cost = self.g.ent[m].max_life;
-                        self.mana_debit(cost);
+                        if shield3_predecrement {
+                            // `sub_68DE0` with `v2 = f26 - 1`: the
+                            // `v2 == word_0x30_48` debit is
+                            // unreachable, so this takes the else —
+                            // the mid-burst pin — on the ARM tick.
+                            if self.g.ent[m].f26 > 1 {
+                                self.suppress_regen();
+                            }
+                        } else {
+                            let cost = self.g.ent[m].max_life;
+                            self.mana_debit(cost);
+                        }
                     } else if self.g.ent[m].f56 != 0 {
                         // The possess re-press RELEASE SIGNAL
                         // (`byte_0x3C_60`, raised by the cast gate's
@@ -1423,14 +2306,51 @@ impl World {
                         // freely, all tiers" reading over-fired (the
                         // (9,17) re-press family, no retail counterpart
                         // at any input latency: mc2l30 452->355, mc2l0
-                        // 445->312, mc2l4 1393->1208). Tier 1/2 keep the
-                        // coarse full-delivery re-fire below (`sub_69900`
-                        // spawn untraced; not in the current corpus).
-                        self.g.ent[m].f56 = 0;
-                        if self.g.ent[m].f71 > 0 {
-                            self.mc2_spell_fire(spell, m, p, ctx);
-                            let cost = self.g.ent[m].max_life;
-                            self.mana_debit(cost);
+                        // 445->312, mc2l4 1393->1208).
+                        //
+                        // ⭐⭐ AND THE TIER'S RE-FIRE IS THE **BASIC**
+                        // BOLT ON A 1..3 COUNTER, NOT THE TIER'S OWN
+                        // ARM AND NOT A SECOND CAST. Retail's block is
+                        // four statements (EF:55995-56010):
+                        //   `v6 = byte_0x3C_60; if (v6) {`
+                        //   `  if (byte_0x46_70) {`
+                        //   `    if (v6 == 1) sub_69900(a1x, v1x);`
+                        //   `    if (++byte_0x3C_60 > 3) { = 0; … } }`
+                        //   `  else byte_0x3C_60 = 0; }`
+                        // — `sub_69900` is the (9,1)/(10,12) BASIC
+                        // spawner, so a held Mana Magnet or Mana Lock
+                        // sprays PLAIN claim bolts between its own
+                        // deliveries; the signal is a COUNTER that
+                        // latches for three ticks, so a mashed button
+                        // cannot re-fire faster than that; and there
+                        // is NO debit — `sub_68DE0` parks the whole
+                        // cost in the regen lane on the window's FIRST
+                        // tick only (`v2 == word_0x30_48`, EF:55575-83)
+                        // and every later tick merely pins regen to 0.
+                        // mc2l6-rsg t=3993 slot 846 is the witness: the
+                        // player holds tier 2 (token 345 `byte_0x46_70`
+                        // 2, window tick 41 of 51) and retail borns a
+                        // **(9,1) action 1** with `dword_0x10_16` 200
+                        // and `byte_0x44_68` 12, where the port re-ran
+                        // the tier walk and launched (9,17) action 18.
+                        if self.g.ent[m].f71 != 0 {
+                            if self.g.ent[m].f56 == 1 {
+                                // `sub_68E50` reads the TOKEN, so the
+                                // held tier's own row still supplies
+                                // the payload columns.
+                                let tier = (self.g.ent[m].f71 as usize).min(2);
+                                let sub = self
+                                    .g
+                                    .assets
+                                    .spells
+                                    .get(spell)
+                                    .map_or(Mc2SubSpell::default(), |r| r.tiers[tier]);
+                                self.mc2_possess_launch(m, p, 1, (10, 12), sub);
+                            }
+                            let v7 = self.g.ent[m].f56.wrapping_add(1);
+                            self.g.ent[m].f56 = if v7 > 3 { 0 } else { v7 };
+                        } else {
+                            self.g.ent[m].f56 = 0;
                         }
                     }
                 } else {
@@ -1467,8 +2387,172 @@ impl World {
                 // (shield/invis re-presses, EF:60914-28) pins f26 at
                 // 1 for the whole hold and retail clamps every one of
                 // those ticks.
-                if !first && afford && !v14_collapse {
+                // ⭐⭐⭐ WHICH SPELLS PIN THE REGEN EVERY TICK IS AN
+                // ENUMERATED LIST, AND SIX OF THEM DO NOT.
+                // `sub_68DE0` is not part of a shared skeleton — each
+                // of the 26 manifestation handlers places its own call,
+                // and the placement is not uniform. Twenty put it
+                // AFTER the `word_0x2E_46 == word_0x30_48` block, so
+                // it runs on every afforded tick (the first-tick arm
+                // parks `-maxMana` in the regen lane, later ticks clamp
+                // the positive regen to 0 — the "an active spell blocks
+                // mana regeneration" law). But `sub_6BCF0` (17),
+                // `sub_6BF30` (18), `sub_6C620` (21), `sub_6C870` (22),
+                // `sub_6CAC0` (23) and `sub_6CFA0` (25) close the block
+                // one brace LATER, with the call INSIDE it — so those
+                // six debit on the arm frame and then leave the purse
+                // alone for the rest of their window. (Castle 2 and
+                // heal 5 are the same shape and already return above;
+                // 1 and 7 nest an extra call but also carry an
+                // unconditional trailing one, so they pin every tick.)
+                // The port suppressed generically for all of them.
+                //
+                // mc2l6-rsg t=6267: the human casts spell 18 for 12000
+                // (`d88` 719 -> -12000, purse 1438596 -> 1426596) on a
+                // 23-tick window, and retail pays the full +719 regen
+                // on t=6268->6269 and EVERY tick after while token 362
+                // counts down 21, 20, 19… — 1427315, 1428034, 1428753.
+                // The port held the purse flat for the whole window.
+                if !first
+                    && afford
+                    && !v14_collapse
+                    && !duel_fizzle
+                    && !NO_MID_BURST_REGEN_PIN.contains(&spell)
+                    // ⭐⭐⭐ …AND SHIELD III'S PIN IS KEYED ON THE
+                    // POST-DECREMENT COUNTER, so the tick the window
+                    // ENDS on (`f26 == 1`, which the re-press cancel
+                    // `sub_5F660` case 0xE also manufactures) pins
+                    // NOTHING and the wizard's fresh recompute stands.
+                    && !(shield3_predecrement && self.g.ent[m].f26 <= 1)
+                {
                     self.suppress_regen();
+                }
+                // ⭐⭐⭐ AND SO IS THE SHIELD WINDOW — THE LAST OF THE
+                // FOUR WIZARD-BUFF COLUMNS TO GET IT.
+                // `sub_6A480` (EF:56496-56541) is the shield's exact
+                // twin of the rebound body below, on the OWNER's
+                // (`parentId_0x28_40`) flag word, keyed on the TIER's
+                // `life_0x1A` and not on the tier index:
+                //
+                // ```text
+                //   v1 = SPELLS[6].subspell[byte_0x46_70].life_0x1A;
+                //   if (!v1)      { if (sub_68D50) { parent.byte[1] |= 0x40;   // CHARGED, EVERY tick
+                //                                    sub_68DE0; word_0x2E_46--; } else word_0x2E_46 = 0; }
+                //   else if (v1 == 1) { if (sub_68D50) { if (word_0x2E_46 == word_0x30_48)
+                //                                            parent.byte[2] |= 0x40;  // ARMED, FIRST tick only
+                //                                        word_0x2E_46--; sub_68DE0; } else word_0x2E_46 = 0; }
+                //   if (!word_0x2E_46) { parent.dword &= 0xFFBFBFFF; sub_6D880; }
+                // ```
+                //
+                // SPELLS.DAT gives spell 6 `life_0x1A` = 0 / 0 / 1
+                // (durations 101 / 201 / 301), so Shield I and II are
+                // the CHARGED stamp — re-published on EVERY afforded
+                // tick — and only Shield III is the one-shot ARMED
+                // stage.
+                //
+                // The port latched `player.shield` ONCE, in
+                // `mc2_spell_fire`'s spell-6 arm, and
+                // `apply_player_damage` CLEARS it per absorb
+                // (world.rs, the `:55700-07` block). So a human
+                // Shield I quartered exactly ONE hit and then ran
+                // naked for the remaining 100 ticks of its own
+                // window, where retail quarters — and mana-pays —
+                // every hit for the whole window. THREE of the four
+                // wizard-buff columns already held this law: MC1's
+                // human (`world.rs` spell 4, "SET-only … the damage
+                // intake's absorb is the only clear"), MC1's rival
+                // (`mc1/rivals.rs`, `flags & 0x4000`) and — since the
+                // MC2 rival buff-bits dig — `mc2/rivals.rs`
+                // ([`crate::mc2::rivals::F_SHIELD_CHARGED`]). Only the
+                // MC2 human never crossed.
+                //
+                // ⚠ OPEN, and reported as an anchored hunk rather than
+                // landed here: the ARMED stage (`byte[2] & 0x40`) has
+                // no lane on the human column at all — `Player` has
+                // only the one `shield` bool — so Shield III keeps
+                // `mc2_spell_fire`'s FIRST-TICK-ONLY stamp as its
+                // stand-in, which is exactly what every tier had
+                // before this block. That first-tick latch is left
+                // where it is, so this block is purely additive and
+                // `MGC_NO_SHIELD_RESTAMP=1` is an exact revert.
+                if spell == 6 && afford && !no_shield_restamp() {
+                    let tier = self.g.ent[m].f71 as usize;
+                    let life = self
+                        .g
+                        .assets
+                        .spells
+                        .get(spell)
+                        .map_or(Mc2SubSpell::default(), |r| r.tiers[tier.min(2)])
+                        .life;
+                    if life == 0 {
+                        self.player.shield = true;
+                    }
+                    // ⭐⭐⭐ AND THE OTHER ARM OF THE SAME `if` IS THE
+                    // ARMED STAGE — `else if (v1 == 1) { if (sub_68D50)
+                    // { if (word_0x2E_46 == word_0x30_48)
+                    // parent.byte[2] |= 0x40; … } }` (EF:56525-31).
+                    // FIRST TICK ONLY, and a tier declaring `life_0x1A`
+                    // > 1 stamps NEITHER bit: retail's chain is
+                    // `if (!v1) … else if (v1 == 1) …` with no trailing
+                    // else, an ENUMERATED LIST whose absence is a law.
+                    // mc2l6-rsg has three of these windows on the human
+                    // (t=22531 / 22730 / 23116, `sel[6] == 2` and
+                    // `SPELLS[6].tiers[2].life == 1`).
+                    if life == 1 && first && !no_mc2_shield_armed() {
+                        self.player.shield_armed = true;
+                    }
+                    if std::env::var_os("MGC_SHIELD_PROBE").is_some() {
+                        let t = crate::DEBUG_TICK.load(std::sync::atomic::Ordering::Relaxed);
+                        eprintln!(
+                            "[shield] t={t} tier={tier} life={life} f26={} f28={} first={first}",
+                            self.g.ent[m].f26, self.g.ent[m].f28
+                        );
+                    }
+                }
+                // ⭐⭐⭐ THE REBOUND WINDOW IS A FLAG THE TOKEN
+                // RE-STAMPS AT ITS OWN WALK SLOT, EVERY AFFORDED
+                // TICK — NOT A BOOLEAN THE CAST LATCHES.
+                // `sub_6AA00` (EF:56721-51) is three statements on the
+                // OWNER's flag word: window dead → `word[0] &= 0x7FEF`
+                // (both bits), else the tier's own bit, `life_0x1A == 0`
+                // → `byte[1] |= 0x80` (scatter) and `== 1` →
+                // `byte[0] |= 0x10` (precise), and NEITHER for a tier
+                // that declares anything else. The deflect gate reads
+                // it live off the victim's record at the projectile's
+                // walk slot (`v4x->…word[0] & 0x8010`, EF:62939), so
+                // the ARM tick already deflects for every bolt below
+                // the token — the book sits at 344+ and the human's
+                // cast runs at the carpet's own slot 343, above it.
+                // The port derived `Gen::player_rebound` once at the
+                // tick head (world.rs), so the whole arm frame read
+                // stale: mc2l6-rsg t=4847 is the cast, retail's token
+                // 352 loads its 251-tick window and stamps 0x8000 on
+                // the carpet the same frame, and rival 370's (9,0) at
+                // slot 809 — already inside the human — comes back
+                // owned by the human with `roll` 15 / `yaw` 57 and
+                // life refilled, where the port let it land and reaped
+                // it. ⭐ THE MC1 COLUMN HAS HELD THIS LAW SINCE
+                // mc1hwl0 t=38740 (`world.rs` spell 14's mid-walk
+                // republish); it simply never crossed.
+                if spell == 8 && afford {
+                    let tier = self.g.ent[m].f71 as usize;
+                    let life = self
+                        .g
+                        .assets
+                        .spells
+                        .get(spell)
+                        .map_or(Mc2SubSpell::default(), |r| r.tiers[tier.min(2)])
+                        .life;
+                    let precise = match life {
+                        0 => Some(false),
+                        1 => Some(true),
+                        _ => None,
+                    };
+                    if let Some(precise) = precise {
+                        self.player.rebound = true;
+                        self.g.player_rebound = true;
+                        self.g.mc2_rebound_precise.0 = precise as i32;
+                    }
                 }
                 // ⭐⭐ SPEED'S OWN REGISTER WRITE (`GetScroll_69DB0`
                 // EF:56230-40), the thing that makes it a spell and not
@@ -1531,21 +2615,6 @@ impl World {
                 {
                     self.g.ent[s].act_life *= 4;
                     self.g.ent[s].id24 = PLAYER_TARGET;
-                }
-                // The duel no-grip fizzle (`sub_6B610` abort arm,
-                // EF:57280): 28 ticks into the window with NO duel
-                // lock formed → collapse the charge to 1 (expires
-                // next tick). With a lock the window runs full.
-                if spell == 14
-                    && self.mc2_duel.is_none()
-                    && self.g.ent[m].f26 > 1
-                    && self.g.ent[m]
-                        .f28
-                        .max(1)
-                        .saturating_sub(self.g.ent[m].f26 as u16)
-                        >= 28
-                {
-                    self.g.ent[m].f26 = 1;
                 }
                 self.g.ent[m].f26 -= 1;
                 if self.g.ent[m].f26 == 0 {
@@ -1753,30 +2822,189 @@ impl World {
     /// retail mints the (10,43) delivery pair and debits 30000 where
     /// the port fired nothing until t=328.
     ///
-    /// ⚠ HUMAN ONLY. Retail's `SpellsEnabled[2]` is materialized for
-    /// every player including AI (`sub_5CF40` EF:59374), so a RIVAL
-    /// castle stamps its owner's manifestation too — but MC2 rivals
-    /// cast through [`World::mc2_rival_cast_castle`], which owns no
-    /// class-15 record for the stamp to land on. Unported, and inert.
+    /// ⭐ OWNER-GENERIC. Retail's `SpellsEnabled[2]` is materialized for
+    /// every player including AI (`sub_5CF40` EF:59374), and EF:61036
+    /// indexes it off `Entities_EA3E4[castle->id_0x1A_26]` with no
+    /// player test at all — a RIVAL castle stamps its own owner's
+    /// manifestation exactly like the human's does.
+    ///
+    /// ⚠ THE PORT'S OWN COMMENT HERE USED TO SAY THE LAW WAS INERT
+    /// because "MC2 rivals cast through `mc2_rival_cast_castle`, which
+    /// owns no class-15 record for the stamp to land on." That claim
+    /// was false: the per-rival [`Mc2Spellbook`] carries `book.ent[2]`
+    /// (`mc2_rival_castle_tier` reads its tier off exactly that
+    /// record), and mc2l6-rsg slot 373 is rival 370's live (15,2).
+    /// Retail pins it at t=4310 and the port left it at 0 for the
+    /// 2,000 ticks that followed. (Fourth session running that a port
+    /// comment named its own defect — cf. 81's "cannot be landed",
+    /// 84's `.max()`, 85's "not in the current corpus".)
     pub(crate) fn mc2_castle_lock_stamp(&mut self, own: u16, pin: bool) {
-        if own != PLAYER_TARGET {
+        let Some(m) = self.mc2_owner_castle_token(own) else {
             return;
-        }
-        let m = self.mc2_book.ent[2] as usize;
-        // The model gate matters under import — a book slot that
-        // survived a re-import can name a record that is no longer the
-        // castle manifestation.
-        if m == 0
-            || m >= self.g.ent.len()
-            || self.g.ent[m].class64 != 15
-            || self.g.ent[m].model65 != 2
-        {
-            return;
-        }
+        };
         if pin {
             self.g.ent[m].f26 = self.g.ent[m].f28.max(1) as i16 - 1;
         } else if self.g.ent[m].f26 > 0 {
-            self.mc2_castle_lock_release(m);
+            if own == PLAYER_TARGET {
+                self.mc2_castle_lock_release(m);
+            } else {
+                self.mc2_rival_castle_lock_release(m, own);
+            }
+        }
+    }
+
+    /// ⭐⭐⭐ `sub_605E0`'s LEVEL-0 **RIVAL** ARM (EF:61645-61658;
+    /// NETHERW.EXE file 0x84f02-0x84f55) — THE CASTLE-DEATH TOKEN
+    /// PURGE, and the ONE guard it has is `index != 0`.
+    ///
+    /// ```text
+    ///   84f02  movsx esi,[ebx+0x1a]            ; castle->id_0x1A_26
+    ///   84f06  mov   esi,[esi*4+0x1a3e4]       ; Entities[owner]
+    ///   84f0d  cmp   byte [esi+0x40],1         ; owner->model == 1 (a RIVAL)
+    ///   84f11  jne   0x84f57                   ; else → sub_5F890(castle, 0)
+    ///   84f13  mov   eax,ds:0x41a0
+    ///   84f18  test  byte [eax+0x2fed2],4      ; the LEVEL-GRAPHICS bit 2
+    ///   84f1f  je    0x84f61
+    ///   84f21  mov   eax,[esi+0xa4]            ; owner's player block
+    ///   84f27  mov   dx,[eax+0x337]            ; SpellsEnabled[2] (0x333 + 2*2)
+    ///   84f2e  test  dx,dx
+    ///   84f31  je    0x84f61                   ; ← THE ONLY GUARD
+    ///   84f33  movsx eax,dx
+    ///   84f36  mov   edi,[eax*4+0x1a3e4]       ; Entities[idx] — NO class/model test
+    ///   84f3d  push  edi
+    ///   84f3e  call  0x7c710                   ; DisableEntityDrawing04_57F10
+    ///   84f4c  mov   word [eax+0x337],0        ; SpellsEnabled[2] = 0
+    /// ```
+    ///
+    /// ⭐ AND THE INDEX IS ROUTINELY A MARKER, NOT A SLOT. The wizard
+    /// death handler `sub_5E310` (EF:60146,
+    /// [`World::mc2_scatter_spells`]) stamps a **boolean 1** into every
+    /// occupied book slot when a wizard dies. So a rival that died and
+    /// then lost its castle hands this arm the literal `1` — and retail
+    /// dereferences it, reap-flagging **whatever record sits at pool
+    /// slot 1**. On mc2l22 that is the authored `(10,45)` building at
+    /// slot 1: rival 477 is a corpse `(3,1)` in action 3, its castle
+    /// 502 falls level 1 → 0 at t=1198, and retail raises
+    /// `flags.b1_reap4` on slot 1 in the same tick — the tick-top
+    /// `sub_57F20` then frees it at t=1199. That single record was the
+    /// take's certification wall.
+    ///
+    /// ⚠ NO CLASS/MODEL GATE HERE, deliberately — unlike
+    /// [`Self::mc2_owner_castle_token`], whose gate stays: that helper
+    /// feeds `sub_5F890`'s PIN, which writes retail `word_0x2E_46`, a
+    /// lane the port's polymorphic `f26` alias spends on `dword_0x10_16`
+    /// for class 10 (conformance.rs's `(10, _) => scratch10` arm). Firing
+    /// the PIN through the same stale index would write the BUILDING'S
+    /// OCCUPANCY. Retail's `word_0x2E_46 = word_0x30_48 - 1 = -1` on
+    /// slot 1 is real (`explain` t=1198 shows `f2e 0 -> -1`) but lands on
+    /// a lane the port does not model for class 10 — pair-blind, and NOT
+    /// landable through `f26`.
+    pub(crate) fn mc2_castle_death_token_purge(&mut self, c: usize) {
+        if no_mc2_castle_death_token_purge() {
+            return;
+        }
+        // `if (!a1x->dword_0x10_16)` (EF:61645) — the castle that just
+        // took its LAST level — and `Entities[castle->id]->model == 1`
+        // (EF:61647): a RIVAL wizard owner. The human's carpet is
+        // class-3 model **0** and falls to the `else` arm
+        // (`sub_5F890(a1x, 0)`), which the dispatch site already runs.
+        if self.g.ent.get(c).is_none_or(|e| e.f26 > 0) {
+            return;
+        }
+        let own = self.g.ent[c].id24;
+        if own == PLAYER_TARGET
+            || !self
+                .g
+                .ent
+                .get(own as usize)
+                .is_some_and(|o| o.class64 == 3 && o.model65 == 1)
+        {
+            return;
+        }
+        // `terrain_2FECE.byte_0x2FED2 & 4` — the level-graphics byte's
+        // bit 2. Set on exactly two shipped MC2 levels (022 `gfx_type`
+        // 4 and 062 `gfx_type` 7); every other level, mc2l0/l3/l6/l24
+        // included, carries 0, so this arm is inert off level 22 by
+        // construction.
+        if !self.mc2_castle_purge_level() {
+            return;
+        }
+        let Some(ri) = (0..self.mc2_rivals.len())
+            .find(|&r| self.mc2_rivals[r].ent != 0 && self.mc2_rivals[r].ent == own)
+        else {
+            return;
+        };
+        let m = self.mc2_rivals[ri].book.ent[2] as usize;
+        if m == 0 || m >= self.g.ent.len() {
+            return;
+        }
+        self.g.ent[m].flags |= 0x400;
+        self.mc2_rivals[ri].book.ent[2] = 0;
+    }
+
+    /// `terrain_2FECE.byte_0x2FED2 & 4` (EF:61650; NETHERW.EXE file
+    /// `0x84f18` `test byte [eax+0x2fed2],4` / `je 0x84f61`) — the
+    /// level-graphics byte's bit 2, plumbed as
+    /// [`World::set_mc2_castle_purge_level`] from the level header's
+    /// `gfx_type`. Set on exactly two shipped MC2 levels (022
+    /// `gfx_type` 4 and 062 `gfx_type` 7); every other level —
+    /// mc2l0/l3/l6/l24 included — carries 0, so this arm is INERT off
+    /// 022/062 by construction.
+    ///
+    /// ⚠ This was a stub returning `true` when the purge was first
+    /// banked, which is the whole reason the purge measured
+    /// net-negative: it fired on mc2l6-rsg (level 6, `gfx_type` 0),
+    /// where retail's gate is clear. `MGC_MC2_PURGE_ANY_LEVEL=1`
+    /// restores the stub for A/B.
+    fn mc2_castle_purge_level(&self) -> bool {
+        static ANY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *ANY.get_or_init(|| std::env::var_os("MGC_MC2_PURGE_ANY_LEVEL").is_some()) {
+            return true;
+        }
+        self.mc2_castle_purge_level
+    }
+
+    /// `Entities_EA3E4[own]->dword_0xA4_164x->str_611.SpellsEnabled[2]`
+    /// (EF:61036 / EF:61652 / EF:61697) — the castle-spell
+    /// manifestation of an arbitrary castle OWNER. The out-of-pool
+    /// human reads the world-side `mc2_book`; every other wizard reads
+    /// its own [`Mc2Spellbook`].
+    ///
+    /// The class/model gate matters under import — a book slot that
+    /// survived a re-import can name a record that is no longer the
+    /// castle manifestation.
+    pub(crate) fn mc2_owner_castle_token(&self, own: u16) -> Option<usize> {
+        let m = if own == PLAYER_TARGET {
+            self.mc2_book.ent[2] as usize
+        } else {
+            let ri = (0..self.mc2_rivals.len())
+                .find(|&r| self.mc2_rivals[r].ent != 0 && self.mc2_rivals[r].ent == own)?;
+            self.mc2_rivals[ri].book.ent[2] as usize
+        };
+        (m != 0
+            && m < self.g.ent.len()
+            && self.g.ent[m].class64 == 15
+            && self.g.ent[m].model65 == 2)
+            .then_some(m)
+    }
+
+    /// [`Self::mc2_castle_lock_release`]'s rival twin — the same
+    /// `sub_5F890` `a2 == 0` arm priced through the rival column's
+    /// `SetSpell` ([`World::mc2_rival_set_spell`]) against the rival's
+    /// OWN castle. No player-effect teardown: spell 2 has no arm in
+    /// [`Self::mc2_cast_expire`]'s match, and every effect that one
+    /// drops is a human-carpet lane.
+    fn mc2_rival_castle_lock_release(&mut self, m: usize, own: u16) {
+        self.g.ent[m].f26 = 0;
+        // `sub_6D880` (EF:58215): apply the deferred tier, then clear.
+        if self.g.ent[m].f44 > 0 {
+            let t = (self.g.ent[m].f44 - 1) as u8;
+            self.g.ent[m].f44 = 0;
+            self.mc2_rival_set_spell(m, t, own);
+        }
+        if self.rival_castle(own).is_some() {
+            let tier = self.g.ent[m].f71;
+            self.mc2_rival_set_spell(m, tier, own);
         }
     }
 
@@ -1816,7 +3044,13 @@ impl World {
         // `dword &= 0xFFBFBFFF` EF:56496-tail, invis `&= 0xDF`
         // EF:57068-tail, and the sight/rebound analogues).
         match spell {
-            6 => self.player.shield = false,
+            // `parent.dword &= 0xFFBFBFFF` (EF:56537) clears BOTH
+            // stage bits — byte[1] 0x40 and byte[2] 0x40 — in one
+            // store, so the window's end drops the ARMED stage too.
+            6 => {
+                self.player.shield = false;
+                self.player.shield_armed = false;
+            }
             8 => {
                 self.player.rebound = false;
                 self.g.mc2_rebound_precise.0 = 0;
@@ -1835,6 +3069,19 @@ impl World {
                 }
                 self.g.ent[m].f146 = 0;
                 self.player.metamorph = 0;
+                // …and the cloak lifts with it: `v2x->byte[0] &= 0xDF`
+                // beside the `DisableEntityDrawing04_57F10` despawn
+                // (EF:56403; shipped EXE 0x8EA50 `and cl,0xdf`). It is
+                // the shared 0x20 bit, so retail's metamorph expiry
+                // cancels a live Invisibility cloak too — faithful.
+                // `invis_strength` is left alone (retail never touches
+                // `byte_0x1BF_447` here). Witness: mc2l0-spells-galore
+                // t=8039, the (5,25) puppet at slot 197 is reap-flagged
+                // and the carpet's flags go 301 → 269 in the same tick.
+                if !crate::mc2::roster::no_metamorph_cloak() {
+                    self.player.invisible = false;
+                    self.g.player_invisible = false;
+                }
                 self.g.snd_player(60);
             }
             0xB => {
@@ -1872,14 +3119,21 @@ impl World {
         match spell {
             0 if life >= 2 => arm(28, (10, 76), false),
             0 => arm(0, (10, 0), false),
-            // Lightning L1/L2 (subtype 12): retail's `sub_66FD0` HARD-
-            // CODES the detonation to spawn the `(10,38)` lightning
-            // burst (NOT the bolt's own `(9,9)`, which retail keeps only
-            // to chain a second-order beam FROM the burst;
-            // docs/spell-audit/lightning.md §5.B). Route straight to
-            // `(10,38)`; the second-order `(9,9)` chain off the burst
-            // is deferred (its `(10,38)` internals untraced).
-            7 if matches!(life, 1 | 2) => arm(12, (10, 38), false),
+            // Lightning L1/L2 (subtype 12): the bolt's OWN
+            // `byte_0x43_67`/`byte_0x44_68` really are `(9,9)` —
+            // measured, mc2l22 t=1080 slot 485. The `(10,38)` storm is
+            // `sub_66FD0`'s HARD-CODED detonation, not a descriptor
+            // (see `mc2_proj_impact`), and the `(9,9)` pair is what the
+            // storm CHAINS onto the beams it rains (`sub_35640`
+            // EF:25919-24 spawns each as `_4A190(pos, storm->b43,
+            // storm->b44)`). Stamping `(10,38)` on the BOLT put a value
+            // there retail never holds, and left the impact unable to
+            // find its own effect on any bolt the pair lane IMPORTS —
+            // 82 storm births in mc2l22, zero minted by the port.
+            // ⭐⭐ A DELIBERATE APPROXIMATION HAS AN EXPIRY DATE: the
+            // "(10,38) internals untraced" this shortcut cited have
+            // since landed (`mc2_spawn_lightning_burst`/`mc2_storm_tick`).
+            7 if matches!(life, 1 | 2) => arm(12, (9, 9), false),
             7 => arm(9, (10, 23), false),
             9 => arm(3, (10, 17), true),
             15 => arm(23, (10, 71), true),
@@ -1944,11 +3198,29 @@ impl World {
                 let Some(i) = self.mc2_launch(spell, m, &arm, sub, p) else {
                     continue;
                 };
+                // Steal Mana: `sub_6B3E0` post-writes the bolt's
+                // `byte_0x46_70` = the TOKEN's tier index (EF:57213);
+                // the `sub_6DCA0` 0xD arm never touches it. The
+                // (10,25) burst copies it (EF:63559) and the drain
+                // indexes `SPELLS[13]` by it. Not `sub.life` (0/0/1).
+                // mc2l6-rsg t=8673 slot 736: the human's L2 bolt reads
+                // b46 = 1.
+                if spell == 13 {
+                    self.g.ent[i].f71 = tier as u8;
+                }
                 if off != 0 {
                     let yaw = p.heading.wrapping_add(off) & 0x7FF;
                     let e = &mut self.g.ent[i];
                     e.f30 = yaw;
-                    e.f34 = yaw;
+                    // ⭐ THE FAN OFFSET LANDS ON `yaw_0x1C_28` ALONE —
+                    // `sub_6A5C0` EF:56629-42 computes `v7 = yaw ±113`
+                    // and stores it to `yaw_0x1C_28`; the `axis_0x9A`
+                    // step above it (EF:56622-27) took the UNFANNED
+                    // bearing, and the arm writes no `roll_0x20_32`
+                    // at all. See [`no_launch_roll_absence`].
+                    if no_launch_roll_absence() {
+                        e.f34 = yaw;
+                    }
                 }
                 if let Some(t) = twin {
                     self.g.ent[i].f52 = t as u16;
@@ -1994,60 +3266,8 @@ impl World {
                     3 => Some((17, (10, 0))),
                     _ => None,
                 };
-                if let Some((subtype, impact)) = arm
-                    && let Some(i) = self.mc2_launch(
-                        spell,
-                        m,
-                        &DispatchArm {
-                            subtype,
-                            impact,
-                            charge: false,
-                        },
-                        sub,
-                        p,
-                    )
-                {
-                    // `sub_69900`'s launch tail (EF:56050-67) — the
-                    // (9,17) arm writes the same lanes
-                    // (EF:55956/55966/55968), so both share it:
-                    //   `mana_0x90_144` = the TOKEN's mana — now the
-                    //     universal `mc2_launch` copy (the l24 corpus
-                    //     records 33),
-                    //   `dword_0x10_16` = 200 on the basic bolt (@0x10
-                    //     → f26); the leveled arm instead squares the
-                    //     token's `subSpellIndex << 8`.
-                    // The `position.z += caster fov` of EF:56054 /
-                    // EF:55969 is already carried by `muzzle`, which
-                    // launches at pose z + PLAYER_HH.
-                    // DELIBERATE: retail also stamps `word_0x26_38` =
-                    // the token's SLOT (@0x26 → f40), but the port
-                    // spends f40 on the spell INDEX — the impact XP
-                    // back-ref (`mc2_proj_impact`), which retail
-                    // hard-codes per handler (`sub_6D8B0(id, 1, 1)`,
-                    // EF:63314/59052). The lane is not compared; the
-                    // XP wiring wins.
-                    let token_sub = self.g.ent[m].f30 as i32;
-                    {
-                        let e = &mut self.g.ent[i];
-                        e.f26 = if subtype == 1 {
-                            200
-                        } else {
-                            let v = token_sub << 8;
-                            (v.wrapping_mul(v)) as i16
-                        };
-                        // BOTH possession arms take the carpet boost
-                        // RAW — `v2x->actSpeed += a2x->actSpeed`
-                        // (EF:56048 / EF:55953) with no clamp. The
-                        // [384, 0x2000] clamp `mc2_launch` applies is
-                        // `sub_6DCA0`'s alone (EF:44226-31), and it
-                        // both floors a REVERSING carpet's bolt at
-                        // 384 and drops the negative term outright.
-                        // mc2l4 t=13 slot 303 records speed **336** =
-                        // 384 − 48 on a backing carpet.
-                        e.f126 = 384i32.saturating_add(p.speed as i32) as i16;
-                    }
-                    // Sound 40 only on a successful spawn.
-                    self.g.snd_player(40);
+                if let Some((subtype, impact)) = arm {
+                    self.mc2_possess_launch(m, p, subtype, impact, sub);
                 }
             }
             // castle: the castle-ball cast (the MC1 machinery on the
@@ -2085,9 +3305,21 @@ impl World {
             // healing. See [`Self::mc2_heal_token_tick`], which
             // `mc2_manifestation_tick` early-returns into.
             5 => debug_assert!(false, "mc2 heal routes through mc2_heal_token_tick"),
-            // shield (EF:56496): armed-window flag.
+            // shield (EF:56496): armed-window flag — and WHICH flag is
+            // the TIER's `life_0x1A`, exactly as the rebound arm below
+            // reads it. `life == 0` (Shield I/II) is the CHARGED bit
+            // `byte[1] |= 0x40`; `life == 1` (Shield III) is the
+            // one-shot ARMED bit `byte[2] |= 0x40`, whose absorb NULLS
+            // the letter and promotes to CHARGED. This arm is the
+            // FIRST tick of the token's own window, so it stands in
+            // for `sub_6A480`'s first pass; the per-tick CHARGED
+            // re-stamp lives in `mc2_manifestation_tick`.
             6 => {
-                self.player.shield = true;
+                if sub.life == 1 && !no_mc2_shield_armed() {
+                    self.player.shield_armed = true;
+                } else {
+                    self.player.shield = true;
+                }
                 self.mc2_award_xp(PLAYER_TARGET, 6, 1);
             }
             // rebound (`sub_6AA00` EF:56721-51): armed-window flag +
@@ -2098,8 +3330,10 @@ impl World {
             // itself lives in `mc2_rebound_deflect` at the movers'
             // victim-hit gates.
             8 => {
-                self.player.rebound = true;
-                self.g.mc2_rebound_precise.0 = (sub.life == 1) as i32;
+                // The window flag itself is NOT a first-tick latch —
+                // `sub_6AA00` re-stamps it at the TOKEN's own walk
+                // slot every afforded tick, which is what lets the arm
+                // frame deflect. See `mc2_manifestation_tick`.
                 self.mc2_award_xp(PLAYER_TARGET, 8, 1);
             }
             // teleport (`sub_6AD60` EF:56860): the real per-tier
@@ -2209,15 +3443,81 @@ impl World {
             // metamorph (`sub_6A030` EF:56294): transform the caster
             // into a pooled class-5 creature (pose-puppet), carpet hidden.
             4 => self.mc2_cast_metamorph(m, sub, p),
-            // duel (`sub_6B610` EF:57258): spawn the (10,26) DUEL
-            // TETHER at the caster carrying the tier + owner, cast
-            // sound 9 (EF:57316). The grip → lock → enforcement
-            // machinery lives in world.rs (`mc2_duel_tether_tick` /
-            // `mc2_duel_enforce`); docs/spell-audit/duel.md.
-            0xE => self.mc2_cast_duel(sub, p),
+            // duel (`sub_6B610` EF:57258): FIRE THE (9,7) DUEL DART.
+            // The (10,26) tether is the dart's IMPACT, not the cast
+            // product. The grip → lock → enforcement machinery lives
+            // in world.rs (`mc2_duel_tether_tick` / `mc2_duel_enforce`);
+            // docs/spell-audit/duel.md.
+            0xE => self.mc2_cast_duel(m, sub, p),
             _ => {}
         }
         let _ = ctx;
+    }
+
+    /// ONE possession bolt — `sub_69900` (EF:56039) for the basic
+    /// `(9,1)` arm, `sub_69640`'s inline block (EF:55950-79) for the
+    /// leveled `(9,17)`. The two write the same lanes, so the launch
+    /// tail below is shared; only the subtype/impact pair differs.
+    /// Split out because the HELD RE-FIRE reaches the basic arm
+    /// directly, past the tier walk (see `mc2_manifestation_tick`).
+    fn mc2_possess_launch(
+        &mut self,
+        m: usize,
+        p: PlayerPose,
+        subtype: u8,
+        impact: (u8, u8),
+        sub: Mc2SubSpell,
+    ) {
+        let Some(i) = self.mc2_launch(
+            1,
+            m,
+            &DispatchArm {
+                subtype,
+                impact,
+                charge: false,
+            },
+            sub,
+            p,
+        ) else {
+            return;
+        };
+        // `sub_69900`'s launch tail (EF:56050-67) — the (9,17) arm
+        // writes the same lanes (EF:55956/55966/55968), so both
+        // share it:
+        //   `mana_0x90_144` = the TOKEN's mana — now the universal
+        //     `mc2_launch` copy (the l24 corpus records 33),
+        //   `dword_0x10_16` = 200 on the basic bolt (@0x10 → f26);
+        //     the leveled arm instead squares the token's
+        //     `subSpellIndex << 8`.
+        // The `position.z += caster fov` of EF:56054 / EF:55969 is
+        // already carried by `muzzle`, which launches at pose z +
+        // PLAYER_HH.
+        // DELIBERATE: retail also stamps `word_0x26_38` = the token's
+        // SLOT (@0x26 → f40), but the port spends f40 on the spell
+        // INDEX — the impact XP back-ref (`mc2_proj_impact`), which
+        // retail hard-codes per handler (`sub_6D8B0(id, 1, 1)`,
+        // EF:63314/59052). The lane is not compared; the XP wiring
+        // wins.
+        let token_sub = self.g.ent[m].f30 as i32;
+        {
+            let e = &mut self.g.ent[i];
+            e.f26 = if subtype == 1 {
+                200
+            } else {
+                let v = token_sub << 8;
+                (v.wrapping_mul(v)) as i16
+            };
+            // BOTH possession arms take the carpet boost RAW —
+            // `v2x->actSpeed += a2x->actSpeed` (EF:56048 / EF:55953)
+            // with no clamp. The [384, 0x2000] clamp `mc2_launch`
+            // applies is `sub_6DCA0`'s alone (EF:44226-31), and it
+            // both floors a REVERSING carpet's bolt at 384 and drops
+            // the negative term outright. mc2l4 t=13 slot 303 records
+            // speed **336** = 384 − 48 on a backing carpet.
+            e.f126 = 384i32.saturating_add(p.speed as i32) as i16;
+        }
+        // Sound 40 only on a successful spawn.
+        self.g.snd_player(40);
     }
 
     /// The launch block shared by every projectile arm (cast-path
@@ -2238,36 +3538,87 @@ impl World {
     /// (docs/spell-audit/fools-mana.md). The trap machinery is the
     /// (10,57) TICK's, not a cast flag: the authored ground spheres run
     /// the identical path off their NewEvent defaults.
-    fn mc2_cast_fools_mana(&mut self, _m: usize, p: PlayerPose, sub: Mc2SubSpell) -> bool {
-        let (mx, my, _mz) = self.muzzle_side(p, self.mc2_hand_side());
+    fn mc2_cast_fools_mana(&mut self, m: usize, p: PlayerPose, sub: Mc2SubSpell) -> bool {
+        // ⭐⭐⭐ THE HUMAN'S FOOL'S MANA IS `sub_6C870` — THE SAME BODY
+        // THE RIVAL COLUMN RUNS. The port's human arm was a paraphrase
+        // assembled from the WRONG retail function: the `dword_0x10_16
+        // = wizext->byte_0x154; … = 0` pair it cited as EF:57825-26
+        // belongs to `sub_6C7B0` (the class-9 subtype-0x15 launcher a
+        // dozen lines above, EF:57810-31), not to `sub_6C870`, which
+        // never touches @0x10 at all. Statement by statement against
+        // EF:57888-57922 the paraphrase differed in six places:
+        //
+        //   * `axis_0x9A` (dest) — INVENTED. Retail writes no velocity
+        //     accumulator here; the sphere is a THROWN body carried by
+        //     `actSpeed` through `sub_35FB0`'s flight arm
+        //     (EF:26457-26524, `Gen::mc2_fool_flight`). The port's
+        //     96-unit polar nudge is the settle arm's lane.
+        //   * `actSpeed_0x82_130` — MISSING. EF:57897-903:
+        //     `v3 = 4*caster.actSpeed; clamp(140, 280);
+        //      actSpeed = (tokenLCG & 0x7F) + v3`.
+        //   * `pitch_0x1E_30` — MISSING (EF:57919); the flight arm's
+        //     `MoveEntity(yaw, pitch, actSpeed)` reads it, so a
+        //     pitchless sphere flies flat.
+        //   * the LCG is the TOKEN's `a1x->rand_0x14_20` (EF:57902,
+        //     EF:57914) — the port drew off the SPHERE, which both
+        //     desynchronises the fan and burns a different seed.
+        //     TWO draws per sphere, speed first then yaw.
+        //   * the spawn z is the CASTER's, raised by the hand muzzle
+        //     (`_4A190(&caster.position, …)` EF:57894 then
+        //     `sub_68E50` EF:57904) — the port snapped it to the
+        //     GROUND, so every decoy started buried at the player's
+        //     feet.
+        //   * tier ≥ 3 colours the sphere with the caster
+        //     (EF:57909-12); the port left every tier neutral.
+        //
+        // The free-slot gate is retail's too (`sub_4A810_get_0x35plus()
+        // > 6`, EF:57888): the burst is all-or-nothing.
+        if self.g.free.len() <= 6 {
+            return false;
+        }
+        // ⭐ NO MUZZLE LIFT — THE SECOND CALL PATH. `sub_6C870`
+        // spawns at `&<caster>->position_0x4C_76` (EF:57894) and runs
+        // `sub_68E50` (EF:57904), which steps 256 units LATERALLY at
+        // pitch 0 and never writes z: the body carries no
+        // `position_0x4C_76.z += array_0x52_82.fov` at all, exactly
+        // like the army/alliance arms in `mc2_launch`. `muzzle_side`'s
+        // z is `p.z + PLAYER_HH`, so every human decoy was born 100
+        // units high; its lateral step and terrain revert already run
+        // off the UNLIFTED `p.z`, so only the returned height was
+        // wrong. The RIVAL funnel (mc2/rivals.rs, `s == 0x16`) has
+        // always spawned at the caster's own z. mc2l6-rsg pair
+        // 10633->10634: retail births six (10,57) at z
+        // 389/401/398/394/390/386 off a caster z of 257; the port held
+        // 489/501/498/494/490/486 — the only six rows in the pair.
+        let (mx, my, _) = self.muzzle_side(p, self.mc2_hand_side());
         let payload = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
-        let tier = sub.life.clamp(0, 3) as u8;
+        let tier = sub.life.max(0) as u8;
+        let base = (4 * p.speed as i32).clamp(140, 280);
         let mut spawned = false;
         for _ in 0..6 {
-            let z = self.g.ground_z(mx, my) as i16;
-            let Some(s) = self.g.mc2_spawn_mana_sphere(57, mx, my, z) else {
+            let Some(s) = self.g.mc2_spawn_mana_sphere(57, mx, my, p.z) else {
                 break;
             };
-            // ±85 yaw fan (retail `caster.yaw - 85 + rng % 0xAA`), given
-            // a short outward toss so the six scatter like thrown mana.
-            let r = self.g.ent_rand(s);
-            let yaw = p.heading.wrapping_add((r % 0xAA) as u16).wrapping_sub(85) & 0x7FF;
-            let mut pos = (mx, my, z);
-            Gen::polar_step(&mut pos, yaw, 0, 96);
+            // EF:57902-03 — the TOKEN's LCG, drawn for the speed FIRST.
+            let r1 = self.g.ent_rand(m);
+            let speed = ((r1 & 0x7F) as i32 + base) as i16;
+            // EF:57914-18 — the second TOKEN draw, the ±85 yaw fan.
+            // (`wizext + 0x18` is the human aim offset; the port keeps
+            // no such lane, so it is 0 here as on the rival column.)
+            let r2 = self.g.ent_rand(m);
+            let yaw = p.heading.wrapping_sub(85).wrapping_add((r2 % 0xAA) as u16) & 0x7FF;
             let e = &mut self.g.ent[s];
+            e.f126 = speed; // actSpeed — the throw
             e.id24 = PLAYER_TARGET; // parentId = caster (the skip-gate)
-            e.f71 = tier; // byte_0x46_70 retaliation tier {0,1,2}
             e.f44 = payload; // subSpellIndex damage payload
+            e.f71 = tier; // byte_0x46_70 retaliation tier
             e.f144 = 0; // NEUTRAL — no owner colour (the "fool")
-            e.f30 = yaw; // launch heading (fallback retaliation aim)
-            e.dest_x = pos.0.wrapping_sub(mx);
-            e.dest_y = pos.1.wrapping_sub(my);
-            // The spawn banks the caster's cast-charge meter into the
-            // decoy's @0x10 and zeroes it INSIDE the loop
-            // (EF:57825-26): the first decoy reads the meter, the
-            // other five read 0.
-            e.f26 = self.wiz_charge[0] as i16;
-            self.wiz_charge[0] = 0;
+            e.f30 = yaw; // launch heading
+            e.f32 = p.pitch; // launch pitch (EF:57919)
+            if tier >= 3 {
+                e.f144 = PLAYER_TARGET;
+                self.g.ball_resize(s);
+            }
             spawned = true;
         }
         spawned
@@ -2283,32 +3634,73 @@ impl World {
     /// (mc2_cast_expire). Sound 60; XP on the fire tick. No control
     /// rebinding is needed — the creature is slaved to the live player
     /// pose (docs/spell-audit/summon-creatures.md Part A).
-    /// `sub_6B610` first-tick body (EF:57297-57316): the (10,26)
-    /// duel tether — class 10, model/action 26, life 8, sprite row
-    /// 284, +44 = 200 (the ch4 grip amount), stamped with the
-    /// caster (`byte_0x46_70` → owner, ours `id24`) and the TIER
-    /// (`subSpellIndex_0x2A_42` copy, ours `f71`), spawned at the
-    /// caster's position; `PrepareEventSound(…, -1, 9)`.
-    fn mc2_cast_duel(&mut self, sub: Mc2SubSpell, p: PlayerPose) {
-        let tier = self.mc2_book.sel[14];
-        let z = self.g.ground_z(p.x, p.y) as i16;
-        if let Some(t) = self.g.new_event() {
-            {
-                let e = &mut self.g.ent[t];
-                e.class64 = 10;
-                e.model65 = 26;
-                e.tick70 = 26;
-                e.max_life = 8;
-                e.f44 = 200;
-                e.f71 = tier;
-                e.id24 = PLAYER_TARGET;
-                e.flags &= !8;
-            }
-            self.g.link(t, p.x, p.y, z);
-            self.g.refill_life(t);
-            self.g.mc2_set_sprite(t, 284);
+    /// `sub_6B610` first-tick body (EF:57289-57316) — THE DUEL DART.
+    ///
+    /// ⭐⭐⭐ DUEL FIRES A PROJECTILE. Retail's first live tick of the
+    /// class-15 model-14 manifestation spawns a **(9,7)** flyer
+    /// (`_4A190(&caster.position, 9, 7)` EF:57291 → the `sub_4D740`
+    /// creator, EF:34898) whose IMPACT pair is `byte_0x43_67 = 10 /
+    /// byte_0x44_68 = 26` — the (10,26) tether is what the dart makes
+    /// when it lands, not what the cast makes where you stand. The
+    /// port spawned the tether at the caster's feet, which is a
+    /// self-grip: every duel gripped whatever stood next to the
+    /// CASTER instead of what the dart hit.
+    ///
+    /// mc2l6-rsg t=1326 is the witness — retail's slot 855 is a live
+    /// (9,7) (max_life 21 = 0x2000/384, sprite 213, speed/min_speed
+    /// 384, action 7, `b44` 26, mana 51 off the token, `f2a` 5170 =
+    /// the tier's range payload) where the port held a (10,26) with
+    /// life 8 and speed 16. Subtype 7 was missing from `CREATORS`
+    /// outright: it is the ONE class-9 creator no `sub_6DCA0` band arm
+    /// reaches (docs/spell-audit/rival-spells.md §3.1 flagged the hole
+    /// in 2026-07; this closes it).
+    ///
+    /// ⚠ NO SPEED BOOST HERE. `sub_6B610` has no
+    /// `actSpeed_0x82_130 +=` line at all — neither `sub_6DCA0`'s
+    /// clamped `a5` nor the possession family's raw add — so the dart
+    /// leaves at the creator's flat 384 whatever the carpet is doing.
+    /// Retail's slot 855 records exactly 384.
+    ///
+    /// The stamps, in retail's own order: the hand muzzle
+    /// (`sub_68E50`), `word_0x26_38` = the token slot (the port spends
+    /// that lane on the XP back-ref, as the possession arms do),
+    /// impact 10/26, `subSpellIndex_0x2A_42` + `mana_0x90_144` +
+    /// `byte_0x46_70` off the TOKEN, `position.z += caster fov` (which
+    /// `muzzle_side` already carries), the `axis_0x9A_154x` aim point
+    /// = the caster's position stepped 10240 along the launch bearing,
+    /// the bearing itself, and `PrepareEventSound(…, -1, 9)`.
+    fn mc2_cast_duel(&mut self, m: usize, sub: Mc2SubSpell, p: PlayerPose) {
+        let (mx, my, mz) = self.muzzle_side(p, self.mc2_hand_side());
+        let Some(i) = self.g.mc2_spawn_cast_proj(7, mx, my, mz) else {
+            return; // pool full: no dart, NO cast sound
+        };
+        // The aim point: the CASTER's own position (not the muzzle)
+        // stepped a flat 10240 along the launch bearing — the two
+        // commented-out `*(x_DWORD *)v3 = *(x_DWORD *)(v8 + 76)` lines
+        // above EF:57310 are that copy, dropped by the 2019 hand
+        // conversion (see [[remc2-source-corruption-class]]); the
+        // `MoveEntity_57FA0` call they feed survived intact.
+        let mut dest = (p.x, p.y, p.z);
+        Gen::polar_step(&mut dest, p.heading, p.pitch, 10240);
+        let token_mana = self.g.ent[m].f140;
+        let tier = self.g.ent[m].f71;
+        {
+            let e = &mut self.g.ent[i];
+            e.id24 = PLAYER_TARGET;
+            e.f68 = 10;
+            e.f69 = 26;
+            e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+            e.f140 = token_mana;
+            e.f71 = tier;
+            e.f30 = p.heading;
+            e.f32 = p.pitch;
+            // `word_0x26_38` = the (15,14) token SLOT (see
+            // [`no_token_slot_backref`]); was the bare index 14.
+            e.f40 = if no_token_slot_backref() { 14 } else { m as u16 };
+            e.dest_x = dest.0;
+            e.dest_y = dest.1;
+            e.site_z = dest.2;
         }
-        let _ = sub;
         self.g.snd_player(9);
     }
 
@@ -2328,9 +3720,41 @@ impl World {
             e.tick70 = model.wrapping_mul(8).wrapping_add(7); // action 8*M+7
             e.id24 = PLAYER_TARGET; // caster's team → allied
             e.f26 = 0; // scream-loop timer: cry on the first tick
+            // ⭐⭐⭐ `or BYTE PTR [ecx+0xc],0x1` at 0x8e928 — THE PUPPET
+            // IS BORN HIDDEN. See [`no_metamorph_puppet_hidden`] for
+            // the whole disassembled tail. The `&= 0xfe` correction
+            // below it is the NON-LOCAL caster's arm; this is the
+            // human column, which is the local player by
+            // construction, so the bit stands.
+            if !no_metamorph_puppet_hidden() {
+                e.flags |= 1;
+            }
         }
         self.g.ent[m].f146 = s as u16; // manifestation link (word_0x96_150)
         self.player.metamorph = model; // hide the carpet, draw the creature
+        // ⭐⭐⭐ THE METAMORPH CLOAK IS THE INVISIBILITY BIT.
+        // `sub_6A030`'s first-tick block ends `v2x->byte[0] |= 0x21`
+        // (EF:56335; shipped EXE 0x8E92F `or dl,0x21`) on the CASTER —
+        // bit 0 is the draw-hide, bit 5 (0x20) is the SAME
+        // scan-invisibility bit the Invisibility spell and the death
+        // touchdown raise, and every mob scanner filters on it
+        // (`sub_1BF90` :9155, `sub_1DBF0`'s wizard-watch tail :10294,
+        // the archer's Scan A). The port hid the carpet from the
+        // renderer only, so a metamorphed wizard stayed scannable.
+        // mc2l0-spells-galore t=8104 slot 96 is the witness: a (5,1)
+        // in the kind-2 hold (action 15, StageVar2 2) noticed the
+        // metamorphed human 932 units away and broke to aggro
+        // (StageVar2 10, action 14, speed → min_speed); retail leaves
+        // it held. ⚠ ONE RETAIL FIELD, TWO PORT HOMES — the mirror
+        // alone lives one frame (`tick_inner` rebuilds it from the
+        // spell every tick), so the authoritative `player.invisible`
+        // takes the write too. `invis_strength` is NOT set: retail
+        // never touches `byte_0x1BF_447` here, so arming a spell does
+        // not break a metamorph cloak.
+        if !crate::mc2::roster::no_metamorph_cloak() {
+            self.player.invisible = true;
+            self.g.player_invisible = true;
+        }
         self.mc2_award_xp(PLAYER_TARGET, 4, 1);
         self.g.snd_player(60);
     }
@@ -2352,6 +3776,36 @@ impl World {
         // is the CASTER's own flag bits, which is why `hand_bits`
         // rather than a token register carries it.
         let (mx, my, mz) = self.muzzle_side(p, self.mc2_hand_side());
+        // ⭐ THE ARMY AND ALLIANCE ARMS NEITHER LIFT NOR RE-PRICE.
+        // Diffed statement by statement against their five siblings,
+        // `sub_6C170` (EF:57659-81) and `sub_6CD20` (EF:58062-86) are
+        // the only two direct `_4A190` arms with NEITHER the muzzle
+        // lift NOR the mana copy: the `sub_693F0` fire block carries
+        // `v6x->mana_0x90_144 = a1x->mana_0x90_144;` and
+        // `v6x->position_0x4C_76.z += v1x->array_0x52_82.fov;`
+        // (EF:55865-66), the mine `sub_6CAC0` carries both
+        // (EF:57991-92) and so do both possession arms
+        // (EF:56055-56 / EF:55970-71) — the army and the alliance
+        // spawn at `&<caster>->position_0x4C_76`, run `sub_68E50`
+        // (which only steps 256 LATERALLY, at pitch 0) and stop. So
+        // they launch at the CASTER'S OWN z and keep the class-9
+        // ctor's `mana_0x90_144 = 50`.
+        // ⚠ Three of the four EF citations under the mana copy below
+        // name the WRONG function: EF:57745 is `sub_6C3E0`, EF:57817
+        // is `sub_6C620`, EF:58151 is `sub_6CFA0`; only the mine's
+        // EF:57992 sits in the arm it claims. `sub_6C170` (the army,
+        // EF:57638-57700) and `sub_6CD20` (the alliance,
+        // EF:58039-58106) contain no `mana_0x90_144` write at all.
+        // Measured on both Firefly Army casts in mc2l6-rsg: pair
+        // 15630→15631 slot 6 — z retail **1145** (carpet 343's own z
+        // that tick, per `explain`) vs port 1245 (+PLAYER_HH), mana
+        // retail **50** vs port 33 (the token's purse); pair
+        // 20561→20562 slot 102 — z 992/1092, mana 50/80.
+        let bare = matches!(arm.subtype, 24 | 25);
+        let mz = if bare { p.z } else { mz };
+        // The caster token's own charge byte — retail's `a1x->byte_0x46_70`,
+        // the tier index `mc2_spell_fire` reads to pick `sub`.
+        let tier_index = self.g.ent[m].f71;
         let Some(i) = self.g.mc2_spawn_cast_proj(arm.subtype, mx, my, mz) else {
             return None; // pool full: no projectile, NO cast sound
             // (retail gates the sound on the spawn, EF:44224-39)
@@ -2363,7 +3817,51 @@ impl World {
             e.f69 = arm.impact.1;
             // The tier payload rides every projectile (EF:55864 —
             // the effect-state copy; carried damage / claim amount).
-            e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+            //
+            // ⭐⭐⭐ …EXCEPT ON THE THREE ARMS WHOSE THUNK HAS NO SUCH
+            // STATEMENT AT ALL — AN ABSENCE IN AN ENUMERATED LIST IS
+            // THE LAW. Scanning every human cast thunk for
+            // `subSpellIndex_0x2A_42 =`: the band `sub_6DCA0` writes
+            // `a4x->subSpellIndex_2` per arm (EF:44105/44128/44144/
+            // 44158/44170/44183) and its fire block `sub_693F0`
+            // OVERWRITES with the TOKEN's own @0x2A (EF:55864), the
+            // alliance `sub_6CD20` (EF:58073) and Fool's Mana
+            // `sub_6C870` (EF:57906) write the spell row's
+            // `subSpellIndex_2`, the mine `sub_6CAC0` (EF:57993) the
+            // tier index, the duel `sub_6B610` (EF:57300) the token's
+            // — but the BASIC possession `sub_69900` (EF:56039-70),
+            // the LEVELED possession block in `sub_69640`
+            // (EF:55950-84) and the summon ARMY `sub_6C170`
+            // (EF:57637-77) contain NO `subSpellIndex_0x2A_42` write
+            // whatsoever. Their flyers therefore keep
+            // `NewEvent_4A050`'s ctor default **100**
+            // (Events.cpp:569, the port's `Gen::new_event`
+            // `e.f44 = 100`).
+            //
+            // WITNESS (mc2l22, `MGC_RAW_SHADOW=1`, first 1200 pairs):
+            // `(9,1) f2a` 121 rows across 76 slots, retail **100** vs
+            // port 10 (e.g. t=9 slot 664; the dig's own head is t=495
+            // slot 719), and `(9,17) f2a` 3 rows, retail **100** vs
+            // port 20 (t=512 slot 718). The army arm is unwitnessed on
+            // this take — mc2l6-rsg's two Firefly Army casts are the
+            // place to confirm it.
+            if !matches!(arm.subtype, 1 | 17 | 24) || no_launch_2a_absence() {
+                e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+            }
+            // ⭐ EXCEPT THE MAGIC MINE, THE ONE ARM THAT SHIPS THE TIER
+            // INDEX INSTEAD OF THE PAYLOAD. `sub_6CAC0` (EF:57993) is
+            // `v2x->subSpellIndex_0x2A_42 = a1x->byte_0x46_70;` where
+            // every sibling writes
+            // `SPELLS[spell].subspell[byte_0x46_70].subSpellIndex_2`
+            // (fools' mana EF:57906, alliance EF:58073, and all six
+            // `sub_6DCA0` band arms EF:44105-44170). It has to: the
+            // (10,78) mine's own arm step re-INDEXES the spell row with
+            // it (`SPELLS[23].subspell[subSpellIndex].subSpellIndex_2`
+            // → maxLife, EF:29886-88) — see `mc2/effects.rs`
+            // `mc2_mine_tick`.
+            if arm.subtype == 29 && !crate::mc2::effects::no_mc2_mine() {
+                e.f44 = tier_index as u16;
+            }
             if arm.charge {
                 e.f71 = sub.life.max(0) as u8;
             }
@@ -2372,12 +3870,150 @@ impl World {
             // sits at pose z already).
             e.f30 = p.heading;
             e.f32 = p.pitch;
-            e.f34 = p.heading;
-            e.f36 = p.pitch;
-            // Speed boost: caster actSpeed onto the base, clamped
-            // (EF:44226-31).
-            let boosted = (e.f126 as i32 + p.speed.max(0) as i32).clamp(384, 0x2000);
+            // ⭐⭐⭐ AN ABSENCE IN AN ENUMERATED LIST — THE CLASS-9
+            // FLYER IS BORN WITH `roll`/`fov` AT ZERO. The port's
+            // `f34`/`f36` ARE retail's `roll_0x20_32`/`fov_0x22_34`
+            // (`import_ent_mc2`: `f34: r.roll`), i.e. the DESIRED
+            // yaw/pitch the servo chases — and NOT ONE of the twenty
+            // class-15 fire handlers writes either word on the flyer
+            // it spawns. Nor does the band spawner `sub_6DCA0`
+            // (EF:44019-44238 contains no `roll_0x20_32`,
+            // `fov_0x22_34`, `yaw_0x1C_28` or `pitch_0x1E_30` write at
+            // all), and `NewEvent_4A050` memsets the record before
+            // seeding its eleven named defaults (Events.cpp:565-578),
+            // none of which is @0x20 or @0x22.
+            // BYTE-VERIFIED: `sub_69900`'s complete store list in the
+            // shipped `NETHERW.EXE` (file 0x8E100-0x8E240) is @0x82,
+            // @0x43, @0x26, @0x44, @0x1a, @0x50, @0x90, @0x10, @0x9a
+            // (the aim point), @0x1c and @0x1e — there is no
+            // `mov %ax,0x20(%ebx)` and no `0x22(%ebx)` anywhere in it.
+            // The port stamped the launch bearing into both, which the
+            // NEXT tick's `mc2_flyer_tick` recomputes anyway (its
+            // targetless arm is literally `e.f34 = e.f30`), so the
+            // stamp only ever showed up as a BIRTH-TICK divergence in
+            // the ungraded `roll` lane. `MGC_NO_MC2_LAUNCH_ROLL_ABSENCE=1`
+            // restores it.
+            if no_launch_roll_absence() {
+                e.f34 = p.heading;
+                e.f36 = p.pitch;
+            }
+            // ⭐⭐⭐ THE DIRECT ARMS TAKE THE CASTER BOOST **RAW** —
+            // THE [384, 0x2000] CLAMP IS `sub_6DCA0`'s ALONE
+            // (EF:44224-31, the band spawner's tail). Every
+            // hand-written class-15 handler instead opens with a bare
+            // `spawned->actSpeed_0x82_130 += caster->actSpeed_0x82_130`
+            // and never clamps: possession basic (`sub_69900`
+            // EF:56048) and leveled (`sub_69640` EF:55953), summon
+            // army (`sub_6C170` EF:57662), magic mine (`sub_6CAC0`
+            // EF:57984), alliance (`sub_6CD20` EF:58065). So a bolt
+            // cast by a REVERSING wizard is born BELOW its own
+            // `min_speed` and stays there — the class-9 mover never
+            // floors it back up.
+            //
+            // ⭐ A LAW LANDED ON ONE CALL PATH IS NOT LANDED. The
+            // RIVAL funnel has carried exactly this since mc2l6-rsg
+            // t=1130 (`mc2_rival_cast_proj`, rivals.rs `let boosted =
+            // if direct { … } else { … }`, same five citations), and
+            // the human's possession pair got a one-off re-stamp
+            // (`e.f126 = 384i32.saturating_add(p.speed …)` in
+            // `mc2_possess_launch`, mc2l4 t=13 slot 303 = 336) — but
+            // `mc2_launch` itself, which serves the army / mine /
+            // alliance arms too, kept the clamp. mc2l6-rsg pair
+            // 15630→15631: the human casts Firefly Army while
+            // REVERSING at actSpeed −48 and retail records the (9,24)
+            // at slot 6 with `speed` **336** = 384 + (−48); the port
+            // floored the sum back to the ctor's own 384. (Both
+            // Firefly Army casts show it — pair 20561→20562 slot 102
+            // is the second.)
+            //
+            // ⚠ The `.max(0)` on the BAND leg is left exactly as the
+            // rival twin leaves it: retail passes `a5 =
+            // v1x->actSpeed_0x82_130` RAW (EF:55856 and the eleven
+            // `sub_6DCA0` siblings) and every class-9 creator's base
+            // speed is 384, so `clamp(384, ..)` swallows the
+            // difference on every existing row. No witness, no change.
+            let boosted = if matches!(arm.subtype, 1 | 17 | 24 | 25 | 29) {
+                e.f126 as i32 + p.speed as i32
+            } else {
+                (e.f126 as i32 + p.speed.max(0) as i32).clamp(384, 0x2000)
+            };
             e.f126 = boosted as i16;
+        }
+        // ⭐⭐⭐ THE LAUNCH AIM POINT (`axis_0x9A_154x`, our
+        // `dest_x`/`dest_y`/`site_z`). EVERY human cast thunk but one
+        // stamps the spawned flyer's @0x9A vector with the CASTER's
+        // OWN position (not the muzzle, not the fov-lifted z) stepped
+        // along the launch bearing:
+        //   `sub_693F0`  band fire block  EF:55871-77   0x4000
+        //   `sub_69640`  leveled possess  EF:55976-81   0x4000
+        //   `sub_69900`  basic possess    EF:56059-64   **10240**
+        //   `sub_6C170`  summon army      EF:57673-77   0x4000
+        //   `sub_6CD20`  alliance         EF:58077-81   0x4000
+        //   `sub_6B3E0`  steal mana       EF:57214-18   0x4000
+        //   `sub_6CAC0`  magic mine       EF:57996-98   4096, pitch 0,
+        //                                 then z = getTerrainAlt
+        //   `sub_6B610`  duel dart        EF:57310      10240
+        // — and only Fool's Mana (`sub_6C870`, EF:57867-57946) has no
+        // such write. The port carried exactly ONE of the eight (the
+        // duel dart, `mc2_cast_duel`); the other seven left the lane
+        // at the ctor's zero. ⭐ A LAW LANDED ON ONE CALL PATH IS NOT
+        // LANDED.
+        //
+        // The bearing is `wizext->nextEntity_0x18_24 + caster.yaw` /
+        // `wizext->entityIndex2_0x1A_26 + caster.pitch`, i.e. the same
+        // pair this helper already stamps as the launch yaw/pitch —
+        // the port keeps no aim-offset lane, so `p.heading`/`p.pitch`
+        // stand in, exactly as `mc2_cast_duel` does.
+        //
+        // WITNESS (mc2l22, `MGC_RAW_SHADOW=1`, first 1200 pairs):
+        // `(9,1) dest_x/dest_y/dest_z` 121 rows EACH across 76 slots,
+        // retail non-zero vs port 0 (t=9 slot 664 retail
+        // 537/13129/684), and `(9,17)` 3 rows each (t=512 slot 718
+        // retail 10107/33687/512). The dig's own head is mc2l22 t=495
+        // slot 719, where retail records (61138, 26877, −183).
+        //
+        // ⚠ SCOPE: only the four DIRECT `_4A190` arms whose thunk was
+        // read statement by statement in round 98 are landed here.
+        // The BAND's own site (`sub_693F0` EF:55871-77, which would
+        // serve every `mc2_dispatch_arm` subtype) and the mine's
+        // terrain-alt variant are reported, not landed — the band
+        // reaches this helper through paths (`sub_6A5C0`'s lightning
+        // fan EF:56599-56680, EF:56141's 4096/pitch-0 site) that were
+        // not audited.
+        //
+        // ⭐ ROUND 98 — THE SCOPE NOTE ABOVE IS NOW PAID OFF. The
+        // whole class-15 fire table was enumerated site by site (see
+        // [`mc2_launch_axis_reach`], which carries the twenty-row
+        // table and the two shipped-EXE confirmations), so the band's
+        // own `sub_693F0`/`sub_6A5C0` blocks and the two remaining
+        // direct arms (spell 9 `sub_6AB00`, spell 13 `sub_6B3E0`)
+        // are landed here too, keyed on the SPELL rather than on the
+        // dispatch subtype. `MGC_NO_MC2_LAUNCH_AXIS_BAND=1` reverts
+        // exactly that extension.
+        // `MGC_NO_MC2_LAUNCH_AXIS_BAND=1` reverts ONLY the round-98
+        // extension (spells 0/7/9/13) on the HUMAN column, leaving
+        // 98-1's four direct arms and the rival funnel's own switch
+        // independently attributable.
+        let band_ext = matches!(spell, 0 | 7 | 9 | 13) && no_launch_axis_band();
+        if let Some((reach, use_pitch, ground_snap)) = mc2_launch_axis_reach(spell, sub.life) {
+            if !no_launch_axis() && !band_ext {
+                let mut dest = (p.x, p.y, p.z);
+                Gen::polar_step(
+                    &mut dest,
+                    p.heading,
+                    if use_pitch { p.pitch } else { 0 },
+                    reach,
+                );
+                // The terrain-tail eight end
+                // `axis.z = getTerrainAlt_10C40(&axis)`.
+                if ground_snap {
+                    dest.2 = self.g.ground_z(dest.0, dest.1) as i16;
+                }
+                let e = &mut self.g.ent[i];
+                e.dest_x = dest.0;
+                e.dest_y = dest.1;
+                e.site_z = dest.2;
+            }
         }
         // Every retail cast site copies the hand token's mana onto
         // the spawned projectile (`v6x->mana_0x90_144 =
@@ -2386,8 +4022,10 @@ impl World {
         // mine EF:57992, alliance EF:58151). The lane is COMPARED
         // (mc2l0 t=2798 slot 172: retail 20 = the fireball hand's
         // purse; the class-9 ctor default 50 must not survive).
-        let token_mana = self.g.ent[m].f140;
-        self.g.ent[i].f140 = token_mana;
+        if !bare {
+            let token_mana = self.g.ent[m].f140;
+            self.g.ent[i].f140 = token_mana;
+        }
         // The fire block banks the caster's cast-charge meter into
         // the projectile's @0x10 scratch home and ZEROES the meter
         // (`v6x->dword_0x10_16 = wizext->byte_0x154; … = 0`,
@@ -2398,10 +4036,20 @@ impl World {
         // keeping the zero (EF:56058/55975).
         self.g.ent[i].f26 = self.wiz_charge[0] as i16;
         self.wiz_charge[0] = 0;
-        // Back-ref for the impact XP award (`word_0x26_38` → the
-        // spell entity; ours carries the spell INDEX in f40 — a
-        // projectile never uses the attacker latch).
-        self.g.ent[i].f40 = spell as u16;
+        // ⭐⭐⭐ `word_0x26_38` IS THE (15,x) TOKEN'S **POOL SLOT**,
+        // NOT THE SPELL INDEX, AND TWO RETAIL READERS DEREFERENCE IT:
+        // the impact XP award (`sub_6D8B0(id,
+        // Entities[a1x->word_0x26_38]->model_0x40_64, 1)`, EF:62985)
+        // — for which slot and index are interchangeable, because a
+        // (15,N) token's model IS N — and `sub_68AC0`, the Magic
+        // Mine's swallow, which also writes the token's tier back
+        // into the mine and RE-ARMS the token's window
+        // (`v5x->word_0x2E_46 = 1`, EF:55441-44). The second reader
+        // is unreachable from an index, so the lane carries the slot
+        // and [`Gen::mc2_token_model`] resolves it back.
+        if !no_token_slot_backref() {
+            self.g.ent[i].f40 = m as u16;
+        }
         // The local player's FIREBALL swaps to the star-shaped
         // muzzle/aim sprite 42 (`SetEntityIndex_49C90(v17x, 42)`,
         // gated local-player && spell 0 — EF:30291): index + frame
@@ -2446,6 +4094,7 @@ impl World {
                 // (EF:55946-49). Both share the model-1/0x11 aim list.
                 1 if life == 0 => Some(1),
                 1 => Some(17),
+                0xE => Some(7), // the duel dart (`sub_6B610` EF:57291)
                 0x13 => Some(24),
                 0x17 => Some(29),
                 0x18 => Some(25),
@@ -2669,5 +4318,310 @@ impl Snap for Mc2Spellbook {
             right: r.get()?,
             ring: r.get()?,
         })
+    }
+}
+
+/// ⭐⭐⭐ ROUND 98 — **SHIELD III DECREMENTS BEFORE IT BILLS.**
+///
+/// `sub_6A480`'s two arms differ ONLY in the order of their four
+/// statements (EF:56513-15 vs EF:56525-28, and the shipped `NETHERW.EXE` at file
+/// `0x8ECDD` / `0x8ED0B` — `off = 0x34800 + linear − 0x10000`):
+///
+/// ```text
+///   life_0x1A == 0 :  byte[1] |= 0x40 ; sub_68DE0 ; word_0x2E_46--
+///   life_0x1A == 1 :  byte[2] |= 0x40 ; word_0x2E_46-- ; sub_68DE0
+/// ```
+///
+/// `sub_68DE0` (EF:55569) keys the FULL-COST debit on
+/// `word_0x2E_46 == word_0x30_48`, so in the second arm — where the
+/// counter is already one lower — the debit is unreachable and the
+/// call always lands in the else (`if (v2 && manaRegen > 0)
+/// manaRegen = 0`), whose `v2` is the POST-decrement counter.
+///
+/// The lane is FREE-RUN ONLY (`manaRegen_0x88_136` is not in
+/// `EntObsMc2`, and the pair importer reconstructs the delta from
+/// retail's own post-tick counter, so it was already right) — hence
+/// a unit test and no fixture. Kill switch:
+/// `MGC_NO_MC2_SHIELD3_PREDECREMENT=1`, which restores the shared
+/// skeleton and makes BOTH assertions below fail.
+#[cfg(test)]
+mod fools_retaliation_arm_tests {
+    //! The two ABSENCES in `sub_36770`/`sub_36850`'s enumerated store
+    //! lists, both disassembled from the shipped `NETHERW.EXE` (see
+    //! [`super::no_fools_splash_arm`] / [`super::no_fools_lightning_id`]).
+    //! Neither has an exemplar in the recording corpus — no take
+    //! splashes a fool's retaliation, and no tier-2/3 Fool's Mana is
+    //! ever claimed — so these are the lane, per docs/CONFORMANCE.md.
+    use crate::engine::features::{FeatureAssets, Planes};
+    use crate::engine::world::World;
+    use crate::ids::GameId;
+    use crate::mc1::mobs::MobCtx;
+    use crate::mc2::spells::MC2_SPELL_ROWS;
+
+    /// A flat MC2 world; `tile_type` 0 makes every tile WATER
+    /// (`Gen::cap_bit` -> 1), which is `sub_36770`'s splash gate.
+    fn world(water: bool) -> World {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![if water { 0 } else { 5 }; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: vec![Default::default(); MC2_SPELL_ROWS],
+            mc2_sprite_ext: Vec::new(),
+        };
+        World::new_for_game(planes, &[], 1, assets, GameId::Mc2)
+    }
+
+    fn ctx() -> MobCtx {
+        MobCtx {
+            px: 200 << 8,
+            py: 200 << 8,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// The sphere, with a PARENT that is not its own slot — the whole
+    /// point of the fused-`id24` hazard (`id24` is the port's home for
+    /// BOTH retail's `@0x1A` and `@0x28`, and on a (10,57) the
+    /// importer resolves it to `parentId_0x28_40`).
+    fn sphere(w: &mut World, parent: u16) -> usize {
+        let s =
+            w.g.mc2_spawn_mana_sphere(57, 100 << 8, 100 << 8, 100)
+                .expect("the fool's sphere spawned");
+        w.g.ent[s].id24 = parent;
+        w.g.ent[s].f44 = 500;
+        assert_ne!(
+            parent as usize, s,
+            "the parent is not the sphere's own slot"
+        );
+        s
+    }
+
+    #[test]
+    fn the_fools_water_splash_owns_itself() {
+        // `sub_36770`'s splash arm is NETHERW.EXE 0x5B014-0x5B045 in
+        // full: push 5 / push 10 / push &sphere->position / _4A190 /
+        // test / je / <pool index> / push 27 / push -1 / push idx /
+        // PrepareEventSound. NOT ONE STORE on the new record, so it
+        // keeps NewEvent_4A050's `id_0x1A_26 = <own pool index>`.
+        let mut w = world(true);
+        let s = sphere(&mut w, 7);
+        let c = ctx();
+        w.g.mc2_fools_bolt(s, 0, (10, 0), 4242, &c);
+        let splash = (1..w.g.ent.len())
+            .find(|&j| w.g.ent[j].class64 == 10 && w.g.ent[j].model65 == 5)
+            .expect("the water tile minted the (10,5) splash");
+        assert_eq!(
+            w.g.ent[splash].id24, splash as u16,
+            "the splash takes NO id_0x1A_26 (NETHERW.EXE 0x5B014-0x5B045 \
+             has no store at all), so it keeps its own-slot ctor seed"
+        );
+    }
+
+    #[test]
+    fn the_dry_retaliation_mints_no_splash() {
+        // The control: the arm is gated on the WATER tile
+        // (`sub_104D0_terrain_tile_is_water`, 0x5B003-0x5B012).
+        let mut w = world(false);
+        let s = sphere(&mut w, 7);
+        let c = ctx();
+        w.g.mc2_fools_bolt(s, 0, (10, 0), 4242, &c);
+        assert!(
+            !(1..w.g.ent.len()).any(|j| w.g.ent[j].class64 == 10 && w.g.ent[j].model65 == 5),
+            "no splash off a dry tile"
+        );
+    }
+
+    #[test]
+    fn the_thunder_retaliation_carries_the_spheres_own_slot() {
+        // `sub_36850`: 0x5B093 `mov 0x1a(%eax),%ax` / 0x5B097
+        // `mov %ax,0x1a(%ebx)` — %eax is the SPHERE, and a (10,57)'s
+        // `@0x1A` is its own pool index (`sub_50130`, file 0x74930,
+        // never writes @0x1A, so NewEvent's seed stands). NOT its
+        // `parentId_0x28_40`, which is what the port's fused `id24`
+        // handed it.
+        let mut w = world(false);
+        let s = sphere(&mut w, 7);
+        let c = ctx();
+        w.g.mc2_fools_bolt(s, 9, (10, 23), 4242, &c);
+        let bolt = (1..w.g.ent.len())
+            .find(|&j| w.g.ent[j].class64 == 9 && w.g.ent[j].model65 == 9)
+            .expect("the tier-2 arm minted its thunder bolt");
+        assert_eq!(
+            w.g.ent[bolt].id24, s as u16,
+            "the thunder bolt copies the SPHERE's @0x1A (its own slot), \
+             not the Fool's-Mana caster"
+        );
+    }
+}
+
+#[cfg(test)]
+mod shield_billing_tests {
+    use crate::engine::features::{FeatureAssets, Planes};
+    use crate::engine::world::{PlayerCommand, PlayerPose, World};
+    use crate::ids::GameId;
+    use crate::mc1::mobs::PLAYER_TARGET;
+    use crate::mc2::spells::{MC2_SPELL_ROWS, Mc2SpellRow};
+
+    fn away() -> PlayerPose {
+        PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0, 0.0, 0.0)
+    }
+
+    /// A flat MC2 world holding SHIELD (6) at tier 0, with the spell
+    /// row synthesized at retail's own Shield numbers except for
+    /// `life_0x1A`, which is the arm selector under test, and
+    /// `maxManaLimit_A`, pinned to 0 so `sub_68D50`'s castle-pool
+    /// upkeep leg is out of the picture (retail's Shield III wants a
+    /// 60,000-mana castle; the law has nothing to do with that leg).
+    /// Returns the world and the manifestation's pool slot.
+    fn shield_world(life: i8) -> (World, usize) {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut spells = vec![Mc2SpellRow::default(); MC2_SPELL_ROWS];
+        spells[6].byte_0 = 3;
+        for t in 0..3 {
+            // SPELLS.DAT spell 6 tier 2: manaCost 10000, word_0x18 301.
+            spells[6].tiers[t].mana_cost = 10_000;
+            spells[6].tiers[t].word_0x18 = 301;
+            spells[6].tiers[t].max_mana_limit = 0;
+            spells[6].tiers[t].life = life;
+        }
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells,
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
+        w.mc2_grant_plausible(&[(6, 0)]);
+        let m = w.mc2_book.ent[6] as usize;
+        assert!(m != 0, "shield was granted");
+        w.mc2_book.left = 6;
+        // Fund the purse the supported way (a CLAIMED sphere lifts the
+        // ceiling the census re-derives every lap; a bare
+        // `player.mana =` is clamped back).
+        let (px, py, _) = w.human_pose;
+        let b = w.g.spawn_mana_ball(px, py, 4000).expect("purse");
+        w.g.ent[b].f140 = 200_000;
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        // The adopt path stamps a 64-tick cooldown (`word_0x36_54`);
+        // run it off and let the census lift the ceiling.
+        for _ in 0..70 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        w.player.mana = w.player.mana_max;
+        assert!(
+            w.player.mana >= 10_000,
+            "the rig must be able to afford the 10,000 cast; got {}",
+            w.player.mana
+        );
+        assert_eq!(w.g.ent[m].f26, 0, "the window is not armed yet");
+        assert_eq!(w.g.ent[m].f54, 0, "the grant cooldown has run off");
+        (w, m)
+    }
+
+    fn fire(w: &mut World) {
+        w.tick(
+            away(),
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+    }
+
+    /// THE ARM TICK. Retail's `life_0x1A == 0` arm calls `sub_68DE0`
+    /// with `word_0x2E_46 == word_0x30_48`, so it parks `-maxMana` in
+    /// the caster's regen lane. The `life_0x1A == 1` arm has already
+    /// decremented, so the same call takes the else and merely PINS
+    /// the regen — Shield III's 10,000 is never charged.
+    ///
+    /// Witness: mc2l6-rival-spells-galore t=22531 (`f2e` 301 → 300,
+    /// the carpet's `flags` 269 → 4194573 = `byte[2] |= 0x40`), where
+    /// retail's `d88` goes 739 → 0 and `mana` stays 1475227 for the
+    /// whole window; the port stamped −10000 and landed on 1465227.
+    #[test]
+    fn shield_iii_arms_without_paying_where_shield_i_pays_in_full() {
+        // ── the CONTRAST arm: `life_0x1A == 0` bills ──────────────
+        let (mut w, m) = shield_world(0);
+        fire(&mut w);
+        assert!(w.g.ent[m].f26 > 0, "the shield window armed (life 0)");
+        assert_eq!(
+            w.debug_player_mana_delta(),
+            -10_000,
+            "sub_6A480's `life_0x1A == 0` arm calls sub_68DE0 BEFORE \
+             the decrement, so the first-tick full-cost debit lands \
+             (EF:56512-14, NETHERW.EXE 0x8ecf8 call / 0x8ecfd dec)"
+        );
+
+        // ── the LAW arm: `life_0x1A == 1` never reaches the debit ──
+        let (mut w, m) = shield_world(1);
+        fire(&mut w);
+        assert!(w.g.ent[m].f26 > 0, "the shield window armed (life 1)");
+        assert_eq!(
+            w.debug_player_mana_delta(),
+            0,
+            "sub_6A480's `life_0x1A == 1` arm decrements FIRST \
+             (NETHERW.EXE 0x8ed29..0x8ed30 dec / 0x8ed34 call), so \
+             sub_68DE0's `v2 == word_0x30_48` test is false by \
+             construction and it can only PIN the regen"
+        );
+    }
+
+    /// THE LAST TICK. Because the tier-2 arm hands `sub_68DE0` the
+    /// POST-decrement counter, the tick the window ends on passes
+    /// `v2 == 0` — and `if (v2 && manaRegen > 0)` is then false, so
+    /// the wizard's freshly recomputed regen SURVIVES its own last
+    /// shield tick.
+    ///
+    /// Witness: rsg t=22721, the re-press cancel (`move_bits` 0 → 16;
+    /// `sub_5F660` case 0xE pins `f2e` to 1, `f2e` 111 → 0). Retail's
+    /// `d88` goes 0 → 739 and `mana` 1475165 → 1475904 at t=22722;
+    /// the port pinned and held flat — the recorded −739 wall.
+    #[test]
+    fn shield_iii_does_not_pin_the_regen_on_the_tick_its_window_ends() {
+        let (mut w, m) = shield_world(1);
+        fire(&mut w);
+        // A mid-window tick DOES pin (`v2 != 0`) — the control that
+        // stops this test passing on a port that never pins at all.
+        w.tick(away(), PlayerCommand::default());
+        assert!(w.g.ent[m].f26 > 1, "still mid-window");
+        assert_eq!(
+            w.debug_player_mana_delta(),
+            0,
+            "a mid-burst shield tick pins the regen (sub_68DE0's else)"
+        );
+        // Now the counter retail's re-press cancel manufactures.
+        w.g.ent[m].f26 = 1;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[m].f26, 0, "the window ended on that tick");
+        assert!(
+            w.debug_player_mana_delta() > 0,
+            "the post-decrement counter is 0, so sub_68DE0 pins \
+             NOTHING and the wizard's own recompute stands; got {}",
+            w.debug_player_mana_delta()
+        );
     }
 }

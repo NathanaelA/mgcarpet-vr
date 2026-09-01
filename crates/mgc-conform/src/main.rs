@@ -12,6 +12,7 @@
 //!   once, diff the port's obs projection against the recorded obs at
 //!   N+1 (adjacent pairs only; gaps break pairing, never the run).
 
+mod alloc_trace;
 mod explain;
 mod fixtures;
 mod jsondiff;
@@ -133,10 +134,32 @@ fn usage() -> ! {
                              CLEAN ⇒ INHERITED (the one-tick law is\n\
                              right — the break rides earlier state:\n\
                              unit test / upstream dig)\n\
+           --stop-at-divergence\n\
+                             HORIZON QUERY: stop at the first divergent\n\
+                             boundary instead of reading the rest of the\n\
+                             take. The horizon, the first-divergence\n\
+                             render and the --brief signature are the\n\
+                             same as a full run's; every COUNT is\n\
+                             truncated, so both reports say stopped=<t>.\n\
+                             Refused with --segmented\n\
            --brief           one machine-readable line per take\n\
                              (horizon / segments / first divergence /\n\
                              signature) — the corpus regression sweep,\n\
                              diffable against a saved baseline\n\
+           --resync-deviations\n\
+                             consult conformance/known-deviations.json and\n\
+                             RE-ANCHOR at a boundary whose every row is a\n\
+                             registered DEVIATION, instead of ending the\n\
+                             run there. `replay` classifies those rows by\n\
+                             default (they read `roster-excused` and are\n\
+                             kept out of the excess-reset count); this flag\n\
+                             is what lets a PLAIN free run keep measuring\n\
+                             past one. The resync is reported, never\n\
+                             hidden: the deviating value propagates, so\n\
+                             the run past it is retail's state, not the\n\
+                             port's own\n\
+           --no-roster       replay/verify-deltas: skip the roster\n\
+                             entirely (raw, unclassified)\n\
            --start <t>       anchor the replay at tick t instead of the\n\
                              first record"
     );
@@ -200,6 +223,26 @@ pub struct Args {
     /// dump-state --port: sample MID-WALK — snapshot the pool as the
     /// tick into `t` reaches this slot, before it dispatches.
     pub at_slot: Option<u16>,
+    /// replay: stop the run at the FIRST divergent boundary — the
+    /// horizon query, which is the single most-run question in the
+    /// campaign and today pays a whole-take read to answer. The
+    /// horizon, its first-divergence render and its `--brief`
+    /// signature are exactly what an un-truncated run reports; every
+    /// COUNT (graded/clean/segments/…) is truncated by construction,
+    /// so both reports carry a `stopped=<t>` marker and no baseline
+    /// can silently absorb one. Refused with `--segmented`, whose
+    /// whole job is to keep measuring past the first break.
+    pub stop_at_div: bool,
+    /// replay: RE-ANCHOR at a roster-EXCUSED boundary in a plain free
+    /// run — the instrument half of the replay-consults-known-deviations
+    /// ruling (docs/CONFORMANCE.md "The known-deviation roster in
+    /// `replay`"). `--segmented` already re-anchors at every break, so
+    /// it needs no flag: there the roster only re-CLASSIFIES the reset.
+    /// A free run cannot excuse a registered row without resyncing,
+    /// because the deviating VALUE propagates (RNG draws, painted
+    /// terrain) — so this re-imports retail's state at that boundary
+    /// and says so, rather than pretending the run stayed bit-exact.
+    pub resync_deviations: bool,
 }
 
 fn parse_args() -> Args {
@@ -218,6 +261,7 @@ fn parse_args() -> Args {
         baseline: None,
         sample_every: 10,
         no_roster: false,
+        resync_deviations: false,
         no_pose_alt: false,
         no_slot_desync: false,
         no_terrain: false,
@@ -227,6 +271,7 @@ fn parse_args() -> Args {
         classify: false,
         brief: false,
         at_slot: None,
+        stop_at_div: false,
         input_delay: 0,
         start: None,
     };
@@ -258,6 +303,8 @@ fn parse_args() -> Args {
             "--no-pose-lane" => a.no_pose_lane = true,
             "--pose-only" => a.pose_only = true,
             "--segmented" => a.segmented = true,
+            "--stop-at-divergence" => a.stop_at_div = true,
+            "--resync-deviations" => a.resync_deviations = true,
             "--classify" => a.classify = true,
             "--brief" => a.brief = true,
             "--port" => a.dump_port = true,
@@ -1032,7 +1079,18 @@ fn check_decode(path: &std::path::Path, args: &Args) -> i32 {
                 continue;
             }
         };
-        let diffs = jsondiff::diff(stored, &decoded, args.max_diffs);
+        // `check-decode` is the one consumer that wants the stored obs
+        // as a `Value` (the strict comparator diffs value trees), so it
+        // — and only it — pays for materialising one.
+        let stored: serde_json::Value = match serde_json::from_str(stored.get()) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("  t={}: obs: {e}", tick.t);
+                bad += 1;
+                continue;
+            }
+        };
+        let diffs = jsondiff::diff(&stored, &decoded, args.max_diffs);
         if diffs.is_empty() {
             ok += 1;
         } else {

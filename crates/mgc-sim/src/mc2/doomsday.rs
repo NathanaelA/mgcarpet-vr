@@ -110,7 +110,10 @@ impl Gen {
             // (NETHERW.EXE @0x45f11; the machine itself only ever ANDs
             // it off).
             e.flags |= 0x4880_0001;
-            e.f56 = 1;
+            // `@0x36` is NOT `byte_0x38_56` — see `mc2_class5_w36_legacy`.
+            if crate::mc2::roster::mc2_class5_w36_legacy() {
+                e.f56 = 1;
+            }
             e.row156 = 107;
             e.f58 = 64; // byte_0x39_57 awake
             e.f66 = 3; // xtype
@@ -939,7 +942,8 @@ impl World {
                     // left the latch with no import home, so every
                     // imported pyramid summon read f46 ≈ 0 and puffed
                     // itself on its first replayed tick.
-                    e.f26 = 250;
+                    // dig 98-Q20: @0x2E's own home (`lease2e`).
+                    e.set_lease(250);
                     e.f126 = 320;
                     // `parentId_0x28_40 = pyramid` is unmodeled: the
                     // port has no creature parent-link home (f40 is

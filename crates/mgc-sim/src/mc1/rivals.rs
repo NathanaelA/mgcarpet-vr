@@ -1161,8 +1161,19 @@ impl World {
             r.mana = (r.mana + amount).min(r.mana_max);
             return;
         }
-        if let Some(r) = self.mc2_rivals.iter_mut().find(|r| r.ent == owner) {
+        if let Some(ri) = self.mc2_rivals.iter().position(|r| r.ent == owner) {
+            let r = &mut self.mc2_rivals[ri];
             r.mana = (r.mana + amount).min(r.mana_max);
+            // Retail's purse IS the entity word `mana_0x90_144`; the
+            // brain record only mirrors it. See
+            // [`crate::mc2::cast::no_mc2_wiz_purse_is_entity`].
+            if !crate::mc2::cast::no_mc2_wiz_purse_is_entity() {
+                let m = self.mc2_rivals[ri].mana.min(i32::MAX as u32) as i32;
+                let t = owner as usize;
+                if t < self.g.ent.len() {
+                    self.g.ent[t].f140 = m;
+                }
+            }
         }
     }
 

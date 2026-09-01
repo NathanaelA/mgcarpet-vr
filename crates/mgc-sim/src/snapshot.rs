@@ -88,7 +88,21 @@ const MAGIC: u32 = 0x5343_474D;
 ///    reloaded save must come back on the same arm it was taken on —
 ///    otherwise a replayed level would start awarding scrolls after a
 ///    save/load.
-pub const SNAPSHOT_VERSION: u32 = 16;
+/// 17: `Mc2Rival::knock_dir` / `Mc2Rival::knock_mag` — the MC2
+///     rival's pending knockback impulse (`yaw_0x1E_30` /
+///     `moveBoost_0x1E_30`, EF:60697-702) joined the rival record
+///     after `vdes`. The MC1 twin of SNAPSHOT 13, and real state for
+///     longer here: nothing on the alive path spends it (`sub_146F0`
+///     has no moveBoost leg), so a rival that has been taking fire
+///     carries the impulse until its death fall runs `sub_5D530`.
+/// 18: `World::mc2_castle_purge_level` — the castle-purge level bit
+///     (`terrain_2FECE.byte_0x2FED2 & 4`, EF:61650) joined the World
+///     stream after `mc2_level_replayed`. Construction config like
+///     `mc2_doom_level`, but it changes sim behaviour on levels 022
+///     and 062 (`sub_605E0`'s level-0 rival arm purges the owner's
+///     spell-2 book slot only there), so a reloaded save must come
+///     back on the same arm it was taken on.
+pub const SNAPSHOT_VERSION: u32 = 18;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]

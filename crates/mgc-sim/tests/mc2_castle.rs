@@ -145,6 +145,29 @@ fn mc2_castle_tier1_cast_grows_fire_turrets() {
     let (_, _, lvl2) = w.loadout().castle.expect("castle survives");
     assert_eq!(lvl2, 2, "upgraded to level 2");
     assert_eq!(count(&w, 10, 79), 4, "level 2 grows the 4-turret ring");
+
+    // ⭐⭐ AND NOT ONE OF THEM IS SOLID. `sub_508E0_castle_defend_create`
+    // ends with `event->struct_byte_0xc_12_15.byte[0] &= 0xF7`
+    // (EF:36998), clearing the COLLIDE bit `NewEvent_4A050` hands out
+    // by default — and `sub_10780`'s very first test on a candidate is
+    // `byte[0] & 8` (EF:3763). A castle's defender stage is scenery to
+    // every projectile probe in the game; leaving the bit set made each
+    // piece a 100000-life wall that detonated anything flying over the
+    // castle. mc2l6-rival-spells-galore t=1657 is the corpus row: rival
+    // 370's fireball bursts on piece slot 46 and snaps to its
+    // `sub_65580`-lifted z (1754 + ayaw 100 = 1854, the tell) where
+    // retail's flies on. The bit is not a graded lane, so this is the
+    // assertion.
+    for e in w.debug_pool().1 {
+        if e.class == 10 && e.model == 79 {
+            assert_eq!(
+                e.flags & 8,
+                0,
+                "castle piece at slot {} must not collide",
+                e.slot
+            );
+        }
+    }
 }
 
 /// The level's ending cluster is the CHECKPOINT variant — dis 4 spawns

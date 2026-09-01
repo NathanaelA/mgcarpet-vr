@@ -91,6 +91,330 @@
    "file": "the-rival-s-life-regen-is-a-stored-register-appl.mgcr",
    "source": "mc2l6-rival-spells-galore",
    "note": "THE RIVAL'S LIFE REGEN IS A STORED REGISTER, APPLIED BEFORE IT IS RE-SELECTED: sub_12A70 does `life_0x8 += dword_0xA4_164x->lifeRegen_0x163_355` (EF:5425) on the rate the PREVIOUS tick stored, and the fork that recomputes it - maxLife/200 at the own castle or a dolmen, maxLife/500 afield (EF:5439/5447) - sits twenty lines further down, past the mana clamp, sharing its at-castle test with the mana half two statements above. So the boosted rate lands the tick AFTER the rival reaches its castle. mc2l6 t=784: rival 378 (maxLife 1992) arrives over castle 174 and retail still regenerates 1992/500 = 3 (life 737 -> 740) with manaRegen already flipped 100 -> 1000 in that same statement pair, then 1992/200 = 9 from t=785; the port recomputed the life half fresh each tick and paid the boost a frame early. The register is imported from the players block (+998+355), like the brake word, because it is state and not a derived value. Ledger SESSION 78 law D."
+  },
+  {
+   "t": 1129,
+   "file": "the-direct-cast-arms-take-the-caster-speed-boost.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE DIRECT CAST ARMS TAKE THE CASTER SPEED BOOST RAW: the [384, 0x2000] clamp is sub_6DCA0's tail ALONE (EF:44224-31 `v24 = a5 + base; if (v24 < 384) ...; if (... > 0x2000) ...`). Every hand-written class-15 token handler instead opens its spawn with a bare `spawned->actSpeed_0x82_130 += caster->actSpeed_0x82_130` and never clamps - possession basic sub_69900 EF:56048, possession leveled EF:55953, summon EF:57662, mine EF:57984, alliance EF:58065, and the (9,10) castle-upgrade ball EF:56129 - so a bolt cast by a REVERSING wizard is born BELOW its own min_speed and the class-9 mover has no floor that pulls it back. The HUMAN column has carried this since the mc2l4 t=13 witness (mc2_spell_fire case 1 re-stamps 384 + p.speed after mc2_launch clamped, recording speed 336 = 384 - 48); the RIVAL funnel is one shared body for both halves of the arm split and kept the clamp on all of them. mc2l6-rsg t=1130: rival 370 fires its spell-1 (9,1) at speed -8 (its d88 had just flipped to -100) so retail's slot 853 is born at 384 - 8 = 376 against min_speed 384 where the port minted 384 - and the whole x,y,z,speed head is that one missing step length. Ledger SESSION 80 law A."
+  },
+  {
+   "t": 1325,
+   "file": "duel-fires-a-9-7-dart-and-only-a-struck-wizard.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "DUEL FIRES A (9,7) DART, AND ONLY A STRUCK WIZARD MAKES THE TETHER: sub_6B610 (EF:57291) spawns _4A190(&caster.position, 9, 7) - the sub_4D740 creator EF:34898, action 7, speed/min_speed 384 with NO caster-speed boost anywhere in the function, maxLife 21 = 0x2000/384, row 60, sprite 213 - carrying impact pair byte_0x43_67 = 10 / byte_0x44_68 = 26. The (10,26) tether is what that dart MAKES WHEN IT LANDS, not what the cast makes where you stand; subtype 7 was missing from CREATORS outright, the one class-9 creator no sub_6DCA0 band arm reaches. And the dart's flight worker is sub_662E0, NOT the generic sub_65820: its resolution arm forks three ways (EF:63531-45) and the middle one, `!v5x || v5x->class_0x3F_63 != 3 || (model != 0 && model != 1)`, runs sub_65780(a1x, 0, ...) + disable with NO effect spawn. mc2l6-rsg grades both halves with nine darts - slot 855 (t=1326-1347) flies its full 21-tick life into empty air and dies with NOTHING allocated (the free stack pops exactly once at t=1347 and that slot goes to an unrelated (10,66)), slots 842/843 stop on terrain and also spawn nothing, while slots 807/857/617/379/172/208 each strike rival 370 and birth a (10,26) that same tick. Ledger SESSION 80 law B."
+  },
+  {
+   "t": 1374,
+   "file": "the-duel-tether-is-a-ch4-area-write-that-renews.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE DUEL TETHER IS A ch4 AREA WRITE THAT RENEWS ITS OWN LIFE: sub_33E80 (EF:24985) in full - `v1 = life; dword_0x10_16++; life = v1 - 1; if (v1 < 0) { DisableEntityDrawing04(a1x); return; } sub_585A0(a1x); if (sub_10C80(a1x, 4u, a1x->byte_0x46_70)) life = 0;`. sub_10C80 IS Gen::area_write; the ch4 pair word_0x76_118 / word_0x7A_122 at str_0x5E_94 + 6*4 IS mail[4] (amount = the TIER, source = the marker's OWNER), and sub_5EFA0's duel block EF:60643-57 reads exactly that mail off the VICTIM to stamp the CASTER's lock. So the marker is not a scanner with a radius: it is a stationary 8-tick area effect whose life resets to 0 on every tick it catches somebody and which only starts dying once the victim leaves its box. WARNING - the 2026-07-17 trace named sub_38D80 (EF:28348) as this tick, a roster scanner that writes word_0x7A_122 = its OWN SLOT and decrements life every tick, and invented the ctor besides; mc2l6-rsg slot 827 (t=1375) refutes all of it - life holds 0 for TWENTY-FOUR ticks with scratch10 counting 1..26 before falling to -1/-2 and freeing at t=1401, and rival 370 takes mail4.src 0 -> 343 (the human's entity id, not the marker slot). The real ctor is sub_4F720 (EF:36129): action 26, maxLife 8, subSpellIndex 200, sprite 213 (the trace guessed 284) and SetEntityShiftRot_49EA0(event, 512, 512) - the extents quad retail records as apitch/aroll/afov 512 where the bare sprite row gives 78/78/75. Ledger SESSION 80 law D."
+  },
+  {
+   "t": 1624,
+   "file": "the-human-life-regen-rate-is-a-stored-register.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE HUMAN LIFE-REGEN RATE IS A STORED REGISTER ON THE MC2 COLUMN TOO: AddPlayer03_00_5E010 credits life_0x8 += lifeRegen_0x163_355 (EF:60002) and only THEN re-selects it from the at-castle/dolmen box test (EF:60021 - maxLife/250 = 40 there, maxLife/2000 = 5 afield), so a rate change lands ONE TICK after the test flips. player_regen_block credited MC1 with the register and MC2 with the freshly selected rate, under a rationale that said MC2's recorder lane for it was undecoded - but Mc2Wizard::life_regen has lifted flight +355 all along and it was the human's IMPORT SEAT that was missing (the MC1 arm has carried life_rate: wiz.life_rate for months). mc2l6-rsg t=1624->1625: the carpet has just entered its own castle's summed-extents box, retail credits one last afield +5 (7710 -> 7715) and banks the 40 for t=1626; under the reverted build the pair reads life: retail 7715 port 7750. Ledger SESSION 81 law C."
+  },
+  {
+   "t": 3083,
+   "file": "a-respawned-rival-comes-back-raw-and-re-mints-its-book.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "A RESPAWNED MC2 RIVAL COMES BACK RAW, AT ITS CASTLE'S OWN ALTITUDE, WITH A FRESHLY MINTED BOOK: sub_5C950 is ONE function for the mint and the reuse, and everything that reads WizardMapSettings_0x360D2 - Aggression, Perception, Reflexes and the Life scalar word_0x24A_586 that divides maxLife - sits inside `if (v9)`, the NEW-ENTITY arm (EF:43757-72). The reuse arm runs only the three statements above it, `word_0x24A_586 = 256; maxMana_0x8C_140 = 1000; maxLife_0x4 = 10000` (EF:43703-05), and the tail does `life = maxLife; mana = maxMana`. So a rival authored at Life 51 spawns with 10000*51>>8 = 1992 and comes back from its first death with 10000 - five times the wizard it was - while its mana ceiling goes the other way, wiped from whatever the castle ladder grew it to back down to 1000. Three more in the same arm: the anchor is `v35x = *castle_position` (EF:43690), the WHOLE axis_3d including z, not the terrain+0x100 the authored point was lifted to (retail 2720, the port's ground sample 2976); sub_5C950's FIRST statement is sub_49F90 (EF:43672), the free-stack rebuild, so the re-minted book takes the LOWEST free slots (3/4/6/7, not 672 and up); and sub_5CF40 (EF:43770-84) re-mints EVERY known spell UNCONDITIONALLY, overwriting SpellEnabled[i] and simply ORPHANING the tokens the death scatter left loose - the port's `book.ent[s] == 0` guard meant a rival that died once respawned with an empty book, 72 missing class-15s at t=3084. What the arm does NOT write is manaRegen_0x88_136 (the rate the wizard died holding is what its first live tick spends: 1000 -> 1100 at t=3085), nor the entity's actSpeed_0x82_130 or its @0x2C fall velocity - retail's `speed_0xc_12 = 0` and `yaw_0x1E_30 = 0` are the PLAYER struct's commanded-speed and knock registers. mc2l6-rsg t=3084, rival 378. Ledger SESSION 83 law D."
+  },
+  {
+   "t": 3257,
+   "file": "a-respawned-rivals-token-fires-a-frame-later.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "WHETHER A RIVAL'S CAST FIRES ON THE ARM FRAME IS A SLOT COMPARISON, NOT A CONSTANT: retail's arm (sub_5F7B0 EF:60976) writes word_0x2E_46 = word_0x30_48 and nothing else - the FIRE, the sub_68DE0 debit and the countdown all live in the token's own action body (sub_693F0), which runs at the TOKEN's pool slot. A wizard minted at level load owns the slots directly above itself, so its token is walked LATER in the very frame the arm lands and the first tick is same-frame (SESSION 74 law B, the caster-slot stand-in in mc2_rival_buffs). A RESPAWNED wizard's book is re-minted onto the LOWEST FREE SLOTS (SESSION 83 law D: sub_5C950 opens on sub_49F90), so its tokens sit BELOW it, have already been walked this frame, and the first tick - fire, debit and all - lands on the NEXT one. mc2l6-rsg t=3258: rival 378, respawned at t=3084 with its book at 3/4/6/7, stamps its spell-1 cast and retail's own wizext moves with it (burst 2 -> 3, cooldown[1] 0 -> 10, cmd_speed 80 -> 0) while the pool allocates NOTHING but rival 383's slipstream puff - the free stack pops exactly once, 615, and that slot takes the (10,2). The (9,1) is not born until t=3259, at slot 39, the slot the port had already spent a frame earlier: it fired on the arm frame, took 615 for the projectile and pushed the puff down to 39. Ledger SESSION 83 law E."
+  },
+  {
+   "t": 3542,
+   "file": "the-leveled-possession-bolt-has-no-speed-ramp.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE LEVELED POSSESSION BOLT HAS NO SPEED RAMP EITHER - IT IS THE SAME FAMILY AS THE RE-POINT: the +-1/x2 actSpeed fixup toward minSpeed that opens the generic core (EF:62923-31) and sub_662E0 (EF:63464-72) is absent from states 0 (sub_65C20), 1 (CastPosses_65F60), 29 (sub_65B50) and - the one the port was missing - 18 (sub_674C0), whose ONLY actSpeed_0x82_130 reference in the whole body is the MoveEntity_57FA0 argument at EF:58991. mc2l6-rsg t=3542->3543: the human's leveled (9,17) is born at slot 807 with speed 368 against a minSpeed of 384 and retail keeps 368 through its first flight tick, where the port ramped to 370 and flew two units further (x retail 220.81640625 port 220.82421875). Ledger SESSION 85 law B."
+  },
+  {
+   "t": 3550,
+   "file": "the-magnet-aura-takes-the-bolt-s-bearing.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE MANA-MAGNET AURA TAKES THE BOLT'S BEARING, NOT ITS OWN CTOR ROLL: sub_674C0 stamps its SECOND child with the same three words as its first - v14x->id_0x1A_26 / yaw_0x1C_28 / pitch_0x1E_30 = a1x->... (EF:59050-52), one line below the claim pulse's EF:59042-44 - so AddAuxiliary_50500's single random-yaw draw (EF:36822) is OVERWRITTEN, not kept. Only id24 had crossed into the port, leaving every magnet standing at its ctor roll. mc2l6-rsg t=3550->3551: the (9,17) at slot 807 detonates on a sphere and its (10,54) aura is born at slot 569 with heading 446 and pitch 35 - the bolt's own post-move bearing, the same pair the (10,12) pulse at slot 67 takes - where the port read 1105 and 0. Ledger SESSION 85 law C."
+  },
+  {
+   "t": 3919,
+   "file": "both-possession-tiers-spawn-a-model-54-aura.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "BOTH POSSESSION TIERS SPAWN A MODEL-54 AURA - THE TIER LIVES IN dword_0x10_16, NOT IN THE MODEL: retail's second child is _4A190(&pos, byte_0x43_67, byte_0x44_68) (EF:59048) and the subtype-69 row resolves to the SAME ctor as 54, AddAuxiliary_50500, whose third statement is the literal model_0x40_64 = 0x36 (EF:36819). A CTOR'S HARDCODED MODEL OUTRANKS THE SUBTYPE THAT SELECTED IT. The range is the only thing the tier changes, and it rides the bolt's dword_0x10_16 = (subSpellIndex << 8) squared (EF:55974), copied onto the aura at EF:59056. mc2l6-rsg t=3919->3920: the human's Mana Lock lands, retail borns the (10,70) FORCED steal pulse at slot 599 and its aura at slot 598 as (10,**54**) carrying 26214400 = (20<<8)^2, where the port stamped model 69. Ledger SESSION 85 law E."
+  },
+  {
+   "t": 3992,
+   "file": "a-held-possession-tier-re-fires-the-basic-bolt.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "A HELD POSSESSION TIER RE-FIRES THE **BASIC** BOLT ON A 1..3 COUNTER, NOT ITS OWN ARM AND NOT A SECOND CAST: sub_69640's non-first-tick arm is four statements (EF:55995-56010) - `v6 = byte_0x3C_60; if (v6) { if (byte_0x46_70) { if (v6 == 1) sub_69900(a1x, v1x); if (++byte_0x3C_60 > 3) byte_0x3C_60 = 0; } else byte_0x3C_60 = 0; }` - and sub_69900 is the (9,1)/(10,12) BASIC spawner (EF:56039). So a held Mana Magnet or Mana Lock sprays PLAIN claim bolts between its own deliveries; the release signal is a COUNTER that latches three ticks, so a mashed button cannot re-fire faster than that; and there is NO debit, because sub_68DE0 parks the whole cost in the caster's regen lane on the window's FIRST tick only (v2 == word_0x30_48, EF:55575-83) and every later tick merely pins regen to 0. mc2l6-rsg t=3992->3993: the player holds tier 2 (token 345 byte_0x46_70 = 2, window tick 41 of 51) and retail borns a (9,1) action 1 at slot 846 with dword_0x10_16 200 and byte_0x44_68 12, where the port re-ran the tier walk and launched (9,17) action 18. Ledger SESSION 85 law F."
+  },
+  {
+   "t": 4476,
+   "file": "reactive-defense-writes-the-entity-s-actual-spe.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "REACTIVE DEFENSE WRITES THE ENTITY'S ACTUAL SPEED, NOT THE AI'S SETPOINT, AND ONLY WITH A METAMORPH TOKEN: sub_161A0's tail is `if (v14x) { v13 = v14x->byte_0x46_70 ? minSpeed : 3*minSpeed; a1x->actSpeed_0x82_130 = v13; }` (EF:7842-49) over v14x = sub_146C0(a1x, 4u) (EF:7772), the owner's spell-4 manifestation. Two laws in three statements: the write lands on the ENTITY's actSpeed - the same lane the combat weave already pulses - where the port wrote speed_0xc_12, silently undoing the speed_0xc_12 = 0 / word_0xe_14 = 1 brake the mid-band engage arm sets three statements earlier (EF:7804-05); and a rival holding no metamorph token takes NO speed write at all, where the port's else stamped plain minSpeed. mc2l6-rsg t=4476->4477: rival 370 is in Defense with cmd_speed 0, brake 1 and minSpeed 80, and retail steps the entity speed 0 -> 240 in the one tick while the port left it at 0. Ledger SESSION 86 law E."
+  },
+  {
+   "t": 4493,
+   "file": "the-dead-target-drop-is-a-write-in-sub-5efa0-no.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE DEAD-TARGET DROP IS A WRITE IN sub_5EFA0, NOT A PREDICATE IN THE GATE: sub_14C60 (EF:6707) is one statement - sub_14C40(a2x) == a1x->word_0x98_152, an IDENTITY compare of id + model + (class<<7) - and every one of the six state handlers that opens with it (sub_12FF0 :5586, sub_131F0 :5664, sub_135C0 :5831, sub_13710 :5880, sub_13890 :5953, sub_161A0 :7744) tests nothing else. The only liveness/reap test retail applies to a wizard's target is sub_5EFA0's second block (EF:60634-39): `if (word_0x96_150) { v2x = Entities[word_0x96_150]; if (v2x > Entities[0] && (v2x->life_0x8 <= 0 || v2x->byte[1] & 4)) word_0x96_150 = 0; }` - and sub_12A70 reaches sub_5EFA0 only down the NOT-DOCKED arm (word_0x159_345 == 0, EF:5400-19), so a wizard inside its castle's grace window keeps a dead target AND KEEPS ACTING ON IT. The port had folded the write into the read, which answers 'dead' a tick early and every tick after. mc2l6-rsg t=4493->4494: rival 370's disguise anchor, the (5,19) at slot 213, steps life 0 -> -200 while 370 spends the LAST tick of its grace; the signature is unchanged at 872 (= 213 + 19 + (5<<7)) and retail runs sub_161A0 in full - two entity-LCG draws for the tier-0 heading wiggle (rand 53646 -> 59181 -> 56364), the tan2 re-aim to roll 1703, and actSpeed 3*minSpeed = 240 - where the port's gate returned before any of it and servoed 240 -> 224. Reverting either half dirties this pair."
+  },
+  {
+   "t": 4494,
+   "file": "a-docked-wizard-keeps-a-dead-target-the-drop-wa.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "A DOCKED WIZARD KEEPS A DEAD TARGET - THE DROP WAITS FOR THE GRACE TO EXPIRE: the companion tick to the sub_5EFA0 write. sub_12A70's fork is `if (word_0x159_345) { memset(&str_0x5E_94, 0, 36); word_0x159_345--; } else if (sub_5EFA0(a1x) == 2) ...` (EF:5400-19), so the dead-target clear is reachable ONLY on a tick the wizard is out of its castle's grace window. mc2l6-rsg rival 370's grace runs out at t=4494 (invuln 1 -> 0), and t=4494->4495 is the first tick sub_5EFA0 gets to look: it finds target96 213 pointing at a (5,19) whose life is -200, zeroes the word, and sub_14C60 then reads the Entities[0] sentinel and refuses the whole sub_161A0 body - no entity-LCG draw (rand holds 56364), no tan2 re-aim (roll holds 1703), z falls 780 -> 768 and actSpeed servoes 240 -> 224 with no disguise write. The tick BEFORE, still docked, retail runs every one of those. Deleting the clear from mc2_rival_intake dirties this pair; the gate half is pinned by the-dead-target-drop-is-a-write-in-sub-5efa0-no."
+  },
+  {
+   "t": 4847,
+   "file": "the-rebound-window-is-stamped-at-the-token-s-ow.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE REBOUND WINDOW IS A FLAG THE TOKEN RE-STAMPS AT ITS OWN WALK SLOT, NOT A BOOLEAN THE CAST LATCHES: sub_6AA00 (EF:56721-51) writes the OWNER's flag word every afforded tick - `if (word_0x2E_46 <= 0) v1x->word[0] &= 0x7FEF; else if (sub_68D50(a1x,v1x)) { v3 = SPELLS[model].subspell[byte_0x46_70].life_0x1A; if (v3) { if (v3 == 1) byte[0] |= 0x10; } else byte[1] |= 0x80; sub_68DE0(a1x,v1x); }` - and the deflect gate reads it LIVE off the victim's record at the projectile's own walk slot (`v4x->struct_byte_0xc_12_15.word[0] & 0x8010 && sub_68740(...)`, sub_65820 EF:62939). The human's cast runs at the carpet's slot 343 and its book sits at 344..369, so the ARM TICK already deflects for every bolt below the token. mc2l6-rsg t=4847->4848 is the cast: token 352 (spell 8, tier byte_0x46_70 1) loads its 251-tick window (word_0x2E_46 0 -> 250) and stamps 0x8000 on carpet 343 (flags 269 -> 33037) the same frame, and rival 370's (9,0) at slot 809 - already inside the human - comes back OWNED BY THE HUMAN: roll 1039 -> 15 (= yaw + 0x400), yaw -> 57 (roll + rand%0x5B - 45 off the entity draw 23259 -> 5274), pitch/fov 85 -> 1963 (= -85 & 0x7FF), life refilled to 21, xtype/xsubtype re-keyed to the old shooter's 3/1, f1a 370 -> 343, target96 343 -> 370, and the human's purse paying the quarter (1438596 -> 1438591). The port derived Gen::player_rebound once at the tick head, so the whole arm frame read stale and the bolt landed and reaped instead. The MC1 column has held this republish since mc1hwl0 t=38740; it never crossed. Dropping the token-slot republish in mc2_manifestation_tick dirties this pair."
+  },
+  {
+   "t": 5564,
+   "file": "the-precise-rebound-tier-draws-no-lcg-the-scatt.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE PRECISE REBOUND TIER DRAWS NO LCG - THE SCATTER STEP LIVES INSIDE THE SCATTER ARM: sub_68740's tail is a two-armed if on the VICTIM's own flag byte (EF:55304-09) - `if (a2x->struct_byte_0xc_12_15.byte[0] & 0x10) { v10 = a1x->subSpellIndex_0x2A_42; a1x->yaw_0x1C_28 = a1x->roll_0x20_32; a1x->subSpellIndex_0x2A_42 = 2 * v10; } else { a1x->rand_0x14_20 = 9377 * a1x->rand_0x14_20 + 9439; a1x->yaw_0x1C_28 = a1x->roll_0x20_32 + a1x->rand_0x14_20 % a3 - a4; }` - so the T3 return goes back EXACTLY down the reverse ray with a DOUBLED payload and never touches the bolt's LCG. The port hoisted the draw above the branch, so every precise deflection advanced that stream one step too far and the desync rode the bolt for the rest of its life. mc2l6-rsg t=5564->5565: rival 370's (9,0) at slot 856 strikes the human's precise Rebound (byte[0] 0x10, the tier whose subspell life_0x1A is 1) - subSpellIndex 250 -> 500, yaw and roll both 1415 (= the pre-step yaw 391 + 0x400), pitch/fov 2027 -> 22, life refilled to 21, xtype/xsubtype re-keyed to 3/1, f1a 370 -> 343 and the human's purse paying the quarter 1392337 -> 1392332 - and retail HOLDS rand at 45665 where the port stepped it to 63456. That draw was the pair's ONLY field diff. Hoisting the ent_rand call back above the `if precise` dirties this pair."
+  },
+  {
+   "t": 6290,
+   "file": "the-standing-fire-probe-is-a-2x2-ring-with-a-rad.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE STANDING-FIRE PROBE IS A 2x2 RING WITH A RADIUS: sub_10B70 (EF:3921) anchors at ((x-128)>>8, (y-128)>>8), each axis wrapped to a byte, walks all FOUR cells of the 2x2 block, and gates every candidate on sub_583F0_distance_3d(a1, j.pos) <= 0x80 - a genuinely 3-D metric (dy2+dx2+dz2, EF:40421). The port probed the single OCCUPIED cell with no radius at all, so any fire in the same 256-unit tile suppressed a re-light. mc2l6-rsg t=6291: boulder 189 steps to (49018,16375,3540) with its own earlier fire (slot 620) still burning at (49087,16382,2982) - same cell (191,63), 69 units apart horizontally and 562 in 3-D. Retail lights the second (10,6); the port lit nothing, and the whole 15-puff meteor ring behind it shifted one free-stack slot. Ledger SESSION 89 law A."
+  },
+  {
+   "t": 6354,
+   "file": "a-drowned-boulder-still-takes-its-step-disableen.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "A DROWNED BOULDER STILL TAKES ITS STEP: DisableEntityDrawing04_57F10 (EF:238f10) is a one-line byte[1] |= 4 and sub_32600's water arm is NOT an early exit - the (10,16) runs its whole tail after splashing: dword_0x10_16++, the CopyEntityPosition_57CF0 move onto the predicted point, and the resting slope+friction block. mc2l6-rsg t=6355 slot 553: retail steps (51382,15405,84) -> (51446,15377,0) with scratch10 8->9 and dest_x/y 64/-28 -> 62/-27, and the (10,5) it just spawned at slot 11 links AHEAD of it in the shared cell - proof 553 was still in the map chain, and still moving, after the reap flag went on. The port returned instead and froze the record where it stood. Ledger SESSION 89 law B."
+  },
+  {
+   "t": 6422,
+   "file": "the-standing-fire-probe-has-no-reap-test-sub-10b.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE STANDING-FIRE PROBE HAS NO REAP TEST: sub_10B70's per-candidate predicate is exactly class == a2 && a3 == model && dist3d <= 0x80 (EF:3940) - a fire that burnt out earlier in this same walk still holds its ground until the tick-top reaper frees it, and it still suppresses a re-light. mc2l6-rsg t=6423: boulder 408 rests at (47360,15649,540) with fire 104 dead 44 units away at (47337,15611,548); slot 104 < 408, so its own dispatch has already stamped flags.b1_reap4. Retail lights nothing; the port's invented reap filter lit a fresh (10,6) every tick the boulder sat there. Ledger SESSION 89 law C."
+  },
+  {
+   "t": 6428,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE UPGRADE HOVER IS THE CAST'S FAIL ARM: sub_12FF0 steps z by word_160_0xe_14 toward castle.z+512 only inside if (!sub_14E10(a1x, 2)) (EF:5590-5606); a cast that LANDS returns through sub_16580 with no z step. mc2l6-rsg t=6429: rival 383's Create-Castle upgrade lands (cooldown[2] 0->40, the (9,10) ball born), retail z 578 = the post-move floor exactly, the port hovered +4 first and minted the ball 4 high. Ledger SESSION 91 law C-A.",
+   "file": "the-upgrade-hover-is-the-cast-s-fail-arm-sub-12f.mgcr"
+  },
+  {
+   "t": 6478,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE TARGET SIGNATURE SUMS THE RAW ID: sub_14C40 is id_0x1A_26 + model + (class << 7) (EF:6701) and a castle's id is its OWNER wizard's slot, so the human's castle signs 343+2+384 = 729. The port summed its TRANSLATED id24 (PLAYER_TARGET on every human-owned record) and got 385, so sub_14C60's identity gate failed and the whole RaidCastle body was skipped. mc2l6-rsg t=6479: rival 378's think tick on the human's castle - roll 670->668, pitch 397->1734, spell-0 cast (burst -26, cooldown[0] 2, token 3 window 5) - all missing in the port. Ledger SESSION 91 law T-A.",
+   "file": "the-target-signature-sums-the-raw-id-sub-14c40-i.mgcr"
+  },
+  {
+   "t": 7061,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "A DEAD RIVAL'S SPEED TOKEN RUNS THE EMPTY ARM: GetScroll_69DB0 opens its effect arm on sub_68D50 (EF:56216), whose second statement is life_0x8 < 0 -> false (EF:55553); the refused arm writes no speed, no puff, no debit pin - only the trailing decrement runs (EF:56262). mc2l6-rsg t=7062: rival 383 dies at its own walk slot, its token 387 above it holds the arm-tick 240 and pops nothing, where the port wrote 160 and minted a (10,2). Ledger SESSION 91 law SP-A.",
+   "file": "a-dead-rival-s-speed-token-runs-the-empty-arm-ge.mgcr"
+  },
+  {
+   "t": 7490,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE TREE FLAME IS BORN 128 BELOW THE GROUND IT SNAPPED TO: AddTree02_00_64E20's lethal arm (EF:62421-33) mints the (10,6) with _4A190, whose ctor NewAdd0A06_4E5F0 already stamped z = getTerrainAlt (EF:35471), then reads the FLAME's z back (v7 = v4x->z, EF:62428) and writes v7 - 128 (0 when v7 <= 128) over it - the tree's own stale z is not an operand. The port subtracted 128 from the tree's entry z and let the ctor snap discard it. mc2l6-rsg t=7491 slot 279: retail 1042 = 1170 - 128 where the tree's entry z was 1239. Ledger SESSION 91 law TF-A.",
+   "file": "the-tree-flame-is-born-128-below-the-ground-it-s.mgcr"
+  },
+  {
+   "t": 8673,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE STEAL-MANA BURST IS A POOL RECORD: sub_662E0's impact arm mints the (10,25) burst through _4A190 on a class-3 model-0/1 victim only (EF:63537) and stamps id/yaw/pitch/target/subSpell/tier onto it (EF:63552-59). mc2l6-rsg t=8674: retail pops slot 102 for the burst; the port skipped the allocation and poked the victim's mailbox by hand, so every later pop shifted. Ledger SESSION 91 law S-A.",
+   "file": "the-steal-mana-burst-is-a-pool-record-sub-662e0.mgcr"
+  },
+  {
+   "t": 8674,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "STEAL MANA BILLS BY TIER, THE CASTER TAKES IT ALL: the (10,25)'s sub_10C80 class-3 arm posts the TIER INDEX on ch3 (free-only, no flags test), and sub_61050 re-reads SPELLS[13].subspell[tier] - caster.mana += amt, victim.mana -= amt, victim clamped then caster (EF:62202-20), source word only cleared (EF:62227). mc2l6-rsg t=8675: rival 378 at 1600 drained to 0 (+100 regen) while the human gains the full 4000. The port credited only what the victim held and treated the channel as an amount. Ledger SESSION 91 law S-B.",
+   "file": "steal-mana-bills-by-tier-the-caster-takes-it-all.mgcr"
+  },
+  {
+   "t": 10086,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "A WHIRLWIND NODE IS A QMEMCPY OF ITS HEAD: AddWind_4F040 copies the whole 0xA8-byte head record into each of the 11 tail nodes (EF:35882) before re-stamping model 75 / action 82 / index, so a node is born with the ctor's yaw=pitch=roll=(rand&0x7FF)-1, actSpeed 50, minSpeed 20, maxSpeed 10, subSpellIndex 1000 - and nothing ever re-stamps a node's pitch or speed. mc2l6-rsg t=10087: all 11 nodes heading/pitch retail 1299 port 0, speed retail 50 port 16 (NewEvent's default). The port copied only id/life/rand. Ledger SESSION 91 law W-A.",
+   "file": "a-whirlwind-node-is-a-qmemcpy-of-its-head-addwin.mgcr"
+  },
+  {
+   "t": 10087,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE RIVAL MOVER'S FIRST STATEMENT IS THE ONE-SHOT STOP VETO: sub_146F0 opens with if (byte[1] & 8) { byte[1] &= 0xF7; } else { the whole body } (EF:6441-44) - the band, the step, the strafe, the +-16 servo and the turn all live in the else. A whirlwind's sub_33340 victim arm parks a caught wizard on the eye and sets the bit (EF:24360); retail's wizard then clears it and moves nothing. The port's mc2_rival_movement had no test, so a caught rival stepped |-3| along its yaw, servoed speed -3 -> 13, turned 1774 -> 1760, re-banded z 210 -> 206 and relinked its cell twice, with the bit stuck on. mc2l6-rsg t=10087->10088 rival 378 in the human's funnel. Ledger SESSION 91 law FN-A.",
+   "file": "the-rival-mover-s-first-statement-is-the-one-sho.mgcr"
+  },
+  {
+   "t": 10089,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE WHIRLWIND'S FLOAT BAND RUNS ON EVERY VICTIM AND ITS COMMIT IS UNCONDITIONAL: sub_33340 ends each victim iteration with MoveEntity, the cave ceiling clamp, sub_580E0(&pred, getTerrainAlt(&pred), word_0xc, word_0xa, v37) and CopyEntityPosition (EF:24381-95) - all BELOW the whole arm chain and none of them guarded by whether the victim actually moved. v37 is 0 at the top of the body (EF:24291) and written in the FAR-GRAB arm alone (EF:24315), so a mid-ring victim bands with a zero sink step. The port had no band at all and committed only when the position changed; its own doc comment called the band a deliberate approximation needing the behavior rows' word_0xa/0xc homes, which mc2_alt_core has had for sessions. mc2l6 t=10090 slot 745 (10,39): retail z 73 - which the port's OWN terrain sampler returns at the predicted point - port 0. Ledger SESSION 92 law WW-A.",
+   "file": "the-whirlwind-s-float-band-runs-on-every-victim.mgcr"
+  },
+  {
+   "t": 10109,
+   "file": "the-whirlwind-grab-latch-was-never-imported.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE WHIRLWIND GRAB LATCH WAS NEVER IMPORTED: retail's byte[3] & 0x10 is the whirlwind's victim GRAB latch - SET at EF:24375 once the inner lift has carried the victim 768 + rand%768 above the eye, READ at EF:24309 (far arm) and EF:24327 (near arm), CLEARED at EF:24322 past the FLING RING (d2 >= 5308416). It was the one flag byte import_ent_mc2 never unpacked (the fn destructured b0/b1/b2 only), so every imported victim arrived UNGRABBED and the port re-ran the MID-RING arm on a wizard retail was already spinning. WITNESS the t=10108-10121 window on slot 378: retail's per-tick yaw delta is always 204*n and its displacement always 128*n along the same LATCHED bearing with the same n (n in {1,2,4}) - the grabbed arm moves on word_0x30_48, NOT on the spinning yaw. (3,1) census 419 -> 164 rows. Kill switch MGC_NO_MC2_GRAB_IMPORT. Session 96."
+  },
+  {
+   "t": 10236,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE WHIRLWIND COIN READS THE TICK COUNTER AS IT STANDS: sub_331A0's every-16th-tick wander flip tests byte_0x3E_62 & 0xF without incrementing it (EF:24191) - the only writer is the dispatch walk's post-handler ++, and NewEvent seeds it with the SLOT index. The port's own pre-check increment double-clocked the head (a coin every 8 ticks, one tick early). mc2l6-rsg t=10237 head 547 phase3e 64: retail draws (rand 31487->23358, f2e 1->-1), the port did not. Ledger SESSION 91 law W-B.",
+   "file": "the-whirlwind-coin-reads-the-tick-counter-as-it.mgcr"
+  },
+  {
+   "t": 10633,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "FOOL'S MANA SPAWNS AT THE CASTER'S OWN Z - THE HUMAN ARM TOOK A MUZZLE LIFT RETAIL HAS NOT GOT. sub_6C870 spawns its six decoys with _4A190(&caster->position_0x4C_76, 10, 57) (EF:57894) and then runs sub_68E50 (EF:57904), which steps 256 units LATERALLY at pitch 0 and never writes z - the body carries no position_0x4C_76.z += array_0x52_82.fov at all, unlike its five _4A190 siblings. The port's human arm seeded from muzzle_side, whose returned z is p.z + PLAYER_HH, so every human-cast decoy was born exactly 100 units high; muzzle_side's own lateral step and terrain revert already run off the UNLIFTED p.z, so only the returned height was wrong. The rival funnel had always spawned at the caster's raw z. mc2l6-rsg pair 10633->10634, the birth tick of slots 542/544/545/546/548/745: retail z 389/401/398/394/390/386 off a caster z of 257, port 489/501/498/494/490/486 - six rows, one field, one constant, and nothing else in the tick diverging.",
+   "file": "fool-s-mana-spawns-at-the-caster-s-own-z-the-hum.mgcr"
+  },
+  {
+   "t": 10805,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE FOOL'S (10,57) SPHERE MERGES, WITH ITS OWN MERGE FUNCTION, AND THE MEMBERSHIP TEST IS A PARAMETER NOT A CONSTANT. sub_35FB0's grounded arm runs the same partner search the ball does and ends in sub_36F30, not sub_36D50 (NETHERW.EXE 0x5adc5 call 0x35250 = sub_10A50, 0x5add3 call 0x5b730 = sub_36F30, 0x5addc call 0x5b120), with no byte[1] & 0x20 decay test in front of it - the ball's decay gate is the ball's alone. sub_10A50 matches the SEEKER's own xtype/xsubtype @0x41/@0x42 against the candidate's class/model @0x3f/@0x40 with -1 as a wildcard on either half (0x352d9-0x35301: movsbl 0x41(%esi) cmp -1, mov 0x41(%esi) cmp 0x3f(%ebx), mov 0x42(%esi) cmp 0x40(%ebx)), and sub_50130 stamps that pair as (10, 57) not (10, 39) (0x7494f/0x74953 movb $0xa,0x41(%eax) / movb $0x39,0x42(%eax)). The port early-returned on is_fool and hardcoded the partner filter to model65 == 39 && tick70 != 62, so a fool's sphere never merged at all. sub_36F30 itself is a tier contest on @0x46 with a coin flip off the SURVIVOR's own per-entity LCG when tiers tie and parents differ, then the loser's @0x28/@0x94/@0x46/@0x2A move across and it is hard-freed (0x5b73c-0x5b7a8). mc2l6-rsg pair 10805->10806: retail slot 168 takes mana 1738->2180 and f5a 55->56 while slot 174 is FREED; the port kept both. Family (10,57) 657 -> 173 whole-take, (9,9) 432 -> 38.",
+   "file": "the-fool-s-10-57-sphere-merges-with-its-own-merg.mgcr"
+  },
+  {
+   "t": 11663,
+   "file": "the-victim-probe-self-id-is-fused-with-owner.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE PROBE SELF-ID IS FUSED WITH THE OWNER: retail sub_10780's victim-accept gate compares @0x1A on BOTH sides - NETHERW.EXE 0x3503c-0x35044 `mov ax,[esi+0x1a]` / `cmp ax,[ebx+0x1a]` / je skip - and nothing in that gate reads @0x28. The port's id24 register is a FUSION of @0x1A and @0x28 for four families, so the probe read the OWNER where retail reads the SELF ID and every projectile sharing their owner flew straight through them. WITNESS t=11663->11664: slot 547 is a (10,57) Fool's-Mana sphere at (15100,18717,1281) with owner28=343 (the human) and retail f1a=547; retail 343 != 547 -> HIT, port 343 != 343 -> skip. The fingerprint pinning the victim: sub_65580 raises the bolt by the victim's box fov, 1281+84=1365, retail's exact recorded bolt z. Worth +1387 ticks of horizon. Kill switch MGC_NO_PROBE_ID_UNFUSE. Session 96."
+  },
+  {
+   "t": 13544,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE MAGIC MINE IS A LIVE SPELL-SWALLOWING BEACON AND THE PORT HAD ALL THREE WIRES CUT. (a) A wizard's own (10,78) BENDS his qualifying bolts onto itself inside a +/-0xAA yaw cone - sub_68940 runs BEFORE sub_67CB0 at EF:62907 (sub_65820), and again at EF:63093 / 63450 / 63589; the port called only sub_67CB0, the generic 0x71 autoaim. (b) It is SOLID: the ctor sub_50840 sets byte[0] |= 8 (EF:36969) and the port CLEARED that bit, so the victim probe could never return it. (c) It SWALLOWS on contact: sub_68AC0 (EF:62974 / 63177 / 63533 / 58814) spawns a bare (10,0), records the spell, disarms itself one-shot via a2x->word_0x36_54 = token->model_0x40_64 (EF:55438) and suppresses the whole impact tail - none of it ported. Two more absent writes made the beacon unreachable even so: sub_67960's impact block writes resultx->word_0x32_50 = a2x->id_0x1A_26 (EF:59356), never written in the port so the mine's f52 was 0; and the mine's own @0x1A is its OWN SLOT (retail slot 178 reads f1a 178) because the owner lives in @0x32, so sub_10780's self-exclusion a1x->id != v5x->id (EF:3769) passes in retail where the port's fused id24 held the caster 343 and skipped. mc2l6-rsg pair 13544->13545: the human's charged meteor leaves at cast yaw 335 and retail records it flying at heading 183 toward the (10,78) at slot 178, with the (10,0) trailing spark at slot 58 copying it; the port flew straight on. Free-run horizon 13544 -> 13569. The armed gate also had to be carried through the pair importer (f36, armed <=> 0) or every imported pair re-arms a mine retail disarmed - that alone was 116 rows. Kill switches MGC_NO_MINE_BEACON and MGC_NO_MINE_SWALLOW.",
+   "file": "the-magic-mine-bends-and-swallows-its-owner-s-sp.mgcr"
+  },
+  {
+   "t": 13600,
+   "file": "the-fool-s-trap-claim-gate-is-a-short-circuit.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE FOOL'S-TRAP && IS SHORT-CIRCUIT: retail sub_35FB0's `else if (w68 && sub_36680(a1x))` skips the m57 mover ONLY when sub_36680 returns NONZERO, and it returns 0 on four arms (owner-clears; every tier-1 tick before the 8th; the first tier-2/3 tick; the tier>3 fallthrough). NETHERW.EXE 0x5a7d6-0x5a7e8: `cmp word [ebx+0x68],0` / jz 0x5a80a, then `call 0x5ae80` / `test al,al` / jz 0x5a80a - BOTH jz land on the SAME address, i.e. a claim latch that fails the second test still runs the mover. The port returned out of ball_tick on the mere PRESENCE of the ch1 claim latch (its comment asserted the false claim \"Claimed -> retail's else-if never reaches the mover\"), freezing every mid-trap fool's sphere. WITNESS pair 13600->13601, sphere slot 316: retail rolls y 16895->16899, z 1349->1350, dest_y 4->0, b39 16->15; the port held all four while its latch-free neighbour slot 317 moved. (10,57) census 172 -> 21 rows. Kill switch MGC_NO_M57_TRAP_FALLTHROUGH. Session 96."
+  },
+  {
+   "t": 13795,
+   "file": "the-10-57-signature-is-the-slot-not-the-caster.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE (10,57) SIGNATURE IS THE SLOT, NOT THE CASTER: sub_14C40 (NETHERW.EXE file 0x39440) sums class<<7 + model + @0x1A and NOTHING else - 0x39447 `66 0f be 43 3f` movsbw 0x3f(%ebx),%ax; 0x3944c `66 0f be 53 40`; 0x39456 `66 03 43 1a` add 0x1a(%ebx),%ax. @0x1A is NewEvent_4A050's own SLOT INDEX (0x6E946 `66 89 43 1a`). The sphere's only creation site, sub_6C870 EF:57894-905, sets parentId_0x28_40 = caster->id_0x1A_26 and NEVER touches the new record's own @0x1A - and the importer FUSES @0x28 into id24, so mc2_target_sig summed the CASTER where retail sums the SLOT. rsg: retail's word_0x98_152 on rival 378 = 1496 = 159+57+1280 while the port summed 1680 = 343+57+1280, so sub_14C60 was false every tick and sub_135C0's state-6 body fell out at its first line. Scoped by the enumerated `id_0x1A_26 =` list: five fused seats DO copy the parent's @0x1A and are already right; only the sphere is reachable as a rival target. Ledger ROUND 99 law 10, MGC_NO_MC2_M57_SIG_IS_SLOT."
+  },
+  {
+   "t": 13831,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE MAGIC MINE IS BORN AT THE CARRIER'S POSITION, NOT ON THE GROUND, AND THE CARRIER'S TAIL STAMPS ONLY THREE WORDS. sub_50840's ctor is event->position_0x4C_76 = *position + AddEventToMap_57D70(event, position) (EF:36968/36981) - a straight copy of the axis sub_67960 hands it, which is the (9,29) carrier's own position after that tick's move. The port looked the ground height up and linked there instead, so every mine started ~2000 units low and spent the rest of the take floating up: mc2l6-rsg pair 13831->13832, slot 767 is born at z retail 3664 (the carrier's 3712 less this same tick's one -48 float step) against the port's 1718 (ground 1670 plus one +48 step), and that alone was the take's free-run wall. The same pair pins the tail's ENUMERATED list (EF:59356-59): word_0x32_50 = caster, byte_0x46_70 = 0, subSpellIndex_0x2A_42 = the carrier's tier - and NOTHING else. No id_0x1A_26 (retail f1a 767, its OWN slot, against the port's fused 343, which is why sub_10780's self-exclusion let a caster's own bolt reach his own mine), no word_0x96_150 and no mana_0x90_144 (retail mana 0 against the port's 1). The tier index lives in f44 - the lane import_ent_mc2 seats for a (10,78), c10_2a_in_f140 excluding it on purpose - and byte_0x43_67 in f68: retail f2a 1 / b43 2, the port f2a 2 / b43 10 (the NewEvent default it never wrote), both lanes inverted against the importer. Kill switches MGC_NO_MINE_SPAWN_POS and MGC_NO_MINE_CARRIER.",
+   "file": "the-magic-mine-is-born-at-the-carrier-s-position.mgcr"
+  },
+  {
+   "t": 14025,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE MAGIC MINE'S SINK STEPS BY THE PRE-INCREMENT COUNTER AND THE DECOMPILE'S CONVERTED LINE HAS IT BACKWARDS. sub_3A8B0 case 9 (EF:30073-76) reads dword_0x10_16++; z -= 32 * dword_0x10_16 in remc2's hand-converted text, but its own commented-out raw Hex-Rays directly above reads v12 = dword_0x10_16; dword_0x10_16 = v12 + 1; z - 32 * v12 - the OLD value. The recording settles it: mc2l6-rsg pair 14025->14026, slot 772 steps scratch10 3 -> 4 while z goes 3466 -> 3370, a -96 = 32x3 step, not the -128 the converted line predicts. And the shipped EXE settles it independently: NETHERW.EXE file 0x5F654 (linear 0x3AE54) is mov 0x10(%ebx),%eax / mov %eax,%edx / inc %eax / mov %eax,0x10(%ebx) / shl $0x5,%edx / movswl 0x50(%ebx),%eax / sub %edx,%eax - the copy to edx precedes the inc. THE DECOMPILE IS NOT RAW DECOMPILER OUTPUT AND THE SHIPPED EXE OUTRANKS THE LISTING. Kill switch MGC_NO_MINE_SINK_STEP.",
+   "file": "the-magic-mine-s-sink-steps-by-the-pre-increment.mgcr"
+  },
+  {
+   "t": 15631,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE SUMMON-ARMY CHAIN CARRIES THE CASTER'S parentId DOWN THREE RECORDS: sub_6C170 stamps the (9,24) carrier from the class-15 token (EF:57669), sub_67800 copies it onto all eight (10,72) ring nodes (EF:59170), and sub_3A5B0 stamps it onto the hatched creature one statement after the sv2 = 13 marker (EF:29609-11). Retail's parentId_0x28_40 write list is 17 sites and only this spell's three are on it. The port already holds the caster in id24 at every seat - the native spawners and the importer all set it - and obs_project_mc2's owner whitelist simply never published it for these families. mc2l6 t=15632 slot 6 owner: retail 343 port 0, the only row in the pair. Ledger SESSION 92 law SA-A.",
+   "file": "the-summon-army-chain-carries-the-caster-s-paren.mgcr"
+  },
+  {
+   "t": 15641,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE SUMMON RING'S HEAD WEARS THE BOLT'S BEARING: sub_65820's impact tail stamps the record _4A190 RETURNED (EF:62988-94 - id_0x1A_26, yaw_0x1C_28, pitch_0x1E_30, word_0x96_150, subSpellIndex_0x2A_42, byte_0x46_70), and for sub_51800 that is the HEAD ALONE: the qmemcpy tail nodes (EF:37478) are minted BEFORE the stamp, and sub_67800's chain walk afterwards re-stamps only byte_0x46_70/parentId/id down word_0x34_52 (EF:59166-72), never the bearing pair. Retail records exactly that split - mc2l6-rsg t=15642 head slot 4 heading 632 / pitch 14 with its ring-mate slot 3 at 0/0; t=20564 head slot 81 502/119, mate slot 13 0/0; mc2l22 t=53599 head slot 421 676/1993 (its caster 424's own bearing, to the unit) with mate 978 at 0/0. mc2_proj_impact's (10,72) arm returns None because it mints its own children, which skipped the whole generic tail; the (10,12) claim pulse is the sibling None-arm that already hand-stamped yaw/pitch, so this was the one absence left in that enumerated list. Free-run witness: dump-state --port --start 20563 t=20564 slot 81 has heading and pitch as its ONLY two != lanes. Round 98 dig Q7, MGC_NO_SUMMON_HEAD_BEARING.",
+   "file": "the-summon-ring-s-head-wears-the-bolt-s-bearing.mgcr"
+  },
+  {
+   "t": 15642,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE SUMMON RING IS A RING OF NODES, NOT OF CREATURES. sub_51800 (EF:37459) mints one (10,72) record per ring member - shipped EXE 0x7603e mov BYTE PTR [eax+0x45],0x4f (action 0x4F) / [eax+0x3f],0xa / [eax+0x40],0x48 / mov DWORD PTR [eax+0x4],0x10 (life = maxLife = 16) / and dl,0xf7 clearing the collide bit - with nodes 1..N-1 a qmemcpy of the head (so every node shares the head's entity RNG seed, visible in the recording as identical rand across ring members: t=15641 slots 3/4/32 all 36786) and the head placed LAST at angle 0, behind an all-or-nothing free-slot gate. Only when a node's own life counts down to zero does sub_3A5B0 (EF:29590) hatch the class-5 creature: life-1, despawn below 0, and at exactly 0 _4A190(&pos,5,byte_0x46_70) with sv2 13, action 8*M+7 and word_0x2E_46 = 250. strA0[0x4F] = 0x0021B5B0 (EF:1681) had NO PORT HOME AT ALL, so the node fell to the terrain catch-all whose default arm despawns WITHOUT decrementing - which is the whole 'want = got - 1' life population. (10,72) census rows 435 -> 6. Ledger SESSION 95 wave 2 dig 4.",
+   "file": "the-summon-ring-is-a-ring-of-nodes-not-of-creatu.mgcr"
+  },
+  {
+   "t": 15660,
+   "file": "summon-army-and-pyramid-summon-share-one-core.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE SUMMON-ARMY AND PYRAMID-SUMMON SHARE ONE HANDLER: sub_1D5D0 puts `case 0xD:` and `case 0x10:` on ONE arm, both dispatching sub_1E580 (EF:10013-16), so every law landed on the port's StageVar2-16 path was owed to StageVar2-13 as well; the port's case-13 was a hand-rolled paraphrase. Retail sub_1E700 (NETHERW.EXE 0x42F00, EF:10755) MOVES FIRST (sub_1B8C0), THEN aims on the `byte_0x3E_62 & 7` throttle, THEN applies a `& 0x3F` 64-tick two-draw wander jink ((rand&0xFF)+85) * (2*((v%0x9D)/79)-1), THEN a crowd steer-away off bytearray_38403[model]. The port aimed EVERY tick and BEFORE the move core. WITNESS slot 495, a (5,19) firefly around t=15657-15663: roll HOLDS at 492 for six ticks and moves only on the tick entered with phase3e==64 (&7==0 AND &0x3F==0), where it takes two rand draws and lands on 1448; yaw then chases at the row's full cap (row 88 v_2=113) 492 -> 605 -> 718, and f2e falls exactly 5 per tick. Worth -433 census rows on this take. Kill switch MGC_NO_SUMMON_CORE. Session 96."
+  },
+  {
+   "t": 15708,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE (10,73) SUMMON PUFF HAS ITS OWN TICK, AND IT IS StageVar2-13 EXCLUSIVE. sub_51A00 (EF:37506) is the ctor - action 0x50, model 0x49, life = maxLife = 16, byte[0] &= 0xF7, sprite 220 - and strA0[0x50] = 0x0021B630 (EF:1682) is sub_3A630 (EF:29617), a bare life-1 with despawn at <= 0. Neither had a port home, so like its (10,72) sibling the puff fell to the terrain catch-all, whose default arm despawns without decrementing. Its call site is EF:10745-46 inside sub_1E580: `if (StageVar2 == 13) _4A190(&pos,10,73);` and THEN _4A190(&pos,10,0) - so the puff precedes the fire and only on the summon stage, while the pyramid twin (sv2 16) drops the fire alone. (10,73) census rows 259 -> 8. Ledger SESSION 95 wave 2 dig 4.",
+   "file": "the-10-73-summon-puff-has-its-own-tick-and-it-is.mgcr"
+  },
+  {
+   "t": 19303,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "STEAL MANA TIER 3 TAKES TEN PERCENT OF THE VICTIM'S CASTLE AND PAYS THE THIEF NOTHING: SPELLS row 13 tier 2 carries life_0x1A = 1, so sub_61050 takes the percent arm (EF:62135-88) - store -= store*10/100 on the VICTIM'S castle, then a while loop minting (10,39) spheres of at most 500 each in a ring of radix(pitch,roll) around the CASTER'S castle, one victim-LCG draw per chunk (EF:62158-59) - and v33 is zero by LABEL_23 so neither purse moves. The port read subSpellIndex as a flat amount for every tier, i.e. always retail's no-castle fallback. mc2l6 t=19304: castle 466 store retail 7722 port 8580 (858 = 500+358), rival 378 rand retail 17252 port 4806 (exactly two u16 LCG steps), and two (10,39) records the port never mints. Ledger SESSION 92 law SM-L3.",
+   "file": "steal-mana-tier-3-takes-ten-percent-of-the-victi.mgcr"
+  },
+  {
+   "t": 20587,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE SUMMON LEASE AND THE COMBAT SCRATCH ARE TWO DIFFERENT RETAIL FIELDS, AND @0x2E IS LIVE ONLY ON THE StageVar2 STATE. sub_3A5B0 (EF:29609-11) hatches the summon-army creature with StageVar2 = 13, actionIndex = 8*model + 7 and word_0x2E_46 = 250; its ctor sub_4C310 (EF:34187) leaves dword_0x10_16 = 0. Those are DIFFERENT WORDS and the port homes both in f26. sub_1D5D0 (EF:9977) is the only StageVar2 dispatcher and its five @0x2E cases - 0xC sub_1E4D0, 0xD/0x10 sub_1E580, 0xE sub_1E9C0, 0x11 sub_1E320 - are reached from its 22 call sites, every one a per-model +7 handler, so @0x2E is dead the instant sub_1E580 hands the creature off to 8*model + 2. import_ent_mc2 keyed the f26 home on StageVar2 ALONE, so an ENGAGED summon's combat brain was handed its lease: sub_24510's 15-bolt burst reader (EF:15470-74, v6 = dword_0x10_16; if (v6) { -1; _4A190(pos,9,0); subSpell 1600; mana 50000 }) saw 249 and fired a (9,0) homing bolt EVERY tick. WITNESS pair 20587->20588, the two summoned wyverns hatched at t=20580 (slots 53 and 102, sv2 13, action 130, phase3e 9/10 so the %40 cadence gate never armed): retail scratch10 0 with f2e FROZEN at 249/245, the port spends one lease each and mints two extra (9,0) at z 1760 = 992 + 6*128 and z 2530 = 1762 + 6*128 - both m16 z-lifts exactly. Two rows in the pair, zero under the law. Worth 602 census rows over pairs 0..20800: the whole 278-row extra (9,0) family, 203 field (10,0), all 41 (9,13) rows, and 26 field (5,19) - the MIRROR of the same collision, a summoned firefly whose hover altitude (dword_0x10_16, EF:16410-16) was its lease. Kill switch MGC_NO_SUMMON_LEASE_SPLIT.",
+   "file": "the-summon-lease-and-the-combat-scratch-are-two.mgcr"
+  },
+  {
+   "t": 20748,
+   "file": "a-controlled-creature-is-dragged-back-into-its-o.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "A CONTROLLED CREATURE IS DRAGGED BACK INTO ITS OWN 8*model+7 SLOT AT THE TOP OF EVERY FRAME, AND THE PORT RAN THAT PASS NOWHERE. UpdateEntities_57730 opens its unpaused half with sub_12780() and then walks ALL 29 per-model class-5 roster chains, calling sub_12500 on every member whose StageVar1_0x48_72 or StageVar2_0x49_73 is non-zero (EF:40095-40101; NETHERW.EXE 0x7C1A9-0x7C1E4: call 0x36f80, cmpb $0x0,0x48(%ebx) / cmpb $0x0,0x49(%ebx), call 0x36d00, mov (%ebx),%ebx, cmp $0x1d,%esi). sub_12500's jump-table arm shared by StageVar2 13 (Summon Army), 14 (Alliance), 16 and 17 (the doomsday pyramid's summon pair) is four instructions at NETHERW.EXE 0x36D8B-0x36DA2: cmp $0x2,%si / je (attack holds), cmp $0x6,%si / je (flee holds), then mov 0x40(%ebx),%al / shl $0x3,%al / add $0x7,%al / mov %al,0x45(%ebx) - and the outer gate at 0x36D1F refuses phases 4/5. So every phase except 2/4/5/6 is snapped back to the controlled slot. THE PORT CARRIED THIS ON ONE CALL PATH ONLY - a partial mid-walk paraphrase inside mc2_alliance_clock, for StageVar2 14 alone and gated phase < 2 - so 13, 16 and 17 had none of it. mc2l6-rsg t=20748->20749: rival 378 has just died, and slots 53 and 102 are (5,16) Summon-Army wyverns (StageVar2 13, parent 343) that dropped out of sub_24510's attack slot to actionIndex 129 the tick before. Retail's pre-pass snaps both to 8*16+7 = 135 and runs sub_1E580, spending the no-lock -5 lease (f2e 249->244 and 214->209) and clearing target96 378->0; the port ran m16's own state-1 idle brain instead and held 129. Kill switch MGC_NO_SV_CONTROLLED_SLOT_SNAP. Round 98 dig Q22."
+  },
+  {
+   "t": 22705,
+   "file": "an-armed-shield-nulls-the-hit-and-promotes.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "AN ARMED SHIELD NULLS THE HIT OUTRIGHT AND PROMOTES TO CHARGED: sub_5EFA0's absorb opens `if (byte[1] & 0x40 || byte[2] & 0x40)` on the VICTIM's own flag word (EF:60676) and SPLITS - the CHARGED arm quarters and mana-pays (EF:60684-88), the ARMED arm (byte[2] & 0x40, sub_6A480's `life_0x1A == 1` FIRST-TICK stamp = Shield III, EF:56525-31) runs `dword &= 0xFFBFBFFF; dword_0x5E_94 = 0; byte[1] |= 0x40` (EF:60690-93): the letter is NULLED, no mana is taken, and the stage promotes to CHARGED so the NEXT hit is quartered. The MC2 HUMAN column had no ARMED lane at all (Player carried one `shield` bool) and no import seat for the bit, so every graded pair inside a Shield III window ran UNSHIELDED. t=22705->22706: carpet 343 steps flags 0x40010D -> 0x410D with mail0.amt 62 -> 0 and life HELD at 6861 where the port spent 500; t=22708->22709 then spends the promoted stage on a raw 248 (life -62, mana -62, residue 62). Three more in this take (t=22866, 23166) and two in mc2l24 (t=35401, 40337, 850 nulled). MGC_NO_MC2_SHIELD_ARMED."
+  },
+  {
+   "t": 24708,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE (10,71) FISSURE KEEPS ITS RAMP REFERENCE IN word_0x2C_44 AND ITS DAMAGE IN @0x2A. sub_3A2D0's phase-0 init writes @0x2C = maxLife >> 3 (NETHERW.EXE 0x5EAF6-0x5EB08, sar $3 then mov %ax,0x2c(%ebx)) and rewrites @0x2A in place as 4 * (@0x2A / maxLife) (0x5EB01-0x5EB25), and every arm of the grow/pin/shrink ladder reads @0x2C signed as v4 (movswl 0x2c(%ebx),%esi at 0x5EB26). The port homes those at f44 and f140, but import_ent_mc2 had no (10,71) arm, so the uniform map fed f44 the @0x2A DAMAGE and f140 the dead @0x90. An imported fissure then evaluated maxLife - 3*damage >= life, fell into the GROW arm on every single tick, never reached the PIN arm that draws rand_0x14_20 (EF:29500), and posted a zero beat. mc2l6-rsg t=24709 slot 401 (maxLife 48, @0x2A 16, @0x2C 6): retail scratch10 18 and rand 55999, the port 19 and 2528.",
+   "file": "the-10-71-fissure-keeps-its-ramp-reference-in-wo.mgcr"
+  },
+  {
+   "t": 25531,
+   "file": "the-m22-castle-drain-worm-never-asks-whether-its.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE m22 CASTLE-DRAIN WORM NEVER ASKS WHETHER ITS POSSESSED WIZARD IS STILL ALIVE, AND THE PORT SKIPPED ALL THREE OF RETAIL'S TARGET GATES. sub_26AA0 (the 0xB2 castle-acquire state, EF:17337-42) interrogates the possessed wizard record BEFORE it resolves the castle, and each answer takes LABEL_17 (scratch10 = 0, playerEntityIndex = 0, actionIndex = 177): NETHERW.EXE 0x4B305-0x4B32D is mov 0x1a3e4(,%eax,4),%eax / cmpb $0x3,0x3f(%eax) ; jne LABEL_17 / cmpl $0x0,0x8(%eax) ; jl LABEL_17 / testb $0x4,0xd(%eax) ; jne LABEL_17 - target still class 3, life >= 0 (a 32-bit cmpl, the whole signed life), and not carrying struct_byte_0xc byte[1] bit 2 (= dword bit 10 = the port's flags & 0x400 reap mark). Only THEN is dword_0xA4_164->CastleEntityIndex_0x3A_58 read, the tan2 roll written and the 0x100 range test run. The port's Gen::m22_tick went straight to the castle lookup and asked none of the three, so a worm that had latched onto a wizard kept draining toward that wizard's castle after the wizard died - and, being out of range, simply sat in 0xB2 forever. mc2l6-rsg pair 25531->25532 is the witness: worm head slot 3 holds player_ent 343, and slot 343 (the human carpet) is at life = -1270; retail reverts (scratch10 779 -> 0, player_ent 343 -> 0, action 178 -> 177) while the port found the human's castle 63 nearly 10,000 units away, failed the range test and held. The human is OUT OF POOL in the port (self.ent[343] is a reserved hole), so the PLAYER_TARGET arm reads ctx.pdead, the mid-walk republished player.life < 0 echo. Kill switch MGC_NO_M22_TARGET_GATES. Round 98 dig Q27."
+  },
+  {
+   "t": 26315,
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE (10,67) FLOOD KEEPS ITS DOME-TOP REFERENCE IN word_0x2C_44, NOT ITS PAYLOAD. Phase 1 seeds @0x2C as 32*(mean-80) (EF:28546) and the phase-2 outer ring raises it to the rim's alt >> 5; sub_39B60 then reads it as v5 = victim.z - word_0x2C_44 for both the ceiling test and the close band (EF:29053-77). The port's importer has no (10,67) arm, so the uniform fall-through seated f44 from @0x2A - the subSpell - instead. On slot 496 that is 3000 where @0x2C is 36, so every victim in the disc evaluated z - 3000 <= 96 and took sub_3A200's DAMAGE arm where retail takes the PUSH arm, and sub_3A200's 1-in-7 roll then stepped the flood's private LCG once per tick forever. It also permanently suppressed the phase-2 outer-ring raise. mc2l6-rsg t=26315 slot 496: rand retail 10536, port 42759 = 9377*10536 + 9439 mod 2^16, the imported seed advanced exactly one step.",
+   "file": "the-10-67-flood-keeps-its-dome-top-reference-in.mgcr"
+  },
+  {
+   "t": 26502,
+   "file": "the-flood-chain-walk-rereads-its-cursor-off-the-moved-victim.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE FLOOD'S CHAIN WALK RE-READS ITS CURSOR OFF THE MOVED VICTIM: sub_39B60's walk is `for (i = mapEntityIndex[cell]; ; i = victim->oldMapEntity_0x16_22)` and the C `for` increment runs AFTER the body, i.e. after CopyEntityPosition_57CF0 may have re-linked the victim - AddEventToMap_57D70 pushes at the HEAD of the destination cell and parks that cell's previous head in the victim's own @0x16. So a shove crossing a tile edge continues down the DESTINATION cell's chain and those entities are shoved by this cell's iteration too. NETHERW.EXE file 0x5E592 `e8 59 df 01 00` call -> 0x7C4F0 CopyEntityPosition, then 0x5E5E6 `66 8b 43 16` mov ax,[ebx+0x16] - the cursor read off the MOVED victim, with %ebx never reloaded after the move (EF:29011-29125). The port cached `next` before the move, so retail shoved the (10,57) at slot 462 twice on rsg t=26503 and the port once: retail's step (-78,+35), the port's (-38,+17), the halves adding exactly. Ledger ROUND 99 law 3, MGC_NO_FLOOD_CHAIN_REWALK; +8 rsg horizon."
+  },
+  {
+   "t": 26515,
+   "file": "one-retail-bit-two-port-homes-and-the-importer-filled-one.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "ONE RETAIL BIT, TWO PORT HOMES, AND THE IMPORTER FILLED ONLY ONE: retail's byte[0] bit 0 is BOTH the port's positional bit 0 AND the quake TOSSED/HANDLED latch. sub_3A200 stamps both at once (NETHERW.EXE 0x5EA16 `81 ca 01 00 10 00` or edx,0x100001) and sub_39FA0's class-3/model-1 arm tests `f6 42 0c 21` = [edx+0xc] & 0x21 (bit 0 | bit 5) at 0x5E848. The port homes the latch at flood::F_TOSSED = 1<<31 and import_ent_mc2 only ever wrote `flags |= 1`, so every IMPORTED quake victim arrived UN-TOSSED and the flood's 26x26 sweep dragged it on a tick retail skips - and the extra shove drew ent_rand for the 1-in-7 kill roll retail never rolled, which is the (10,67) `rand` rows this fixture pins. Same shape and same table as the b3 & 0x10 whirlwind-grab hole ten lines below it. Ledger ROUND 99 law 4, MGC_NO_MC2_TOSSED_IMPORT."
+  },
+  {
+   "t": 27956,
+   "file": "the-fireball-worker-clobbers-its-own-payload-on-a-strike.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE FIREBALL WORKER CLOBBERS ITS OWN PAYLOAD ON A STRIKE AND ITS SIBLING DOES NOT: sub_65C20's strike arm - the ELSE of the word[0] & 0x8010 rebound test - opens with `if (victim->str_160->byte_160_0x20_32 & 0x10) a1x->subSpellIndex_0x2A_42 = 1;` (EF:63166-67) BEFORE sub_65580, so the impact tail's `v18x->subSpellIndex = a1x->subSpellIndex` (EF:63188) hands the spawned effect a payload of ONE. The generic core sub_65820, which the same tail also serves, has NO such line (EF:62938-46) - a SIBLING SPLIT the port fused. NETHERW.EXE file 0x8A420: 0x8a59f `66 f7 40 0c 10 80` testw $0x8010,0xc(%eax); 0x8a5ca `f6 40 20 10` testb $0x10,0x20(%eax); 0x8a5d0 `66 c7 43 2a 01 00` movw $0x1,0x2a(%ebx). rsg t=28338: rival 378's (9,0) bolt strikes the human's row-84 (5,16) and retail's own `explain` records f2a 250 -> 1, so the (10,0) fire it mints bills the human 1/tick where the port billed 250 - the constant -249 on the human's life behind that take's whole 21-segment pose family. Ledger ROUND 99 law 7, MGC_NO_MC2_STRIKE_SUBSPELL_1."
+  },
+  {
+   "t": 30321,
+   "file": "the-level-end-latch-is-imported-state.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE LEVEL-END LATCH IS IMPORTED STATE, AND THE PAIR IMPORTER'S CROSS-PAIR WIPE ATE IT. retail_import_mc2 seeds World::completed from retail's own objective board (struct_0x3659C[local].IsLevelEnd_0, LevelStructs.h:190-96, decoded as RetailMc2::objectives) and then the cross-pair latch wipe a few hundred lines below - inherited verbatim from the MC1 arm, which has no such board - set it back to false, so EVERY MC2 pair ticked with completed == false. The one reader is AddSwitch0B_04_6F150 (EF:54329-46), the class-11 model-4 LEVEL-END RELEASE: it walks the class-3 roster and fires sub_4A1E0(id_0x1A_26, 1) on the first model-0 wizard whose board carries the latch, then DisableEntityDrawing04. Retail latches the board at the tail of 30320->30321 (the last rival, ent 378, is banished; board completed=0 -> 1, states [1]->[2]) and slot 271 (11,4) id 10 fires one frame later: disposition 10 lays the ending wave on slots 176..187 - an (11,12) X-marker at tile (172,188), EIGHT (2,7) falling props ringing it, the (14,3) checkpoint X at (174,226) and its (10,13) companion - while the port fired nothing and left twenty-four dead (10,0)/(10,13) leftovers standing. Kill switch MGC_NO_IMPORT_LEVEL_END_LATCH. Round 98 dig Q11."
+  },
+  {
+   "t": 34604,
+   "file": "the-painters-build00-row-is-the-sign-extended-byte.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE CASTLE PAINTER'S BUILD00 ROW IS THE SIGN-EXTENDED BYTE AND RETAIL NEVER CLAMPS IT: AddTerrainMod0A_2A_37BC0 (NETHERW.EXE file 0x5C3C0, EF:27648) loads the row as `0f be 53 46` movsbl 0x46(%ebx),%edx at THREE sites (0x5C451/0x5C471/0x5C49D) - sign-extended, unclamped, no bound test - into a 77-row table. The port carried an INVENTED `.min(7)` clamp, which turned residue row 176 into row 7 = the 48x48 castle pad, so a (10,42) painter parked at the map origin terraformed the corner every tick under the (5,13) villagers standing there. That, not any hover or ground-sample law, was the entire villager `z` family. remc2's `if (byte_0x46_70 < 0) {...}` at EF:27661/27689 is its own //fix, not retail. An out-of-range row now takes BUILD00 row 0, the table's own empty row. Ledger ROUND 99 law 5, MGC_NO_MC2_PAINTER_ROW_VERBATIM. See DEVIATIONS.md 'RETAIL'S OWN OUT-OF-BOUNDS READS' for the birth-extent rows this cannot fix."
   }
  ]
 }

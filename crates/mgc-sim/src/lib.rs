@@ -931,6 +931,10 @@ impl Simulation {
             equip_left: input.equip_left,
             equip_right: input.equip_right,
             mc2_select: input.mc2_select,
+            // The cycle-ring cast shortcut is a REPLAY lane today: the
+            // native shell has no ring pane to raise 0x40 from, so it
+            // stays silent here (`GameInput` carries no cursor).
+            mc2_ring_cast: None,
             spell_ring: input.spell_ring,
             respawn: input.respawn,
             demolish: input.demolish,
@@ -1522,6 +1526,11 @@ impl Simulation {
             &inp,
             over,
             knock,
+            // No duel leash on this path: `sub_5DE30`'s lock is armed
+            // and consumed inside the faithful walk
+            // (`World::step_player_flight_mc2`), and this mover is the
+            // world-less/enhanced fallback that never runs one.
+            None,
             &|x, y| w.ground_z_engine(x, y),
             &|x, y| w.player_cave_ceiling(x, y),
             &|cur, prop| w.player_mc2_gate(cur, prop),

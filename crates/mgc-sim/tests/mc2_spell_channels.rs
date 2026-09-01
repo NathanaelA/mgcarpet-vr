@@ -1089,6 +1089,41 @@ fn mc2_fools_mana_throws_six_decoys_that_trap_the_possessor() {
         "…and not one of them is a collectible (10,39) ball"
     );
 
+    // ⚠ LET THE FAN SEPARATE BEFORE SPRINGING ONE. The six decoys
+    // leave the same muzzle and are still a cluster on the next tick,
+    // and RETAIL'S OWN RETALIATION FIREBALL EATS A SIBLING DECOY
+    // THERE — this is not a port artefact, it is what the shipped
+    // code does:
+    //   * `SummonFireball_4D2E0` (NETHERW.EXE file 0x71AE0-0x71B7E in
+    //     full) writes @0x45/@0x3F/@0x40/@0x82/@0x84/@0x90/@0x04/
+    //     @0xA0 and `0xc(%ebx) &= 0xF7`, and **never @0x41/@0x42** —
+    //     so the fireball keeps `NewEvent_4A050`'s `xtype = xsubtype
+    //     = -1` WILDCARD (Events.cpp:571-72) and `sub_10780`'s filter
+    //     (EF:3767-70) admits every class/model;
+    //   * `sub_50130`, the (10,57) ctor (file 0x74930-0x749CE), has no
+    //     `and $0xf7` on `0xc(%ebx)` at all, so a fool's sphere KEEPS
+    //     the NewEvent `struct_byte_0xc.dword = 8` damageable bit that
+    //     `sub_10780` gates on;
+    //   * and a sibling decoy is a STRANGER: `sub_50130` never writes
+    //     @0x1A either, so every sphere's `id_0x1A_26` is its own pool
+    //     index and the probe's `a1x->id_0x1A_26 != v5x->id_0x1A_26`
+    //     always passes.
+    // Measured: springing a decoy 0-4 ticks after the cast detonates
+    // the retaliation on a sibling in the same tick (at the ENDPOINT
+    // probe too, not only mid-chord — so retail's single
+    // `sub_65C20` probe would eat it as well); from 8 ticks on the
+    // fan has spread and the bolt flies. The old assertion here read
+    // that as "the decoy never springs" — it always sprang, the
+    // fireball just died on its brother.
+    for _ in 0..12 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    assert_eq!(
+        count(&w, 10, 57),
+        base + 6,
+        "all six decoys survive the flight"
+    );
+
     // A rival (a non-owner id) possession-claims one decoy → it springs.
     let slot = w.debug_mc2_claim_fool_sphere(12345);
     assert!(slot != 0, "a decoy is present to be claimed");
@@ -1229,14 +1264,21 @@ fn mc2_fools_mana_tier2_retaliates_with_lightning() {
 }
 
 #[test]
-fn mc2_magic_mine_blast_reaches_a_neighbouring_wizard() {
-    // The mine's detonation must actually REACH someone standing next
-    // to it. Player-reported: it did not. `ent_overlap` sums BOTH
-    // parties' extents and the mine ctor never set f80/f82/f84, so the
-    // blast was a POINT — and once the mine started hovering 1024 above
-    // ground (EF:29862-72) even standing on the spot could not overlap
-    // it. The detonation now opens a real blast box and spits a bolt at
-    // whatever tripped it.
+fn mc2_magic_mine_relaunch_reaches_a_neighbouring_wizard() {
+    // ⭐⭐⭐ THE DETONATION IS A RELAUNCH OF THE SWALLOWED SPELL.
+    // `sub_3A8B0` case 5 (EF:29974-30005) hands `sub_6DCA0` the mine's
+    // OWNER as the caster, the mine's own position as the muzzle and
+    // the SWALLOWED spell + tier, then aims the shot at whoever
+    // tripped it (`sub_655C0`) and owns it to the mine's owner. There
+    // is no area write anywhere in case 5.
+    //
+    // This test used to assert the opposite: a forced 1024-unit blast
+    // box around one `area_write` plus a `(9,0)` stand-in bolt, run
+    // under `WorldPatches::LEGACY` because "retail ships the trigger
+    // dead". That premise was refuted (`sub_68AC0` writes the armed
+    // gate) and the player retired all three inventions, so the
+    // contract is now retail's: the mine SHOOTS, and the shot is what
+    // reaches the wizard beside it.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -1245,12 +1287,9 @@ fn mc2_magic_mine_blast_reaches_a_neighbouring_wizard() {
         eprintln!("skipping: level-000 has no terrain");
         return;
     };
-    // The working mine is the `mc2_magic_mine` patched arm (retail
-    // ships the trigger dead — DEVIATIONS.md).
-    w.set_patches(mgc_sim::WorldPatches::LEGACY);
     let (cx, cy) = open_spot(&w);
     // Burn off SPAWN GRACE far from the mine site first — grace absorbs
-    // the blast and makes a working mine look broken.
+    // the hit and makes a working mine look broken.
     let (fx, fz) = (cx as f32 + 60.5, cy as f32 + 60.5);
     for _ in 0..400 {
         let alt = w.ground_height_tiles(fx, fz) + 4.0;
@@ -1265,23 +1304,35 @@ fn mc2_magic_mine_blast_reaches_a_neighbouring_wizard() {
         "grace must be gone or this proves nothing"
     );
 
-    // A RIVAL-owned mine, so the human is a valid victim.
-    assert!(w.debug_mc2_place_mine(cx, cy, 0, 7) != 0, "mine placed");
+    // A live NON-human owner, so the human is a valid victim and the
+    // entry guard (EF:29793-98, owner dead ⇒ the mine goes) holds.
+    let owner = w.debug_mc2_spawn_creature(19, cx + 40, cy + 40, 900);
+    assert!(owner != 0, "owner spawned");
+    let slot = w.debug_mc2_place_mine(cx, cy, 0, owner as u16);
+    assert!(slot != 0, "mine placed");
+    // …and CHARGE it, which is what `sub_68AC0` does when a qualifying
+    // bolt of the owner's own lands on it: spell 0 (fireball) at tier
+    // 0, whose `sub_6DCA0` arm is the (9,0) body.
+    w.debug_mc2_charge_mine(slot, 0, 0);
+
     let before = w.player_damage_taken();
     let (px, pz) = (cx as f32 + 2.5, cy as f32 + 0.5);
+    let mut fired = false;
     for _ in 0..300 {
         let alt = w.ground_height_tiles(px, pz) + 4.0;
         w.tick(
             PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0),
             PlayerCommand::default(),
         );
+        fired |= count(&w, 9, 0) > 0;
         if w.player_damage_taken() > before {
             break;
         }
     }
+    assert!(fired, "the mine relaunched the swallowed fireball");
     assert!(
         w.player_damage_taken() > before,
-        "a wizard two tiles from a tripped mine takes damage"
+        "a wizard two tiles from a tripped mine is hit by its relaunch"
     );
 }
 
@@ -1342,10 +1393,21 @@ fn mc2_magic_mine_places_a_persistent_mine_not_a_fireball() {
 
 #[test]
 fn mc2_magic_mine_detonates_when_a_target_approaches() {
-    // The proximity trigger: a mine detonates (despawns + bursts) when a
-    // wizard comes within 14 tiles after the arm delay. Placed as a
-    // RIVAL-owned mine right where the human sits → it triggers on the
-    // out-of-pool human (docs/spell-audit/magic-mine.md §2).
+    // The retail contract, in two halves.
+    //
+    // (1) THE ARMED GATE. `sub_3A8B0` case 1 (EF:29910-13) advances
+    //     only when `word_0x36_54 != -1`, and `sub_50840` seeds that
+    //     word at −1. An UNCHARGED mine therefore PARKS: it never
+    //     rolls the arm delay (case 2, EF:29926-31), never scans and
+    //     never fires, however close you stand. The port used to
+    //     self-arm here under `gameplay.patches.mc2_magic_mine`; the
+    //     player retired that option, so parking is the only arm.
+    //
+    // (2) THE TRIGGER. Once `sub_68AC0` has recorded a swallowed spell
+    //     the mine wakes, rolls a 16..65-tick delay, and from case 4
+    //     scans every 16th of its own frames for the nearest class-3
+    //     model ≤ 1 within 3584 (14 tiles), the owner excluded — then
+    //     detonates on it.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -1354,27 +1416,72 @@ fn mc2_magic_mine_detonates_when_a_target_approaches() {
         eprintln!("skipping: level-000 has no terrain");
         return;
     };
-    // The proximity trigger only exists under the `mc2_magic_mine`
-    // patched arm (retail ships it dead — DEVIATIONS.md).
-    w.set_patches(mgc_sim::WorldPatches::LEGACY);
     let (cx, cy) = open_spot(&w);
     let pose = pose_at(&w, cx, cy);
-    let slot = w.debug_mc2_place_mine(cx, cy, 0, 7); // owner = rival id 7
+    let owner = w.debug_mc2_spawn_creature(19, cx + 40, cy + 40, 900);
+    assert!(owner != 0, "owner spawned");
+    let slot = w.debug_mc2_place_mine(cx, cy, 0, owner as u16);
     assert!(slot != 0, "the mine was placed");
     assert_eq!(count(&w, 10, 78), 1);
 
-    let mut detonated = false;
+    // (1) An uncharged mine parks. `f26` is `dword_0x10_16`, the arm
+    // delay case 2 rolls — it stays 0 for as long as the mine is
+    // stuck in case 1.
+    let arm_delay = |w: &World| -> i16 {
+        w.debug_pool()
+            .1
+            .iter()
+            .find(|e| e.slot == slot)
+            .map_or(-1, |e| e.f26)
+    };
     for _ in 0..90 {
         w.tick(pose, PlayerCommand::default());
+    }
+    assert_eq!(count(&w, 10, 78), 1, "an uncharged mine does not detonate");
+    assert_eq!(
+        arm_delay(&w),
+        0,
+        "an uncharged mine never leaves case 1, so it never rolls an arm delay"
+    );
+    assert_eq!(count(&w, 9, 0), 0, "…and it never fires");
+
+    // (2) Charge it — `sub_68AC0`'s two writes, verbatim — and it
+    // arms, scans and detonates on the human sitting on top of it.
+    w.debug_mc2_charge_mine(slot, 0, 0);
+    // Case 1 advances to 2 and RETURNS (EF:29911-15); case 2 rolls the
+    // delay on the tick after that.
+    w.tick(pose, PlayerCommand::default());
+    w.tick(pose, PlayerCommand::default());
+    assert!(
+        arm_delay(&w) >= 16,
+        "case 2 rolls a 16..65-tick arm delay off the record's own stream"
+    );
+    // Stand two tiles off so the relaunched bolt is observable in the
+    // pool for a tick rather than detonating inside the mine's own.
+    let near = {
+        let (px, pz) = (cx as f32 + 2.5, cy as f32 + 0.5);
+        let alt = w.ground_height_tiles(px, pz) + 2.0;
+        PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0)
+    };
+    let mut fired = false;
+    let mut gone = false;
+    for _ in 0..400 {
+        w.tick(near, PlayerCommand::default());
+        fired |= count(&w, 9, 0) > 0;
         if count(&w, 10, 78) == 0 {
-            detonated = true;
+            gone = true;
             break;
         }
     }
     assert!(
-        detonated,
-        "the mine detonates while the human sits inside its 14-tile trigger"
+        fired,
+        "the charged mine detonates while the human sits inside its 14-tile trigger"
     );
+    // ⭐ AND IT GOES THE WAY RETAIL SENDS IT: not by the port's old
+    // `f71 = 6` hand-off at the first shot, but by spending
+    // `byte_0x43_67` — tier 0's budget is one burst (EF:30028-40),
+    // after which case 6 → 7 → 9 hangs, sinks and puffs it out.
+    assert!(gone, "a tier-0 mine spends its one burst and tears down");
 }
 
 #[test]
@@ -1700,10 +1807,17 @@ fn mc2_rebound_deflects_and_reowns() {
         let (bx, by) = (pose.x, pose.y.wrapping_sub(3 * 256));
         let slot = w.debug_mc2_hostile_bolt(bx, by, pose.z, 0x400, 900);
         assert!(slot != 0, "the hostile bolt spawned");
+        // `mc2_spawn_cast_proj` gives every creator +140 = 50, so the
+        // deflection owes a quarter of that. Regen runs every tick,
+        // so record the purse step per tick and read the debit off
+        // the DIFFERENCE between the deflection tick and a quiet one.
+        let mut steps: Vec<i64> = Vec::new();
 
         let mut row = None;
         for _ in 0..12 {
+            let before = w.debug_player_mana() as i64;
             w.tick(pose, PlayerCommand::default());
+            steps.push(w.debug_player_mana() as i64 - before);
             let Some(r) = w
                 .debug_flock_probe(9, 0)
                 .into_iter()
@@ -1728,13 +1842,45 @@ fn mc2_rebound_deflects_and_reowns() {
                 "T3 PRECISE returns exactly down the reverse ray"
             );
         } else {
-            let dev = (row.yaw as i32 + 22) & 0x7FF;
-            assert!(dev <= 44, "T1 scatter stays within ±22 of the reverse ray");
+            // The scatter window is the CALL SITE's `(a3, a4)`, and
+            // this bolt is the action-0 fireball, whose body
+            // `sub_65C20` passes `(0x5B, 45)` (EF:63162) — not the
+            // `(0x2D, 22)` the shared `sub_65820` core and the arrow
+            // use. The raw store can leave `yaw` below 0 as a wrapped
+            // u16, so bias before masking.
+            let dev = (row.yaw as i32 + 45) & 0x7FF;
+            assert!(dev <= 90, "T1 scatter stays within ±45 of the reverse ray");
         }
         assert_eq!(
             w.mc2_book_view().xp[8] - xp8,
             2, // +1 the cast itself, +1 the deflection (EF:55283)
             "the deflection awards Rebound XP"
+        );
+        // ⭐ THE VICTIM PAYS A QUARTER OF THE BOLT'S +140, AND THE
+        // HUMAN IS A VICTIM LIKE ANY OTHER. EF:55284 subtracts it
+        // from `a2x->mana_0x90_144` with no player test; ours rides
+        // the `player_deflect_debit` seat the MC1 column already
+        // uses, so it must land in the purse by the tick boundary.
+        // The regen step runs in the same tick, so read the debit off
+        // the shortfall against the preceding quiet tick.
+        assert!(
+            steps.len() >= 2,
+            "need a quiet tick to read the regen step against"
+        );
+        let quiet = steps[steps.len() - 2];
+        let hit = steps[steps.len() - 1];
+        assert_eq!(
+            quiet - hit,
+            50 / 4,
+            "the deflector pays proj.mana/4 (EF:55232/55284)"
+        );
+        // ⭐ THE DEFLECTED BOLT PARKS AT THE VICTIM'S POSITION PLUS
+        // ITS EXTENT QUAD'S `.fov` (EF:55302-04) — the carpet's is
+        // 100, the same as `PLAYER_HH`. It is NOT the victim's feet.
+        assert_eq!(
+            row.z,
+            pose.z.wrapping_add(100),
+            "the bolt lands at the victim's z + .fov, not its feet"
         );
     }
 }

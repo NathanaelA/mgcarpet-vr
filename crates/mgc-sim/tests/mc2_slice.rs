@@ -602,16 +602,47 @@ fn mc2_slice_behaviors_and_goldens() {
     // every checkpoint after post-init moves. Verified attributable to
     // the pair: reverting dig_scorch to the single-cell zero-skipping
     // form restores all six. Behavior change toward retail by design.
+    // Re-pinned (ALL SIX) 2026-09-04 (ROUND 98) for THE MC2 SPRITE
+    // FRAME COUNT (`byte_0x5D_93`, our hashed `Ent::frames89`).
+    // `SetEntityIndex_49C90`'s third line (EF:32834; shipped
+    // NETHERW.EXE file 0x6E4AE-0x6E4C0) stamps
+    // `x_BYTE_D8A2E[particlesParameters_D951C[row].byte_12]` on every
+    // sprite set, and `sub_49D50` (EF:32851) does the same; the MC2
+    // column never wrote the lane, so every MC2 record carried 0.
+    // ⚠⚠⚠ THIS IS A HASHED-FIELD RE-PIN, NOT A BEHAVIOUR CHANGE.
+    // A/B-ATTRIBUTED with the law's own kill switches, one binary:
+    //   * BOTH switches set (`MGC_NO_MC2_FRAMES89=1
+    //     MGC_NO_MC2_FRAME_CAP=1`, i.e. the pre-dig column)
+    //     reproduces the PREVIOUS pin EXACTLY on all six.
+    //   * `MGC_NO_MC2_FRAME_CAP=1` alone — the frame-count stamp in,
+    //     the sibling `sub_585A0` cap out — reproduces THESE six
+    //     exactly. So ALL SIX moves are the stamp's field value; the
+    //     cap adds nothing on top of it (in this world every record
+    //     that reaches an animation step takes at most one).
+    //   * ⚠ `MGC_NO_MC2_FRAMES89=1` ALONE is a DEGENERATE state that
+    //     never ships (the cap gating on a lane that is still 0
+    //     FREEZES frame88 at 0) and moves D/E to a third value. The
+    //     two switches are only meaningful together or not at all.
+    //   * the layout-independent OBSERVABLE projection HOLDS ON ALL
+    //     SIX: nothing in this world is built or moves differently,
+    //     the records simply carry retail's frame count (1 on every
+    //     row this slice mints) where they carried 0.
+    // Corpus-corroborated: across 80 sampled `mc2l6-rsg` master
+    // images every live retail record with a set sprite reads
+    // `+0x5D == 1` except the (10,0) fire (row 7) at 16, and the
+    // ungraded `b5d` census goes to ZERO on both focus takes
+    // (mc2l22 0..1200 fixed 3,061 / introduced 0; rsg 0..2000 fixed
+    // 7,819 / 0), with both horizons unchanged.
     const GOLDEN: [u64; 6] = [
-        0x2caf2b26b31a754f, // post-init (GenerateEvents + dis 0)
-        0x3b1cc1c57a4237b4, // A: 64 idle ticks afield
-        0x21d8d1becd8f3c02, // B: the type-5 fly-to latched
+        0x67b8694a698ecb88, // post-init (GenerateEvents + dis 0)
+        0xa8c9c3fcaa97ea9b, // A: 64 idle ticks afield
+        0x9f0f7b1e89f7a307, // B: the type-5 fly-to latched
         // C-E re-pinned for the mc2l0 on-ramp batch (2026-08-21f;
         // attribution in mc2_cave.rs): the fireball's terrain-contact
         // move REVERT (sub_65C20 v16x) + the universal token-mana
         // copy + the impact pitch stamp move the combat checkpoints;
         // the D fireball window is the first consumer.
-        0xb45ba7f41aed9cd5, // C: goat awake/flee window
+        0x2dfb44aae2ba61a8, // C: goat awake/flee window
         // D re-pinned for the MC2 CAST-CHARGE BANK (`mc2_launch`;
         // EF:55869-70 — every MC2 cast site copies the wizext
         // `byte_0x154` meter into the projectile's @0x10 and zeroes
@@ -619,7 +650,72 @@ fn mc2_slice_behaviors_and_goldens() {
         // fireball's f26 is a hashed lane, so the first cast in the
         // window moves D. A/B-attributed by suppressing the single
         // bank (D alone returns; E holds).
-        0x5d523a1d91169441, // D: fireball combat over the goat
+        // D re-pinned AGAIN 2026-09-02 for THE FIRE CTOR'S @0x2C SEED
+        // (`mc2_spawn_fire`): `NewEvent_4A050` writes
+        // `subSpellIndex_0x2A_42 = 100` (Events.cpp:569) — that is
+        // @0x2A — while the memset leaves @0x2C at 0, and for a
+        // (10,0) fire the port's `f44` IS retail's @0x2C
+        // (`port_ent_lanes_mc2`'s `f2c` arm lists 10/0). Every fire
+        // was being born with 100 in its fall/flicker register.
+        // Measured on mc2l22 t=10914..10932: `(10,0) f2c` 61 rows,
+        // retail 0 / port 100. D is the first checkpoint that mints
+        // fires (the fireball's impact over the goat), which is why
+        // it alone moves. A/B-attributed: reverting that one
+        // assignment reproduces the previous pin exactly with all 25
+        // other laws of this session still in, and it is the same
+        // single law that moved mc2_cave's checkpoint A.
+        // D re-pinned AGAIN 2026-09-04 (SESSION 97) for THE (15,x)
+        // TOKEN-SLOT BACK-REF. Retail's `word_0x26_38` carries the
+        // token's **POOL SLOT**, not a spell index: both readers index
+        // `Entities_EA3E4` with it — the impact XP award
+        // `sub_6D8B0(a1x->id, Entities[a1x->word_0x26_38]->model_0x40_64, 1)`
+        // (EF:62985), where slot and index happen to be
+        // interchangeable because a (15,N) token's model IS N; and the
+        // Magic Mine's swallow `sub_68AC0` (EF:55441-44), which reads
+        // BOTH `model_0x40_64` and `byte_0x46_70` off that record and
+        // re-arms `word_0x2E_46 = 1`. The second is unreachable from
+        // an index, so the lane must carry the slot and
+        // `Gen::mc2_token_model` resolves it back for the first.
+        // ⭐ D ALONE MOVES, and the layout-independent OBSERVABLE
+        // projection HOLDS ON ALL SIX — nothing in the window is built
+        // differently; the window's ten human fireballs simply carry
+        // `f40` 152 (their token's slot) where they carried 0.
+        // A/B-ATTRIBUTED: `MGC_NO_TOKEN_SLOT_BACKREF=1` reproduces the
+        // previous pin exactly with the session's other twelve laws
+        // still in.
+        // ⚠⚠ THE LESSON, NOT THE LAW: this write landed WITHOUT a kill
+        // switch, so no kill-switch A/B could attribute the move and it
+        // took a per-entity hash probe against a HEAD build to find.
+        // The switch above was added afterwards. EVERY LAW NEEDS ITS
+        // SWITCH AT LANDING TIME — this is what it costs when one does
+        // not have one.
+        0x1fc30a4fe2e2046f, // D — re-pinned 2026-09-04 (ROUND 98) for THE
+        // LAUNCH AIM POINT `axis_0x9A_154x` EXTENDED TO THE WHOLE
+        // class-15 fire table (`MGC_NO_MC2_LAUNCH_AXIS_BAND=1`
+        // reverts). Retail stamps the flyer's @0x9A with the caster's
+        // position stepped along the launch bearing; round 98 landed it
+        // on four arms and then extended it to spells 0/7/9/13
+        // (Fireball / Lightning / Meteor / Steal Mana).
+        // ⚠⚠⚠ HASHED-FIELD RE-PIN, NOT A BEHAVIOUR CHANGE.
+        // A/B-ATTRIBUTED with the law's own switch, one binary:
+        //   * `MGC_NO_MC2_LAUNCH_AXIS_BAND=1` alone reproduces the
+        //     PREVIOUS pin exactly (0x920175c3ec9f033f); the other
+        //     three launch switches do NOT — so this checkpoint is
+        //     the band extension's and nothing else's.
+        //   * `dest_x`/`dest_y`/`dest_z` are ungraded lanes with no
+        //     reader in this slice; `Gen` is `derive(Hash)` and
+        //     `state_hash` hashes `g` wholesale, so a non-zero value
+        //     where there was a zero moves the pin by itself.
+        //   * BOTH focus horizons are identical either way
+        //     (mc2l22 3,629 / mc2l6-rsg 26,502) and the whole-take
+        //     GRADED pair censuses are byte-identical.
+        // WITNESS (this is the point — see the `no_launch_axis_band`
+        // doc): on `recordings/mc2l0-spells-galore.mgcr`, whole take,
+        // `MGC_RAW_SHADOW=1` row-set diff: **fixed 1,251 / introduced
+        // 0**, and EVERY fixed row is `(9,0) dest_x/dest_y/dest_z`.
+        // ⭐ The law was briefly parked as "unwitnessed" because its
+        // dig measured only rsg pairs 0..2000 — a WINDOW artefact.
+        // A "no exemplar" verdict is only as wide as its window., // D: fireball combat over the goat
         // E re-pinned AGAIN for the MC2 BUILDING-ROSTER LAW
         // (`area_write`'s ch0 footprint pass now walks the tick-top
         // `dword_38527` chain, EF:4076 — a record that only becomes
@@ -676,7 +772,32 @@ fn mc2_slice_behaviors_and_goldens() {
         // reproducing these hashes: the pack crowd-avoid's un-wrapped
         // i16 gap, the XP-scroll `sub_106C0` collect, the MC2 fleet
         // register, and the strict-only class-14 probe admission.
-        0x2a2c83cea42c3c5f, // E: census + villager/archer provocation
+        // E re-pinned 2026-09-05 (ROUND 105) for THE CLASS-5 `@0x36` LAW
+        // (`MGC_NO_MC2_CLASS5_W36=1` reverts). All 18 class-5 creature ctors
+        // wrote the ch0 damage contract TWICE — correctly as `e.f28 = 1`
+        // (`@0x38`) and again as a duplicate `e.f56 = 1`, which on class 5 is
+        // a DIFFERENT retail word (`@0x36`). `sub_4C8F0` (`NETHERW.EXE` file
+        // 0x710F0) never writes `[eax+0x36]` at all, so retail's value there
+        // is `NewEvent_4A050`'s zero. E is the checkpoint that spawns
+        // creatures, which is why it alone of the six moves.
+        // ⚠⚠⚠ HASHED-FIELD RE-PIN, NOT A BEHAVIOUR CHANGE.
+        // A/B-ATTRIBUTED with the law's own switch, ONE binary:
+        //   * `MGC_NO_MC2_CLASS5_W36=1` alone restores the previous pin
+        //     (0xe84e646a50e96795) and the whole suite goes green.
+        //   * THE OTHER FIVE CHECKPOINTS ARE BYTE-IDENTICAL across the A/B —
+        //     only E moves, and `mc2_cave`'s OBSERVABLE half likewise HOLDS
+        //     unchanged, which is that test's own stated proof of a
+        //     hashed-field move rather than behaviour.
+        //   * `f56` is UNGRADED on these models (`port_ent_lanes_mc2`
+        //     publishes it, `obs_project_mc2` never projects it) and NO port
+        //     reader consumes it — the 18 gated models are none of the
+        //     multipart family 0/3/22/27, re-verified by deriving each site's
+        //     class/model from its own ctor. `Gen` is `derive(Hash)` and
+        //     `state_hash` hashes `g` wholesale, so a 1 where retail records
+        //     a 0 moves the pin by itself.
+        //   * mc2l22 stays CERTIFIED (`segments=27 devs=0 horizon=END`) and
+        //     the graded corpus is unmoved.
+        0x83e9fedf92dca869, // E: census + villager/archer provocation
     ];
     // Checkpoints 4-6 re-pinned for the DISPOSITION-FIRE stack
     // rebuild (see mc2_cave.rs — sub_49F90 at sub_4A1E0's top,
@@ -726,6 +847,19 @@ fn mc2_slice_behaviors_and_goldens() {
     // reproduces the previous pin exactly, with the session's other
     // three laws (the m20 state-2 pointer test and `dword_38519`'s
     // life-test entry condition at its three scan sites) still in.
+    // Re-pinned (ALL SIX) 2026-09-03 for THE MC2 ALLOCATOR'S
+    // BEHAVIOR-ROW SEED — the same one-line delta as `mc2_cave`'s
+    // re-pin, whose comment carries the derivation. `NewEvent_4A050`
+    // writes `dword_0xA0_160x = &str_D7BD6[59]` in BOTH arms
+    // (Events.cpp:573 / :599); the port left every natively spawned
+    // MC2 record on `BEHAVIOR[0]`, the (5,0) creature row, so its
+    // hover band was `v_12 = 7` and its drift `v_14 = +244` instead of
+    // row 59's `0` / `−4`. ALL SIX move, post-init included, because
+    // this slice's world mints entities from its first tick.
+    // A/B-ATTRIBUTED: reverting the seed ALONE makes this test PASS on
+    // the previous pin with the session's four other laws still in;
+    // and the mana sphere's dropped roll and the two MC2 cave arms
+    // were each reverted alone and reproduce these exact six hashes.
     assert_eq!(
         got, GOLDEN,
         "the MC2 slice diverged from its goldens — if DELIBERATE, \

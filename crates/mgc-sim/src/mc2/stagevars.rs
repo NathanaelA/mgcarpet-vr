@@ -57,6 +57,36 @@ use super::super::mc1::mobs::MobCtx;
 use super::behavior::{BEHAVIOR, Mc2BehaviorRow};
 use super::multipart::BRANCH_STATE;
 
+/// A/B toggle for the STAGEVAR SIBLING WATCH-HANDLE REUSE: set
+/// `MGC_NO_SV_WATCH_SIBLING_CHAIN` to restore the pre-dig behaviour,
+/// where `mc2_resolve_watch`'s `&1` arm reused ANY held sibling's
+/// cached `word_0x4A_74` — including a DEAD one, which retail's
+/// per-model roster chain (`bytearray_38403x[model]`, EF:10622-30)
+/// does not carry. See the write-up at the call site.
+fn no_sv_watch_sibling_chain() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_SV_WATCH_SIBLING_CHAIN").is_some())
+}
+
+/// A/B toggle for the WATCH-HANDLE RESOLVE CADENCE: set
+/// `MGC_NO_SV_WATCH_CADENCE` to restore the pre-dig behaviour, where
+/// the kind-3/4/5 shadow leg resolved AND CACHED the watch handle on
+/// every tick, outside retail's 8-tick gate. See the write-up at the
+/// call site in `mc2_held_move`.
+fn no_sv_watch_cadence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_SV_WATCH_CADENCE").is_some())
+}
+
+/// A/B toggle for the WATCH-HANDLE NEAREST SCAN: set
+/// `MGC_NO_SV_WATCH_CHAIN_SCAN` to restore the pre-dig pool walk, which
+/// scanned in slot order with three guards retail does not have and
+/// without the tick-top roster snapshot. See the write-up at the scan.
+fn no_sv_watch_chain_scan() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_SV_WATCH_CHAIN_SCAN").is_some())
+}
+
 /// One live StageVar slot (`D41A0_0.StageVars2_0x365F4[slot]`, LS:249).
 /// Index-aligned with the level file's 11-slot array; slot 0 is unused.
 #[derive(Debug, Clone, Copy, Default, Hash)]
@@ -665,7 +695,27 @@ impl World {
         //   after release. The dodge keeps a held dragon evading
         //   locked-on fireballs like a free one.
         // Other models' +7 tails stay skipped (APPROX, module doc).
-        if matches!(kind, 1..=10) && self.g.ent[i].tick70 & 7 == 7 {
+        //
+        // ⭐⭐⭐ **THE SWITCH READS `StageVar2` AFTER THE LEGS, AND
+        // THERE IS NO ACTION TEST.** Both wrappers are literally
+        // `sub_1D5D0(a1x, 8m); switch (a1x->StageVar2_0x49_73) { … }`
+        // (`sub_1F300` EF:11355-58, `sub_26470` EF:16938-41) — the
+        // selector is the field the legs JUST WROTE, and the action
+        // the legs may have promoted is never consulted. The port
+        // gated on the ENTRY kind AND on the action still reading
+        // phase 7, which is exactly false on the one tick that
+        // matters: the non-lethal hit arm and the kind-10 re-raise
+        // both leave `StageVar2 = 10` (still in the case list) while
+        // moving the action to `8m+2`/`8m+6`, so retail runs the
+        // ambient physics on the RELEASE tick and the port skipped
+        // it. mc2l6-rsg t=2032 slot 157, a stage-held kind-1 dragon
+        // taking the human's 200: retail settles the ground (z 1785
+        // → 1781, `mc2_alt_commit`) and then bobs on top of it —
+        // `z += dword_0x10_16` (75) → 1856, velocity 75 → 70. The
+        // port stopped at the settle and held 1781/75, and the two
+        // fresh (9,9) bolts the human aimed at the chain that same
+        // tick were born on the wrong pitch because of it.
+        if matches!(self.g.ent[i].site_z, 1..=10) {
             match self.g.ent[i].model65 {
                 21 => self.g.m21_jump(i),
                 0 => {
@@ -777,7 +827,7 @@ impl World {
             return;
         };
         match kind {
-            1 => self.mc2_sv_walk(i, Some(v.point)),
+            1 => self.mc2_sv_walk(i, Some(v.point), None),
             2 => {
                 let e = &self.g.ent[i];
                 // Retail's leash test is the wrapped 16-bit box
@@ -785,22 +835,76 @@ impl World {
                 let out = ((v.point.0.wrapping_sub(e.x)) as i16 as i32).abs() > 3072
                     || ((v.point.1.wrapping_sub(e.y)) as i16 as i32).abs() > 3072;
                 if out {
-                    self.mc2_sv_walk(i, Some(v.point));
+                    self.mc2_sv_walk(i, Some(v.point), None);
                 } else {
                     self.mc2_sv_graze(i);
                 }
             }
             3..=5 => {
-                let w = self.mc2_watch_handle(i, hpos, &v);
+                // ⭐⭐⭐ THE RESOLVE LIVES INSIDE THE 8-TICK CADENCE
+                // GATE, AND THE PORT HOISTED IT OUT. `sub_1D8C0`
+                // (NETHERW.EXE file 0x420C0) runs the move core every
+                // tick and then gates EVERYTHING else on the entity's
+                // own dispatch counter:
+                //     421cd  53                 push ebx
+                //     421ce  e8 ed de ff ff     call 0x400C0 (sub_1B8C0, the move)
+                //     421d3  8a 6b 3e           mov ch,BYTE PTR [ebx+0x3e]
+                //     421d9  f6 c5 07           test ch,0x7
+                //     421dc  0f 85 03 02 00 00  jne  0x423e5      <-- off-cadence: SKIP
+                //     421f4  f6 86 f5 65 03 00 02  test [sv+0x365f5],0x2
+                //     421fd  66 83 7b 4a 00     cmp WORD PTR [ebx+0x4a],0x0
+                //     42202  75 0d              jne  0x42211      <-- already cached
+                //     42205  e8 d6 09 00 00     call 0x42BE0      <-- sub_1E3E0, THE RESOLVE
+                //     4220d  66 89 43 4a        mov WORD PTR [ebx+0x4a],ax
+                // `sub_1E3E0` has exactly ONE call site in the whole
+                // decompile (EF:10177) and it is this one; the kind-3
+                // guardian `sub_1D7C0` (EF:10080) and the pack head
+                // `sub_1D700` (EF:10042) both read `word_0x4A_74`
+                // RAW, behind the SAME `& 7` gate. The port shared
+                // `mc2_watch_handle` between the shadow leg and the
+                // guardian arm, gated only the guardian, and so
+                // resolved-and-CACHED on the seven off-cadence ticks
+                // retail never resolves on.
+                //
+                // WITNESS mc2l6-rsg, slot 49 (5,20), a kind-3 hold.
+                // Retail's own `sv_timer` (= `word_0x4A_74`) lane,
+                // tick by tick: 29 at t=34,560-34,562, 23 at
+                // 34,563-34,566, then the re-arm zeroes it and it
+                // reads **0 for FOUR ticks** (34,567-34,570, action
+                // 167, StageVar2 3) before resolving to 32 at
+                // t=34,571. `phase3e & 7` is 0 at 34,563 and 34,571
+                // and 4 at 34,567 — the cadence exactly. The port
+                // resolved at 34,567, cached slot 34 (the only live
+                // (5,19) in range on THAT tick), and still held it at
+                // 34,571 when 32 had become the nearer one — which is
+                // the `slot 49 action` head at t=34,572.
+                //
+                // Off-cadence `mc2_sv_walk` returns straight after
+                // `mc2_move_core`, so `target`/`watched` are dead
+                // there and passing 0 changes nothing but the resolve.
+                let w = if no_sv_watch_cadence() || self.g.ent[i].f63 & 7 == 0 {
+                    self.mc2_watch_handle(i, hpos, &v)
+                } else {
+                    0
+                };
                 let target = (w != 0).then(|| {
                     let t = &self.g.ent[w];
                     (t.x, t.y)
                 });
-                self.mc2_sv_walk(i, target);
+                self.mc2_sv_walk(i, target, (w != 0).then_some(w));
             }
             6..=9 => self.mc2_sv_graze(i),
             _ => {}
         }
+    }
+
+    /// A/B toggle for the SHADOW BACK-OFF law (dig D2, session 96):
+    /// set `MGC_NO_SV_BACKOFF` to restore the pre-2026-09-03 shape,
+    /// where the kind-3/4/5 shadow walk had only `sub_1DDA0`'s three
+    /// steps and never peeled away from the entity it escorts.
+    fn sv_backoff_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_SV_BACKOFF").is_none())
     }
 
     /// The shared WALK leg (`sub_1DDA0`/`sub_1D8C0` quiet path): move
@@ -808,7 +912,7 @@ impl World {
     /// just hit the terrain fence — the retry yaw stands), every 64th
     /// tick a ±(85..340) wander jitter on top, and the same-model
     /// separation override last (EF:10195-10218).
-    fn mc2_sv_walk(&mut self, i: usize, target: Option<(u16, u16)>) {
+    fn mc2_sv_walk(&mut self, i: usize, target: Option<(u16, u16)>, watched: Option<usize>) {
         self.g.mc2_move_core(i);
         if self.g.ent[i].f63 & 7 != 0 {
             return;
@@ -830,6 +934,55 @@ impl World {
         // `mc2_avoid_packmate_at`: seam-blind across the 0x8000 map
         // centre (mc2l0-pd t=906).
         self.g.mc2_avoid_packmate_at(i, true);
+        // ⭐⭐⭐ **THE SHADOW LEG ENDS IN A PERSONAL-SPACE BACK-OFF
+        // FROM THE WATCHED ENTITY, AND ONLY THE SHADOW LEG DOES.**
+        // `sub_1D8C0` (kinds 3/4/5, EF:10210-16, NETHERW.EXE
+        // 0x42345-0x42391) closes case 0 with a FOURTH step the
+        // point-walk `sub_1DDA0` (kind 1, EF:10382-10418) does not
+        // have and cannot have — it walks to a POINT, not an entity:
+        //     if (abs(a1x->pos.x - v12x->pos.x) < a1x->pitch + v12x->pitch
+        //      && abs(a1x->pos.y - v12x->pos.y) < a1x->pitch + v12x->pitch)
+        //         a1x->roll_0x20_32 = tan2(&v12x->pos, &a1x->pos);
+        // — the AWAY angle, overwriting BOTH the aim and the packmate
+        // override, so an escort that closes on its charge peels off
+        // instead of walking through it. The threshold is the SUM of
+        // the two half-extents, not the walker's alone — the shipped
+        // EXE settles it: `movswl 0x54(%ebx)` then `movswl 0x54(%esi)`
+        // (ebx = a1x, esi = v12x) before each `cmp`, where the
+        // packmate loop 0x60 bytes earlier loads only `0x54(%ebx)`.
+        // Both `jge`s prove the test is STRICT `<`, and the `movswl`
+        // on 0x4C/0x4E proves the positions are SIGN-EXTENDED i16.
+        // The port shares ONE walk leg between the two retail
+        // functions and had only `sub_1DDA0`'s shape, so the shadow
+        // never backed off (⭐⭐⭐ A LAW LANDED ON ONE CALL PATH IS NOT
+        // LANDED — here, a leg that was never on the path at all).
+        // mc2l4 slot 175, a kind-4 (5,3) shadowing (5,9) slot 154:
+        // pitches 414 + 74 = 488. t=23 |dy| = 528 → no fire, retail
+        // `roll` 968 = the toward-aim; t=31 |dx| = 152, |dy| = 425 →
+        // FIRES, retail `roll` 968 → 1937 = `angle_of(-152, -425)`,
+        // exactly 1024 (180°) off the port's 913. The 425/528 bracket
+        // pins the sum: 414 alone misses t=31, 2*414 wrongly takes
+        // t=23. `roll` is UNGRADED, so the census stayed clean and the
+        // free run broke one tick later on `heading`, mc2l4's whole
+        // 31-tick horizon.
+        if let Some(w) = watched
+            && Self::sv_backoff_law()
+        {
+            let (ex, ey, p) = {
+                let e = &self.g.ent[i];
+                (e.x, e.y, e.f80 as i32)
+            };
+            let (wx, wy, wp) = {
+                let c = &self.g.ent[w];
+                (c.x, c.y, c.f80 as i32)
+            };
+            let lim = p + wp;
+            let d = |a: u16, b: u16| ((a as i16 as i32) - (b as i16 as i32)).abs();
+            if d(ex, wx) < lim && d(ey, wy) < lim {
+                self.g.ent[i].f34 =
+                    super::super::engine::features::Gen::angle_between(wx, wy, ex, ey);
+            }
+        }
     }
 
     /// The GRAZE leg (`sub_1E1C0` quiet path, EF:10520-45): move
@@ -1026,32 +1179,125 @@ impl World {
     }
 
     /// `sub_1E3E0` (EF:10609-48): resolve a `&2` slot's watch handle —
-    /// on `&1` (subtype-matched) slots first reuse a same-slot
-    /// sibling's cached word74, else the nearest live class-5 of the
-    /// watched subtype by 2D distance. (Retail scans the per-model
-    /// live list; we scan the pool — comparison-only, same nearest.)
+    /// on `&1` (subtype-matched) slots first reuse a same-slot,
+    /// same-model, ON-CHAIN sibling's cached word74 (see the block
+    /// below), else the nearest live class-5 of the watched subtype by
+    /// 2D distance. (Retail scans the per-model live list; we scan the
+    /// pool — comparison-only, same nearest.)
     fn mc2_resolve_watch(&self, i: usize, slot: usize) -> u16 {
         let v = &self.mc2_stagevars[slot];
         if v.flags & 0x01 != 0 {
-            for h in &self.mc2_sv_held {
-                if h.slot as usize == slot && h.ent as usize != i && h.timer != 0 {
-                    return h.timer as u16;
+            // ⭐⭐⭐ RETAIL WALKS THE PER-MODEL ROSTER CHAIN, THE PORT
+            // WALKED THE HELD SIDE TABLE. `sub_1E3E0`'s `&1` arm is
+            // `for (ix = bytearray_38403x[a1x->model_0x40_64];
+            //      ix > Entities_EA3E4[0] && !v2x; ix = ix->next_0)`
+            // (EF:10622-30) — the SCANNER'S OWN MODEL chain, whose
+            // membership is rebuilt every tick top from the LIVE
+            // class-5 records (`class == 5 && life >= 0 &&
+            // actionIndex != 120`, [`Gen::mob_chains`]). A sibling
+            // that has died is OFF that chain, so retail never reads
+            // the stale `word_0x4A_74` it is still carrying and falls
+            // through to the nearest-live scan below. The port's
+            // `mc2_sv_held` walk has no such membership: a dead
+            // sibling kept handing its corpse-beacon out forever.
+            //
+            // WITNESS mc2l6-rsg t=34563 (segment anchored 30407):
+            // slot 49 (5,20, StageVar1 = 1) re-arms kind 3, its own
+            // word74 is zeroed, and it re-resolves. Sibling slot 47
+            // is a (5,20) on the same StageVar slot with word74 = 29
+            // — and `life = -900`. Retail's chain does not carry it,
+            // so the model-19 nearest scan elects the LIVE (5,19) at
+            // slot 23; the port reused 29, whose own (5,19) had died
+            // one tick earlier at 34562. That single handle is the
+            // whole `slot 49 action` head at t=34564: retail holds
+            // action 162 on the fresh target while the port drops back
+            // to 161. (The SECOND head at 34572 is the same family but
+            // a different instance — a handle the port had already
+            // cached four ticks earlier and retail had scrubbed; see
+            // the banked lead in the round-99 ledger.)
+            if no_sv_watch_sibling_chain() {
+                for h in &self.mc2_sv_held {
+                    if h.slot as usize == slot && h.ent as usize != i && h.timer != 0 {
+                        return h.timer as u16;
+                    }
+                }
+            } else {
+                let mine = self.g.ent[i].model65 as usize;
+                for k in 0..self.g.mob_chains.visible(mine).len() {
+                    let j = self.g.mob_chains.visible(mine)[k] as usize;
+                    if let Some(h) = self.mc2_sv_held.iter().find(|h| h.ent as usize == j)
+                        && h.slot as usize == slot
+                        && h.timer != 0
+                    {
+                        return h.timer as u16;
+                    }
                 }
             }
         }
+        // ⭐⭐⭐ AND THE NEAREST SCAN IS THE SAME CHAIN, WITH NO GUARDS
+        // AT ALL. `sub_1E3E0`'s second loop, NETHERW.EXE 0x42C73:
+        //     42c73  8b b4 86 03 96 00 00  mov esi,[esi+eax*4+0x9603]  (chain head,
+        //                                        indexed by the stagevar's WATCH MODEL)
+        //     42c7a  eb 21                 jmp 0x42c9d      (test-first)
+        //     42c7c  8d 46 4c              lea eax,[esi+0x4c]
+        //     42c87  e8 44 a0 03 00        call 0x7CCD0     (EuclideanDistXY_584D0)
+        //     42c92  39 d0                 cmp eax,edx
+        //     42c94  73 05                 jae 0x42c9b      <-- STRICT `<`: first of a tie holds
+        //     42c96  89 45 fc / 89 f7      best = d; winner = ix
+        //     42c9b  8b 36                 mov esi,[esi]    <-- ix = ix->next_0: CHAIN ORDER
+        //     42c9d  3b 35 e4 a3 01 00     cmp esi,Entities[0]
+        //     42ca3  77 d7                 ja  0x42c7c
+        // and `EuclideanDistXY_584D0` (0x7CCD0) is a SQUARED distance
+        // with a 16-bit subtraction sign-extended before the multiply
+        // (`66 8b 02 / 66 2b 01 / 98 / 0f af d8`), which is what the
+        // `as i16` casts below reproduce.
+        //
+        // **There is no life test, no reap test and no self-exclusion
+        // in that loop** — membership is entirely the roster chain's,
+        // and the chain is a TICK-TOP SNAPSHOT (`class == 5 &&
+        // life >= 0 && actionIndex not in {0xB4,0xE8,0xEA}`,
+        // EF:39987-40006). The port walked the POOL in slot order with
+        // a LIVE `act_life`/`flags & 0x400` read plus `j != i`, and
+        // without the action exclusions — wrong on five counts, and
+        // the live read is exactly the hazard `world.rs`'s chain
+        // builder documents ("a live `act_life >= 0` read on a
+        // full-array walk gets BOTH ticks wrong, in opposite
+        // directions").
+        //
+        // WITNESS mc2l4 t=310 (segment anchored 308), slot 213 (5,4),
+        // a kind-3 hold on a cadence tick (`phase3e` 65 in BOTH
+        // columns): retail resolves **138**, the pool walk resolves
+        // **172**. Before the cadence law above the port covered this
+        // up by resolving on an earlier off-cadence tick that happened
+        // to elect 138 — a wrong answer reached by a wrong route.
         let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
         let mut best = 0u16;
         let mut bd = u64::MAX;
-        for (j, e) in self.g.ent.iter().enumerate().skip(1) {
-            if e.class64 == 5
-                && e.model65 == v.watch_model
-                && e.act_life >= 0
-                && e.flags & 0x400 == 0
-                && j != i
-            {
-                let dx = (x.wrapping_sub(e.x) as i16 as i64).unsigned_abs();
-                let dy = (y.wrapping_sub(e.y) as i16 as i64).unsigned_abs();
-                let d = dx * dx + dy * dy;
+        let dist = |x: u16, y: u16, e: &crate::engine::features::Ent| {
+            let dx = (x.wrapping_sub(e.x) as i16 as i64).unsigned_abs();
+            let dy = (y.wrapping_sub(e.y) as i16 as i64).unsigned_abs();
+            dx * dx + dy * dy
+        };
+        if no_sv_watch_chain_scan() {
+            for (j, e) in self.g.ent.iter().enumerate().skip(1) {
+                if e.class64 == 5
+                    && e.model65 == v.watch_model
+                    && e.act_life >= 0
+                    && e.flags & 0x400 == 0
+                    && j != i
+                {
+                    let d = dist(x, y, e);
+                    if d < bd {
+                        bd = d;
+                        best = j as u16;
+                    }
+                }
+            }
+        } else {
+            let wm = v.watch_model as usize;
+            for k in 0..self.g.mob_chains.visible(wm).len() {
+                let j = self.g.mob_chains.visible(wm)[k] as usize;
+                let d = dist(x, y, &self.g.ent[j]);
                 if d < bd {
                     bd = d;
                     best = j as u16;
@@ -1149,6 +1395,48 @@ impl World {
     }
 }
 
+/// ⭐⭐⭐ THE BLOCKED-TICK AIM GATE OF `sub_1E700` — A RETAIL DWORD BIT
+/// INDEX DROPPED INTO THE PORT'S **REMAPPED** FLAG WORD.
+///
+/// `sub_1E700`'s aim leg (EF:10812-27) is fenced by
+/// `if (!(a1x->struct_byte_0xc_12_15.byte[2] & 4))` — the MOVE-BLOCKED
+/// bit `sub_1B8C0` has just set or cleared two statements earlier. On a
+/// blocked tick retail keeps the retry yaw the move core wrote and
+/// performs NEITHER the target aim NOR the 64-tick wander jink; only the
+/// same-model crowd steer-away below it still runs.
+/// Verified byte-for-byte in the shipped `NETHERW.EXE` at file
+/// **0x43068** (`f6 43 0e 04  testb $0x4,0xe(%ebx)` / `0f 85 …
+/// jne 0x430f0`) — @0x0E is `flags` byte[2], and the jump lands PAST
+/// the `roll` store at 0x43085 (`66 89 43 20  mov %ax,0x20(%ebx)`) and
+/// past the jink, on the crowd-steer loop.
+///
+/// Retail's flags live in ONE little-endian dword, so `byte[2] & 4` is
+/// dword bit **18** — and both `sub_1E700` paraphrases in `mc2/mobs.rs`
+/// wrote that literal `1 << 18`. **The port's `flags` is NOT retail's
+/// dword**: `obs_project_mc2` maps `byte[1]&8 → 26`, `byte[2]&4 → 27`,
+/// `byte[2]&0x10 → 28`, `byte[2]&0x20 → 29` (`mc2/mobs.rs`
+/// `F_STOP`/`F_BLOCKED`/`F_NO_CORPSE`/`F_CLAIM_LOCK`), identity only
+/// below bit 18. Port bit 18 has no writer at all, so the gate was
+/// UNCONDITIONALLY OPEN and every blocked tick re-aimed.
+/// ⭐ A SPLIT IN A SIBLING TRIO: `mc2_sv_walk` above models the SAME
+/// retail gate and gets it right (`flags & F_BLOCKED`); the two
+/// `sub_1E700` arms — the Summon-Army creature (`mc2_summon_core`) and
+/// the doomsday-pyramid summon (`mc2_doom_summon_home_tick`), which
+/// `sub_1D5D0`'s dispatch (EF:10013-16) sends to the SAME retail
+/// function — both carried the raw retail bit index.
+///
+/// Set `MGC_NO_SUMMON_BLOCKED_BIT` to restore the dead `1 << 18` mask.
+pub(crate) fn summon_blocked_mask() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        if std::env::var_os("MGC_NO_SUMMON_BLOCKED_BIT").is_some() {
+            1 << 18
+        } else {
+            super::mobs::F_BLOCKED
+        }
+    })
+}
+
 /// `Maths::Abs16` on the wrapping axis difference (engine units).
 fn abs16(a: u16, b: u16) -> i32 {
     (a.wrapping_sub(b) as i16 as i32).abs()
@@ -1215,5 +1503,140 @@ impl Snap for Mc2Held {
             slot: r.get()?,
             timer: r.get()?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summon_blocked_mask;
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
+    use crate::mc2::mobs::{F_BLOCKED, F_STOP};
+    use crate::patches::WorldPatches;
+    use crate::verbs::VerbSet;
+
+    fn flat_gen() -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    fn ctx_at(px: u16, py: u16) -> MobCtx {
+        MobCtx {
+            px,
+            py,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// One Summon-Army firebug parked at (0x2000, 0x2000), leased and
+    /// on the 8-tick aim throttle, with `extra_flags` OR'd in.
+    fn summoned_firebug(g: &mut Gen, extra_flags: u32) -> usize {
+        let i = g.new_event().expect("summon slot");
+        let e = &mut g.ent[i];
+        e.class64 = 5;
+        e.model65 = 19;
+        e.tick70 = 8 * 19 + 7; // the shared class-5 controlled slot
+        e.site_z = 13; // StageVar2 = Summon Army
+        e.id24 = PLAYER_TARGET; // parent = the human's carpet
+        e.row156 = 88; // the firebug's behaviour row
+        e.max_life = 600;
+        e.act_life = 600;
+        e.x = 0x2000;
+        e.y = 0x2000;
+        e.z = 100;
+        e.set_lease(500); // the lease (word_0x2E_46) — dig 98-Q20
+        e.f63 = 8; // phase: & 7 == 0 (aim) but & 0x3F != 0 (no jink)
+        e.f34 = 1234; // the sentinel target yaw (roll_0x20_32)
+        // `sub_1B8C0`'s forced-stop head returns before it can touch
+        // the blocked bit, so the rig can hand the gate the exact
+        // flag word it is meant to read.
+        e.flags |= F_STOP | extra_flags;
+        i
+    }
+
+    /// ⭐⭐⭐ `sub_1E700` DOES NOT RE-AIM ON A MOVE-BLOCKED TICK.
+    ///
+    /// EF:10817 fences the whole aim leg with
+    /// `if (!(a1x->struct_byte_0xc_12_15.byte[2] & 4))`, the bit
+    /// `sub_1B8C0` has just written. Shipped `NETHERW.EXE` file
+    /// 0x43068: `f6 43 0e 04  testb $0x4,0xe(%ebx)` /
+    /// `0f 85 7e 00 00 00  jne 0x430f0` — the jump clears the `roll`
+    /// store at 0x43085 (`66 89 43 20  mov %ax,0x20(%ebx)`) and the
+    /// 64-tick jink, landing on the crowd-steer loop.
+    ///
+    /// The port wrote that retail DWORD bit index verbatim as
+    /// `1 << 18`, but the port's flag word remaps `byte[2] & 4` to bit
+    /// 27 (`F_BLOCKED`); bit 18 has no writer at all, so the gate was
+    /// unconditionally open and every blocked tick re-aimed. On
+    /// `recordings/mc2l6-rival-spells-galore.mgcr` that is the
+    /// t=15,699 wall: firebug 498 is blocked on the one throttle-open
+    /// tick t=15,696, retail holds `roll` at 1367 and the port
+    /// re-aimed to 1380; three ticks later the heading servo arrives
+    /// on the wrong bearing.
+    ///
+    /// `roll` (@0x20) has no comparator in `verify-deltas` and the
+    /// pair importer restores it every tick, so no fixture can see
+    /// this law — the whole-take pair census is byte-identical with it
+    /// on and off. Kill switch: `MGC_NO_SUMMON_BLOCKED_BIT=1`, under
+    /// which the blocked arm below aims too and this test fails.
+    #[test]
+    fn a_blocked_summon_keeps_the_retry_yaw_instead_of_re_aiming() {
+        // (0x2000, 0x2000) -> (0x4000, 0x2000) is due +x, angle 512.
+        let ctx = ctx_at(0x4000, 0x2000);
+
+        let mut g = flat_gen();
+        let free = summoned_firebug(&mut g, 0);
+        g.mc2_creature_tick(free, &ctx);
+        assert_eq!(
+            g.ent[free].lease(), 495,
+            "the StageVar2-13 leg ran (lease -1, then -4 on the \
+             no-lock fallback)"
+        );
+        assert_eq!(
+            g.ent[free].f34, 512,
+            "an unblocked summon aims at its parent"
+        );
+
+        let mut g = flat_gen();
+        let stuck = summoned_firebug(&mut g, F_BLOCKED);
+        g.mc2_creature_tick(stuck, &ctx);
+        assert_eq!(g.ent[stuck].lease(), 495, "the same leg ran on both arms");
+        assert_eq!(
+            g.ent[stuck].f34, 1234,
+            "a BLOCKED summon keeps the yaw the move retry left \
+             (EF:10817, NETHERW.EXE 0x43068)"
+        );
+    }
+
+    /// The gate must read the bit `mc2_move_core` actually writes.
+    /// Retail's `byte[2] & 4` is dword bit 18; the PORT files it at
+    /// bit 27, and nothing in the tree ever writes port bit 18.
+    #[test]
+    fn the_summon_aim_gate_reads_the_port_s_own_blocked_bit() {
+        assert_eq!(summon_blocked_mask(), F_BLOCKED);
+        assert_ne!(F_BLOCKED, 1 << 18, "the port's flag word is remapped");
     }
 }

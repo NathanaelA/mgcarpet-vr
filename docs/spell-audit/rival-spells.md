@@ -166,15 +166,17 @@ tether/drain machine.
 - Spell index/model **14**. SPELLS.DAT row 14, 3 tiers.
 - Effect state: `sub_6B610` (EF:57258) — spawns a projectile **directly** via `_4A190(pos,9,7)` (class-9 subtype **7**), NOT via `sub_6DCA0`.
 - Projectile impact: `byte_0x43_67=10, byte_0x44_68=26` → **impact (10,26)** (EF:57299-57301).
-- Duel-marker scanner (the (10,26) entity's tick): `sub_38D80` (EF:28348) — latches nearby wizards via `word_0x7A_122`.
+- Duel-marker tick (the (10,26) entity): **`sub_33E80` (EF:24985)** — a ch4 AREA WRITE (`sub_10C80(a1x, 4u, byte_0x46_70)`) that resets its own `life` to 0 on every tick the letter lands, so the marker lives as long as it keeps catching somebody. (⚠ `sub_38D80` EF:28348 is NOT this tick — it is a roster scanner that writes `word_0x7A_122` = its own slot; the 2026-07 duel trace misattributed it. SESSION 80.)
 - Duel-link setup: `sub_5EFA0` (EF:60633, the wizard tick) @ EF:60648-60657.
 - Tether/drain machine: `sub_5DE30` (EF:59888), run on the caster's player tick.
-- Subtype-7 creator: `sub_4D740` (EF:34898) — model 7, behavior row 60, sprite 213, speed 384, maxLife 21 (`docs/traces/mc2-class9-low-band-creators.md`). **Not in the port's `CREATORS` table.**
+- Subtype-7 creator: `sub_4D740` (EF:34898) — model 7, behavior row 60, sprite 213, speed 384, maxLife 21 (`docs/traces/mc2-class9-low-band-creators.md`). ✅ landed in `CREATORS` SESSION 80.
+- Flight worker: **`sub_662E0`** (EF:63419), whose effect spawn is gated on the struck victim being a class-3 model-0/1 WIZARD (EF:63531-45) — a missed / expired / terrain-stopped dart spawns nothing at all.
+- Tether creator: **`sub_4F720`** (EF:36129) — class 10, model/action 26, maxLife 8, `subSpellIndex 200`, sprite 213, ShiftRot 512/512.
 - Tier fields (row 14): `life_0x1A = [0, 1, 2]`, `subSpell = [5170, 7720, 7720]` (**= duel range**, not damage), `mana = [10000, 20000, 40000]`, `word_0x18` (duration) `= [195, 395, 603]`.
 
 ### 3.2 Retail behavior + per-tier law
 **Cast** (`sub_6B610`, EF:57289-57316): on first tick, `_4A190(pos,9,7)` →
-subtype-7 projectile launched along the caster's aim at speed 0x2800, impact
+subtype-7 projectile launched along the caster's aim at the creator's flat 384 (`sub_6B610` writes NO caster-speed boost), impact
 (10,26), carrying `subSpellIndex`, owner id, and `byte_0x46_70 = caster tier`;
 sound **9**. The cast then holds; a **28-tick engage timer**
 (EF:57280): if `word_0x2E_46 <= word_0x30_48 - 28 && ctx.word_0x146_326 == 0`

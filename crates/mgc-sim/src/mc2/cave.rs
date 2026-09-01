@@ -1011,10 +1011,11 @@ impl Gen {
             self.ent[i].flags |= 0x400;
         } else {
             // sub_585A0 (EF:40438): frame advance up to the count.
-            let e = &mut self.ent[i];
-            if e.frame88 + 1 < e.frames89 {
-                e.frame88 += 1;
-            }
+            // ⚠ ROUND 98: the gate is retail's `frame88 < frames89`
+            // (shipped NETHERW.EXE 0x7CDAA `cmp 0x5d(%edx),%al` /
+            // `jae`), NOT `frame88 + 1 < frames89` — an off-by-one
+            // that was invisible while `frames89` was 0 column-wide.
+            self.mc2_anim_step(i);
         }
     }
 

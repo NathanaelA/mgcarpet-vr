@@ -70,6 +70,26 @@ pub struct Rule {
     /// matches missing/extra rows).
     #[serde(default)]
     pub field: Option<String>,
+    /// Several field names at once — the same gate as `field`, for a
+    /// family whose rows always arrive together (the hydra's parity
+    /// draw moves `heading` AND `rand` on the same boundary). A row
+    /// matches when it satisfies EITHER `field` or `fields`; a rule
+    /// carrying both is a rule about that union.
+    #[serde(default)]
+    pub fields: Option<Vec<String>>,
+    /// ⭐ An explicit PAIR-TICK list — the shape a registered FLOOR
+    /// takes, as opposed to a registered CLASS. `t_min`/`t_max` scope
+    /// a behaviour that recurs; a floor is a finite set of measured
+    /// rows the register names one by one (the IVT read's two ticks),
+    /// and writing it as a window would claim more than was measured.
+    ///
+    /// ⚠ TICK SPACE IS THE PAIR'S START, like `t_min`/`t_max` and like
+    /// `verify-deltas --csv`'s `t` column — so a `replay` boundary at
+    /// `t` is listed here as `t - 1`. The ledger and DEVIATIONS.md
+    /// quote BOUNDARY ticks (the tick that executed), so every entry
+    /// here reads one below its write-up on purpose.
+    #[serde(default)]
+    pub ticks: Option<Vec<u64>>,
     /// Pair-tick onset window, inclusive.
     #[serde(default)]
     pub t_min: Option<u64>,
@@ -142,11 +162,19 @@ impl Roster {
             {
                 return false;
             }
-            if let Some(f) = &r.field {
-                match row.field {
-                    Some(rf) if rf == f => {}
-                    _ => return false,
+            if r.field.is_some() || r.fields.is_some() {
+                let hit = row.field.is_some_and(|rf| {
+                    r.field.as_deref() == Some(rf)
+                        || r.fields.as_ref().is_some_and(|fs| fs.iter().any(|f| f == rf))
+                });
+                if !hit {
+                    return false;
                 }
+            }
+            if let Some(ts) = &r.ticks
+                && !ts.contains(&t)
+            {
+                return false;
             }
             if let Some(t0) = r.t_min
                 && t < t0

@@ -139,6 +139,16 @@ pub(crate) struct Shadow {
     /// allocators and a single merged compare would measure the
     /// importer's COMPOSITION rather than the port's order.
     pub(crate) recycle: (u64, u64, String),
+    /// THE OBJECTIVE BOARD (`struct_0x3659C[local]`), keyed
+    /// `(lane, row)` — row 0 for the three scalars. See
+    /// [`Self::compare_board_mc2`].
+    pub(crate) board: BTreeMap<(&'static str, u8), Lane>,
+    /// Set once [`Self::compare_board_mc2`] has run, for the same
+    /// reason as `wiz_fed`: "0 mismatches" and "nobody looked" must
+    /// never print the same.
+    pub(crate) board_fed: bool,
+    /// Boundaries at which the board was compared (the denominator).
+    pub(crate) board_n: u64,
     /// Set once [`Self::compare_wiz_mc1`] or [`Self::compare_wiz_mc2`]
     /// has run — a silent "0 mismatches" would read as "the player
     /// block is clean" when it means "nobody looked", which is exactly
@@ -149,6 +159,9 @@ pub(crate) struct Shadow {
     pub(crate) skew: BTreeSet<&'static str>,
     /// `MGC_RAW_SHADOW_ALL=1` — report every lane, graded or not.
     pub(crate) all_lanes: bool,
+    /// `MGC_ALLOC_CENSUS=1` — print one classified line per
+    /// mismatching allocator boundary (see [`Self::alloc_census`]).
+    alloc_census: usize,
     /// Optional per-row TSV (`MGC_RAW_SHADOW_ROWS=<path>`). Wizard
     /// rows ride the same file with class 255, model = wiz, slot =
     /// array index.
@@ -227,6 +240,10 @@ impl Shadow {
             watch,
             wiz_watch,
             all_lanes: std::env::var_os("MGC_RAW_SHADOW_ALL").is_some(),
+            alloc_census: match std::env::var("MGC_ALLOC_CENSUS") {
+                Ok(v) => v.trim().parse().unwrap_or(4),
+                Err(_) => 0,
+            },
             ..Default::default()
         }))
     }
@@ -277,6 +294,94 @@ impl Shadow {
                 "  WIZ LANE {} {} t={t} [{idx}]: retail {a} port {b}",
                 key.0, key.1
             );
+        }
+    }
+
+    /// The board-lane twin of [`Self::hit`]; `row` is the objective
+    /// row index (0 for the three scalars). TSV class 254 (wizard
+    /// rows use 255), model = the row index.
+    fn board_hit(&mut self, name: &'static str, row: u8, t: u64, a: i64, b: i64) {
+        let lane = self.board.entry((name, row)).or_default();
+        lane.rows += 1;
+        if lane.example.is_empty() {
+            lane.first_t = t;
+            lane.example = format!("t={t}: retail {a} port {b}");
+        }
+        lane.last_t = t;
+        lane.slots.insert(row as u16);
+        if let Some(w) = self.rows.as_mut() {
+            let _ = writeln!(w, "{t}\t{row}\t254\t{row}\t{name}\t{a}\t{b}");
+        }
+    }
+
+    /// ⭐⭐⭐ **THE OBJECTIVE BOARD IS RECORDED BUT WAS UNGRADED** —
+    /// exactly the class this module exists for, and it hid mc2l22's
+    /// t=1200 wall for two campaign rounds (round 98, dig Q13: a
+    /// phantom type-2 completion at t=1199 fired the m32 switch's
+    /// disposition, whose `sub_49F90` rebuild + 50 spawns WAS the
+    /// wall). The bytes were always in the capture
+    /// (`RetailMc2::objectives[8][11]`, `mgcr.rs:2419`,
+    /// `type_substr_3659C` / LevelStructs.h:190-196, stride 11):
+    ///
+    /// - `[0]` `IsLevelEnd_0`   ← the port's `World::completed()`
+    /// - `[1]` `ObjectiveText_1` — the CURRENT-row cursor
+    /// - `[2]` `ObjectiveDone_2` — the m32 one-pass pause
+    /// - `[3..11]` `stage_0x3659F[8]` — per-row state (1 active, 2 done)
+    ///
+    /// `sub_58F00_game_objectives` (EF:40693) reads and writes them at
+    /// the FRAME TAIL and the class-11 model-32 switches gate on
+    /// `stage_0x3659F[par1] == 2` (EF:54369), so a board row that
+    /// latches one tick early detonates the pool on the NEXT walk.
+    /// Only the LOCAL player's board is compared — `mc2_stages` is the
+    /// only board the port models.
+    ///
+    /// ⚠ WHICH LANE IS SPEAKING MATTERS HERE MORE THAN ANYWHERE. In
+    /// PAIR mode the importer RESTORES all four lanes from retail@t
+    /// (`world/conformance.rs:2658`) before the tick runs, so a row is
+    /// a genuine ONE-TICK write bug attributable to the handler that
+    /// ran. In the FREE RUN the board has been the port's own since
+    /// the anchor, so the first row is where the port's own objective
+    /// history parts — which is the lane the horizon measures.
+    ///
+    /// ⚠ `mc2_stages` is COMPACTED by the baker (`set_mc2_stages`), so
+    /// port index == retail row by construction (the importer relies
+    /// on the same identity). Retail's row-state bytes past the port's
+    /// stage count are still checked — against 0 — rather than
+    /// silently dropped, because an absence there would be a baker
+    /// law, not a clean lane.
+    pub(crate) fn compare_board_mc2(&mut self, world: &World, st: &RetailMc2, t: u64) {
+        let Some(board) = st.objectives.get(st.local_player as usize) else {
+            return;
+        };
+        self.board_fed = true;
+        self.board_n += 1;
+        let (cur, rows) = world.mc2_objective_view();
+        for (name, want, got) in [
+            ("completed", board[0] as i64, world.completed() as i64),
+            ("cursor", board[1] as i64, cur as i64),
+            ("pause", board[2] as i64, world.mc2_objective_pause() as i64),
+        ] {
+            if want != got {
+                self.board_hit(name, 0, t, want, got);
+            }
+        }
+        for k in 0..8usize {
+            let want = board[3 + k] as i64;
+            // A row the port does not model publishes 0 — retail's own
+            // value for an unauthored row, and the only honest thing to
+            // say about a real one.
+            let got = rows.get(k).map_or(0, |r| r.1 as i64);
+            if want != got {
+                self.board_hit("state", k as u8, t, want, got);
+            }
+        }
+        // The row COUNT itself: a port board shorter or longer than
+        // retail's authored set is a loader story, not a latch story,
+        // and would otherwise show up as a flood of `state` rows.
+        let want_n = board[3..].iter().filter(|&&s| s != 0).count() as i64;
+        let got_n = rows.iter().filter(|r| r.1 != 0).count() as i64;
+        if want_n != got_n {
+            self.board_hit("live_rows", 0, t, want_n, got_n);
         }
     }
 
@@ -512,6 +617,113 @@ impl Shadow {
                 }
             }
         }
+        self.alloc_census(world, st, human_slot, t);
+    }
+
+    /// `MGC_ALLOC_CENSUS=1` — the per-boundary CLASSIFIER for the two
+    /// allocator stacks (round 98, dig Q23). The census line only ever
+    /// carried its FIRST example, which cannot tell an ORDER
+    /// difference from a DEPTH one from a MEMBERSHIP one — and those
+    /// are three different bugs. Default-OFF, print-only; it changes
+    /// nothing the grader accepts.
+    ///
+    /// One line per mismatching boundary:
+    /// `ACENSUS t=<t> <stack> kind=<K> rlen=<n> plen=<m> depth=<d>
+    ///  onlyR=[..] onlyP=[..]` where `kind` is
+    /// `MEMBER` (the two sets differ), `ORDER` (same set, different
+    /// order) or `LEN` (one is a proper prefix of the other, top
+    /// aligned).
+    fn alloc_census(&mut self, world: &World, st: &RetailMc2, human_slot: u16, t: u64) {
+        let dep = self.alloc_census;
+        if dep == 0 {
+            return;
+        }
+        let pool = st.ents.len();
+        let keep = |s: &u16| (*s as usize) < pool && *s != human_slot;
+        let (pf, pr) = world.free_stacks_mc2();
+        for (name, want, got) in [
+            (
+                "free",
+                st.free_stack
+                    .iter()
+                    .copied()
+                    .filter(keep)
+                    .collect::<Vec<_>>(),
+                pf.to_vec(),
+            ),
+            (
+                "recycle",
+                st.recycle_stack
+                    .iter()
+                    .copied()
+                    .filter(keep)
+                    .collect::<Vec<_>>(),
+                pr.to_vec(),
+            ),
+        ] {
+            if want == got {
+                continue;
+            }
+            let ws: BTreeSet<u16> = want.iter().copied().collect();
+            let gs: BTreeSet<u16> = got.iter().copied().collect();
+            let only_r: Vec<u16> = ws.difference(&gs).copied().collect();
+            let only_p: Vec<u16> = gs.difference(&ws).copied().collect();
+            let depth = want
+                .iter()
+                .rev()
+                .zip(got.iter().rev())
+                .position(|(a, b)| a != b);
+            let kind = if !only_r.is_empty() || !only_p.is_empty() {
+                "MEMBER"
+            } else if want.len() == got.len() {
+                "ORDER"
+            } else {
+                "LEN"
+            };
+            let cm = |s: u16| -> String {
+                let r = st
+                    .ents
+                    .get(s as usize)
+                    .map_or("?".into(), |e| format!("({},{})", e.class3f, e.model40));
+                // ⭐ dig 98-Q29: retail's class alone cannot tell "the
+                // port dropped a spawn" from "the port kept a record
+                // retail freed" — both print as a MEMBER difference.
+                // The PORT's class/model at the same slot separates
+                // them in one glance. Print-only, like the rest.
+                let p = world
+                    .port_ent_lanes_mc2(s, human_slot, false)
+                    .map_or("-".to_string(), |v| {
+                        let m: BTreeMap<&'static str, Option<i64>> = v.into_iter().collect();
+                        format!(
+                            "({},{})",
+                            m.get("class3f").copied().flatten().unwrap_or(-1),
+                            m.get("model40").copied().flatten().unwrap_or(-1),
+                        )
+                    });
+                format!("{s}:r{r}p{p}")
+            };
+            println!(
+                "ACENSUS t={t} {name} kind={kind} rlen={} plen={} depth={} \
+                 rtop={:?} ptop={:?} onlyR=[{}] onlyP=[{}]",
+                want.len(),
+                got.len(),
+                depth.map_or("-1".into(), |d| d.to_string()),
+                want.iter().rev().take(dep).collect::<Vec<_>>(),
+                got.iter().rev().take(dep).collect::<Vec<_>>(),
+                only_r
+                    .iter()
+                    .take(8)
+                    .map(|&s| cm(s))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                only_p
+                    .iter()
+                    .take(8)
+                    .map(|&s| cm(s))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+        }
     }
 
     pub(crate) fn compare_wiz_mc1(&mut self, world: &World, st: &RetailMc1, t: u64) {
@@ -739,6 +951,45 @@ impl Shadow {
                 self.skew
             );
         }
+        // THE OBJECTIVE BOARD. Printed on BOTH paths and BEFORE the
+        // wizext block, because it is the lane a stage-gated
+        // disposition rides and a single early latch is worth
+        // thousands of entity rows (round 98 dig Q13's t=1200 wall).
+        if !self.board_fed {
+            let _ = writeln!(
+                s,
+                "  OBJECTIVE BOARD: NOT WATCHED on this path — `struct_0x3659C[local]` \
+                 (level-end latch, row cursor, m32 pause, the 8 row states) is UNCHECKED here."
+            );
+        } else {
+            let btotal: u64 = self.board.values().map(|l| l.rows).sum();
+            let _ = writeln!(
+                s,
+                "  OBJECTIVE BOARD (struct_0x3659C[local]: IsLevelEnd/cursor/pause/8 row \
+                 states): {btotal} mismatches over {} boundaries",
+                self.board_n
+            );
+            let mut keys: Vec<_> = self.board.iter().collect();
+            if by_first {
+                keys.sort_by_key(|(k, l)| (l.first_t, k.0, k.1));
+            }
+            for (k, lane) in keys {
+                let _ = writeln!(
+                    s,
+                    "    {}{}: {} rows t={}..{}  e.g. {}",
+                    k.0,
+                    if k.0 == "state" {
+                        format!("[{}]", k.1)
+                    } else {
+                        String::new()
+                    },
+                    lane.rows,
+                    lane.first_t,
+                    lane.last_t,
+                    lane.example
+                );
+            }
+        }
         if !self.wiz_fed {
             // No WIZEXT arm ran on this path. Say so — "0 mismatches"
             // would read as "the player block is clean" when it means
@@ -807,6 +1058,24 @@ impl Shadow {
                 format!("  e.g. {}", self.free.2)
             }
         );
+        // ⚠ The RECYCLE verdict used to print ONLY on the `!wiz_fed`
+        // path — i.e. never on MC2, the one column that HAS a recycle
+        // stack (`compare_wiz_mc2` sets `wiz_fed`). The reporter was
+        // dropping its own second allocator lane. Same shape as the
+        // hole this whole module exists to close.
+        if self.recycle.1 > 0 {
+            let _ = writeln!(
+                s,
+                "    recycle stack: {} / {} boundaries mismatched{}",
+                self.recycle.0,
+                self.recycle.1,
+                if self.recycle.2.is_empty() {
+                    String::new()
+                } else {
+                    format!("  e.g. {}", self.recycle.2)
+                }
+            );
+        }
         s
     }
 }

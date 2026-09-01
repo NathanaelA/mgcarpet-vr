@@ -231,6 +231,12 @@ fn mc2_cave_behaviors_and_goldens() {
         "cave run is not deterministic"
     );
     println!("mc2 cave hashes: {got:#018x?}");
+    // Print the OBSERVABLE projection too. It is asserted far below the
+    // layout pin, so a moved layout hash used to hide it entirely (the
+    // "23c trap"): you could not tell a layout-only re-pin from a real
+    // behaviour change without editing the test first. Printing both up
+    // front makes the A/B a one-run question.
+    println!("mc2 cave OBSERVABLE: {obs:#018x?}");
 
     // Behavior probes on a fresh world.
     let mut w = build_world(&root).unwrap();
@@ -650,10 +656,130 @@ fn mc2_cave_behaviors_and_goldens() {
         // A caves world runs rival wizards, so the late checkpoint
         // reshapes from the first rival SPEED window on.
         vec![
-            0xfcd7cfe710ac9782u64,
-            0x12d87c9aa580b181,
-            0x737a0266e1a078a2,
-            0xc553ff1cead3c046,
+            // Checkpoint A re-pinned 2026-09-02 (B/C/D hold byte-for-
+            // byte) for THE FIRE CTOR'S @0x2C SEED: `NewEvent_4A050`
+            // writes `subSpellIndex_0x2A_42 = 100` (Events.cpp:569) —
+            // that is @0x2A — while the memset leaves @0x2C at 0, and
+            // for a (10,0) fire the port's `f44` IS retail's @0x2C
+            // (`port_ent_lanes_mc2`'s `f2c` arm lists 10/0 among the
+            // ramp2c-style homes). The port had been seeding every
+            // fire's fall/flicker register with 100. Measured on
+            // mc2l22 t=10914..10932: `(10,0) f2c` 61 rows, retail 0 /
+            // port 100, one per fire minted in the window.
+            // A/B-ATTRIBUTED: reverting `mc2_spawn_fire`'s `f44 = 0`
+            // ALONE reproduces the previous pin exactly with all 25
+            // other laws of this session still in; and this session's
+            // Cruise-roll `watcomrand()` law and the rival mint-tier
+            // law were each independently reverted and moved NOTHING
+            // here.
+            // Re-pinned (ALL FOUR) 2026-09-03 for THE MC2 ALLOCATOR'S
+            // BEHAVIOR-ROW SEED. `NewEvent_4A050` writes
+            // `dword_0xA0_160x = &str_D7BD6[59]` in BOTH arms
+            // (Events.cpp:573 free pop, :599 sacrifice) — MC2's table
+            // BASE, `v_12 = 0` / `v_14 = −4`. MC1's twin writes
+            // `var_u32_29951_156 = unk_98F38` (sub_main.cpp:43877 /
+            // :43902), which IS index 0, so only the MC2 column needed
+            // the stamp. Every natively spawned MC2 record had been
+            // running the (5,0) creature row (`v_12 = 7`, `v_14 =
+            // +244`) — a wrong hover floor and a wrong vertical drift
+            // on everything the sim mints, which is why all four
+            // checkpoints move.
+            // A/B-ATTRIBUTED: reverting the seed ALONE reproduces the
+            // previous pin EXACTLY on checkpoints A, B and C, with the
+            // session's other four laws still in.
+            // Checkpoint D additionally carries the MANA SPHERE'S
+            // INVENTED ROLL: `TransformEntityToManaSphere_36BA0`
+            // (EF:26903) writes `yaw_0x1C_28` and nothing else, where
+            // the port also stamped `roll_0x20_32` (our `f34`).
+            // A/B-ATTRIBUTED: reverting that one line alone moves D
+            // and leaves A/B/C byte-identical.
+            // A/B-EXCLUDED, and worth recording: the two MC2 cave arms
+            // dropping their spurious `ROW_BASE +` (`ball_tick`,
+            // `mc2_fool_flight`) move NOTHING here even though this IS
+            // a caves world — reverting them alone reproduces these
+            // same four hashes.
+            // Corpus receipt: mc2l6-rival-spells-galore free horizon
+            // 10,087 -> 10,109, clean boundaries 10,319 -> 10,662.
+            //
+            // ⭐⭐⭐ RE-PINNED 2026-09-04 (dig 98-Q30) — THIS TEST HAD
+            // BEEN RED AT HEAD SINCE ROUND 97 WITH THE MOVE
+            // UNATTRIBUTED. It is now attributed to exactly TWO laws,
+            // and to nothing else:
+            //
+            // (1) CHECKPOINTS B, C AND D moved AT HEAD (A held
+            // byte-for-byte) for THE SHADOW BACK-OFF —
+            // `MGC_NO_SV_BACKOFF`, `mc2/stagevars.rs::mc2_sv_walk`,
+            // landed in the same commit (f2fb6e8) that wrote the
+            // previous pin, but AFTER the pin was computed, so it was
+            // never folded in. `sub_1D8C0` (held kinds 3/4/5) closes
+            // case 0 with a fourth step `sub_1DDA0` (kind 1) does not
+            // have: if |dx| and |dy| are BOTH strictly under the SUM
+            // of the two records' `0x54` half-extents, the escort
+            // stamps `roll_0x20_32 = tan2(&watched, &self)` — the AWAY
+            // angle — over both the toward-aim and the packmate
+            // override. VERIFIED IN THE SHIPPED `NETHERW.EXE` at file
+            // 0x42345-0x4239D (disassembled, not quoted from memory):
+            //   42349 movswl 0x54(%ebx),%eax ; 4234d movswl 0x54(%esi),%ecx
+            //   42351 movswl 0x4c(%ebx),%edx ; 42355 add %eax,%ecx   <- the SUM
+            //   42357 movswl 0x4c(%esi),%eax ; 4235b sub %eax,%edx
+            //   4235f cltd/xor/sub (abs)     ; 42364 cmp %ecx,%eax
+            //   42366 jge 0x423e5            <- STRICT `<`
+            //   4236c..42387 the same block on 0x4e (y), same jge
+            //   42389 lea 0x4c(%ebx),%eax / push / add $0x4c,%esi /
+            //   42390 push %esi / 42391 call 0x7c9e0 (tan2) /
+            //   42399 mov %ax,0x20(%ebx)     <- roll, AWAY direction
+            // A caves world runs stagevar-held escorts, so every
+            // checkpoint after the first back-off reshapes; the LOAD
+            // checkpoint (A) predates any, which is why A held.
+            //
+            // (2) ALL FOUR then move again for THE MC2 SPRITE STAMP —
+            // `MGC_NO_MC2_FRAMES89` (dig 98-Q12, `mc2/mobs.rs`):
+            // `byte_0x5D_93 = x_BYTE_D8A2E[particlesParameters[row].byte_12]`
+            // is now stamped on the MC2 column, and `frames89` is
+            // hashed `Ent` state, so every checkpoint that has minted
+            // a sprited record moves. That one is a HASHED-FIELD move,
+            // not behaviour — see the OBSERVABLE assert below, which
+            // HOLDS unchanged across it.
+            //
+            // THREE-WAY A/B (ONE binary md5 b4eb5bf6911bc30fd34e1f874274b33e,
+            // back to back, plus a pristine-HEAD build 707787cdab22e3b6…):
+            //   * `MGC_NO_MC2_FRAMES89=1 MGC_NO_MC2_FRAME_CAP=1` alone
+            //     reproduces the PRISTINE HEAD BUILD's four hashes
+            //     exactly (9f0bd0d2… 9286ce62… cc2e833a… 1e7748a9…);
+            //   * adding `MGC_NO_SV_BACKOFF=1` reproduces the PREVIOUS
+            //     PIN exactly (9f0bd0d2… 552a7ea6… 97c82747… 1ef324a8…);
+            //   * setting ALL 33 of round 98's other kill switches on
+            //     top changes NOTHING further — every other law of this
+            //     round is A/B-EXCLUDED here;
+            //   * and on the pristine HEAD build, each of round 97's
+            //     69 kill switches was set ALONE: `MGC_NO_SV_BACKOFF`
+            //     is the ONLY one that moves a hash.
+            //
+            // ⭐ RE-PINNED ROUND 105 (2026-09-05) — `MGC_NO_MC2_CLASS5_W36`,
+            // the class-5 `@0x36` law. It meets THIS TEST'S OWN STANDARD for
+            // a justified re-pin, stated in the OBSERVABLE comment below:
+            // the four layout hashes move and **OBSERVABLE HOLDS BYTE-FOR-BYTE
+            // UNCHANGED** (0xca0e5c44… 0xb60c271e… 0x020feba3… 0xf08daed0…),
+            // which is the independent proof of a hashed-field move rather
+            // than behaviour. Attribution A/B'd on ONE binary: green under
+            // `MGC_NO_MC2_CLASS5_W36=1`, red without it, so the move is this
+            // law's alone.
+            // THE LAW: `sub_4C8F0` (`NETHERW.EXE` file 0x710F0) never writes
+            // `[eax+0x36]` — its complete store set is 0x04 0x14 0x1c 0x1e
+            // 0x20 0x22 0x2a 0x2c 0x38 0x39 0x3e 0x3f 0x40 0x41 0x43 0x44
+            // 0x45 0x46 0x82 0x84 0x90 0xa0 — so retail's `@0x36` on a fresh
+            // class-5 creature is `NewEvent_4A050`'s zero. All 18 ctors wrote
+            // the ch0 damage contract TWICE, once correctly as `e.f28 = 1`
+            // and once as a duplicate `e.f56 = 1` landing in a DIFFERENT
+            // retail word. `Ent::f56` is `@0x36` on class 5 (the importer
+            // agrees: `f56: if matches!(class3f, 2|10) { b38 } else { f36 }`).
+            // None of the 18 is a multipart model (0/3/22/27) — verified by
+            // re-deriving each site's class/model from the ctor — so no port
+            // reader consumes it and the stray 1 was inert but recorded.
+            0x9437af5b85e0b34a_u64,
+            0xea13f2bab820e3b6,
+            0xa7d951c9c30f8f13,
+            0x3053a3ccb807efed,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -769,11 +895,27 @@ fn mc2_cave_behaviors_and_goldens() {
     // sphere's z under the rock is observable sphere state, and the
     // divergence needs the disposition storm to throw one high enough
     // to reach the roof. Same A/B attribution and same exclusions.
+    // THE SHADOW BACK-OFF (dig 98-Q30's attribution of the long-red
+    // layout pin above — `MGC_NO_SV_BACKOFF`, `sub_1D8C0`'s fourth
+    // step, byte-verified at `NETHERW.EXE` 0x42345-0x4239D) moves
+    // B, C and D here and HOLDS the load checkpoint — exactly the
+    // correct signal, and the reason this projection exists: an escort
+    // that closes on its charge now peels away instead of walking
+    // through it, so held-creature poses and positions genuinely
+    // differ from the first back-off on, while A predates any of them.
+    // A/B-ATTRIBUTED (ONE binary md5 ac3a8db27fbcf73be74b1849f4c08b98,
+    // back to back): `MGC_NO_SV_BACKOFF=1` ALONE reproduces the
+    // previous OBSERVABLE pin EXACTLY on all four.
+    // A/B-EXCLUDED, and this is the useful half: round 98's MC2 SPRITE
+    // STAMP (`MGC_NO_MC2_FRAMES89` + `MGC_NO_MC2_FRAME_CAP`), which
+    // moves ALL FOUR of the layout hashes above, moves NOTHING here —
+    // both arms are byte-identical. That is the independent proof that
+    // the stamp is a hashed-field move and not behaviour.
     const OBSERVABLE: [u64; 4] = [
         0xca0e5c449cf57b10,
-        0x65bac868017c2757,
-        0xdbbeee1a0bf108ce,
-        0x2e5b37d39fb619b2,
+        0xb60c271e559caa80,
+        0x020feba34505bd3b,
+        0xf08daed0a7324021,
     ];
     assert_eq!(
         obs, OBSERVABLE,

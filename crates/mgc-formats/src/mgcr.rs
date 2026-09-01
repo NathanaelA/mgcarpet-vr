@@ -123,7 +123,15 @@ impl Header {
 #[derive(Debug, Clone, Default)]
 pub struct TickRecord {
     pub t: u64,
-    pub obs: Option<serde_json::Value>,
+    /// The obs channel, KEPT AS RAW JSON TEXT. Every consumer
+    /// deserializes it straight into a typed `ObsMc1`/`ObsMc2` (or, in
+    /// `check-decode`, into a `Value` for the strict comparator), and
+    /// materialising a ~200 KB `Value` tree per tick — a `BTreeMap` of
+    /// heap `String` keys per object, built, deep-cloned into here and
+    /// dropped again — was the single largest cost in the runner.
+    /// `serde_json::from_str(rec.obs.get())` accepts exactly the same
+    /// JSON the `Value` round-trip did.
+    pub obs: Option<Box<serde_json::value::RawValue>>,
     /// The raw master-struct image (`state.struct_b64`).
     pub state: Option<Vec<u8>>,
     /// MC1/HW external input registers (`state.ext`), raw bytes.
@@ -197,7 +205,139 @@ fn b64_field(v: &serde_json::Value, key: &str) -> Result<Option<Vec<u8>>, String
     }
 }
 
+/// The tick line, parsed at the container level ONLY: the bulk
+/// channels stay as borrowed text (`obs`) or a borrowed base64 body
+/// (`state`, `terrain`) instead of being materialised as
+/// `serde_json::Value` trees. The small provenance channels stay
+/// `Value` so their permissive readers below keep their exact
+/// accept/ignore behaviour.
+#[derive(Deserialize)]
+struct RawRow<'a> {
+    #[serde(default)]
+    t: Option<serde_json::Value>,
+    #[serde(borrow, default)]
+    obs: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow, default)]
+    state: Option<RawState<'a>>,
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+    #[serde(borrow, default)]
+    terrain: Option<RawTerrain<'a>>,
+    #[serde(default)]
+    wallclock: Option<serde_json::Value>,
+    #[serde(default)]
+    hash: Option<serde_json::Value>,
+    #[serde(default)]
+    set: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct RawState<'a> {
+    #[serde(borrow, default)]
+    struct_b64: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow, default)]
+    ext: Option<RawExt<'a>>,
+}
+
+#[derive(Deserialize)]
+struct RawExt<'a> {
+    #[serde(borrow, default)]
+    keys_b64: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow, default)]
+    cursor_b64: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow, default)]
+    lbtn_b64: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow, default)]
+    rbtn_b64: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow, default)]
+    latch_b64: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow, default)]
+    press_b64: Option<std::borrow::Cow<'a, str>>,
+}
+
+#[derive(Deserialize)]
+struct RawTerrain<'a> {
+    #[serde(borrow, default)]
+    base_b64: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow, default)]
+    delta_b64: Option<std::borrow::Cow<'a, str>>,
+}
+
+fn b64_str(key: &str, s: Option<std::borrow::Cow<'_, str>>) -> Result<Option<Vec<u8>>, String> {
+    use base64::Engine as _;
+    match s {
+        None => Ok(None),
+        Some(s) => base64::engine::general_purpose::STANDARD
+            .decode(s.as_ref())
+            .map(Some)
+            .map_err(|e| format!("{key}: bad base64: {e}")),
+    }
+}
+
 impl TickRecord {
+    /// The streaming path: one tick line, parsed straight into the
+    /// record. Field-for-field the same readers as [`Self::from_value`]
+    /// — only the container walk differs.
+    fn from_line(line: &str, line_no: u64) -> Result<TickRecord, String> {
+        let row: RawRow = serde_json::from_str(line).map_err(|e| format!("line {line_no}: {e}"))?;
+        let t = row
+            .t
+            .as_ref()
+            .and_then(|t| t.as_u64())
+            .ok_or("tick record without a numeric \"t\"")?;
+        let (state, ext) = match row.state {
+            None => (None, None),
+            Some(st) => {
+                let image = b64_str("struct_b64", st.struct_b64)?;
+                let ext = match st.ext {
+                    None => None,
+                    Some(e) => {
+                        let pair = |b: Option<Vec<u8>>| {
+                            b.filter(|b| b.len() >= 4).map(|b| {
+                                (
+                                    i16::from_le_bytes([b[0], b[1]]),
+                                    i16::from_le_bytes([b[2], b[3]]),
+                                )
+                            })
+                        };
+                        let btn = |b: Option<Vec<u8>>| b.map(|b| i16::from_le_bytes([b[0], b[1]]));
+                        Some(Ext {
+                            keys: b64_str("keys_b64", e.keys_b64)?,
+                            cursor: pair(b64_str("cursor_b64", e.cursor_b64)?),
+                            lbtn: btn(b64_str("lbtn_b64", e.lbtn_b64)?),
+                            rbtn: btn(b64_str("rbtn_b64", e.rbtn_b64)?),
+                            latch: pair(b64_str("latch_b64", e.latch_b64)?),
+                            press: pair(b64_str("press_b64", e.press_b64)?),
+                        })
+                    }
+                };
+                (image, ext)
+            }
+        };
+        let terrain = match row.terrain {
+            None => None,
+            Some(tv) => Some(TerrainBlock {
+                base: b64_str("base_b64", tv.base_b64)?,
+                delta: b64_str("delta_b64", tv.delta_b64)?,
+            }),
+        };
+        Ok(TickRecord {
+            t,
+            obs: row.obs.map(ToOwned::to_owned),
+            state,
+            ext,
+            input: row.input,
+            terrain,
+            wallclock: row.wallclock.as_ref().and_then(|w| w.as_u64()),
+            hash: row
+                .hash
+                .as_ref()
+                .and_then(|h| h.as_str())
+                .and_then(|h| u64::from_str_radix(h, 16).ok()),
+            set: row.set.as_ref().and_then(|s| s.as_object()).cloned(),
+        })
+    }
+
     pub fn from_value(v: &serde_json::Value) -> Result<TickRecord, String> {
         let t = v
             .get("t")
@@ -244,7 +384,12 @@ impl TickRecord {
         };
         Ok(TickRecord {
             t,
-            obs: v.get("obs").cloned(),
+            obs: match v.get("obs") {
+                None => None,
+                Some(o) => {
+                    Some(serde_json::value::to_raw_value(o).map_err(|e| format!("obs: {e}"))?)
+                }
+            },
             state,
             ext,
             input: v.get("input").cloned(),
@@ -263,7 +408,11 @@ impl TickRecord {
 /// Compression is sniffed from the zstd magic, not the extension.
 pub struct Recording {
     pub header: Header,
-    lines: std::io::Lines<Box<dyn BufRead>>,
+    reader: Box<dyn BufRead>,
+    /// The current line, reused across rows. A tick line is ~0.5 MB of
+    /// JSON, so `BufRead::lines()`'s fresh `String` per row was a
+    /// half-megabyte allocate/copy/free on every tick of every scan.
+    line: String,
     pub line_no: u64,
 }
 
@@ -287,11 +436,11 @@ impl Recording {
         } else {
             Box::new(BufReader::new(f))
         };
-        let mut lines = BufRead::lines(reader);
-        let first = lines
-            .next()
-            .ok_or("empty recording")?
-            .map_err(|e| e.to_string())?;
+        let mut reader = reader;
+        let mut first = String::new();
+        if reader.read_line(&mut first).map_err(|e| e.to_string())? == 0 {
+            return Err("empty recording".to_string());
+        }
         let header: Header =
             serde_json::from_str(&first).map_err(|e| format!("header parse: {e}"))?;
         if !(1..=2).contains(&header.format) {
@@ -299,31 +448,86 @@ impl Recording {
         }
         Ok(Recording {
             header,
-            lines,
+            reader,
+            line: String::new(),
             line_no: 1,
         })
     }
 
+    /// Read the next non-empty line into the reusable buffer. `None`
+    /// at end of stream; the line is left in `self.line`.
+    fn next_line(&mut self) -> Option<Result<(), String>> {
+        loop {
+            self.line.clear();
+            match self.reader.read_line(&mut self.line) {
+                Ok(0) => return None,
+                Ok(_) => {}
+                Err(e) => return Some(Err(e.to_string())),
+            }
+            self.line_no += 1;
+            if !self.line.trim().is_empty() {
+                return Some(Ok(()));
+            }
+        }
+    }
+
     /// Next tick record as raw JSON, or None at end of stream.
     pub fn next_value(&mut self) -> Option<Result<serde_json::Value, String>> {
-        let line = match self.lines.next()? {
-            Ok(l) => l,
-            Err(e) => return Some(Err(e.to_string())),
-        };
-        self.line_no += 1;
-        if line.trim().is_empty() {
-            return self.next_value();
+        if let Err(e) = self.next_line()? {
+            return Some(Err(e));
         }
-        Some(serde_json::from_str(&line).map_err(|e| format!("line {}: {e}", self.line_no)))
+        Some(serde_json::from_str(&self.line).map_err(|e| format!("line {}: {e}", self.line_no)))
+    }
+
+    /// The next row's raw master-struct image (`state.struct_b64`),
+    /// decoded into `out` — with every other channel STRUCTURALLY
+    /// SKIPPED instead of materialised.
+    ///
+    /// The obs channel is ~200 KB of JSON per row and building it into
+    /// a `serde_json::Value` (a `BTreeMap` of `String` keys per object,
+    /// then dropped again) is the single most expensive thing a scan
+    /// can do. A scanner that only wants the state image — the MC2
+    /// replay witness below — pays serde's token skipper instead, which
+    /// walks the same bytes with no allocation. Same JSON grammar, same
+    /// accept/reject set; only the materialisation is skipped.
+    ///
+    /// `Ok(false)` = the row carries no state channel (the caller's
+    /// `continue`); `Ok(true)` = `out` holds the image.
+    fn next_state_image(&mut self, out: &mut Vec<u8>) -> Option<Result<bool, String>> {
+        use base64::Engine as _;
+        #[derive(Deserialize)]
+        struct StateOnly<'a> {
+            #[serde(borrow, default)]
+            struct_b64: Option<std::borrow::Cow<'a, str>>,
+        }
+        #[derive(Deserialize)]
+        struct RowStateOnly<'a> {
+            #[serde(borrow, default)]
+            state: Option<StateOnly<'a>>,
+        }
+        if let Err(e) = self.next_line()? {
+            return Some(Err(e));
+        }
+        let row: RowStateOnly = match serde_json::from_str(&self.line) {
+            Ok(r) => r,
+            Err(e) => return Some(Err(format!("line {}: {e}", self.line_no))),
+        };
+        let Some(b64) = row.state.and_then(|s| s.struct_b64) else {
+            return Some(Ok(false));
+        };
+        out.clear();
+        match base64::engine::general_purpose::STANDARD.decode_vec(b64.as_ref(), out) {
+            Ok(()) => Some(Ok(true)),
+            Err(e) => Some(Err(format!("struct_b64: bad base64: {e}"))),
+        }
     }
 
     /// Next tick record, typed at the container level.
     pub fn next_tick(&mut self) -> Option<Result<TickRecord, String>> {
-        let v = match self.next_value()? {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-        Some(TickRecord::from_value(&v))
+        if let Err(e) = self.next_line()? {
+            return Some(Err(e));
+        }
+        Some(TickRecord::from_line(&self.line, self.line_no))
     }
 }
 
@@ -1681,7 +1885,15 @@ pub struct RetailPlayerMc2 {
     pub move_speed: u8, // +332
     pub move_speed_ctr: u8, // +333
     pub mobilize: u8,     // +334
-    pub mobilize_ctr: u8, // +336
+    /// ⚠ **THE NAME IS THE LIE**: remc2 calls this
+    /// `mobilizeCounter2_0x150_336`, but its serialized home is
+    /// `0x14F` = **+335** — `engine_support_converts.cpp:99-101`
+    /// memcpys `mobilizeCounter_0x14E_334` to `output + 0x14e` and
+    /// `mobilizeCounter2_0x150_336` to `output + 0x14f`, with a
+    /// DIFFERENT field (`byte_0x150_336`) at `0x150`. mc2l22
+    /// t=412..420 is the witness: +335 walks 10,10,9,8,7,6,5,4,3
+    /// across the paralyze stun while +336 sits on a constant 232.
+    pub mobilize_ctr: u8, // +335
     /// Water-splash counter (`waterCounter_0x262_610` — an int8_t in
     /// retail; a u16 read here polluted the value with the 0xE0
     /// neighbor byte on every take) and the cave nudge latch
@@ -1704,6 +1916,19 @@ pub struct RetailPlayerMc2 {
     pub regen_stall: i32,
     /// The WANTED timer (`word_0x248_584`, +998+584) — village aggro.
     pub wanted: i16,
+    /// THE DUEL LOCK REGISTER — `dword_0x142_322` (the HELD distance:
+    /// the victim's stamp clamped to [1024, 3072]), `word_0x146_326`
+    /// (the opponent's pool slot; 0 = no lock) and `word_0x14A_330`
+    /// (the tier). `sub_5EFA0`'s duel block (EF:60643-57) stamps all
+    /// three onto the CASTER off the victim's ch4 mail, and
+    /// `sub_5DE30` (EF:59721, called from inside the mover) reads them
+    /// back to servo the carpet's yaw and pull it toward its opponent.
+    /// All three sit well inside the 2124-byte player block and were in
+    /// every capture already — only the decoder was missing them (the
+    /// `charge` / `+0x154` lesson).
+    pub duel_hold: i32,
+    pub duel_target: u16,
+    pub duel_tier: u16,
     pub hand_left: i16,  // +2103 (SpellIndexLeft; -1 = empty)
     pub hand_right: i16, // +2105
     /// `MenuState_0x3DF_2BE4_12221` (+0x3DF) — the input dispatcher's
@@ -2009,13 +2234,16 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
         move_speed: u8_(d, t + 332),
         move_speed_ctr: u8_(d, t + 333),
         mobilize: u8_(d, t + 334),
-        mobilize_ctr: u8_(d, t + 336),
+        mobilize_ctr: u8_(d, t + 335),
         water_ctr: u8_(d, t + 610),
         nudge_latch: u8_(d, t + 609),
         charge: u8_(d, t + 340),
         invuln: i16_(d, t + 345),
         regen_stall: i32_(d, t + 397),
         wanted: i16_(d, t + 584),
+        duel_hold: i32_(d, t + 322),
+        duel_target: u16_(d, t + 326),
+        duel_tier: u16_(d, t + 330),
         hand_left: i16_(d, b + m2::PP_HAND_L),
         hand_right: i16_(d, b + m2::PP_HAND_R),
         menu_state: u8_(d, b + 0x3DF),
@@ -2097,13 +2325,25 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
 /// mc2l0 hid it by being the one MC2 take whose gate is `false`.
 pub fn mc2_take_replayed(path: &std::path::Path) -> Result<bool, String> {
     let mut rec = Recording::open(path)?;
-    while let Some(r) = rec.next_tick() {
-        let tick = r?;
-        let Some(state) = &tick.state else { continue };
-        let st = decode_retail_mc2(state)?;
-        for e in &st.ents {
-            if e.class3f == 14 && e.model40 == 5 {
-                return Ok(e.flags & 1 != 0);
+    // The scan reads the ENTITY POOL and nothing else, so it decodes
+    // the state image itself rather than a whole `RetailMc2` (1,000
+    // entity structs + 1,200 thing rows + the stacks, per row, thrown
+    // away): same slot order, same three lanes, same length check.
+    let mut image: Vec<u8> = Vec::new();
+    while let Some(r) = rec.next_state_image(&mut image) {
+        if !r? {
+            continue;
+        }
+        if image.len() != MC2_STRUCT_SIZE {
+            return Err(format!(
+                "MC2 struct image is {} bytes, want {MC2_STRUCT_SIZE}",
+                image.len()
+            ));
+        }
+        for slot in 0..m2::ENT_COUNT {
+            let o = m2::POOL + slot * m2::ENT_STRIDE;
+            if u8_(&image, o + 0x3F) == 14 && u8_(&image, o + 0x40) == 5 {
+                return Ok(u32_(&image, o + 0x0C) & 1 != 0);
             }
         }
     }
@@ -2209,9 +2449,15 @@ fn mc2_class_at(d: &[u8], slot: usize) -> u8 {
     d[m2::POOL + slot * m2::ENT_STRIDE + m2::ENT_CLASS]
 }
 
+/// `byte[2]` of the flag dword at +0x0C — the SACRIFICABLE bit's home
+/// (`struct_byte_0xc_12_15.byte[2] & 2`).
+fn mc2_flag_byte2_at(d: &[u8], slot: usize) -> u8 {
+    d[m2::POOL + slot * m2::ENT_STRIDE + 0x0E]
+}
+
 /// The one base under which every cell of `cells` decodes to a slot in
-/// `1..1000` whose pool record is free (`want_free`) — or occupied,
-/// for the recycle stack's live victims. `None` when the cells are
+/// `1..1000` whose pool record is free (`want_free`) — or SACRIFICABLE
+/// (`class != 0 && byte[2] & 2`), for the recycle stack's live victims. `None` when the cells are
 /// unaligned, when nothing validates, or when the answer is NOT
 /// unique (callers then keep the stack empty and let the consumer's
 /// own free-list census take over).
@@ -2235,9 +2481,23 @@ fn mc2_base_from_cells(d: &[u8], cells: &[u32], want_free: bool) -> Option<u32> 
     let hi = (m2::ENT_COUNT as i64 - 1) - deltas.iter().copied().max()?;
     let mut found = None;
     for s in lo..=hi {
-        let hit = deltas
-            .iter()
-            .all(|&k| (mc2_class_at(d, (k + s) as usize) == 0) == want_free);
+        let hit = deltas.iter().all(|&k| {
+            let slot = (k + s) as usize;
+            if want_free {
+                mc2_class_at(d, slot) == 0
+            } else {
+                // ⭐ THE VICTIM STACK'S CELLS ARE SACRIFICABLE, NOT
+                // MERELY OCCUPIED. `sub_49F90` (Level.cpp:1289 /
+                // NETHERW.EXE 0x6E819 `testb $0x2,0xe(%eax)`) pushes a
+                // record ONLY when `byte[2] & 2` is set, so that is the
+                // predicate the base has to satisfy. "Occupied" alone
+                // is useless on the snapshots this path exists for: a
+                // FULL pool makes ~every candidate shift validate, the
+                // recovery reports AMBIGUOUS, and the stack decodes
+                // EMPTY on exactly the frames that have victims.
+                mc2_class_at(d, slot) != 0 && mc2_flag_byte2_at(d, slot) & 2 != 0
+            }
+        });
         if hit {
             if found.is_some() {
                 return None;
@@ -2279,10 +2539,47 @@ fn mc2_pool_base(d: &[u8]) -> Option<u32> {
     if let Some(b) = mc2_base_from_cells(d, &free, true) {
         return Some(b);
     }
-    // Pool full (empty free stack): the live-victim stack is the only
-    // pointer set left. Never needed on the current corpus.
+    // ⭐⭐⭐ POOL FULL (EMPTY FREE STACK): the live-victim stack is the
+    // only pointer set left — and this path is NOT theoretical, it is
+    // the only path on every frame that actually sacrifices. mc2l22
+    // t=10030 is the witness: 999 live records, `dword_0x35` = -1 and
+    // `dword_0x11e6` = 66, i.e. a 67-deep victim stack that the old
+    // "occupied" validator could not pin (with 999 of 1000 records
+    // occupied, many shifts validate ⇒ AMBIGUOUS ⇒ None) — so BOTH
+    // stacks decoded empty and every consumer read "retail's recycle
+    // list is empty" on precisely the frames where retail was seizing
+    // from it. The sacrificable predicate in `mc2_base_from_cells`
+    // pins it: the 67 cells decode to slots 854..998 + 211, retail
+    // pops all 67 during the tick, and t=10031 records `dword_0x11e6`
+    // = -1 exactly.
+    if !mc2_full_pool_victims() {
+        return None;
+    }
     let recycle = mc2_stack_cells(d, 0x11E6, 0x11EA);
     mc2_base_from_cells(d, &recycle, false)
+}
+
+/// THE RECORDED VICTIM STACK IS NEVER EMPTY ON A FULL-POOL FRAME —
+/// the decoder simply could not read it. [`mc2_pool_base`] recovers
+/// the MC2 pool base from the FREE stack's pointer cells, but a full
+/// pool leaves that stack empty, and the live-victim fallback used to
+/// validate a candidate base with "every cell lands on an OCCUPIED
+/// record" — which 999-of-1000 occupancy satisfies for many shifts,
+/// so the recovery came back AMBIGUOUS and both stacks decoded EMPTY
+/// on exactly the frames that sacrifice. `sub_49F90` only ever pushes
+/// `byte[2] & 2` records (`NETHERW.EXE` 0x6E819 `testb $0x2,0xe(%eax)`,
+/// inside the descending 999 -> 1 scan at 0x6E7CC `mov $0x3e7,%ebx` /
+/// 0x6E846 `dec %ebx`, with the ghost reap at 0x6E7A3
+/// `testb $0x4,0xd(%ebx)`), so the SACRIFICABLE predicate is the right
+/// validator and it is unique.
+///
+/// `MGC_NO_MC2_SAC_BIT=1` restores the pre-dig decode. Measured on
+/// mc2l22, ONE binary: 10,427 -> 6,204 dirty CSV rows (-40.5%), 10
+/// pairs better and ZERO worse; pair 10030 goes BIT-CLEAN, recovering
+/// retail's exact 67-deep stack where the port had seized 0.
+fn mc2_full_pool_victims() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SAC_BIT").is_none())
 }
 
 /// Decode an MC2 entity stack (top dword + guest-pointer cells into
@@ -2800,6 +3097,58 @@ mod tests {
         );
     }
 
+    /// ⭐⭐⭐ ROUND 98 — **"BOUND BUT UNREADABLE" IS A THIRD STATE, AND
+    /// IT IS NOT RARE.** [`mc2_pool_base`] recovers the pool base from
+    /// the FREE stack's pointer cells and, on a full pool, from the
+    /// RECYCLE stack's — so a frame on which BOTH stacks are empty has
+    /// no pointer set left to recover from and EVERY stage bind decodes
+    /// `None`, however healthy retail's own pointer is. That state is
+    /// distinguishable ONLY by the flags byte: `flags & 1` set with a
+    /// `None` slot means "retail says BOUND and we could not read it",
+    /// which is a completely different fact from `flags & 1` clear.
+    ///
+    /// It reaches the port through `import_ent_mc2`'s objective-board
+    /// arm, which used to import both as "unbound" and so killed the
+    /// port's type-1/2 objectives on exactly the ticks a level's
+    /// buildings are being razed (the debris fills the pool, both
+    /// stacks drain). mc2l22 rows 2 and 3 completed a tick late for
+    /// that reason; see `MGC_NO_STAGE_BIND_KEEP_UNREADABLE`.
+    #[test]
+    fn a_bound_stage_row_whose_pool_base_is_unrecoverable_is_not_an_unbound_row() {
+        const BASE: u32 = 0x0012_0000;
+        // BOTH stacks empty — the pool is full, which is the state the
+        // recording is in whenever a razing spree has filled it.
+        let mut d = mc2_snapshot(BASE, &[], &[], &[]);
+        // Row 0: kind 2, retail's own BOUND bit set, a perfectly valid
+        // pointer to slot 42 in the union.
+        d[0x3654C] = 2;
+        d[0x3654D] = 1;
+        let p = BASE + 42 * m2::ENT_STRIDE as u32;
+        d[0x3654C + 6..0x3654C + 10].copy_from_slice(&p.to_le_bytes());
+        let st = decode_retail_mc2(&d).unwrap();
+        assert!(
+            st.free_stack.is_empty() && st.recycle_stack.is_empty(),
+            "the premise: no pointer set to recover the base from"
+        );
+        let (kind, flags, slot) = st.stage_binds[0];
+        assert_eq!((kind, slot), (2, None), "the slot is UNREADABLE here");
+        assert_eq!(
+            flags & 1,
+            1,
+            "…but retail's own BOUND bit still says the row IS bound — \
+             a consumer that reads only the slot cannot tell this apart \
+             from a genuinely unbound row"
+        );
+        // The control: with either stack populated the very same bytes
+        // decode to the slot, so nothing about the row itself is wrong.
+        let mut d2 = mc2_snapshot(BASE, &[5], &[5], &[]);
+        d2[0x3654C..0x3654C + 10].copy_from_slice(&d[0x3654C..0x3654C + 10]);
+        assert_eq!(
+            decode_retail_mc2(&d2).unwrap().stage_binds[0],
+            (2, 1, Some(42))
+        );
+    }
+
     /// The recycle stack holds LIVE victims, so it can never be
     /// base-recovered on its own the way the free stack can — it rides
     /// the free stack's base (per-stack recovery decoded mc2l4's
@@ -2814,6 +3163,41 @@ mod tests {
         // Non-vacuity: recovering the recycle base from its own cells
         // would have mapped 950 to slot 999 (everything +49).
         assert_ne!(st.recycle_stack, [949, 999]);
+    }
+
+    /// ⭐⭐⭐ A FULL POOL LEAVES ONLY THE VICTIM STACK, AND ITS CELLS
+    /// PIN THE BASE ONLY UNDER THE SACRIFICABLE PREDICATE. With the
+    /// pool full the free stack is empty, so the base has to come off
+    /// `dword_0x11EA`; "these cells land on OCCUPIED records" is
+    /// satisfied by many shifts when 999 of 1000 records are live
+    /// (ambiguous ⇒ None ⇒ the stack silently decoded EMPTY on every
+    /// frame that actually sacrifices). `sub_49F90` only ever pushes
+    /// `byte[2] & 2` records, so that is the predicate — and it is
+    /// unique. mc2l22 t=10030 is the live witness: 67 cells, one base.
+    #[test]
+    fn mc2_victim_stack_base_is_pinned_by_the_sacrificable_bit() {
+        const BASE: u32 = 0x0012_0000;
+        let victims = [900u16, 950, 300];
+        // Full pool: no free record anywhere, so only the victim
+        // cells are left to recover the base from.
+        let mut d = mc2_snapshot(BASE, &[], &[], &victims);
+        for &s in &victims {
+            d[m2::POOL + s as usize * m2::ENT_STRIDE + 0x0E] |= 2;
+        }
+        assert_eq!(
+            mc2_base_from_cells(&d, &mc2_stack_cells(&d, 0x11E6, 0x11EA), false),
+            Some(BASE),
+            "the sacrificable bit pins the base a bare occupancy test cannot"
+        );
+        // Non-vacuity: without the bit every shift validates.
+        let mut plain = mc2_snapshot(BASE, &[], &[], &victims);
+        for slot in 1..m2::ENT_COUNT {
+            plain[m2::POOL + slot * m2::ENT_STRIDE + 0x0E] &= !2;
+        }
+        assert_eq!(
+            mc2_base_from_cells(&plain, &mc2_stack_cells(&plain, 0x11E6, 0x11EA), false),
+            None
+        );
     }
 
     /// No unique base (here: an empty pool makes every candidate
@@ -3050,5 +3434,44 @@ mod tests {
         }
         assert_eq!(n, 40);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// ⚠⚠ **THE DECOMPILE'S FIELD NAME IS THE LIE, NOT THE OFFSET.**
+    /// remc2 calls the mobilize decay counter
+    /// `mobilizeCounter2_0x150_336`, but `global_types.h:254-255`
+    /// declares it as the SECOND of two consecutive `int8_t`
+    /// (`mobilizeCounter_0x14E_334` then this one), so its home is
+    /// `0x14F` = **+335**, not +336 — and
+    /// `engine_support_converts.cpp:99-101` serializes it there
+    /// explicitly, with a DIFFERENT field (`byte_0x150_336`) written
+    /// to `0x150` at `:103`. The shipped EXE agrees: `sub_38F70`
+    /// (NETHERW.EXE 0x5d801/0x5d80e) does
+    /// `mov BYTE PTR [eax+0x14e],0x1` then
+    /// `mov BYTE PTR [eax+0x14f],0xa` for the decompile's
+    /// `mobilizeCounter_0x14E_334 = 1` / `= 10`.
+    ///
+    /// Reading +336 fed `Mc2Ext.mobilize_ctr` a neighbouring byte at
+    /// every re-anchor (`conformance.rs`), which on mc2l22 was a
+    /// constant 232 — a 232-tick stun seeded into every segmented
+    /// replay, where the true lane walks 10,10,9,8,7,… down from the
+    /// paralyze stamp. Corpus witness: mc2l22 t=412..420.
+    /// Ledger SESSION 95 dig 1.
+    #[test]
+    fn the_mc2_mobilize_counter_is_at_335_not_336() {
+        let mut d = vec![0u8; MC2_STRUCT_SIZE];
+        let t = m2::PLAYERS + m2::PP_FLIGHT;
+        // Retail's own pair of writes, distinguishable from each
+        // other and from the +336 neighbour.
+        d[t + 334] = 1; // mobilizeCounter_0x14E_334 = 1
+        d[t + 335] = 10; // mobilizeCounter2 ("_0x150_336") = 10, at 0x14F
+        d[t + 336] = 232; // byte_0x150_336 — the decoy the port used to read
+        let p = decode_retail_player_mc2(&d, 0);
+        assert_eq!(p.mobilize, 1, "mobilize latch is +334 (0x14E)");
+        assert_eq!(
+            p.mobilize_ctr, 10,
+            "the decay counter is at +335 (0x14F) — reading 232 here \
+             means the decoder is back on the field NAME's +336 and \
+             every re-anchor seeds a bogus stun"
+        );
     }
 }

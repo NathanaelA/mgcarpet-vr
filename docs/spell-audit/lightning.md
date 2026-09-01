@@ -227,7 +227,7 @@ the `sub_66FD0` override.
 | Cadence (t0 RAPID, t1/2 CLICK) | font&1 → f59 | identical | ✅ correct |
 | Cast sounds (23 / 9) | v6 | identical (cast.rs:710-715) | ✅ correct |
 | SPELLS.DAT row 7 tiers | life 0/1/2, dmg 200/300/800 | identical | ✅ correct |
-| **Subtype 9 delivery** | one-tick BEAM `sub_66750` | slow homing bolt via `mc2_flyer_tick` | ❌ **L0 stream** |
+| **Subtype 9 delivery** | one-tick BEAM `sub_66750` | ✅ **PORTED** as `Gen::mc2_lightning_beam_tick` | ✅ (§5 Fix A is STALE — see the note there) |
 | Subtype 9 impact effect (10,23) | blast23 | served | ✅ (only delivery is wrong) |
 | **Subtype 12 flight** `sub_66FD0` | charged bolt + drone-lock life arm | generic `mc2_flyer_tick` (approx OK) | ⚠️ close, but… |
 | **Subtype 12 impact** | hard-coded (10,38) + chain (9,9) | generic (9,9) → misfit | ❌ **L1/L2 absent** |
@@ -236,6 +236,31 @@ the `sub_66FD0` override.
 ---
 
 ## 5. Fix data
+
+> ⚠⚠ **§5 FIX A IS STALE — IT LANDED LONG AGO.** `sub_66750` is ported as
+> `Gen::mc2_lightning_beam_tick`. The text below is kept as the trace of the
+> mechanism, not as an open item. Read it as documentation.
+>
+> ⭐ **AND THE ACQUISITION HAS ITS OWN LAW, landed since**: `sub_67CB0`'s
+> **case 9** (EF:54889-54932) is exactly two loops — `dword_38519`, then a bare
+> 29-bucket walk of `bytearray_38403x[jj]` — and has **no worm HEAD /
+> `word_0x34_52` SEGMENT branch**. That expansion exists in only two places in
+> the whole function (EF:54826, the big case's no-candidate fallback; EF:55072,
+> case 1/0x11's unconditional tail). The port's single `worms_always` flag drove
+> both the bucket-22 gate (correct) and the segment expansion (wrong), so
+> lightning locked worm segments carrying `actionIndex 0xB4` — precisely the
+> records the tick-top roster build excludes. Kill switch
+> `MGC_NO_LIGHTNING_WORM_CHAIN`; fixed 627 / introduced 0 on mc2l22.
+>
+> ⚠ **STILL OPEN in this area** (measured by that dig, not landed):
+> `sub_66750`'s `SetMapEntity_57E50(a1x)` (EF:58304) **unlinks the beam from the
+> tile map** before its march and never re-links it — the port marches a linked
+> record 24 tiles. And `mc2_aim_scan`'s creature loop is missing the gate
+> `(kkx->StageVar2_0x49_73 != 14 || kkx->word_0x2C_44 != a1x->id)` that retail
+> carries in the big case (EF:54812), case 9 (EF:54918) **and** case 0x10
+> (EF:54965) — ⚠ and the field it reads SPLITS: the big case and 0x10 use
+> `parentId_0x28_40`, case 9 uses `word_0x2C_44`. Check that split against the
+> shipped EXE before porting it.
 
 **Fix A — subtype 9 = one-tick beam (fixes L0).** Add an action-9 branch in
 `mc2_proj_tick` (mobs.rs:2190-2194): when `model65==9 && tick70==9`, run a new

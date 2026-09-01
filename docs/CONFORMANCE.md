@@ -599,6 +599,64 @@ also restores the THING table (`World::reload_thing_table`) — the one
 piece of port-side level state retail's reload resets that the entity
 import cannot see.
 
+### The known-deviation roster in `replay` (player-ruled 2026-09-04)
+
+`replay` consults `conformance/known-deviations.json` — the same file,
+the same `--no-roster` switch, the same rules `verify-deltas` has always
+read. A boundary whose **every** row matches a rule with
+`status: deviation` — registered retail behaviour the port deliberately
+does not reproduce (docs/DEVIATIONS.md) — is **roster-excused**: the
+segment it opens is `SegOpen::Roster`, it is reported and itemised by
+rule, and it is kept out of `DEVIATION-forced` / `excess resets` and out
+of `horizon`/`first`. The brief line carries `roster=N` only when
+nonzero, so every other baseline line stays byte-stable, and
+`--no-roster` reproduces the pre-ruling output exactly.
+
+**Why this needed a ruling and not just a filter.** `verify-deltas` can
+excuse a registered row for free: it re-imports retail's state every
+pair, so a row it forgives never propagates. A FREE RUN cannot. The
+deviating value is real state — a fitted RNG draw, a painted tile, a
+bearing — and everything downstream of it is the port's own history, not
+retail's. So excusing a registered row in `replay` is only sound if the
+run RE-ANCHORS there, and that is exactly what a segmented reset already
+does. `--segmented` therefore needs no flag; the roster only re-labels a
+reset that was happening anyway. A plain free run opts in with
+**`--resync-deviations`**, and the report always says how many resyncs
+it spent, because a run past a registered wall is measuring from
+retail's state and must never read as an unbroken bit-exact horizon.
+A plain free run WITHOUT the flag keeps its horizon at the registered
+wall — that is the honest default.
+
+**Three lanes can never be excused, whatever the roster says.** The POSE
+channel (its rows are the human's own mover lanes and carry no
+(class, model, slot) for a rule to scope against); an RNG boundary (a
+parted LCG stream is not a per-row fact about one entity, it is the
+whole world's future); and `status: capture` / `status: open` rows —
+capture is the recording's limitation rather than the port's, but it is
+not a RULING, and `open` is a lead awaiting its fix round. Only
+`deviation` is a thing the player has decided stays.
+
+⭐ **The gate is ALL-OR-NOTHING, and that is what makes a coarse rule
+safe.** One unexplained row on the boundary demotes the whole thing back
+to `Deviation`. So a rule scoped by (class, model, field) can excuse a
+registered family without ever hiding a compound break — mc2l22's
+boundary 53976 carries the hydra's parity rows AND a missing-in-port
+`(9,9)`, and it correctly stays a defect.
+
+**Registered FLOORS vs registered CLASSES.** `t_min`/`t_max` scope a
+behaviour that recurs; a floor is a finite set of measured rows the
+register names one by one, and a rule may list them with `ticks` (plus
+`fields` for a family whose rows always arrive together). ⚠ `ticks`,
+like `t_min`/`t_max` and the CSV's `t` column, is in PAIR-START space —
+a `replay` boundary at `t` is listed as `t - 1`, one below its write-up.
+
+**What it bought on day one.** `mc2l6-rival-spells-galore` went
+`devs=3` → **`devs=0`, `horizon=END`, exit 0** — its three remaining
+resets were all the registered `(10,42) applied_pitch` out-of-bounds
+BUILD00 row. mc2l22 went `devs=121` → **96** (25 excused: 5 painter
+rows, 18 hydra-parity boundaries, the 2 IVT-ghost boundaries) and its
+free-run horizon 4,661 → **10,020**. Every other take byte-identical.
+
 Every reset tick names itself as a fixture candidate, which is what
 THE REVERSION PROBE (`tools/conform-rig`) was built to do the hard way
 — that probe stays useful for mining laws that landed before this

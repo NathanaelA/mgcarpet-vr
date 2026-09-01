@@ -23861,6 +23861,616 @@ three units of yaw, 60,512 ticks of runway), mc1l37 t=2735 (one slot,
 three lanes, plus the charter's named castleless-rival dig), mc1l48
 t=276 (now the (10,36) spawner's own position, downstream of Law B).
 
+## SESSION 81 — THE LEASH, THE MAILBOX HOP, AND A REGISTER WHOSE LANE WAS THERE ALL ALONG
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore`
+CERTIFIED and held at END; **`mc2l6-rival-spells-galore` 1376 -> the
+session's close**; `mc2l0-spells-galore` HELD at 8,103 (untouched).
+FIVE laws off one head chain — 1377 -> 1625 -> 1657 — the first two
+the duel ENFORCEMENT that session 80's lock made reachable for the
+first time.
+
+### A — `sub_5DE30` IS INSIDE THE MOVER, AND EVERY OPERAND WAS A DIFFERENT ONE
+
+Head: mc2l6-rsg t=1377, `pose:pose.x,pose.y,pose.yaw` (retail 52905 /
+13192 / 1167, port 52906 / 13191 / 1164). The duel enforcement had been
+a tick-head pass writing the world's KNOCK channel — a standing
+DEVIATIONS approximation, "magnitude formula traced, transport ours."
+Retail's seat is `sub_5D530` EF:59721, i.e. INSIDE the carpet's own
+mover, between the one-shot displacement mailbox (block 6) and the
+debuff decay (block 8), and its tail is:
+
+```
+v12 = 3 * a1x->minSpeed_0x84_132 / 2;
+LOWORD(v6) = (v5 - type160->dword_0x142_322) / (1024 / (int16)v12);
+if ((int16)v6 < -(int16)v12) v6 = 3 * a1x->minSpeed_0x84_132 / -2;
+if ((int16)v6 >  (int16)v12) LOWORD(v6) = v12;
+v7 = tan2(a1x->pos, v2x->pos);  v8 = v7;
+v9 = a1x->yaw + sub_58350(a1x->yaw, v7, 5, 0x82);  HIBYTE(v9) &= 7u;
+a1x->yaw = v9;
+MoveEntity_57FA0(&predictedAxis, v8, a1x->pitch_0x1E_30, v6);
+```
+
+Five separate corrections, and the head needed the transport AND the
+operands together:
+
+- **The metric is 3-D.** `v5 = sub_583F0_distance_3d` (EF:59916), and
+  the HELD distance the delta is taken against is the same 3-D call at
+  the stamp (`sub_5EFA0` EF:60650). The port measured both on the
+  ground plane, so a duel fought at altitude held its shadow.
+- **The cap and the divisor are CONSTANTS.** `minSpeed_0x84_132` on a
+  wizard is `x_DWORD_D4B8C` = 80, stamped by `AddPlayer03_00_5E010`
+  (EF:59958) and never rewritten on a wizard's path — so `v12` is 120
+  and `1024 / v12` is 8, every tick, for every duel. The port derived
+  both from how fast the carpet happened to be flying
+  (`player.speed.max(16)`), which is a different number on almost every
+  tick and never 120 (the carpet's own ceiling is 80).
+- **The clamp is SIGNED.** Inside the held distance retail SHOVES THE
+  CASTER BACK OUT at up to −120; the port's `.clamp(0, cap)` could only
+  ever reel him in.
+- **The yaw servo was missing entirely.** `sub_58350(yaw, bearing, 5,
+  0x82)` — [`Gen::turn_step`], cap 130 — rewrites the caster's heading
+  every tick of the lock, and `moveBoost` has no yaw authority at all,
+  so the knock channel could not have carried it. This is the head's
+  own lane: retail's 1167 IS the bearing to rival 370, reached in one
+  servo step from the port's un-servoed 1164.
+- **The step's heading is the RAW bearing `v8`, not the servoed yaw**,
+  and its pitch is `a1x->pitch_0x1E_30` — the published aim pitch. The
+  carpet is dragged sideways in three dimensions while it slews to face
+  its opponent.
+
+Retail's liveness set is exactly three tests — the manifestation
+charged, `v2x->life_0x8 >= 0`, `v5 < range` — where the port also
+required class 3, the free bit clear and the rival not eliminated.
+Three port inventions, deleted.
+
+Landed as [`crate::flight::mc2_move`] block 7 (the comment there was
+the standing "UNPORTED (banked, worklist 7)" note): the world computes
+bearing + signed pull at the dispatch, the mover applies the servo and
+the polar step onto the CANDIDATE so the commit gate can still refuse
+it and nothing survives into the next tick. **1376 -> ~1594** on its
+own, and the head moved BACKWARD one tick — which was law B.
+
+⚠ On a PINNED-POSE turn (`tick_pose_pair`, `World::tick`) there is no
+candidate to displace, so the enforcement still runs for its state half
+— the range/liveness break and the opponent's drain — and drops the
+leash. The pair channel is structurally blind to the leash either way:
+`word_0x146_326` / `dword_0x142_322` / `word_0x14A_330` are not in the
+MC2 import, so an imported world never holds a lock. UNIT PIN.
+
+### B — THE LOCK STAMP COSTS A TICK, AND IT IS THE VICTIM'S TICK
+
+With law A landed the head slid to t=1376 `pose:pose.yaw`: the port now
+turned the carpet ONE TICK EARLIER than retail. Retail's yaw at t=1376
+is 1184, the pure roll integration — no servo — and 1167 at 1377.
+
+The port resolved the lock inside [`World::mc2_duel_tether_tick`], at
+the (10,26) MARKER's slot, under a comment calling it a standing
+approximation. But the marker only POSTS: `sub_33E80`'s ch4 area write
+drops `{amount = tier, source = the marker's owner}` into the victim's
+mailbox, and a mailbox is read at ITS OWNER's dispatch — `sub_5EFA0`'s
+first block (EF:60643-57), which stamps `word_0x146_326` /
+`dword_0x142_322` / `word_0x14A_330` on the CASTER's player struct and
+awards the caster +1 duel XP.
+
+mc2l6-rsg t=1375 is the arithmetic: the marker sits at slot 827, rival
+370's own slot is BELOW it so the letter waits a tick, and the carpet's
+slot (343) is below 370's in turn — so retail's first LEASHED move is
+1376 -> 1377 where a marker-slot stamp leashes at 1375 -> 1376.
+Collapsing the hop cost exactly one head. Moved to
+[`World::mc2_duel_stamp`], called first thing in `mc2_rival_intake`
+(retail's own statement order). **-> 1624.**
+
+⚠ `sub_5EF70`, which the old arm modelled as a "victim recoil
+`word_0x36_54 = 100`", writes `a1x->dword_0xA4_164x->word_0x36_54` —
+the TYPE_160, not the entity. Its only reader is the ambient tail's
+music switch (EF:59841-47: nonzero → the combat theme and −−, zero →
+exploration). Pure presentation — and the port was stamping 100 into
+the ENTITY's `+54`, which is the MULTIPART CHAIN's tail link, so every
+duelled wizard grew a phantom body segment at slot 100. Deleted.
+
+### C — THE HUMAN LIFE-REGEN REGISTER, MC2 COLUMN (the banked item)
+
+Head: mc2l6-rsg t=1625, `(3,0)slot343:life` — retail 7715, port 7750.
+`player_regen_block` credited MC1 with the STORED rate and MC2 with the
+FRESHLY SELECTED one, under this rationale: *"MC2 keeps the fresh-select
+rate: its recorder lane for the register is undecoded, so an unseeded
+stale value would regress every regen pair."*
+
+**The lane was decoded all along.** `Mc2Wizard::life_regen` lifts
+`lifeRegen_0x163_355` at flight +355 (mgcr.rs), and its own doc comment
+in mgc-formats states the applied-then-selected law verbatim. What was
+missing was the SEAT: `retail_import_mc2`'s human `Player` literal
+never read it, where the MC1 arm has carried `life_rate: wiz.life_rate`
+for months. So the stale-value objection was true of the code and false
+of the recording.
+
+Retail's order on this column is as unambiguous as MC1's:
+`AddPlayer03_00_5E010` credits `life_0x8 += lifeRegen_0x163_355` at
+EF:60002 and only re-selects it from the at-castle/dolmen box test at
+EF:60021 (`maxLife/250` = 40 there, `maxLife/2000` = 5 afield). The
+carpet enters its own castle's summed-extents box at t=1625: retail
+credits one last afield +5 (7710 -> 7715) and banks the 40 for t=1626,
+where the port had already spent it. Both columns now read the
+register; the import seats it. **-> 1656.**
+
+⭐ Pairs are byte-identical under this change — the seeded value IS
+what `mc2_regen_boost` would have computed from the same imported pose
+— which is the whole reason the objection could stand unexamined.
+
+### D — MC2'S KILLER LATCH BELONGS TO THE LETHAL BRANCH ALONE
+
+Found by `dump-state --port` on the free run at t=1656: rival 370 held
+two lanes retail leaves at 0 — `word_0x24_36` = 343 and
+`word_0x34_52` = 100 (the `sub_5EF70` write above). `sub_5EFA0`
+(EF:60712-16) writes the killer only inside `if (a1x->life_0x8 < 0)`,
+and zeroes it when the killer is a (10,67); the per-hit word is
+`word_0x26_38`, which retail clears as its FIRST statement (EF:60633)
+and republishes only when a letter is actually delivered — a one-tick
+flag, not a latch. `mc2_rival_intake` latched the killer on every hit
+and never published the flag at all.
+
+This is MC1's own law one column over ([`Gen::mail_inbox`], :21365-66
+and its three siblings, in the tree since July with the comment "The
+killer latch belongs to the LETHAL branch alone"). **A LAW LANDED ON
+ONE COLUMN IS NOT LANDED** — third session running.
+
+### E — A CASTLE'S DEFENDER STAGE IS SCENERY, NOT A WALL
+
+Head: mc2l6-rsg t=1657, `extra(10,0)slot671x1` — rival 370's fireball
+(slot 770) DETONATES in the port and flies on in retail; the (10,0) is
+its impact spawn. Everything measurable was already identical: at
+t=1656 the port's 770 matched retail on every lane (56213/12515/1657,
+yaw 612, pitch 1891, speed 384, target96 343), and both ended t=1657
+with yaw 607 / pitch 1913. Retail's t=1657 position is EXACTLY
+`MoveEntity(607, 1913, 384)` = (56549, 12616, 1812); the port's is
+(56576, 12544, 1854), which is |d| = 414 — not a polar step at all.
+
+⭐ THE Z WAS THE TELL. Tile-aligned x/y say "snapped onto a record",
+and the 100-unit z excess says WHICH snap: `sub_65C20`'s blocker arm is
+`sub_65580(v8x); CopyEntityPosition(a1x, &v9x->position); sub_655A0(v9x);`
+— it copies the target's position *while it is lifted by its own
+`array_0x52_82.yaw`*. Scanning the pool for `y == 12544` found slot 46:
+a **(10,79) castle defender piece** at (56576, 12544, 1754) with ayaw
+100. 1754 + 100 = 1854, exact.
+
+`sub_508E0_castle_defend_create` (EF:36987-98) ends with
+`event->struct_byte_0xc_12_15.byte[0] &= 0xF7` — it CLEARS the collide
+bit that `NewEvent_4A050` hands out by default (the port's `new_event`
+models that default correctly, `flags = 8`). And `sub_10780`'s very
+first test on a candidate is `byte[0] & 8` (EF:3763). So a castle's
+defender stage is scenery to every projectile probe in the game, and
+the port had been building each piece as a 100000-life wall over the
+one place on the map projectiles congregate.
+
+⚠ `flags.b0_coll8` is NOT a graded lane — the free run was still clean
+at t=1656 with the port holding 1 against retail's 0 on that piece. The
+assertion is a unit pin in `mc2_castle_tier1_cast_grows_fire_turrets`.
+
+### A RIG LAW THE TESTS TURNED UP: A DOCKED WIZARD READS NO MAIL
+
+Both new rival unit pins failed at first for the same reason, and it
+is retail's, not the rig's. `AddPlayer03_00_5E010` (EF:59962-88) opens
+with the castle transfer — a wizard overlapping its own castle dumps
+`str_0x5E_94` into the castle and sets `word_0x159_345 = 2` — and then
+forks: `if (word_0x159_345) { memset(&str_0x5E_94, 0, 36); −−; } else
+sub_5EFA0(a1x);`. So a wizard parked at home reads NO MAIL AT ALL: no
+damage, no steal, no duel grip. The same counter starts at 100 on
+spawn. Both were invisible while the duel lock was stamped at the
+MARKER's slot, which bypassed the mailbox entirely; law B put the read
+back where retail has it and the rig had to follow. `World::
+debug_place_mc2_rival` is the way off the doorstep — ⚠ and 12 tiles is
+not far enough, a castle's summed extents run ~6784 units (26 tiles).
+
+### GATE
+
+Certified **13/13 END devs=0** · suite **all green, 0 failures** ·
+**307 fixtures, 0 regressions** (one new pair fixture,
+`the-human-life-regen-rate-is-a-stored-register` at mc2l6 t=1624,
+reversion-probed and failing on exactly its own two lanes) · clippy 0 ·
+fmt · every other row of the 25-row board byte-held · baseline
+regenerated. `grep PROBE-REVERT` = 0 after.
+
+Laws A, B, D and E are all pair-blind or ungraded-lane, so they are
+UNIT PINS: `flight::…::the_duel_leash_servos_the_yaw_and_steps_the_candidate`
+(the transport), `the_duel_leash_measures_in_3d_and_shoves_back_out`
+(the operands), `the_duel_lock_is_stamped_by_the_victim_not_by_the_marker`
+(the hop), `the_mc2_killer_latch_belongs_to_the_lethal_branch_alone`,
+and the collide-bit assertion folded into
+`mc2_castle_tier1_cast_grows_fire_turrets`.
+
+### NEXT
+
+1. **mc2l6-rsg t=1846** — `extra(10,0)slot765x1` plus a 60-row field
+   block on rival 378: retail takes it to `action` 2, the DEATH FALL
+   (`life` 0), where the port keeps it alive at 274, and slot 379
+   jumps from tile 6.8 to 65.5. A rival death/respawn seam, and a
+   bigger dig than anything in this session.
+2. 🏦 NEW: the rival's spell emit (`sub_693F0` EF:55850-70) stamps two
+   lanes the port leaves at 0 — `word_0x26_38` = the MANIFESTATION
+   entity's own slot (retail's 770 carries 371, rival 370's fire token)
+   and `axis_0x9A_154x` = the caster's position stepped **0x4000**
+   along the firing yaw/pitch (retail 1779 / 16851 / 6584). The second
+   is the port's `dest_*`, which its generic flyer reads as the aim
+   point whenever there is no live `word_0x96_150` — so a rival cast
+   that loses its target aims at the map origin in the port. Both are
+   ungraded today; neither is this head (770 homes on target96 343).
+3. 🏦 NEW: `sub_5EFA0`'s mail clear is on the NON-LETHAL branch only
+   (`if (v1 != 2) { sub_5EF70; word_0x62_98 = 0; }`) and clears the
+   SOURCE alone, where `mc2_rival_intake` zeroes the whole pair
+   unconditionally. Inert for the accumulate protocol; the amount lane
+   is recorded state.
+4. 🏦 NEW: retail's `sub_5EFA0` opens with the aim-target sanity clear
+   (`if (word_0x96_150) { if the target is dead or flagged →
+   word_0x96_150 = 0 }`, EF:60635-40) — session 75's family, unported
+   in `mc2_rival_intake`.
+5. 🏦 Carried from 80: the generic impact tail's `f140`-vs-
+   `subSpellIndex_0x2A_42` lane audit · which ACTIONS share
+   `sub_662E0` · the `pick_*` pool scans · `sub_14030`'s WAR arm · the
+   `(3,1)` `f24`/`f26` swap · the muzzle `f78`-vs-`.fov` audit · the
+   Home handler's castle-less arm · the MC1 lob stamp · `wiz 0
+   shots`/`hits` at mc1l0-sg t=2733 · class-12 burst counter home ·
+   🎬 the OWED mc2l22 rival-heal instrument.
+
+## SESSION 80 — DUEL WAS A PROJECTILE ALL ALONG
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore` CERTIFIED
+and held at END; **`mc2l6-rival-spells-galore` 1129 -> 1376**;
+`mc2l0-spells-galore` HELD at 8,103 (untouched). Four laws off ONE head
+chain — 1130 -> 1326 -> 1348 -> 1375 — and three of the four are the
+MC2 DUEL spell, whose port body turned out to be built on a
+misattributed decompile trace from July.
+
+### THE LAWS
+
+**A — THE DIRECT CAST ARMS TAKE THE CASTER SPEED BOOST RAW.**
+`sub_6DCA0`'s tail is the only place the `[384, 0x2000]` clamp lives
+(EF:44224-31: `v24 = a5 + base; if (v24 < 384) …; if (… > 0x2000) …`).
+Every hand-written class-15 token handler instead opens its spawn with a
+BARE `spawned->actSpeed_0x82_130 += caster->actSpeed_0x82_130` and never
+clamps: possession basic `sub_69900` (EF:56048), possession leveled
+(EF:55953), summon (EF:57662), mine (EF:57984), alliance (EF:58065) —
+and the (9,10) castle-upgrade ball (EF:56129). So a bolt cast by a
+REVERSING wizard is born BELOW its own `min_speed` and stays there: the
+class-9 mover has no floor that pulls it back up.
+
+The human column has carried exactly this since the mc2l4 t=13 witness
+(`mc2_spell_fire` case 1 re-stamps `384 + p.speed` after `mc2_launch`
+clamped, recording speed 336 = 384 − 48 on a backing carpet). The RIVAL
+funnel is one shared body for both halves of the arm split and kept the
+clamp on all of them — **A LAW LANDED ON ONE CALL PATH IS NOT LANDED**,
+at whole-column scale, for the third session running.
+
+mc2l6-rsg t=1130: rival 370 fires its spell-1 (9,1) at speed −8 (its
+`d88` had just flipped to −100), so retail's slot 853 is born at
+384 − 8 = **376** against `min_speed` 384 where the port minted 384 —
+and the whole `x,y,z,speed` head is that one missing step length (the
+bolt's own tick moves it 374 units that frame instead of 382).
+**1129 -> 1325.**
+
+⚠ The `.max(0)` on the band leg is INERT, not faithful: retail passes
+`a5 = v1x->actSpeed` raw (EF:55854 and the eleven `sub_6DCA0` siblings)
+and every class-9 creator's base speed is 384, so `clamp(384, ..)`
+swallows the difference on every row that can exist today. Left alone
+rather than changed without a witness.
+
+**B — DUEL FIRES A PROJECTILE, AND ONLY A STRUCK WIZARD MAKES THE
+TETHER.** `sub_6B610` (EF:57291) spawns a **(9,7)** flyer — the
+`sub_4D740` creator (EF:34898): action 7, speed/min_speed 384, maxLife
+21 = 0x2000/384, behaviour row 60, sprite 213 — carrying impact pair
+`byte_0x43_67 = 10 / byte_0x44_68 = 26`. The (10,26) duel tether is what
+that dart MAKES WHEN IT LANDS, not what the cast makes where you stand.
+Subtype 7 was missing from the port's `CREATORS` table outright: it is
+the one class-9 creator no `sub_6DCA0` band arm reaches
+(docs/spell-audit/rival-spells.md §3.1 flagged the hole in 2026-07).
+
+And the dart's flight worker is `sub_662E0`, NOT the generic
+`sub_65820` — its resolution arm forks three ways (EF:63531-45) and the
+middle one is `!v5x || v5x->class_0x3F_63 != 3 || (model != 0 && model
+!= 1)` → `sub_65780(a1x, 0, …)` + disable, **NO EFFECT SPAWN**. Only a
+struck class-3 model-0/1 wizard reaches `_4A190(pos, byte_0x43,
+byte_0x44)`. (This is the `sub_662E0` fork SESSION 75 banked as "not
+reproduced".)
+
+mc2l6-rsg grades both halves with nine darts: slot 855 (t=1326-1347)
+flies its full 21-tick life into empty air and dies with NOTHING
+allocated — the free stack pops exactly once at t=1347 and that slot
+goes to an unrelated (10,66) — while slots 807/857/617/379/172/208 each
+strike rival 370 and birth a (10,26) on that same tick. Slots 842/843
+stop on terrain and also spawn nothing. **1325 -> 1347.**
+
+⚠ NO SPEED BOOST on this one: `sub_6B610` has no `actSpeed +=` line at
+all — neither `sub_6DCA0`'s clamped `a5` nor law A's raw add — so the
+dart leaves at the creator's flat 384 whatever the carpet is doing.
+Retail's slot 855 records exactly 384.
+
+**C — THE DUEL FIZZLE IS `sub_6B610`'s OWN `LABEL_19`, AND LABEL_19
+SKIPS `sub_68DE0`.** Retail's abort predicate is exactly
+`word_0x2E_46 <= word_0x30_48 - 28 && !wizext->word_0x146_326`
+(EF:57277-85) with NO lower guard, and taking it jumps past the whole
+else — including the `sub_68DE0` call that pins the caster's mana regen
+to 0 for the duration of a live window (EF:55574-77).
+
+The port's extra `f26 > 1` guard blocked the arm in precisely the case
+that matters, because the **RETRIGGER FAMILY pins `f26` to 1 first**:
+`sub_5F660`'s case `{4, 6, 8, 0xB, 0xC, 0xE}` (EF:60914-27) — a cast
+press while one of those six spells' own window is live CANCELS it
+(`word_0x2E_46 = 1`, metamorph 7) instead of refusing, and duel is one
+of the six.
+
+mc2l6-rsg t=1347 is both halves at once. The player casts duel at
+t=1326 (window 195, mana 1,426,916 → 1,416,916 on the 10,000 debit,
+`d88` pinned to 0 for twenty-one ticks) and RE-PRESSES cast at t=1347.
+`sub_5F660` pins the counter to 1; the token's own tick then reads
+`1 <= 167` with no duel lock and takes LABEL_19, so the clamp never runs
+and the wizard's freshly recomputed `d88` 713 stands. Retail steps mana
+1,416,916 → 1,417,629 at t=1348; the port suppressed on the collapse
+tick and held. Same shape as the afford arm and the speed brake beside
+it. **1347 -> 1374.**
+
+**D — THE TETHER IS A ch4 AREA WRITE THAT RENEWS ITS OWN LIFE.**
+`sub_33E80` (EF:24985) in full:
+
+```c
+v1 = life; dword_0x10_16++; life = v1 - 1;
+if (v1 < 0) { DisableEntityDrawing04(a1x); return; }
+sub_585A0(a1x);
+if (sub_10C80(a1x, 4u, a1x->byte_0x46_70)) life = 0;
+```
+
+`sub_10C80` IS `Gen::area_write`; the ch4 pair `word_0x76_118` /
+`word_0x7A_122` at `str_0x5E_94 + 6*4` IS `mail[4]` — amount = the TIER,
+source = the marker's OWNER — and `sub_5EFA0`'s duel block
+(EF:60643-57) reads exactly that mail off the VICTIM to stamp the
+CASTER's lock. So the marker is not a scanner with a radius: it is a
+stationary 8-tick area effect whose life resets to 0 on every tick it
+catches somebody, and which only starts dying once the victim walks out
+of its box.
+
+⚠⚠ **THE JULY 2026 TRACE NAMED THE WRONG FUNCTION.** It read `sub_38D80`
+(EF:28348) as the tether tick — a roster scanner that writes
+`word_0x7A_122` = its OWN SLOT and decrements life every tick — so the
+port gave the tether a hard 8-tick life and a tier-range scan, and
+invented its ctor besides. mc2l6-rsg refutes all of it: slot 827
+(t=1375) holds `life` 0 for TWENTY-FOUR ticks with `scratch10` counting
+1..26, then falls to −1/−2 and frees at t=1401; rival 370 takes
+`mail4.src` 0 → 343 — the human's entity id, not the marker slot — on
+the very tick it is caught. The real ctor is `sub_4F720` (EF:36129):
+action 26, maxLife 8, `subSpellIndex_0x2A_42 = 200`, sprite **213** (the
+trace guessed 284) and `SetEntityShiftRot_49EA0(event, 512, 512)` — the
+extents quad retail records as apitch/aroll/afov 512 where the bare
+sprite row gives 78/78/75. **1374 -> 1376.**
+
+### GATE
+
+Certified **13/13 END devs=0** · suite **909/0** · **306 fixtures, 0
+regressions** · clippy 0 · fmt · every other uncertified row byte-held ·
+baseline rows + header regenerated. Three of the four laws took a PAIR
+fixture (each reversion-probed individually, each failing on exactly its
+own lanes: A on `(9,1) speed,x,y,z`; B on the whole t=1325 allocation
+family including `(9,7)`; D on `(10,26) applied_pitch,f5a` for the ctor
+half and `(10,26) life` for the renew half). `grep PROBE-REVERT` = 0
+after.
+
+⚠ **LAW C's PAIR FIXTURE WAS CUT, PROBED, AND DELETED.** It passed under
+the law AND under its own revert — session 79's rule again, and for the
+same structural reason: the whole difference is a `mana_delta` the
+carpet applies on the FOLLOWING tick, by which time pair mode has
+re-imported retail's register. Neither t=1346 nor t=1347 can see it.
+Replaced by the unit pin
+`a_duel_re_press_collapses_the_window_without_pinning_regen`, which
+arms the window with `dev_spells` on (the affordability gate is not
+what it pins) and then plays the window for real, asserting the regen
+ACCUMULATOR — 0 while the window is live, positive on the collapse
+tick. `World::debug_player_mana_delta` is the new hook; the pool itself
+is unusable here because the mana CEILING is re-derived from the castle
+ladder on every tick and a castle-less test world is pinned at 1,000.
+
+⚠ `mc2_duel_locks_drains_and_breaks` needed rework beyond re-aiming.
+Its out-of-range break now needs 40 ticks, not 3, and the reason is law
+D: `sub_33E80` re-issues the ch4 grip letter every tick it still catches
+the victim, and each landed letter re-stamps the lock, so the
+enforcement's out-of-range clear only sticks once the marker has stopped
+catching anybody and run out its 8 ticks. That is a real behavioural
+change, not a test artifact.
+
+### NEXT (in order)
+
+1. **mc2l6-rsg t=1377** `pose:pose.x,pose.y,pose.yaw` — the DUEL
+   ENFORCEMENT force-fly (`sub_5DE30` EF:59906-48) now that the lock
+   forms for the first time. The port's caster transport is the knock
+   channel (a standing DEVIATIONS approximation, not retail's
+   `MoveEntity`), so this head is likely to ask for the real one.
+2. 🏦 NEW: the generic impact tail writes `f140 = dmg`, but retail's
+   tails write `subSpellIndex_0x2A_42` (`v11x->subSpellIndex_0x2A_42 =
+   a1x->subSpellIndex_0x2A_42`, EF:62999 / :63544) and never touch
+   `mana_0x90_144`. The (10,26) records retail mana 0 against the
+   port's 5170. Ungraded today; the lane mapping wants an audit before
+   anything moves.
+3. 🏦 NEW: `sub_662E0` is now known to be the (9,7)'s worker, but WHICH
+   actions share it is still unmapped (the action→worker table is data,
+   not source). Every class-9 subtype whose impact only makes sense on
+   a wizard is a candidate for the same three-way fork.
+4. 🏦 Carried from 79: the `pick_castle`/`pick_wizard`/`pick_balloon`/
+   `pick_mana` pool scans (law A of session 79 on four more sites) ·
+   `sub_14030`'s WAR arm · the `(3,1)` `f24`/`f26` swap · the HUMAN half
+   of the life-regen register · the muzzle `f78`-vs-`.fov` audit · the
+   Home handler's castle-less arm · the `sub_5EFA0` tail · the MC1 lob
+   stamp · `wiz 0 shots`/`hits` at mc1l0-sg t=2733 · class-12 burst
+   counter home · 🎬 the OWED mc2l22 rival-heal instrument.
+
+
+## SESSION 79 — THE RIVAL BRAIN'S FOUR MISSING PREDICATES
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore`
+CERTIFIED and held at END; **`mc2l6-rival-spells-galore` 843 -> 1129**;
+`mc2l0-spells-galore` HELD at 8,103 (untouched). Six laws, all in the
+MC2 rival brain, all found by walking ONE head chain — 844 -> 953 ->
+1000 -> 1130 — with each landing exposing the next. Two of the six moved
+no horizon on their own and cleared whole `wiz_shadow_mc2` boards
+instead.
+
+### THE LAWS
+
+**A — THE ANTI-PROJECTILE SCAN WALKS THE TICK-TOP CLASS-9 ROSTER.**
+`sub_15CB0` (EF:7447-53) iterates
+`x_D41A0_BYTEARRAY_4_struct.dword_38531` through `next_0`, and that head
+is rebuilt once per tick by `UpdateEntities_57730`'s case-9 arm
+(EF:40011-17) — ABOVE the entity walk that dispatches the wizards
+(EF:40116-80) and BELOW the same function's opening reap pass
+(EF:39948-55). So membership is the class-9 population as of the tick
+head, with NO life and NO flags test of its own. The port scanned the
+live pool with a hand-rolled `flags & 0x400` skip. ⭐ `proj_chain`
+ALREADY EXISTED and MC1's `rival_defense` already walked it: this is the
+one-call-path shape again, the MC2 twin left on the pool.
+
+mc2l6-rsg t=843 is the witness and it is a pretty one. The human's fire
+stream recycles one slot per tick: slot 646's spent (9,9) is a
+`byte[1] & 4` ghost at the t=842 boundary, the tick-843 reap frees it,
+the ctor pops that very slot straight back, and the new bolt — homing on
+rival 370 at 453 units — is live in the pool by the time the walk
+reaches slot 370. Retail's roster was sampled while that slot was FREE,
+so `sub_15CB0` returns 0 and the rival never strafes. The port's pool
+scan found the newborn, took `strafe = 80`, and pushed 370 an eighth of
+a tile off on both axes at t=844. (Retail DOES strafe wiz 1 — at t=892,
+the next `f63 % 49 == 0` cadence tick, on slot 619's (9,13), which was
+alive at the tick head.) **843 -> 952.**
+
+**B — A STALE TARGET SKIPS THE HANDLER; IT DOES NOT CLEAR THE STATE.**
+Every target-carrying handler opens with `v1x =
+Entities[word_0x96_150]` then `sub_14C60(a1x, v1x)`, and every FALSE arm
+is the same two lines — `sub_16580(a1x); return 0;` (sub_12FF0
+EF:5586/5609, sub_131F0 :5664-70, sub_135C0 :5831-36, sub_13710
+:5880/5905, sub_13890 :5953/6050, sub_161A0 :7744). Not one writes
+`byte_0x1C1_449` or zeroes `word_0x96_150`. The port dropped to `Fresh`
+— which is retail's state BYTE 0, a distinct dispatch arm whose
+`sub_12910` case runs the selector TWICE (EF:5255-56) — so one dead
+target both misread the state for up to a whole think period and spent
+an extra arbitration. MC1's `rival_state_tick` has carried this exact
+law since session 58; the MC2 column never got it. mc2l6-rsg: rival 370
+sits in retail's state 8 across t=294..330, 419..439, 447..488, 700..744
+and 796..842 while the port reads 0 — five windows whose lengths are
+exactly "until the next `f63 % (64 - reflexes/4) == 0`". The whole
+wiz-1/2/3 `ai_state` board (201 + 40 + 14 rows) went to 9.
+
+**C — MC2 FEEDS HATE FROM `sub_159E0`, NOT FROM THE DAMAGE MAIL.**
+The tick-top sweep (EF:7319, called from `UpdateEntities_57730` at
+EF:40112) walks the class-9 roster and ledgers each record ONCE
+(`byte[1] |= 0x20`, our 0x2000, stamped as soon as the bolt has both a
+class-3 owner and a non-zero `word_0x96_150`, EF:7347). The bump is
+keyed on the PROJECTILE model, and ⚠ unlike MC1's the heavy set is
+{3,4,11} ONLY — model 16 takes the light rate, because the ladder is
+`<0xA ? (3..4 ? heavy : light) : (>0xA ? (11 ? heavy : light) :
+nothing)` (EF:7376-88 / :7404-19), so model 10 alone scores zero. Castle
+victim (class 3 model 2) -> 5000/1000 AND the war check; any other
+wizard -> 3000/500 and NO war check; a claimed (10,39) sphere hit by a
+possess lob (model 1) -> the claimant's ledger takes `ball_mana / 4`
+(EF:7358-68). **The port had no MC2 twin at all** — the ledger comment
+said "unwired, no corpus signal" — and instead fed a flat +3000 per
+damaging hit off `mc2_rival_take_damage`, war-checking every one. Three
+ways wrong: per damage TICK not per projectile, no model ladder, and war
+latched off the arm retail leaves alone. mc2l6-rsg had wiz 1/2/3 pinned
+at hate 27607 with `war` set from t=387/464/558 where retail's three
+ledgers sit at the 24607 neutral with war clear — and a latched war pins
+the decay (EF:5388), so the port could never come back down. The whole
+hate/war board (2,473 rows) cleared.
+
+**D — "UNDEFENDED" IS TWO TESTS AND THE SECOND IS THE SUMMED-EXTENTS
+BOX.** `sub_13E40`'s enemy-castle pick reads `dist2(owner, castle) >
+0x3840000 && !sub_106C0(owner, castle)` (EF:6202-04); the port kept only
+the 7680-squared radius, which LOOKS like the stronger of the two and is
+not. A rung-6 castle measures 6784 in `array_0x52_82`, so the box
+reaches 6784 + the owner's own 121 = 6905 PER AXIS and its corner sits
+9765 out — 2085 BEYOND the radius. An owner parked diagonally off its
+own keep is therefore "far" and still "at" it. mc2l6-rsg t=953: the
+human is 8067 from castle 63 (65,062,037 > 58,982,400) but at dx 4706 /
+dy 6551, inside the box on both axes, so retail's conjunction fails,
+`sub_13E40` finds no candidate at all (rival 370's own castle holds 0
+mana, so the poorer arm cannot fire either) and the cascade falls
+through to arm 5 — AttackWizard on the human, and a (9,0) fired at slot
+40. The port raided the castle and fired nothing. **952 -> 999.**
+
+**E — THE BALLOON PICK'S HOME TEST IS THAT SAME BOX.** `sub_14250`'s
+third gate is `!sub_106C0(balloon,
+Entities[ownerWizext->CastleEntityIndex])` (EF:6316) where the port had
+an invented 2048-squared circle — more than three times too small
+against a grown castle, so every human balloon loitering inside its own
+keep read as raidable. mc2l6-rsg t=1000: rival 378 takes RaidBalloon
+(ai_state 9) where retail is in Possess (6). **999 -> 1129.**
+
+**F — THE CAST CONE IS `yaw_0x1C` vs THE STORED AIM REGISTER
+`roll_0x20`.** Both aiming arms of `sub_14E10` read exactly
+`sub_582B0(a1x->yaw_0x1C_28, a1x->roll_0x20_32)` — EF:6801 for
+{0,1,7,0x16} at `>= 0xAA`, EF:6845 for {4,9,0xD,0xE,0x12,0x13,0x15} at
+`>= 0xE3` — the same roll/fov desired-aim pair the steering writes, and
+never an on-the-spot bearing. The port recomputed `angle_between` from
+its own steer target, which is a different number the moment the cast
+site runs ABOVE the handler's own aim stamp. mc2l6-rsg t=1130: rival 370
+is in Home with `word_0x96_150` = its own castle (`sub_14630` EF:6394-96
+stamps it), and `sub_133B0`'s opportunistic spell-1 cast fires above the
+`sub_14C60` block that re-stamps `roll` — retail tests yaw 254 against
+roll 254, casts, and `goto LABEL_6` returns past the approach so `roll`
+is never re-stamped that tick. The port aimed a fresh 1596 at the
+castle, read angdist 706, refused at the 0xAA gate, fell through to the
+approach and stamped roll 1596: one missing (10,0) at slot 833 plus the
+whole `roll` lane. ⭐ `mc2_rival_cast_ready`'s own cone already read the
+pair correctly (`f30` vs `f34`) — this was the SECOND copy of one
+predicate, and only one of them had been fixed. **1129 head reshaped.**
+
+### GATE
+
+Certified **13/13 END devs=0** · full workspace suite **908/0** (the
+three new unit pins included) · **303 fixtures, 0 regressions** ·
+clippy 0 · fmt · every other uncertified row byte-held against the
+session-78 baseline · baseline row + header regenerated for mc2l6.
+
+⚠ **BOTH PAIR-FIXTURE CANDIDATES WERE VACUOUS AND WERE DELETED.** Laws
+D and E were cut as pair fixtures at t=952 and t=999, they passed, and
+they passed under their own reversion probe too — because the pick
+writes an UNGRADED `ai_state` and the consequence lands a tick or more
+downstream, where pair mode has already re-imported retail's state.
+Laws A, B, C, D and E are all free-run-only for that reason. Three UNIT
+pins carry C, D and E instead
+(`the_mc2_hate_ledger_is_the_tick_top_projectile_sweep`,
+`the_mc2_undefended_castle_test_is_the_summed_extents_box`,
+`the_mc2_balloon_pick_home_test_is_the_summed_extents_box`), probed
+BATCHED and INDIVIDUALLY — each revert fails exactly its own pin and
+nothing else. `grep PROBE-REVERT` = 0 after.
+
+### NEXT
+
+1. **mc2l6-rsg t=1130** — `(9,1)slot853:x,y,z,speed`, and it is a LOCAL
+   pair: rival 370's spell-1 bolt is BORN with `speed 376` against
+   `min_speed 384` where the port mints it at 384. A newborn class-9
+   ctor/first-tick law, and the first pair-fixturable head on this take
+   since t=783.
+2. **The `wiz_shadow_mc2` leftovers**: `invuln` t=83 (wiz 2, retail 1 /
+   port 9) and the HUMAN's `xp_vol` t=280 (2,608 rows across 5 spell
+   indices) — the only two entries left on the board before the head.
+3. 🏦 NEW: `mc2_rival_pick_castle` / `pick_wizard` / `pick_balloon` /
+   `pick_mana` all still scan the POOL where retail walks
+   `dword_38519`, the class-3 tick-top roster (`wiz_chain`) — the same
+   law as A, on four more sites. `wiz_chain`'s membership also carries
+   an MC1-shaped `flags & 0x10` test that MC2's case-3 arm (EF:39974-83)
+   does not have.
+4. 🏦 NEW: `sub_14030`'s WAR arm returns IMMEDIATELY on the first
+   chain candidate with `war[colour] == 1` — no nearest-election, no
+   distance gate (EF:6257-62). The port folds war into the candidate
+   predicate and range-gates it. Unwitnessed while every war flag is
+   clear; it will matter the first time one latches.
+5. 🏦 NEW: the port's `(3,1)` `f24`/`f26` lanes look SWAPPED against
+   retail's — mc2l6 slot 370 carries retail `f24=0 / f26=343` where the
+   port holds `f24=343 / f26=0`, 659 + 11 rows from t=302. The wizard's
+   damage-source latch (`mc2_rival_take_damage` writes `f38`) may have
+   the wrong home. Also `(3,1) mail0.amt` 650 rows, retail 200/300 held
+   where the port reads 0.
+6. 🏦 Carried from 74-78: the HUMAN half of the life-regen register law
+   · the `mc2_rival_emit` muzzle `f78`-vs-`.fov` per-site audit · the
+   Home handler's CASTLE-LESS arm (needs a castle-less-rival take) · the
+   `sub_5EFA0` tail · the MC1 lob `+68/+69`/`+150/+152/+154` stamp ·
+   `wiz 0 shots`/`hits` at mc1l0-sg t=2733 · class-12 burst counter home
+   · 🎬 the OWED mc2l22 rival-heal instrument.
+
 ## SESSION 78 — FOUR LAWS, THREE OF THEM ABOUT WHOSE VALUE A SITE READS
 
 Focus = the galores (standing player ask). `mc1l0-spells-galore`
@@ -25142,3 +25752,4926 @@ reverted.
    both certified re-takes; `spawn_worm`'s `free.len() + 1 < 16` guard;
    the `flags |= 0x400` per-site binary audit.
 
+
+## SESSION 82 — THE CORPSE KEEPS FLYING (mc2l6-rsg 1845 → 2031)
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore`
+CERTIFIED and held at END; **`mc2l6-rival-spells-galore` 1845 → 2031**;
+`mc2l0-spells-galore` HELD at 8,103 (untouched). FIVE laws, one head
+chain — 1846 → 1883 → 2032 — and every one of them is the MC2 RIVAL
+column running a different function from the one retail runs, where
+some OTHER column of this same port already had the law right.
+
+### ⭐⭐⭐ RULES THIS SESSION PROVED
+
+- **⭐⭐⭐ A LAW LANDED ON ONE COLUMN IS NOT LANDED — fourth session
+  running, and this time it was FIVE FOR FIVE.** The MC2 human's death
+  fall opens on `sub_5D530` (`step_player_flight_mc2` says so in its
+  own comment). The MC1 rival's intake stamps the knock register
+  (SNAPSHOT 13, whose note even reads *"A live rival never spends it;
+  its death fall does"*). The MC2 human's `mc2_scatter_spells` runs
+  ONE RUNNING STREAM off the dying carpet. `mc2_rebuild_free`'s doc
+  names EF:60101 — the death payout — as one of its own call sites.
+  Not one of the four had crossed to the MC2 rival, and the fifth
+  (the fall accumulator's offset) was mis-homed on the class outright.
+  ⭐ THE CHEAPEST DIG IN THE CORPUS IS `grep` FOR THE SAME RETAIL
+  SYMBOL ON THE OTHER COLUMN, and it should be step one, not step ten.
+- **⭐⭐⭐ WHEN A HANDLER'S FIRST STATEMENT IS ANOTHER HANDLER, THE PORT
+  USUALLY DROPPED IT.** `sub_5E310`'s body reads as a gravity leg with
+  a payout, and that is exactly what the port had. Its FIRST line is
+  `sub_5D530(a1x)`. The arm's own doc comment asserted the opposite —
+  *"Z-only, no polar drift — any lateral drift here displaces the
+  graves/tokens"* — which is true and was the bug: retail's graves ARE
+  displaced, eight tiles downrange.
+- **⭐⭐ A REGISTER NOTHING READS IS STILL STATE.** MC2's rival knock
+  is written on every hit and read by exactly one function the rival
+  only reaches once, at death. It looks inert for a whole life and
+  then decides where the corpse, the grave and 26 spell tokens land.
+  A "nothing consumes this" argument is about the CURRENT dispatch
+  set, not about the lane.
+- **⭐⭐ A PAIR THAT CANNOT BE CUT IS STILL A MEASUREMENT.** Both
+  candidate fixtures failed on `(3,1) mana` — rival 370's duel drain,
+  which an imported world cannot run because the lock words are not in
+  the MC2 import (session 81's own pair-blindness). Cutting them
+  anyway named the blindness precisely and turned three laws into unit
+  pins in one step.
+- **⚠ THE DUMP NAMES LANES BY BYTE OFFSET AND THE PORT NAMES THEM BY
+  HABIT.** `f2c` printing `—` on every wizard was the tell that the
+  class had no home for `word_0x2C_44` at all — the lane was graded
+  against @0x2E (dead on the class) and imported from nowhere.
+
+### THE LAWS
+
+- **A — THE RIVAL DEATH FALL OPENS ON THE CARPET MOVER.**
+  `sub_5E310`'s first statement is `sub_5D530(a1x)` (EF:60074), a
+  different mover from the alive brain's `sub_146F0` (EF:6416), and
+  every disagreement between them is a corpse law: the actSpeed servo
+  runs BEFORE the step (mc2l6-rsg t=1851+: 93 → 77 covers 77, 77 → 93
+  covers 93 — exactly inverted from the same wizard's alive ticks) ·
+  the pose accumulators are the HUMAN CURSOR's, so a rival's yaw
+  integration is a no-op and `pitch_0x1E_30` is STAMPED 0 from the
+  empty accumulator (rival 378 carries 2007 from its last cast until
+  the mover clears it) · the ramp writes `pitch_0x24_36` only when the
+  aim pitch is nonzero, so the step is flat · the strafe is spent but
+  NOT decayed · the row's `v_14` is a −4/tick sink under the clearance
+  floor, which is the whole z story once the corpse is off the ground
+  (t=1846..1854: mover −4 every tick, gravity the accumulating rest).
+  New: `mc2_rival_carpet_move`. **1845 → ~1862.**
+- **B — THE MC2 RIVAL'S KNOCKBACK REGISTER, BANKED FOR LIFE.**
+  `sub_5EFA0` (EF:60697-702) stamps `yaw_0x1E_30 = tan2(source →
+  victim)` and `moveBoost_0x1E_30 = damage / 10` clamped [0, 80] on
+  every delivered letter. `sub_146F0` has NO moveBoost leg, so a
+  living rival never spends it: 378's 200-damage letters pin it at 20
+  for its whole life and the death fall pays it out 4/tick over
+  t=1846..1850 (retail's own 20/16/12/8/4/0, bearing 585 exact).
+  `Mc2Rival::knock_dir`/`knock_mag` + the import seat + SNAPSHOT 17.
+  **~1862 → 1882.**
+- **C — THE DEATH SCATTER RUNS ON THE DYING WIZARD'S OWN LCG, AND
+  KEEPS THE OWNER.** EF:60137-62: three 16-bit draws per token
+  CONTINUING across all 26 off `a1x->rand_0x14_20` (the port restarted
+  each TOKEN's private seed — retail's 378 leaves t=1883 with rand
+  9208 where the port held its t=1846 value 38084), and the writes are
+  exactly four — flag bit 0, `actionIndex++` (an INCREMENT), the
+  position, the life. `parentId_0x28_40` is NOT among them: retail's
+  loose tokens keep naming the dead wizard (the graded `owner` lane on
+  slots 379-382). The book entry becomes a BOOLEAN 1, not 0. Also the
+  36-byte `str_0x5E_94` memset (EF:60123) — the only thing that ever
+  clears the letter the fatal hit parked, since `sub_5EFA0` consumes
+  on the SURVIVE path alone.
+- **D — THE PAYOUT REBUILDS THE FREE STACK FIRST.** `sub_49F90`
+  (EF:60116) — Level.cpp:1294-1300's descending 999→1 collect — so the
+  grave and the death puffs come off the LOWEST free slots (retail
+  1/3/4/6; the port took 217/756/760/801). Same statement block: the
+  grave takes the CORPSE's own axis (a clearance band above the
+  terrain, not the re-derived ground point), and action 3 + the flat
+  1200 respawn timer sit INSIDE the grave spawn's success arm, while
+  the husk hide is an OR alone — clearing the collide bit as well was
+  this arm's own invention. **1882 → 2031.**
+- **E — A WIZARD'S FALL VELOCITY LIVES AT @0x2C, NOT @0x2E.** The
+  gravity accumulator is `word_0x2C_44` (EF:60081-90) and @0x2E is
+  DEAD on the class (retail's 378 steps `f2c` 0 → −18 across
+  t=1846..1854 with `f2e` at 0 throughout). The port's accumulator
+  `f46` sat on the uniform @0x2E home, so the lane was graded against
+  the wrong offset AND had no import seat: every imported corpse
+  restarted its fall at velocity 0 and the t=1882 pair landed the
+  wizard at z 145 where retail records 128, missing the whole payout
+  by a tick. Import + dump lane re-homed for class 3 models 0/1.
+
+### GATE
+
+Certified **13/13 END devs=0** · suite all green (44 targets) ·
+**307 fixtures, 0 regressions** · clippy 0 · fmt · full 25-row board
+byte-held except the mc2l6-rsg row · baseline row regenerated ·
+`grep PROBE-REVERT` = 0. Fixtures: THREE UNIT PINS
+(`a_dead_mc2_rival_keeps_flying_under_the_carpet_mover`,
+`an_mc2_rival_banks_its_knockback_until_it_dies`,
+`the_mc2_death_scatter_keeps_the_token_owner`), each reversion-probed
+and each failing on exactly its own law. No pair fixture: every
+candidate in the window fails on rival 370's `mana`, because the human
+holds a DUEL on it and the lock words are not in the MC2 import
+(session 81's pair-blindness, now measured rather than inferred —
+retail 128 + 100 regen − 108 drain = 120 against the port's 228).
+
+### NEXT (in order)
+
+1. **mc2l6-rsg t=2032** `(9,9)slot44:pitch` — RECONNOITRED, and it is
+   NOT the class-9 flyers: slots 44/45 are the human's two fresh
+   (9,9) bolts (targets 157 and 162), and the real event is that
+   **slot 157, a (5,0) MULTIPART CHAIN HEAD, takes a 200 letter from
+   the human and reacts**. Retail: `action45 7 -> 2`, `sv2 1 -> 10`,
+   `scratch10 75 -> 70`, **z 1785 -> 1856 (+71)**, and the whole body
+   (158..165+) follows with z errors that SHRINK toward the tail
+   (−75, −71, −69, −68, −68, −67, −63, −50, −23) — a chain that has
+   not finished propagating. The pair at 2031 is razor-tight: on slot
+   157 exactly TWO lanes differ, `scratch10` (retail steps it −5, the
+   port does not) and `z`. Everything else, the state transition
+   included, already matches.
+   ⭐ THE SHAPE TO CHASE: `sv2` is the port's `site_z`, so at tick
+   start this creature is STAGE-HELD (StageVar2 == 1) and
+   `mc2_creature_tick`'s `action & 7 == 7 && site_z != 0` arm returns
+   without dispatching — retail's `sub_1D5D0` for StageVar2 == 1 is
+   the release, and the +71 lift plus the `dword_0x10_16` −5 belong to
+   it (or to `m0_bob`, which owns the port's z on this state). Start
+   at `sub_1D5D0`'s StageVar2==1 arm and `m0_bob`, not at the flyers.
+2. 🏦 NEW: the MC2 import has no seat for the DUEL LOCK
+   (`word_0x146_326` / `dword_0x142_322` / `word_0x14A_330`), so no
+   mc2l6 pair inside a duel window can ever be cut. Session 81 banked
+   this as a fixture limitation; it is now the thing standing between
+   this take's laws and the pair channel.
+3. 🏦 NEW: the port's rival lethal branch writes `e.f46 = 0`, which
+   retail's (EF:5416-19) does not — a stale terminal velocity would
+   ride a second death. Harmless today (the lane is 0 while alive);
+   audit when the respawn path is next opened.
+4. 🏦 NEW: retail's death-payout kill credit gates on the KILLER being
+   `class 3 && model 0|1` (EF:60104-11) where the port asks
+   `owner_slot_of_source`; and the flood-kill suppression is at the
+   INTAKE (EF:60714-16), not here.
+5. 🏦 Carried from 81/80/79: the rival spell emit `sub_693F0`'s two
+   unstamped lanes · `sub_5EFA0`'s non-lethal-only mail clear and its
+   opening aim-target sanity clear · the generic impact tail's `f140`
+   audit · which ACTIONS share `sub_662E0` · the `pick_*` pool scans ·
+   `sub_14030`'s WAR arm · the `(3,1)` `f24`/`f26` swap · the muzzle
+   `f78`-vs-`.fov` audit · the Home handler's castle-less arm · the
+   MC1 lob stamp · `wiz 0 shots`/`hits` at mc1l0-sg t=2733 · class-12
+   burst counter home · 🎬 the OWED mc2l22 rival-heal instrument.
+
+
+## SESSION 83 — THE WRAPPER, THE CREDIT, THE HALF-TURN AND THE RAW RESPAWN (mc2l6-rsg 2031 → 3368)
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore`
+CERTIFIED and held at END; **`mc2l6-rival-spells-galore` 2031 → 3368**;
+`mc2l0-spells-galore` HELD at 8,103 (untouched). FIVE laws off one head
+chain — 2032 → 2165 → 2547 → 3084 → 3258 — and every one of them was a
+CONTROL-FLOW shape the port had paraphrased: a switch that reads a
+field the caller just wrote, a subtraction with an invented floor, a
+loop whose first statement had migrated to the end, a function whose
+two callers share a body the port had split in half, and a dispatch
+order the port had frozen into a constant. The fifth is the fourth's
+own consequence — landing law D moved a respawned wizard's book below
+it and made a slot relationship the port had hard-coded stop holding.
+
+### ⭐⭐⭐ RULES THIS SESSION PROVED
+
+- **⭐⭐⭐ AN INVENTED GUARD IS FALSE EXACTLY WHEN IT MATTERS.** Three
+  of the four laws are a predicate retail does not have. The phase-7
+  wrapper's `actionIndex & 7 == 7` re-test is true on every quiet tick
+  and false on the ONE tick per hold that the wrapper exists to
+  handle. The duel drain's `max(0)` on the regen term is a no-op on
+  every ordinary tick and wrong on exactly the ticks the victim is
+  casting. A guard that "obviously cannot matter" is a guard nobody
+  measured — and both of these were sitting in front of graded lanes
+  for months.
+- **⭐⭐⭐ READ THE LOOP'S FIRST STATEMENT, NOT ITS BODY.** `sub_35640`
+  seeds a yaw and then OPENS its do-while with the half-turn, so the
+  storm's first beam already carries it. A `base + k * 1024` loop
+  produces the same PAIR of beams and is wrong about which one is
+  spawned first — and since the pair is symmetric, no arithmetic
+  assertion about the two beams can tell the two versions apart. Only
+  the register the loop leaves on the CLOUD can. ⭐ WHEN AN ORDERING
+  BUG PRODUCES A SYMMETRIC SET, PIN THE EMITTER'S OWN STATE.
+- **⭐⭐⭐ A SHARED CTOR/REUSE FUNCTION IS A LAW ABOUT WHAT THE REUSE
+  ARM DOES *NOT* DO.** `sub_5C950` is one function for minting a
+  wizard and for respawning one, and the entire per-map difficulty
+  block — Aggression, Perception, Reflexes and the Life scalar that
+  divides maxLife — lives inside the NEW-ENTITY arm. So a respawned
+  MC2 rival comes back at the RAW 10000 maxLife and 256 Life scalar:
+  a rival authored at Life 51 returns from its first death five times
+  the wizard it was. The port had reimplemented the reuse arm from
+  scratch and re-filled the OLD ceilings.
+- **⭐⭐ THE SIGN OF A MIS-ORDERED PAIR IS THAT THE TWO RECORDS HOLD
+  EACH OTHER'S VALUES, LANE FOR LANE — nothing is missing, nothing is
+  extra, and the free stacks agree at both ends. mc2l6-rsg t=2547
+  looked like a mass-spawn desync and was one line of control flow.
+- **⭐⭐ A FIXTURE THAT FAILS ON SOMEBODY ELSE'S LAW IS A MAP OF THE
+  BLINDNESS.** The law-A pair at t=2031 cut cleanly and then failed on
+  `(3,1) mana` — rival 370's duel drain, which the take's own
+  verify-deltas sweep grades CLEAN at that tick because the sweep's
+  carried World still holds a duel lock the 3-record fixture cannot.
+  ⚠ THE SWEEP'S WORLD IS ITS OWN STATE CHANNEL: "the pair is clean at
+  t" and "a fixture cut at t passes" are different claims.
+- **⚠ A RE-MINT THAT CHECKS WHETHER THE OLD ONE IS STILL ALIVE IS A
+  PORT INVENTION.** `sub_5CF40` overwrites `SpellEnabled[i]` with a
+  brand-new class-15 for every known spell and simply ORPHANS whatever
+  was there — which is coherent only because SESSION 82's law C had
+  already established that the death scatter never frees those tokens.
+- **⭐⭐⭐ A LAW THAT MOVES ENTITIES BETWEEN SLOTS INVALIDATES EVERY
+  COMMENT THAT ASSUMED THE OLD ORDER.** Law E was law D's own
+  consequence, and the port had written the assumption down verbatim
+  — *"the token's own pool slot sits ABOVE the wizard's … so the
+  class-15 handler runs LATER IN THAT SAME FRAME"* — as the
+  justification for emulating the token body at the caster's slot.
+  Law D put a respawned book BELOW its wizard and the justification
+  silently stopped holding. ⭐ AFTER LANDING AN ALLOCATION LAW, GREP
+  THE TREE FOR COMMENTS THAT REASON ABOUT SLOT ORDER.
+- **⭐⭐ WHEN A "MISSING/EXTRA" SIGNATURE NAMES A SPAWNER, CHECK
+  WHETHER THE SPAWNER RAN BEFORE BLAMING ITS GATE.** t=3258's extra
+  (10,2) read as a speed-sustain refusal; the free stack settled it in
+  one call — retail popped ONE slot where the port popped TWO, so
+  nothing was over-spawning the puff and something else was spawning
+  at all.
+
+### THE LAWS
+
+- **A — THE PHASE-7 WRAPPER'S SWITCH READS `StageVar2` AFTER THE LEGS,
+  AND THERE IS NO ACTION TEST** (`sub_1F300` EF:11355-58 for m0,
+  `sub_26470` EF:16938-41 for m21). Both are literally
+  `sub_1D5D0(a1x, 8m); switch (a1x->StageVar2_0x49_73) { … }`. The
+  non-lethal hit arm and the kind-10 re-raise both leave StageVar2 =
+  10 — still inside the case list — while moving the action to
+  `8m+2`/`8m+6`, so retail runs the DODGE and the BOB on the release
+  tick. mc2l6-rsg t=2032 slot 157: a stage-held kind-1 dragon takes
+  the human's 200 (life 4000 → 3800, action 7 → 2, sv2 1 → 10),
+  retail settles the ground to 1781 and then bobs on top of it —
+  z 1856, `dword_0x10_16` 75 → 70 — where the port stopped at the
+  settle. The two fresh (9,9) bolts the human aimed at that chain the
+  same tick were born on the wrong pitch because of it, which is why
+  the take's signature named slot 44 and not slot 157.
+  → `mc2_held_tick` (stagevars.rs). **+133** (2031 → 2164).
+- **B — THE DUEL DRAIN READS THE VICTIM'S STORED REGEN REGISTERS, RAW**
+  (`sub_5DE30` EF:59939-43): `life_0x8 -= lifeRegen_0x163_355 + 2` and
+  `v11 = mana_0x90_144 - (manaRegen_0x88_136 + 8)`, signed, no floor,
+  the only clamp being mana at 0 from below. `manaRegen_0x88_136` is
+  also the lane a cast debit rides (`sub_68DE0`'s first-tick arm parks
+  `-maxMana_0x8C_140` there), so on a casting tick the drain term is
+  NEGATIVE and retail's subtraction becomes a CREDIT that cancels the
+  debit exactly — a dueled rival's purse falls a flat 8 per tick
+  whatever it is casting. mc2l6-rsg t=2165, rival 370 with a 100-mana
+  manifestation opening: retail 588 → 580 (drain −92, regen −100), the
+  port 488. The life half was the same mis-read one register over
+  (`maxLife/500` where retail reads the stored rate — the register
+  SESSION 78 had already landed for the rival's own regen).
+  → `mc2_duel_drain` (rivals.rs). **+382** (2164 → 2546).
+- **C — THE STORM'S HALF-TURN IS THE LOOP'S FIRST STATEMENT**
+  (`sub_35640` EF:25909-13). `pitch_0x1E_30 = 56` and
+  `yaw_0x1C_28 = rand & 0x7FF` before the loop; then the do-while
+  OPENS with `HIBYTE(yaw) = (HIBYTE(yaw) + 4) & 7`, so beam 0 flies at
+  `base + 1024` and beam 1 at `base`. Each beam takes its yaw and
+  pitch FROM THE CLOUD, which therefore ends the tick holding the seed
+  yaw and a pitch of 56. mc2l6-rsg t=2547: retail's yaw-188 (10,23)
+  blast takes slot 733 and its yaw-1212 twin takes 845; the port had
+  them the other way round, with ~70 (9,9) children each following the
+  swap. → `mc2_storm_tick` (tail.rs). **+537** (2546 → 3083).
+- **D — A RESPAWNED RIVAL COMES BACK RAW, AT ITS CASTLE'S OWN
+  ALTITUDE, WITH A FRESHLY MINTED BOOK** (`sub_5C950`'s reuse arm).
+  Five sub-laws in one block:
+  1. `word_0x24A_586 = 256`, `maxMana_0x8C_140 = 1000`,
+     `maxLife_0x4 = 10000` (EF:43703-05) and then `life = maxLife;
+     mana = maxMana` — the `WizardMapSettings_0x360D2` re-read that
+     divides maxLife by the authored Life scalar is INSIDE the
+     new-entity arm (EF:43757-72) and never runs on a respawn. Rival
+     378: maxLife 1992 → 10000, scalar 51 → 256, maxMana 1300 → 1000.
+  2. the anchor is `v35x = *castle_position` (EF:43690) — the WHOLE
+     `axis_3d` including z, overwriting the terrain+0x100 lift the
+     authored point got (retail 2720, the port's ground sample 2976).
+  3. the function's FIRST statement is `sub_49F90()` (EF:43672), so
+     the re-minted book takes the LOWEST free slots (3/4/6/7).
+  4. `sub_5CF40` (EF:43770-84) re-mints EVERY known spell
+     unconditionally and orphans the loose tokens; the port's
+     `book.ent[s] == 0` guard meant a rival that died once respawned
+     with an EMPTY book (72 missing class-15s).
+  5. what the arm does NOT write: `manaRegen_0x88_136` (the rate the
+     wizard died holding is what its first live tick spends — 1000 →
+     1100 at t=3085), the entity's `actSpeed_0x82_130`, and its @0x2C
+     fall velocity. Retail's `speed_0xc_12 = 0` / `yaw_0x1E_30 = 0` /
+     `moveBoost_0x1E_30 = 0` are the PLAYER struct's commanded-speed
+     and knock registers, not anything on the entity.
+  → `mc2_rival_respawn` (rivals.rs). **+173** (3083 → 3257).
+- **E — WHETHER A RIVAL'S CAST FIRES ON THE ARM FRAME IS A SLOT
+  COMPARISON, NOT A CONSTANT** — and law D is what made the other
+  branch reachable. Retail's arm (`sub_5F7B0` EF:60976) writes
+  `word_0x2E_46 = word_0x30_48` and nothing else; the FIRE, the
+  `sub_68DE0` debit and the countdown all live in the token's own
+  action body (`sub_693F0`), which runs at the TOKEN's pool slot. A
+  wizard minted at level load owns the slots directly above itself, so
+  its token is walked LATER in the very frame the arm lands and the
+  first tick is same-frame — which is what SESSION 74 law B landed and
+  what `mc2_rival_buffs`'s caster-slot stand-in emulates by
+  pre-consuming. A RESPAWNED wizard's book is on the LOWEST FREE SLOTS
+  (law D), so its tokens sit BELOW it, have already been walked this
+  frame, and the whole first tick lands on the NEXT one. mc2l6-rsg
+  t=3258: rival 378 stamps its spell-1 cast — retail's own wizext
+  moves with it (`burst` 2 → 3, `cooldown[1]` 0 → 10, `cmd_speed`
+  80 → 0) — and the pool allocates NOTHING but rival 383's slipstream
+  puff; the (9,1) is not born until t=3259, at slot 39, the slot the
+  port had already spent a frame earlier. Tokens below their caster
+  now run `mc2_rival_token_tick` from the slot-ordered
+  `mc2_manifestation_pass`; a level-load book keeps the caster-slot
+  stand-in, byte for byte. **+111** (3257 → 3368).
+
+### GATE
+
+Certified **13/13 END devs=0** · suite green (44 targets) · **309
+fixtures, 0 regressions** · clippy 0 · fmt · full board byte-held
+except the mc2l6-rsg row · baseline regenerated · `grep PROBE-REVERT`
+= 0. TWO PAIR FIXTURES — law D
+(`a-respawned-rival-comes-back-raw-and-re-mints-its-book`, reversion-
+probed: 25 distinct failing lanes under revert, all of them its own)
+and law E (`a-respawned-rivals-token-fires-a-frame-later`, whose
+revert reproduces the head's `extra (10,2)` exactly). THREE UNIT PINS
+in `crates/mgc-sim/src/engine/world.rs`
+(`the_phase_seven_wrapper_switch_reads_stagevar2_not_the_action`,
+`the_duel_drain_reads_the_victims_stored_regen_raw`,
+`the_storm_half_turn_is_the_loops_first_statement`), each
+reversion-probed and each failing on exactly its own assertion. Laws A
+and B are pair-blind for the same reason SESSION 82's three were (no
+duel-lock seat in the MC2 import); law C is pair-blind because the
+(9,9) column is per-entity TEAR-excluded, so a swapped PAIR of beams
+is invisible to a channel that only compares presence.
+
+### NEXT (in order)
+
+1. **mc2l6-rsg t=3369** — `(3,1)slot378:z,pitch`, and it is TWO LANES
+   ON ONE RECORD: retail's respawned rival 378 reads `pitch` 136 /
+   `z` 344 where the port has 143 / 340, with every other lane on the
+   wizard matching. Retail's own changelog at that tick moves neither
+   z nor pitch (`yaw` 912 → 907, `roll` 795 → 792, x/y stepping,
+   `speed` 13 → −3), so the port is WRITING something retail holds.
+   378 is at z 344 over open ground with `actSpeed` crossing zero —
+   the wizard alt servo / `sub_146F0`'s pitch leg is the neighbourhood.
+   ⚠ THE PRECEDING RECONNOITRE WAS WRONG AND THE REFUTATION IS THE
+   USEFUL PART: t=3258's `extra(10,2)` looked like a `sub_68D50`
+   refusal on the speed sustain, but rival 383's castle held 1.4M
+   mana, its own purse 4900, its `actSpeed` 160 and its `d88` pinned
+   to 0 — the sustain DID run, and retail's puff was born on schedule
+   at slot 615. The extra was rival 378's projectile firing a frame
+   early and stealing the slot (law E). ⭐ WHEN A "MISSING/EXTRA"
+   SIGNATURE NAMES A SPAWNER, CHECK WHETHER THE SPAWNER RAN BEFORE
+   BLAMING ITS GATE — the free stack said retail popped ONE slot where
+   the port popped TWO, which named the real culprit in one call.
+2. 🏦 NEW: the (10,23) blast's subSpell has the WRONG HOME on this
+   port. `sub_4F5F0` writes `subSpellIndex_0x2A_42 = 25` and the beam
+   impact overwrites @0x2A with the storm's own subSpell
+   (EF:25925-27), where the port keeps both in `f140`. The dump reads
+   `f2a` 300 / `mana` 0 on retail against 100 / 300 on the port at
+   every (10,23) birth. Per `obs_project_mc2`'s own note this is the
+   tell that model 23's import case is missing from the `c == 10 &&
+   matches!(m, 0|1|6|11|17|65|66)` f140-diversion list — the same way
+   (10,17) was found. Not currently graded by the replay lane set;
+   fix with the next (10,23) head.
+3. 🏦 NEW: `mc2_duel_tier` clamps the spell row's `life` to 0..=2 where
+   retail RETURNS from `sub_5DE30` without draining anything for a
+   value above 2 (EF:59936-38). No shipped row is known to carry 3;
+   confirm against the table and either drop the clamp or document it.
+4. 🏦 PARTIALLY PAID from 82: the respawn path is open and no longer
+   zeroes @0x2C, but the rival LETHAL branch's `e.f46 = 0` (which
+   retail EF:5416-19 does not write) is still there — it is now
+   observably harmless (mc2l6-rsg t=3084 carries retail's −76 through
+   the seam) but it is still an invented write.
+5. 🏦 Carried from 82/81/80/79: the MC2 import's missing DUEL-LOCK seat
+   (`word_0x146_326` / `dword_0x142_322` / `word_0x14A_330`) — now
+   THREE sessions' worth of laws are unit pins because of it · the
+   death-payout kill credit's `class 3 && model 0|1` gate · the rival
+   spell emit `sub_693F0`'s two unstamped lanes · `sub_5EFA0`'s
+   non-lethal-only mail clear · the generic impact tail's `f140` audit
+   · the `pick_*` pool scans · `sub_14030`'s WAR arm · the muzzle
+   `f78`-vs-`.fov` audit · the `flags |= 0x400` per-site binary audit ·
+   🎬 the OWED mc2l22 rival-heal instrument.
+
+## SESSION 84 — WHAT THE REUSE ARM DOES NOT WRITE (mc2l6-rsg 3368 → 3519)
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore` held
+CERTIFIED at END; **`mc2l6-rival-spells-galore` 3368 → 3519**;
+`mc2l0-spells-galore` HELD at 8,103 (untouched). TWO laws, and both
+are the same shape one level down from session 83's: **a write the
+port makes that retail does not.** Session 83 found invented
+PREDICATES; this session found invented ASSIGNMENTS.
+
+Both heads were pair-CLEAN and free-run-DIVERGED — the signature of an
+ungraded lane carrying a debt — and both were named by the raw shadow
+in one census each. Neither is fixture-cuttable: `retail_import_mc2`
+restores the whole player block every pair, so a pair fixture is
+structurally vacuous for anything that lives there.
+
+### LAW A — the reuse arm's zero-writes are an ENUMERATED LIST, and the combat FSMs are not on it
+
+`sub_5C950` (EF:43694-43843) writes, in the reuse arm: `word_0x159_345`,
+`word_0x24C_588`, `dword_0x16D_365`, `speed_0xc_12`, `yaw_0x1E_30`,
+`fov_0x22_34`, `moveBoost_0x1E_30`, `strafeSpeed_0x10_16`, an 18-byte
+`memset(&str_0x1AC_428, 0, 18)`, `word_0x24A_586`, `word_0x146_326` /
+`word_0x148_328`, and — only under `model_0x40_64 == 1` — the brain
+byte `byte_0x1C1_449`, the eight hate words and `SpellEnabled[2]`.
+
+Four of the port's zero-writes are not on that list, and the offsets
+say why:
+
+- the burst counter `word_0x1A2_418` and the poverty latch
+  `word_0x1A4_420` sit **BELOW** the memset's 0x1AC..0x1BD window;
+- the weave FSM (`str_611` 0x45D) and its committed direction
+  (0x45C), and the water-steer FSM (0x45E/0x45F), live in `str_611`,
+  which the reuse arm never touches;
+- the target `word_0x96_150` is an **ENTITY** field — the reuse arm
+  keeps the entity and never re-enters it (the NEW-entity arm gets a
+  fresh, zeroed record from `IfSubtypeCallCreatingManaSphere_4A190`,
+  which is why the mint looks like it clears them).
+
+The recording says it outright. Rival 378's player block across its
+respawn at t=3084:
+
+```
+t=3083  ai_state=11 burst=2 charge=6 invuln=0   cmd_speed=80 weave=1/8 cd=[(1,3)]
+t=3084  ai_state=0  burst=2 charge=6 invuln=100 cmd_speed=0  weave=1/8 cd=[(1,3),(2,8)]
+```
+
+Only `ai_state`, `invuln`, `cmd_speed` and `cooldown[2]` move —
+`burst`, `charge`, `weave`, `weave_dir` and `brake` all ride through
+death untouched.
+
+**`weave` is the one that bites.** The weave FSM's tick-0 arm is the
+only arm that *does* anything: it draws the ENTITY LCG, rolls a
+committed direction and snaps the actual yaw ±512; ticks 3..19 only
+coast. So a respawned rival that retail leaves at `weave` 8 —
+coasting — was, in the port, re-rolling a fresh jink, spending a draw
+nothing else spends and steering off. That debt rode 285 ungraded
+ticks before it surfaced as the wizard's own `z`/`pitch` at t=3369.
+**+151.**
+
+`mc2_rival_respawn`, mc2/rivals.rs.
+
+### LAW B — the at-castle grace pin is an ASSIGNMENT, not a floor
+
+`sub_12A70` initialises `v2 = 0` (EF:5356), raises it only on the
+castle-overlap test, and then does `if (v2) word_0x159_345 = 2`
+(EF:5398-99). So docking does not merely *keep* a wizard's grace
+alive — it **CLOBBERS a larger one down to 2**, and the very next
+statement's `--` parks it at 1 for as long as the wizard stays home.
+
+It matters exactly once per life, and it is the tick a rival
+respawns: `sub_5C950` re-anchors it AT ITS OWN CASTLE with
+`word_0x159_345 = 100` (session 83 law D), so the first `sub_12A70`
+after the respawn throws 98 ticks of that grace away. Rival 378
+respawns at t=3084 with 100 and the recording reads **1** from t=3085
+on; the port's `.max(2)` kept the whole 100.
+
+The consequence is bigger than the counter. Retail's structure is
+`if (word_0x159_345) { memset(&str_0x5E_94, 0, 36); word_0x159_345--; }
+else if (sub_5EFA0(a1x) == 2) {...}` — and `sub_5EFA0`'s FIRST
+statement is `a1x->word_0x26_38 = 0`. So a wizard that never leaves
+the grace branch never re-zeroes its attacker latch. The port sat in
+that branch for 99 ticks it had no business being immune for, and
+when it finally ran the intake it latched a letter retail had already
+eaten — leaving `word_0x26_38` stale at 343 for **400 ticks**.
+
+Horizon-neutral, strongly non-vacuous: the census `wiz 2 invuln` row
+(107 rows t=83..3183) went to **zero**, and `(3,1) f26` collapsed from
+**56 rows to 1**.
+
+⭐ **The MC2 HUMAN column has had the plain assignment all along**
+(`world.rs`, the `grace = 2` beside the same memset). Session 82's
+standing lesson once more: the rival column missing what another
+column of this same port already had right.
+
+`mc2_rival_alive`, mc2/rivals.rs.
+
+### GATE
+
+Certified **13/13 END devs=0** · suite green · **309 fixtures, 0
+regressions** · clippy 0 · fmt · board byte-held except the mc2l6-rsg
+row · baseline regenerated · `grep PROBE-REVERT` = 0. TWO unit pins in
+`crates/mgc-sim/src/engine/world.rs`
+(`the_respawn_keeps_the_combat_fsms_it_never_writes`,
+`the_at_castle_grace_pin_clobbers_a_larger_grace`), each
+reversion-probed.
+
+### NEXT (in order)
+
+1. **mc2l6-rsg t=3520** — `(3,1)slot378:z`, and the cause is already
+   named: at t=3519 rival 378's `target96` parts (retail **851**, port
+   **519**) and the z divergence lands the tick after. Both candidates
+   are `(10,39)` mana spheres a few hundred units apart; **851 and 483
+   are claimed by 378 itself** (`player_ent = 378`) and 519 is
+   unclaimed, so retail's own first test —
+   `if (a1x == Entities[v2x->playerEntityIndex_0x94_148]) goto LABEL_22`
+   — skips 851, yet retail's `word_0x96_150` IS 851. So retail's 851
+   did NOT come from `sub_148E0`, and the port re-picked where retail
+   did not. The dig is *what else writes a rival's target word*, and
+   the OWNED-sphere chain is the suspect: at t=3519 slot 378's
+   `next16` goes 483 → 0 and 483's `prev18` goes 378 → 0, i.e. one of
+   378's own claimed spheres leaves a chain threaded through the
+   wizard record itself.
+2. 🏦 NEW: **`mc2_rival_pick_ball` walks the POOL where retail walks a
+   CHAIN.** `sub_148E0` (EF:6519-6604) opens on
+   `v2x = x_D41A0_BYTEARRAY_4_struct.dword_38523` and steps `->next_0`
+   — ONE chain holding the (10,39)/(10,40)/(10,57) spheres in chain
+   order. The port runs two model-filtered passes over the pool in
+   slot order. That changes the argmin on ties, and — more sharply —
+   **when the model-57 break fires**, since retail can hit a 57 before
+   it has seen later 39/40s. The port's own comment asserts "retail's
+   list is built in that order"; that claim is the thing to check
+   (session 81's lesson). ⚠ Retail's 57 roll is `watcomrand()` — the
+   GLOBAL LCG — where the port draws `ent_rand(i)`, the ENTITY LCG.
+3. 🏦 NEW: the respawn's book re-mint writes fields `sub_5CF40` does
+   not. Retail's re-mint (EF:59374-59404) writes exactly
+   `SpellEnabled[i] = slot`, `parentId_0x28_40 = wizard` and
+   `byte[0] |= 1`, then `SetSpell_6D5E0`. The port additionally
+   stamps `f54 = 64` / `tick70 = s*3` / `f26 = 0` / `f44 = 0` (copied
+   from the level-load mint), and the census shows the four re-minted
+   tokens carrying `f36`(=f54) **64 where retail has 0**, and `b5d`
+   **0 where retail has 1**, from t=3084 to the end of the window.
+4. 🏦 CARRIED from 83: the (10,23) blast's subSpell is MIS-HOMED
+   (`sub_4F5F0` writes `subSpellIndex_0x2A_42 = 25`); `mc2_duel_tier`
+   clamps the row's `life` to 0..=2 where retail RETURNS without
+   draining for > 2 (EF:59936-38); the rival LETHAL branch's
+   `e.f46 = 0` is still an invented write.
+5. 🏦 NEW (broad, low priority): `b5d` (`frames89`) reads **retail 1 /
+   port 0** on newborn records across many families — (3,3), (9,21),
+   (9,0), (10,0), (10,45), (10,79), (10,1), (15,\*) and the (10,12)
+   impact effect. One birth-time write, many columns.
+
+## SESSION 86 — THE CASTLE OWNER IS NOT ONLY THE HUMAN (mc2l6-rsg 4309 → 4493)
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore` held
+CERTIFIED at END; **mc2l6-rival-spells-galore 4309 → 4493 (+184)**;
+`mc2l0-spells-galore` HELD at 8,103 (untouched). FIVE laws off ONE head
+chain (4310 → 4312 → 4477), each landing exposing the next.
+
+Session 83 found invented PREDICATES, 84 invented ASSIGNMENTS, 85 the
+possession workers doing what no other worker does. **86 is a
+PRONOUN**: four of the five laws are the port reading "the human"
+where retail wrote "the castle's owner", "the setpoint" where retail
+wrote "the actual", or "every candidate" where retail wrote "the
+election winner". The fifth is a decompile TYPE that the shipped
+binary contradicts.
+
+### The rules this session proved
+
+- **⭐⭐⭐ THE SHIPPED EXE OUTRANKS THE LISTING — AND A DECLARED TYPE
+  IS PART OF THE LISTING.** remc2's `axis_3d` declares `x`/`y` as
+  `uint16_t`, so every `a2->x - a1->x` in a distance helper promotes
+  to `int` and cannot wrap. `NETHERW.EXE` @0x2393B0 disassembles to
+  `mov ax,[ecx] / sub ax,[esi] / cwde / cdq / xor eax,edx / sub
+  eax,edx` per axis: a **16-bit** subtraction, SIGN-EXTENDED, then
+  `abs`. The whole law lives in one `cwde` that a header file erased.
+  When a numeric law refuses to reproduce, disassemble the helper
+  before re-reading its callers.
+- **⭐⭐⭐ RETAIL GATES THE ELECTION WINNER, NOT THE CANDIDATES —
+  FOURTH SIGHTING, AND THIS ONE ELECTS BY A DIFFERENT METRIC THAN IT
+  GATES BY.** `sub_13B00` ranks foreign castles by
+  `EuclideanDistXY_584D0` inside `sub_14B10` and hands only the winner
+  to `sub_583B0`. A port `min` over one metric is not the same
+  question, and no amount of re-reading the gate finds it.
+- **⭐⭐⭐ "HUMAN ONLY" IS A CLAIM ABOUT THE PORT, NOT ABOUT RETAIL.**
+  Three of this session's five laws were one early return
+  (`if own != PLAYER_TARGET { return }`) or one hardcoded lookup
+  (`self.mc2_book`) standing where retail indexes
+  `Entities_EA3E4[castle->id_0x1A_26]->…->SpellsEnabled[2]`. Grep the
+  port for `PLAYER_TARGET` guards on paths whose retail body takes an
+  entity pointer.
+- **⭐⭐ A PORT COMMENT THAT EXPLAINS WHY A LAW IS INERT IS A STANDING
+  HEAD — FOURTH SESSION RUNNING.** `mc2_castle_lock_stamp` carried
+  "⚠ HUMAN ONLY … MC2 rivals cast through `mc2_rival_cast_castle`,
+  which owns no class-15 record for the stamp to land on. Unported,
+  and inert." The per-rival `Mc2Spellbook` has carried `book.ent[2]`
+  all along, and two other functions in the same file read its tier.
+  (cf. 81's "cannot be landed", 84's `.max()`, 85's "not in the
+  current corpus".)
+- **⭐⭐ THE MODEL BYTE IS NOT THE ROLE.** `sub_605E0`'s level-0 arm
+  branches on the castle owner's `model_0x40_64 == 1`, which reads as
+  "a wizard" — but mc2l6-rsg's own pool says the HUMAN's carpet is
+  class-3 model **0** and only rivals 370/378/383 are model 1. Reading
+  it as "a wizard" would have changed the human column for no reason;
+  reading the corpus made the law human-neutral. **Resolve a model
+  test against the recording's pool, never against the name.**
+- **⚠⚠ "THE PAIR IS CLEAN AT THE HORIZON" DOES NOT MEAN A FIXTURE
+  CUTS THERE.** The t=4309 pair carries a standing unrelated residue —
+  the rival damage MAILBOX has no import seat, so slot 383 imports
+  life 2926 against retail's 2726 — and the cut fixture failed on
+  `field:3,1:life`. It was deleted rather than kept, and law A rides
+  law B's unit pin instead.
+
+### The laws
+
+- **A — THE LADDER RE-SYNC RE-PRICES THE CASTLE OWNER'S OWN
+  CREATE-CASTLE TOKEN.** `sub_60810`'s `locEvent2` (EF:61697-61701) is
+  `Entities_EA3E4[castle->id_0x1A_26]->dword_0xA4_164x->str_611
+  .SpellsEnabled[2]` — no player test — and `sub_60780` (EF:61670-83)
+  hands it to `SetSpell_6D5E0` with `word_0x2E_46` zeroed around the
+  call. The port's drain skipped every non-player mail and read the
+  human's `mc2_book`. mc2l6-rsg t=4310: rival 370's castle falls rung
+  1 → 0 and retail re-prices slot 373 to 1000 / 9 where the port held
+  the rung-1 10000 / 99 for the rest of the take. `engine/world.rs`
+  drain. **+2.**
+- **B — THE UPGRADE LOCK IS STAMPED ON THAT SAME OWNER'S BOOK.**
+  `sub_5F890` (EF:61029-51) pins `SpellsEnabled[2]` at
+  `word_0x30_48 - 1` off the same index. mc2l6-rsg slot 373 holds
+  retail's `f2e` = 100 flat from t=4310 past t=6350; the port held 0.
+  `mc2/cast.rs` + the new `mc2_owner_castle_token`. Ungraded lane;
+  unit pin.
+- **C — AND THE LEVEL-0 RELEASE IS GATED ON THE OWNER'S MODEL.**
+  EF:61645-63 is an if/else on `model_0x40_64 == 1`: a RIVAL-owned
+  castle takes the terrain-flag branch, which never calls
+  `sub_5F890`, so the EF:61643 pin stands through the castle's own
+  death; the human's (model 0) and any unowned castle's (the id-0
+  scratch, left at model 0 by EF:61633) fall to the `else` and
+  release at EF:61662. The port read the reap bit instead.
+  `engine/world.rs` castle pass. Human-neutral.
+- **C2 — A CASTLE MANIFESTATION IS NEVER COUNTED DOWN.** Its window is
+  the lock, not a timed cast — `mc2_rival_buffs` and
+  `mc2_rival_token_tick` now skip spell 2 exactly as the human's
+  `mc2_manifestation_tick` returns before its own decrement.
+  `mc2/rivals.rs`.
+- **D — THE SITE SCOUT ELECTS BY ONE METRIC AND GATES BY ANOTHER, AND
+  BOTH SUBTRACT IN 16 BITS.** `sub_13B00` EF:6087 over `sub_14B10`
+  EF:6615-63, gate `sub_583B0` = `NETHERW.EXE` @0x2393B0. mc2l6-rsg
+  t=4310: rival 370 at (60280, 17397), sector (0,1) — corner
+  (0, 16384) elects the HUMAN's castle whose `dx` wraps to −3584 and
+  fails the 12288 bar, corner (16384, 16384) is castle 174's own tile,
+  corner **(32768, 16384)** elects 174 at |dx| = 16384 and passes. The
+  port's unsigned min-over-all read 61952 at the very first corner and
+  planted the site at x = 0, which drags `roll_0x20_32` (the atan2 to
+  the waypoint, EF:5626) and then the yaw servo. `mc2/rivals.rs`.
+  **+165.** Ungraded lane + reseated by the importer; unit pin.
+- **E — REACTIVE DEFENSE WRITES THE ENTITY'S ACTUAL SPEED, NOT THE
+  AI'S SETPOINT, AND ONLY WITH A METAMORPH TOKEN.** `sub_161A0`'s tail
+  EF:7842-49 over `v14x = sub_146C0(a1x, 4u)` (EF:7772). The port
+  wrote `speed_0xc_12`, undoing the `speed_0xc_12 = 0` /
+  `word_0xe_14 = 1` brake the mid-band engage arm sets three
+  statements earlier (EF:7804-05), and stamped plain minSpeed for a
+  rival holding no token where retail writes nothing. mc2l6-rsg
+  t=4477: cmd_speed 0, brake 1, minSpeed 80, retail steps the entity
+  speed 0 → 240 in one tick. `mc2/rivals.rs`. **+17.** Pair fixture.
+
+### Gate
+
+Certified **13/13 END devs=0** · every guard row byte-held · suite
+green (**925 passed, 0 failed**) · **314 fixtures, 0 regressions** ·
+clippy 0 · fmt · `grep PROBE-REVERT` = 0 · baseline regenerated. ONE
+new pair fixture (law E) and TWO unit pins in
+`crates/mgc-sim/src/engine/world.rs` (laws B/C2 and D), each
+reversion-probed individually. One cut fixture (law A, t=4309) was
+DELETED after its reversion probe showed the pair carries an unrelated
+import residue.
+
+### Next (in order)
+
+1. **mc2l6-rsg t=4494** — `(3,1)slot370:z,speed,rand`. Diagnosed to
+   the seam: the port makes **no entity LCG draw** that tick and its
+   speed servos 240 → 224 toward `vdes = 0`, i.e. **the port's Defense
+   body did not run at all** while retail's did. Retail also clears
+   `target96` to 0 at t=4495 (port holds 213) and moves the wizard's
+   `d88` 1000 → 100. Prime suspect: `sub_161A0`'s opening
+   `sub_14C60(a1x, Entities[word_0x96_150])` TARGET-VALIDITY gate,
+   which the port's `Mc2AiState::Defense` arm has no equivalent of —
+   so the two columns enter and leave the body on opposite conditions.
+2. 🏦 **THE RIVAL DAMAGE MAILBOX HAS NO IMPORT SEAT.** `mail0.amt` on
+   (3,1) records is a standing free-run family (retail 100/200/400,
+   port 0) AND it blocks pair fixtures on this take — the same shape
+   as the banked duel-lock seat. Worth an import-side session; it
+   would unlock the whole mc2l6 pair lane.
+3. 🏦 `sub_14B10`'s chain walk has **no reap test** (EF:6650-61 is
+   `id != own && model == a2` and nothing else), where the port's
+   proxy scan keeps `flags & 0x400 == 0`. Deliberately left with law D
+   — one change at a time stays attributable — and the corpus row does
+   not discriminate (the dying castle is excluded as OWN anyway).
+4. 🏦 `sub_605E0`'s level-0 wizard arm DELETES the owner's castle-spell
+   manifestation outright when `terrain_2FECE.byte_0x2FED2 & 4`
+   (EF:61650-57) — the "lose your castle, lose the spell" map flag.
+   Unported; mc2l6 does not set it (retail keeps slot 373 alive), so
+   there is no corpus row yet.
+5. 🏦 CARRIED from 85: `mc2_rival_pick_ball` walks the POOL where
+   retail walks the `dword_38523` CHAIN; `sub_662E0`'s `sub_686D0` is
+   reached only down its class-3 model-0/1 victim branch; the magnet's
+   missing MODEL filter; (10,23) blast subSpell MIS-HOMED;
+   `mc2_duel_tier` clamps `life` to 0..=2 where retail RETURNS for
+   > 2; the rival LETHAL branch's `e.f46 = 0`; `b5d` retail 1 / port 0
+   on newborn records.
+
+## SESSION 85 — POSSESSION IS THE ODD ONE OUT (mc2l6-rsg 3519 → 4309)
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore` held
+CERTIFIED at END; **mc2l6-rival-spells-galore 3519 → 4309 (+790)**;
+`mc2l0-spells-galore` HELD at 8,103 (untouched). SIX laws.
+
+Five of the six are the POSSESSION spell, and they share one shape:
+**the two possession workers do what no other impact worker does, or
+skip what all of them do.** The galore doctrine paid again — the take
+exercises the spell deliberately, so every divergence in the chain was
+a mechanic gap, not a numeric one.
+
+### ⭐⭐⭐ Rules this session proved
+
+- **⭐⭐⭐ A CALL SITE LIST IS AN ENUMERATED LIST.** `sub_686D0` is
+  called from four places and the port folded ALL impacts into one
+  seam that called it unconditionally. `grep` for the helper, not for
+  the callers you expect — the two possession workers are missing from
+  the list and that absence IS the law. Same shape as session 84's
+  reset-function writes.
+- **⭐⭐⭐ A CTOR'S HARDCODED MODEL OUTRANKS THE SUBTYPE THAT SELECTED
+  IT.** `_4A190(&pos, 10, 69)` resolves to `AddAuxiliary_50500`, whose
+  third statement is `model_0x40_64 = 0x36`. The port assumed the
+  spawn pair it passed IN was the pair that came OUT.
+- **⭐⭐⭐ SOFT KILL IS NOT A FREE — AGAIN, ON A NEW LOOP.** The ball
+  tick's collector test already carried this law; the magnet's scan
+  did not. When a corpus law is "retail's loop has no 0x400 test",
+  audit every OTHER loop over the same chain.
+- **⭐⭐ A PORT COMMENT THAT SAYS "not in the current corpus" IS A
+  STANDING HEAD.** Law F's whole mechanism was written down in
+  `mc2_manifestation_tick` as an untraced approximation; the galore
+  take put it in the corpus and the decompile block was five lines.
+- **⭐⭐ WHEN A CADENCE GATE AND A PER-TICK HANDLER SHARE A TARGET
+  REGISTER, ASK WHO ELSE WRITES IT.** Rival 378's ball pick runs every
+  52 ticks; its possess cast runs every tick. One spurious write to
+  `word_0x96_150` between two picks costs the whole goal, because
+  `sub_14C60` compares a SIGNATURE that the fresh victim will not
+  match.
+- **⚠ AN OBS CHANNEL WITHOUT A LANE CANNOT ASSERT A LAW.**
+  `word_0x96_150` is absent from the `.mgcr` entity record, so law A's
+  pair fixture passed under the reverted build. It was DELETED, not
+  kept. Measure before you cut.
+
+### The laws
+
+- **A — THE POSSESSION DELIVERY DOES NOT RE-POINT ITS OWNER WIZARD.**
+  `sub_686D0` (EF:55192) call sites: EF:58408 (lightning `sub_66750`),
+  EF:62983 (generic `sub_65820`), EF:63187 (fireball `sub_65C20`),
+  EF:63549 (`sub_662E0`, wizard-victim branch only). `CastPosses_65F60`
+  (action **1**) and `sub_674C0` (action **18**) are not among them.
+  mc2l6-rsg t=3519, rival 378: picked ball 851 at t=3507 (cadence 52,
+  `f63 % (64 − refl/4)`), bolt at slot 803 struck ball 519, retail's
+  `target96` stays 851 and the (10,12) claim pulse at slot 439 delivers
+  519's claim on its own at t=3520. `mc2_proj_impact`, mc2/proj.rs.
+  **+23.** FREE-RUN-ONLY; unit pin.
+- **B — `sub_674C0` HAS NO SPEED RAMP EITHER** (EF:58991 is its only
+  `actSpeed_0x82_130` reference). Action 18 joins {0, 1, 29}.
+  mc2l6-rsg t=3543 slot 807: retail 368 vs minSpeed 384, port 370.
+  `mc2_proj_flyer_tick`, mc2/proj.rs. **+8.**
+- **C — THE MAGNET AURA TAKES THE BOLT'S BEARING** (EF:59050-52
+  overwrite `AddAuxiliary_50500`'s single random-yaw draw). mc2l6-rsg
+  t=3551 slot 569: retail heading 446 / pitch 35, port 1105 / 0.
+  `mc2_proj_impact`, mc2/proj.rs. **+4.**
+- **D — THE MAGNET DOES NOT TEST THE REAP BIT** (`sub_38D80`'s loop
+  body is `if (!w7A)` and nothing else, EF:28364). mc2l6-rsg t=3555
+  ball 743: already 0x400 when aura 569 dispatches; retail pulls it
+  (−42, +3) = `MoveEntity_57FA0`'s floor of `(42·SIN[1519])>>16`,
+  the port left it on the previous tick's friction residue (−41, +2).
+  `mc2_aura_tick`, mc2/tail.rs. **+365.** Pair not conforming; unit
+  pin.
+- **E — BOTH POSSESSION TIERS SPAWN A MODEL-54 AURA** (EF:59048 →
+  EF:36819). The tier rides `dword_0x10_16` = `(subSpellIndex << 8)²`,
+  copied from the bolt at EF:59056. mc2l6-rsg t=3920 slot 598: retail
+  (10,54) with 26214400, port (10,69). `mc2_proj_impact`, mc2/proj.rs.
+  **+73.**
+- **F — A HELD POSSESSION TIER RE-FIRES THE BASIC BOLT ON A 1..3
+  COUNTER, AND DOES NOT PAY.** `sub_69640` EF:55995-56010:
+  `if (v6) { if (byte_0x46_70) { if (v6 == 1) sub_69900(a1x, v1x);
+  if (++byte_0x3C_60 > 3) byte_0x3C_60 = 0; } else byte_0x3C_60 = 0; }`
+  — `sub_69900` is the (9,1)/(10,12) BASIC spawner (EF:56039), the
+  signal is a COUNTER not a flag, and the debit lives in `sub_68DE0`'s
+  first-tick arm only (EF:55575-83). mc2l6-rsg t=3993 slot 846: retail
+  (9,1) action 1 with `dword_0x10_16` 200 / `byte_0x44_68` 12, port
+  (9,17) action 18. `mc2_manifestation_tick` + the new
+  `mc2_possess_launch`, mc2/cast.rs. **+317.**
+
+### Gate
+
+Certified **13/13 END devs=0** · every guard row byte-held · suite
+green · **313 fixtures, 0 regressions** (four new pair fixtures for
+laws B/C/E/F, reversion-probed as a batch) · clippy 0 · fmt ·
+`grep PROBE-REVERT` = 0 · baseline regenerated. TWO unit pins in
+`crates/mgc-sim/src/engine/features.rs` (laws A and D), each
+reversion-probed individually.
+
+### Next (in order)
+
+1. **mc2l6-rsg t=4310** — `(15,2)slot373:mana,mana_max`, a class-15
+   CASTLE token (spell 2): retail mana 9 / mana_max 1000 against the
+   port's 99 / 10000. A fresh subsystem — the castle spell's ladder
+   cost register, not the possession family.
+2. 🏦 `mc2_rival_pick_ball` walks the POOL where retail walks the
+   `dword_38523` CHAIN (EF:6519-6604); its 57-break rolls
+   `watcomrand()` (the GLOBAL LCG) where the port draws `ent_rand(i)`.
+   Carried from session 84 and now partly corroborated: this session's
+   law A confirms the ball pick's own cadence, not its walk order.
+3. 🏦 `sub_662E0`'s `sub_686D0` is reached only down its class-3
+   model-0/1 victim branch (EF:63541-49) — the folded seam still
+   stamps every non-possession victim, which is right for three of the
+   four workers and too eager for that one. Needs a corpus row.
+4. 🏦 The magnet's model filter: retail's `sub_38D80` has NO model
+   test, so it pulls the (10,40) claim totem too. Deliberately not
+   changed with law D (membership and the reap gate in one step would
+   make neither attributable).
+5. 🏦 CARRIED: (10,23) blast subSpell MIS-HOMED; `mc2_duel_tier`
+   clamps `life` to 0..=2 where retail RETURNS for > 2 (EF:59936-38);
+   the rival LETHAL branch's `e.f46 = 0`; `b5d` (`frames89`) retail 1 /
+   port 0 on newborn records across many families.
+
+## SESSION 88 — WHOSE SLOT STAMPED IT, AND WHICH ARM DREW (mc2l6-rsg 4847 → 6290)
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore` held
+CERTIFIED at END; **mc2l6-rival-spells-galore 4847 → 6290 (+1443)** on
+FOUR laws off one head chain (4848 → 5291 → 5565 → 6269); `mc2l0-
+spells-galore` HELD at 8,103 (untouched). Every other row in the
+25-row board byte-held.
+
+83 invented PREDICATES · 84 invented ASSIGNMENTS · 85 the possession
+workers as the odd ones out · 86 a PRONOUN · 87 a predicate that was a
+WRITE. **88 is PHASE and PLACEMENT**: three of the four laws are not
+about *what* the port computes but about *whose walk slot stamped the
+value*, *which arm of an if the draw lives in*, and *which of 26
+otherwise-identical handlers puts its call one brace deeper*.
+
+### ⭐⭐⭐ RULES THIS SESSION PROVED
+
+- **⭐⭐⭐ A FLAG A TOKEN RE-STAMPS EVERY TICK IS NOT A BOOLEAN THE
+  CAST LATCHES.** `sub_6AA00` writes the owner's window bit at the
+  TOKEN's own walk slot, and the consumer reads it live off the
+  victim's record at the PROJECTILE's slot. Deriving it once at the
+  tick head is right on every tick but the arm frame — and the arm
+  frame is exactly when a bolt is already in flight at you.
+- **⭐⭐⭐ WHICH ARM OF AN IF THE RNG DRAW LIVES IN IS A LAW.** The
+  port hoisted `rand = 9377*rand + 9439` above `if (precise)`, where
+  retail has it inside the `else`. Every precise deflection then rode
+  a stream one step out of phase for the rest of the bolt's life. A
+  hoist looks like a refactor and is not.
+- **⭐⭐⭐ TWENTY-SIX HANDLERS THAT LOOK LIKE ONE SKELETON ARE NOT ONE
+  SKELETON.** `sub_68DE0`'s placement inside each manifestation body
+  is hand-written, and six of the twenty-six nest it INSIDE the
+  first-tick block. Diff the handlers; do not infer the skeleton.
+  (Same family as 84/85: **a call-site list is an ENUMERATED LIST**.)
+- **⭐⭐⭐ GREP THE OTHER COLUMN FIRST — SIXTH SESSION RUNNING.** Law A
+  is MC1's `world.rs` spell-14 mid-walk republish, verbatim, and its
+  own doc comment already cited the mc1hwl0 t=38740 witness.
+- **⭐⭐ A "🏦 CANNOT BE ASSERTED YET" NOTE CAN BE WRONG ABOUT THE
+  CLAIM, NOT JUST THE WITNESS.** Session 87 banked the rebound pitch
+  flip as "not a negate" (53 → 1984 where a negate gives 1995). With
+  the helpers read out (`sub_582F0`/`sub_582B0`, Sound.cpp:6569/6580 —
+  the SIGN and the MAGNITUDE of the shortest turn from 0), the product
+  is `pitch` folded into (−1024, 1024] and the store is `(−pitch) &
+  0x7FF` for EVERY input. The note had sampled the pitch one statement
+  too early — before `sub_65610`'s steer leg. **CLOSED as a non-law**;
+  the real miss beside it was that retail writes `fov_0x22_34` as well
+  as `pitch_0x1E_30`, which the port never did.
+- **⚠⚠ A VACUOUS UNIT PIN CAN LOOK LIKE A GOOD ONE.** The roster-chain
+  pin's first shape ran a lap to build the chains — and the
+  action-0xE8 creature DESPAWNS ITSELF in that lap, so the reverted
+  pool walk skipped it for a different reason and the probe passed.
+  Setting the roster by hand (the builder is pinned elsewhere) made
+  the pin assert the picker and nothing else.
+
+### THE LAWS
+
+- **A — THE REBOUND WINDOW IS STAMPED AT THE TOKEN'S OWN WALK SLOT**
+  (`sub_6AA00`, EF:56721-51). Window dead → `word[0] &= 0x7FEF`; else
+  the tier's own bit off `SPELLS[model].subspell[b46].life_0x1A` — 0 →
+  `byte[1] |= 0x80` (scatter), 1 → `byte[0] |= 0x10` (precise), and
+  NEITHER for any other value — gated on the `sub_68D50` sustain. The
+  deflect gate reads it live at the bolt's slot (`v4x->…word[0] &
+  0x8010 && sub_68740(...)`, `sub_65820` EF:62939). mc2l6-rsg t=4847
+  is the cast: token 352 loads its 251-tick window and stamps 0x8000
+  on carpet 343 the same frame; rival 370's (9,0) at slot 809 comes
+  back owned by the human (roll 15, yaw 57 off the entity draw 23259 →
+  5274 through the WIDE `(0x5B, 45)` window, pitch/fov 1963, life
+  refilled, xtype/xsubtype 3/1) and the purse pays the quarter,
+  1438596 → 1438591. The port derived `Gen::player_rebound` once at
+  the tick head, so the arm frame read stale and the bolt landed and
+  reaped. **+443.** Pair fixture
+  `the-rebound-window-is-stamped-at-the-token-s-ow`.
+- **B — THE MANA HUNT WALKS THE 29 PER-MODEL ROSTER CHAINS**
+  (`sub_14530`, EF:6357-59): `for (i = 0; i < 29; i++) for (jx =
+  bytearray_38403x[i]; jx > Entities[0]; jx = jx->next_0)`, and the
+  ONLY per-candidate tests are `id_0x1A_26 != mine` and `mana > 0`.
+  Liveness is settled at BUILD time by the tick-top sweep
+  (EF:39987-40008: class 5, `life >= 0`, `actionIndex` not 0xB4 / 0xE8
+  / 0xEA), so the body carries no life or reap test — the port's
+  `flags & 0x400` / `act_life < 0` filters were standing in for a
+  membership rule they cannot express, and its pool walk admitted the
+  three excluded states outright. mc2l6-rsg t=5289: rival 383 elects
+  between model-3 slots 290 (`action45` 25) and 294 (`action45`
+  **0xE8**); 294 is the nearer from castle 392 by
+  `EuclideanDistXY_584D0` (46 414 465 vs 48 220 565) and the port took
+  it, then held the wrong creature for 34 860 ticks. **+274.** Session
+  71's MC1 `str_36382x` law on a new site. Free-run-only (the pair is
+  clean) → unit pin
+  `mc2_the_mana_hunt_walks_the_roster_chain_not_the_pool`.
+- **C — THE PRECISE REBOUND TIER DRAWS NO LCG** (EF:55304-09): the
+  scatter step lives INSIDE the `else`. mc2l6-rsg t=5564 slot 856 is a
+  T3 return (`subSpellIndex` 250 → 500, yaw = roll = 1415, pitch/fov
+  22, purse 1392337 → 1392332) whose `rand` retail HOLDS at 45665 and
+  the port stepped to 63456 — the pair's only field diff. **+704.**
+  Pair fixture `the-precise-rebound-tier-draws-no-lcg-the-scatt`.
+  Landed with it: the pitch flip also writes `fov_0x22_34`
+  (EF:55292-96 assigns `v9` to both).
+- **D — SIX SPELLS PIN THE REGEN ONLY ON THEIR ARM FRAME.**
+  `sub_68DE0` is placed by hand in each of the 26 manifestation
+  handlers; twenty put it after the `word_0x2E_46 == word_0x30_48`
+  block (every afforded tick), but `sub_6BCF0` (17), `sub_6BF30` (18),
+  `sub_6C620` (21), `sub_6C870` (22), `sub_6CAC0` (23) and `sub_6CFA0`
+  (25) close that block one brace LATER, with the call inside it.
+  (Castle 2 and heal 5 are the same shape and already have their own
+  port bodies; 1 and 7 nest an extra call but also carry an
+  unconditional trailing one.) mc2l6-rsg t=6267: the human's spell-18
+  cast costs 12000 on a 23-tick window and retail pays the full +719
+  regen on every tick of it (1427315 → 1428034 → 1428753) where the
+  port held the purse flat. **+22.** Free-run-only → unit pin
+  `mc2_the_first_tick_regen_pin_is_a_six_spell_list`.
+
+### GATE
+
+Certified **13/13 END devs=0** · every guard row byte-held except the
+mc2l6-rsg row · suite **928 passed, 0 failed** (MGC_REQUIRE_GOLDENS=1)
+· **318 fixtures, 0 regressions** · clippy 0 · fmt · `grep
+PROBE-REVERT` = 0 · baseline regenerated. Two pair fixtures and two
+unit pins, each reversion-probed and each failing on exactly its own
+law.
+
+### NEXT
+
+1. **mc2l6-rsg t=6291** — `missing(10,0)slot742x1`. A (9,0) bolt (slot
+   179, mana 50) detonates into a **(10,6)** in place and sprays
+   fifteen (10,0) puffs owned by the human with `flags.b2_kill1` set
+   (free stack 653 → 638); the port sprays FOURTEEN and scatters all
+   of them to slightly different x/y/z. A burst-count + scatter law in
+   the (10,6) impact — fresh ground.
+2. 🏦 **THE PITCH-FLIP BANK IS CLOSED** (see the rules above) — strike
+   it from the carried list.
+3. 🏦 CARRIED: the rival damage MAILBOX has no import seat (blocks the
+   whole mc2l6 pair lane); `sub_14B10`'s chain walk has no reap test;
+   `sub_605E0`'s level-0 castle-manifestation delete;
+   `mc2_rival_pick_ball` walks the POOL not the `dword_38523` chain
+   (**and B is the direct precedent — sweep every remaining rival
+   picker for a pool walk**); `sub_662E0`'s `sub_686D0` seam; the
+   magnet's missing MODEL filter; (10,23) blast subSpell MIS-HOMED;
+   `mc2_duel_tier` clamps where retail RETURNS; the rival LETHAL
+   branch's `e.f46 = 0`; `b5d` retail 1 / port 0 on newborns; neither
+   possession worker is on `sub_68740`'s call-site list.
+
+## SESSION 87 — THE PREDICATE THAT WAS A WRITE (mc2l6-rsg 4493 → 4847)
+
+Focus = the galores. `mc1l0-spells-galore` held CERTIFIED at END;
+**mc2l6-rival-spells-galore 4493 → 4847 (+354)** on THREE law
+families off one head chain (4494 → 4559 → 4567); `mc2l0-spells-
+galore` HELD at 8,103 (untouched). Every other row in the 17-take
+sweep byte-held.
+
+83 found invented PREDICATES, 84 invented ASSIGNMENTS, 85 the
+possession workers as the odd ones out, 86 a PRONOUN. **87 is a
+predicate that was a WRITE** — twice over, plus a constant that was a
+parameter.
+
+### ⭐⭐⭐ RULES THIS SESSION PROVED
+
+- **⭐⭐⭐ A GUARD AND A CLEAR ARE NOT THE SAME LAW, EVEN WHEN THEY
+  TEST THE SAME THING.** `sub_14C60` asks only "is this still the same
+  record?"; `sub_5EFA0` asks "is it dead?" and, if so, ERASES the
+  pointer. Folding the second into the first looks like a refactor and
+  is not: the clear is reachable only on a NOT-DOCKED tick, so the two
+  disagree for the whole length of a wizard's castle grace, and they
+  disagree in the direction that costs a whole handler body. **When a
+  port expresses a stateful invalidation as a stateless predicate, ask
+  what gates the write.**
+- **⭐⭐⭐ A CONSTANT IN THE PORT WHERE RETAIL HAS A PARAMETER IS A
+  SILENT ONE-CALL-PATH LAW.** `sub_68740(a1x, a2x, a3, a4)` takes its
+  scatter window from the caller, and four of five callers agree — so
+  the port's hardcoded 0x2D/22 tested fine everywhere except the one
+  body that flies a plain fireball. **Grep a helper's call sites for
+  DISAGREEING literal arguments before porting it with the majority
+  value.** (cf. session 85's enumerated call-site list.)
+- **⭐⭐⭐ "DELIBERATE APPROXIMATION" IS A CLAIM WITH AN EXPIRY DATE —
+  AND THE SEAT MAY ALREADY EXIST.** `mc2_rebound_deflect` carried "the
+  human's mana debit is skipped (the wizard ledger is world-side)"
+  while `Gen::player_deflect_debit` — built, hashed, and drained at
+  BOTH the pre- and post-carpet drains — had been sitting there for
+  the MC1 column's twin law. FIFTH session running that a port comment
+  explaining an inertness was the standing head. (cf. 81 "cannot be
+  landed", 84 `.max()`, 85 "not in the current corpus", 86 "HUMAN
+  ONLY … inert".)
+- **⭐⭐⭐ GREP THE OTHER COLUMN FIRST — AGAIN, AND FOR THE *SEAT* NOT
+  JUST THE SYMBOL.** Two of the three families were already right on
+  the MC1 column: `watcom_rand` at the anti-rebound roll, and the
+  deflect debit's whole plumbing.
+- **⚠⚠ A HEAD AT t ANCHORS ITS FIXTURE AT t−1 — AND THE PROBE IS THE
+  ONLY THING THAT PROVES IT.** The anti-rebound fixture was cut at
+  t=4557 for a head at 4559, passed the suite, and was VACUOUS. Only
+  the reversion probe caught it. It was deleted rather than kept as
+  ballast, and the law went to a unit pin.
+- **⚠⚠ A "REVERT EVERYTHING RETAIL DOESN'T HAVE" SWEEP CAN MEASURE
+  MUCH WORSE.** Dropping the port's reap proxy (`flags & 0x400`) along
+  with the invented life test took the horizon 4493 → **965**. The
+  proxy stands in for a reap→free timing the port does not share with
+  retail. Isolate invented predicates ONE AT A TIME; the decompile
+  says both are absent, and the corpus says only one of them is.
+
+### THE LAWS
+
+- **A — THE GATE IS A PURE SIGNATURE COMPARE.** `sub_14C60` (EF:6707)
+  = `sub_14C40(a2x) == a1x->word_0x98_152` = `id + model +
+  (class << 7)`, and the six handlers that open with it — `sub_12FF0`
+  :5586, `sub_131F0` :5664, `sub_135C0` :5831, `sub_13710` :5880,
+  `sub_13890` :5953, `sub_161A0` :7744 — test nothing else. Freeing a
+  record clears `class_0x3F_63`, so the free IS the invalidation.
+  Port: `mc2_target_alive` loses `act_life >= 0` (the reap proxy
+  stays, see above).
+- **B — THE DEAD-TARGET CLEAR IS `sub_5EFA0`'s SECOND BLOCK**
+  (EF:60634-39), reachable only via `sub_12A70`'s
+  `word_0x159_345 == 0` arm (EF:5400-19). Ported to the top of
+  `mc2_rival_intake`. t=4494/4495 pin the two sides of the grace
+  edge. **A+B = +65.** Two pair fixtures, each failing only under its
+  own revert.
+- **C — THE ANTI-REBOUND ROLL IS `watcomrand()`** (EF:7212), not the
+  entity LCG. **+8.** Unit pin (`mc2_anti_rebound_roll_leaves_the_
+  rivals_entity_lcg_alone`).
+- **D — `sub_68740` ON FOUR COUNTS**: the scatter window is the call
+  site's `(a3, a4)` and `sub_65C20` alone passes `(0x5B, 45)`
+  (EF:63162); the victim's mana/4 gate AND debit apply to the human
+  (EF:55232/55284); the landing is `victim.z + array_0x52_82.fov`
+  (EF:55302-04), the quad's FOURTH word; the collide pair re-keys off
+  the old shooter's class/model for any shooter (EF:55298-300).
+  **+281.** Unit pins in `mc2_rebound_deflects_and_reowns`, each
+  probed. The scatter half also corrected that test's own ±22
+  assertion.
+
+### GATE
+
+Certified **13/13 END devs=0** · every guard row byte-held · suite
+**926 passed, 0 failed** · **316 fixtures, 0 regressions** · clippy 0 ·
+fmt · `grep PROBE-REVERT` = 0 · baseline regenerated.
+
+### NEXT (in order)
+
+1. **mc2l6-rsg t=4848** — `extra(10,0)slot849x1`. Retail FREES the
+   reap-flagged (10,0) at slot 849 (`flags` 132102 → 132098, class
+   10 → 0, free stack 651 → 653, next-pop → 849) and the port instead
+   holds a LIVE (10,0) there with life 7 and a different `rand`/link
+   set — i.e. the port re-used the slot for a fresh spawn the same
+   tick retail freed it. An allocation/reaper-timing seam; note the
+   port's tick-top reap (`world.rs`, MC2 strict arm) and
+   `mc2_rebuild_free`'s deliberately-unmirrored reap half.
+2. 🏦 **WHY THE mc2l6 PAIR LANE MISSES THE ANTI-REBOUND ROLL.**
+   `player.rebound` (conformance.rs:1001), `poverty` (:875), state and
+   target are all seated, the carpet's 0x8000 bit IS set at t=4558,
+   and yet the port makes no entity-LCG draw in the pair where
+   free-run does. Whatever this is, it also explains why the t=4566
+   rebound pair does not deflect at all.
+3. 🏦 **THE REBOUND PITCH FLIP IS NOT A NEGATE.** EF:55292-96 is
+   `-(sub_582F0(0,pitch) * sub_582B0(0,pitch))` masked to 11 bits, and
+   it writes BOTH `pitch_0x1E_30` and `fov_0x22_34`. Retail turns 53
+   into 1984 where a plain negate gives 1995. (9,0) `pitch` is an
+   UNGRADED lane on this corpus, so nothing can assert it yet —
+   disassemble `sub_582F0`/`sub_582B0` out of NETHERW.EXE when a
+   graded witness appears.
+4. 🏦 **NEITHER POSSESSION WORKER IS ON `sub_68740`'s CALL-SITE
+   LIST.** Actions 1 (`CastPosses_65F60`) and 18 (`sub_674C0`) take no
+   rebound gate at all — the same "possession is the odd one out"
+   family as session 85. The port's shared tail gates them; no corpus
+   row discriminates it yet.
+5. 🏦 CARRIED from 86: the rival damage MAILBOX has no import seat (it
+   blocks the whole mc2l6 pair lane); `sub_14B10`'s chain walk has no
+   reap test; `sub_605E0`'s level-0 arm deletes the owner's castle
+   manifestation under `terrain_2FECE.byte_0x2FED2 & 4`;
+   `mc2_rival_pick_ball` walks the POOL not the `dword_38523` chain;
+   `sub_662E0`'s `sub_686D0` seam; the magnet's missing MODEL filter;
+   (10,23) blast subSpell MIS-HOMED; `mc2_duel_tier` clamps where
+   retail RETURNS; the rival LETHAL branch's `e.f46 = 0`; `b5d` retail
+   1 / port 0 on newborns.
+
+## SESSION 89 (2026-09-02) — THE PROBE THAT HAD THE CELL BUT NOT THE
+## RADIUS
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore` held
+CERTIFIED at END; **mc2l6-rival-spells-galore 6290 -> 6428 (+138)**;
+`mc2l0-spells-galore` HELD at 8,103 (untouched). THREE laws off one
+head chain (6291 -> 6355 -> 6423), all landed in the MAIN SESSION (no
+agents), all three in the same body: `sub_32600`, the (10,16)
+ballistic BOULDER the meteor rains.
+
+83 invented PREDICATES · 84 invented ASSIGNMENTS · 85 the possession
+workers as odd ones out · 86 a PRONOUN · 87 a predicate that was a
+WRITE · 88 PHASE and PLACEMENT. **89 is a SEARCH SHAPE** — the port
+had the right question, the right chain and the right answer, and
+scanned the wrong VOLUME to ask it in.
+
+### ⭐⭐⭐ RULES THIS SESSION PROVED
+
+- **⭐⭐⭐ A CELL IS NOT A RADIUS.** `sub_10B70` (EF:3921) is a 2x2
+  cell block **anchored at `((x-128)>>8, (y-128)>>8)`** — not at the
+  occupied cell — walked in full, with a
+  `sub_583F0_distance_3d(a1, j.pos) <= 0x80` gate on every candidate.
+  A 256-unit tile is TWICE the radius wide, so the two tests are
+  wrong in BOTH directions at once: the port's single cell missed
+  neighbours a quarter-tile away, and its missing radius counted
+  tile-mates half a map-height below. Only one head shows each way,
+  and they were consecutive. **When a port reduces a ring-plus-radius
+  probe to a cell lookup, expect two heads, not one.**
+- **⭐⭐⭐ THE METRIC IS THE LAW, AND HERE IT IS THE Z TERM THAT
+  DECIDES.** At t=6291 the suppressing fire is 69 units away
+  horizontally — comfortably inside 128 — and **562** in 3-D
+  (`radix_3d(dy² + dx² + dz²)`, EF:40421). A 2-D reading of the same
+  gate reproduces the port's bug exactly. Fifth sighting of "WHICH
+  DISTANCE FUNCTION A SITE CALLS IS A LAW" (session 74).
+- **⭐⭐⭐ A ONE-LINE HELPER IS NOT A CONTROL-FLOW STATEMENT.**
+  `DisableEntityDrawing04_57F10` (EF:238f10) is `byte[1] |= 4` and
+  NOTHING else — no unlink, no free, no return. `sub_32600`'s water
+  arm runs the whole tail afterwards, so a drowned boulder takes one
+  more step, lands ON its own splash and banks the friction on its
+  reap tick. The port had read the despawn as an exit. **Read the
+  despawn helper before treating a despawn as an ending.**
+- **⭐⭐ AN INVENTED PREDICATE CAN BE THE THIRD THING WRONG WITH ONE
+  `if`.** The same probe also carried a `flags & 0x400 == 0` reap
+  filter retail does not have. Session 87 banked the reap proxy as
+  load-bearing after dropping it cost 3,528 ticks — but that was a
+  DIFFERENT site. **A proxy earned on one site is not evidence for
+  the same proxy on another; probe it there too.** Here the corpus
+  says drop it: retail's map chain holds a burnt-out fire until the
+  tick-top reaper frees it, and it keeps suppressing re-lights the
+  whole time.
+- **⭐⭐ THE HEAD NAMED THE WRONG RECORD.** `missing(10,0)slot742x1`
+  reads as a puff-count law and is not: the port sprays the SAME
+  fifteen (10,0) puffs at the SAME positions in the SAME order. The
+  free stack simply hands each one the slot before it, because
+  retail's extra allocation — the (10,6) — never happened. **When a
+  spawn head's positions are a clean shift, count the ALLOCATIONS,
+  not the spawns.**
+
+### THE LAWS
+
+- **A — THE STANDING-FIRE PROBE IS A 2x2 RING WITH A RADIUS.**
+  `sub_10B70(&predictedAxis, 10, 6)` (EF:3921, called only from
+  EF:23790): anchor `((x-128)>>8, (y-128)>>8)` byte-wrapped, all four
+  cells, `dist3d <= 0x80` per candidate. t=6291: boulder 189 steps to
+  (49018, 16375, 3540) with its own earlier fire (620) at
+  (49087, 16382, 2982) — same cell (191,63), 69 apart flat and 562 in
+  3-D. Retail lights the (10,6) into slot 179; the port lit nothing,
+  and the 15-puff meteor ring behind it (`sub_32880`, EF:23834) shifted
+  one free-stack slot each. **+64.** Pair fixture.
+- **B — THE SPLASH IS NOT AN EARLY EXIT** (EF:23779-88 + 23804-20).
+  t=6355 slot 553: retail steps (51382, 15405, 84) -> (51446, 15377, 0),
+  `scratch10` 8 -> 9, `dest_x/y` 64/-28 -> 62/-27, and the (10,5) it
+  just spawned at slot 11 links AHEAD of it in the shared cell —
+  proof 553 was still in the map chain and still moving after the
+  reap flag went on. **+68.** Pair fixture.
+- **C — THE PROBE HAS NO REAP TEST** (EF:3940). t=6423: boulder 408
+  rests at (47360, 15649, 540) with fire 104 burnt out 44 units away;
+  104 < 408, so its own dispatch already stamped `flags.b1_reap4`.
+  Retail lights nothing; the port lit a fresh (10,6) every tick the
+  boulder sat still. **+6.** Pair fixture.
+
+### BLAST RADIUS
+
+Two guard rows GREW on the same three laws — the boulder/meteor/fire
+family is not mc2l6-only: **mc2l24 63 -> 133** (+70, new sig
+`pose:pose.x,pose.y,pose.z`) and **mc2l30 234 -> 262** (+28, new sig
+`extra(10,12)slot209x1`). Every other row byte-held.
+
+### GATE
+
+Certified **13/13 END devs=0** · every guard row byte-held or grown ·
+suite **928 passed, 0 failed** (and again under
+`MGC_REQUIRE_GOLDENS=1`) · **321 fixtures, 0 regressions** · clippy 0 ·
+fmt · `grep PROBE-REVERT` = 0 · baseline regenerated.
+
+### NEXT (in order)
+
+1. **mc2l6-rsg t=6429** — `missing(9,10)slot8x1`, diagnosed but NOT
+   landed: **the rival's Create Castle never mints its ball.**
+   `mc2_rival_cast_castle` (rivals.rs) short-circuits the whole cast
+   commit and writes `castle.mail[5] = (10, owner)` directly, with the
+   comment "the (9,10) ball ride is cosmetic, APPROX skipped like the
+   MC1 column". Retail's case 2 with a castle is a plain
+   `sub_5F660(a1x, v2x, 0)` (EF:6825) exactly like case 3 — the arm
+   only — and the MINT lives in the token's own body `sub_69AB0`
+   (EF:56086-58) at the TOKEN's slot: research write to
+   `array_0x24E_590[castleLevel+1]`, `sub_68DE0`, `_4A190(&wizard.pos,
+   9, 10)`, then `word_0x2E_46 = word_0x30_48 - 1`, `+= wizard
+   actSpeed`, `sub_68E50` muzzle, `@0x26` = token slot, `@0x2A` =
+   token subSpell, `id` = wizard id, `z += wizard.fov`, `@0x90` =
+   token mana, `(b43,b44) = (10,43)` + `word_0x96_150` = the castle
+   (castle-less: `(3,2)` and a 4096-ahead ground dest), `@0x10` = the
+   player's `byte_0x154_340` charge (zeroed), yaw/pitch = the player
+   struct's aim offsets + the wizard's. Witness t=6429: token 386
+   (above wizard 383, so same-frame), ball at slot 8 owned by 383,
+   `target96` 392, `scratch10` 84, speed 464 = 384 + the wizard's 80.
+   The flight and delivery machinery already exist and are
+   owner-generic (`mc2_castle_ball_tick`, the (10,43) -> `mail[5]`
+   intake) — this is a REWIRE of the rival commit path, not new
+   physics. Note the port's generic rival debit reads
+   `ent[m].max_life`, which is **0** on a rival castle token, so the
+   cost has to keep coming from `mc2_castle_ladder_cost`.
+2. ⭐ **SWEEP THE OTHER `sub_10B70`-SHAPED PROBES.** Law A is the
+   second sighting of a 2x2-anchored ring (session 70's ball-merge
+   scan was the first) and the port has ~15 other single-cell
+   `map_entity[tile(..)]` walks (`grep -n 'map_entity\['`). Each one
+   needs its retail helper read for an anchor and a radius.
+3. 🏦 CARRIED from 88/87/86: the rival damage MAILBOX has no import
+   seat (blocks the whole mc2l6 pair lane); `sub_14B10`'s chain walk
+   has no reap test; `sub_605E0`'s level-0 castle-manifestation
+   delete; `sub_662E0`'s `sub_686D0` seam; the magnet's missing MODEL
+   filter; (10,23) blast subSpell MIS-HOMED; `mc2_duel_tier` clamps
+   where retail RETURNS; the rival LETHAL branch's `e.f46 = 0`; `b5d`
+   retail 1 / port 0 on newborns; neither possession worker is on
+   `sub_68740`'s call-site list; `mc2_rival_pick_ball` walks the POOL
+   not the `dword_38523` chain.
+
+## SESSION 90 (2026-09-02) — THE COMMIT PATH THAT WAS A SHORTCUT
+## (mc2l6-rsg head 6429: the ball now mints)
+
+Focus = the galores (standing player ask). `mc1l0-spells-galore` held
+CERTIFIED at END; `mc2l0-spells-galore` HELD at 8,103 (untouched);
+**`mc2l6-rival-spells-galore` horizon HELD at 6,428 — but its head
+CHANGED SHAPE**, from `missing(9,10)slot8x1` (the ball absent
+entirely) to `(9,10)slot8:z` (the ball present and byte-exact except
+for a 4-unit z it inherits from its caster), and its clean-boundary
+count went **6,428 -> 7,033**. THREE laws, all one chain, all landed
+in the MAIN SESSION.
+
+83 invented PREDICATES · 84 invented ASSIGNMENTS · 85 the possession
+workers as odd ones out · 86 a PRONOUN · 87 a predicate that was a
+WRITE · 88 PHASE and PLACEMENT · 89 a SEARCH SHAPE. **90 is a COMMIT
+PATH**: the port had reproduced the *effect* of retail's rival
+Create-Castle upgrade with a single hand-written mailbox store, and
+skipping the machinery in between cost it the whole (9,10) ball, one
+pool allocation, and a castle that started transforming a ball-flight
+early.
+
+### ⭐⭐⭐ RULES THIS SESSION PROVED
+
+- **⭐⭐⭐ AN "EQUIVALENT" SHORTCUT IS NOT EQUIVALENT — IT IS A
+  MISSING ALLOCATION.** `mc2_rival_cast_castle` wrote
+  `castle.mail[5] = (10, owner)` directly and its own comment called
+  the (9,10) ball ride "cosmetic, APPROX skipped like the MC1
+  column". Retail's case 2 with a castle (EF:6825) is a bare
+  `sub_5F660(a1x, v2x, 0)` — the ARM only, the identical statement to
+  case 3 — and every stamp lives in `sub_69AB0` (EF:56118-58), the
+  class-15 record's own action-6 body. The ball is a POOL RECORD:
+  even a purely decorative one forks the free stack for the rest of
+  the take. **A cosmetic entity is still an allocation, and an
+  allocation is never cosmetic.** Seventh session running that a port
+  comment explaining an inertness WAS the next head.
+- **⭐⭐⭐ A LOCK YOU ARM MUST HAVE SOMETHING THAT FIRES IT.**
+  Replacing the mail store with retail's arm (`word_0x2E_46 =
+  word_0x30_48`) was correct and, on its own, a hard regression: the
+  body that consumes that window runs from
+  `World::mc2_manifestation_pass`, which returns immediately when
+  `mc2_carpet_slot == 0` — i.e. in ALL NATIVE PLAY, which has no
+  pooled human. Rivals armed an upgrade lock nothing ever minted
+  against and never built again. **Before moving work into a
+  token-slot body, check whether that dispatch even runs outside
+  conformance replay.** The caster-slot stand-in in
+  `mc2_rival_buffs` is where native play has always run rival token
+  bodies, and spell 2's `continue` there had to become a call.
+- **⭐⭐ MC2 BINDS ITS CASTLE AT LEVEL 0; MC1 DOES NOT.** The (10,43)
+  delivery receipt resolved its target through ONE shared search
+  carrying MC1's `wizext+50` stand-in (`castle.f26 > 0`, the
+  level-up-commit binding, :56484). MC2 writes
+  `CastleEntityIndex_0x3A_58` in the very branch that spawns a first
+  castle (EF:6836-38) with no level test, and `sub_69AB0` reads that
+  index raw (EF:56150-52) — so a rival's FIRST upgrade, level 0 -> 1,
+  is a legitimate delivery that the MC1 filter silently dropped.
+  **This was invisible for as long as the shortcut bypassed the
+  token**; routing the rival through the real path exposed it, and
+  its symptom was two native gameplay tests going red.
+- **⭐⭐ THE RIVAL'S BALL LEAVES NO HAND.** `sub_69AB0` mints at
+  `&wizard.position` and then calls `sub_68E50`, whose two offset
+  arms are each gated on one of the caster's hand bits — and the arm
+  that just ran, `sub_5F7B0(.., a3 = 0)`, CLEARS both (EF:60976), with
+  `sub_5F660` forcing `a3 = 0` outright for a model-1 caster
+  (EF:60889). So the muzzle helper is dead on every AI cast and the
+  ball is born on the wizard's own axis. t=6429 confirms it to the
+  unit: ball (61530, 41612) == rival 383.
+- **⚠⚠ A BANKED DIAGNOSIS CAN NAME THE WRONG FIELD.** Session 89
+  banked "the port's generic rival debit reads `ent[m].max_life`,
+  which is **0** on a rival castle token, so the cost has to keep
+  coming from `mc2_castle_ladder_cost`." It does not: `max_life` is
+  the port's home for `maxMana_0x8C_140` on a class-15 record and
+  reads **10000** there, exactly the ladder rung — the banked note
+  had read `dump-state`'s `max_life` LANE (a different offset, and 0)
+  rather than the port field. Retail's debit is `sub_68DE0`'s
+  `-maxMana_0x8C_140` and wizard 383 carries `d88 = -10000` out of
+  t=6429. **Re-derive a banked field claim against the lane table
+  before building on it** (`port_ent_lanes_mc2` is the map).
+
+### THE LAWS
+
+- **A — THE UPGRADE LEG IS AN ARM, NOT A MAIL WRITE**
+  (`mc2_rival_cast_castle`, mc2/rivals.rs). `sub_5F660`'s model-2 arm:
+  a live lock refuses (EF:60907-13), the purse test is the caster's
+  mana against the manifestation's own `maxMana`, and the only write
+  is `sub_5F7B0`'s window word. No mail, no debit, no research here.
+- **B — THE TOKEN'S OWN BODY MINTS THE BALL**
+  (`mc2_rival_castle_token_tick` / `mc2_rival_castle_mint`), run at
+  the TOKEN's pool slot from `mc2_manifestation_pass`, with the
+  caster-slot stand-in in `mc2_rival_buffs` for native play. Research
+  write, `sub_68DE0` debit, `_4A190(&wizard.pos, 9, 10)`, the
+  `word_0x30_48 - 1` latch, and the eleven ball stamps. Every one of
+  them verified against retail's own t=6429 record: slot 386 is now
+  byte-exact on all 91 lanes (it was `f2e` 100/0 before), and slot 8
+  matches retail on every lane except the inherited z.
+- **C — MC2's UPGRADE RECEIPT LANDS ON A LEVEL-0 CASTLE**
+  (`tick_upgrade_token`, engine/features.rs), MC2 arm only; MC1 keeps
+  its `f26 > 0` bound-castle filter untouched.
+
+### RECEIPTS
+
+Unit pins, not fixtures: the mc2l6 pair at that tick carries a
+SECOND, unrelated divergence (below), so no pair fixture cut there
+could be green at HEAD.
+
+- `the_rival_castle_upgrade_arms_and_the_token_mints_the_ball`
+  (laws A + B) — asserts the cast writes only the window, then that
+  the token body mints at the wizard's axis with all eleven stamps,
+  latches the lock at `f28 - 1` and bills `maxMana` once.
+- `the_mc2_upgrade_receipt_lands_on_a_level_0_castle` (law C) —
+  probed: reverting the MC2 arm turns it red (`mail5=(0,0)`).
+- `mc2_dead_wizard_grave_is_possessable` and
+  `the_mc2_death_scatter_keeps_the_token_owner` are law C's measured
+  regression guard: both went RED under A+B alone and green again
+  once C landed.
+
+### GATE
+
+Certified **13/13 END devs=0** (mc2l0 / mc2l3 re-run after law C, both
+still END) · suite **930 passed, 0 failed** (+2; also under
+`MGC_REQUIRE_GOLDENS=1`) · **321 fixtures, 0 regressions**
+(no new fixtures — the receipts are unit pins, see above) · clippy 0 ·
+fmt · `grep PROBE-REVERT` = 0 · baseline regenerated. Every
+uncertified guard row held — mc2l0-sg 8,103 · mc2l1 264 · mc2l4 31 ·
+mc2l24 133 · mc2l30 262 — and `mc2l6-rsg` clean 6,428 -> 7,033.
+
+### NEXT (in order)
+
+1. ⭐⭐⭐ **mc2l6-rsg t=6429 `(9,10)slot8:z` — PRE-EXISTING, AND
+   **NOT** TERRAIN.** PROVED PRE-EXISTING by an A/B probe: with the
+   pre-session-90 shortcut restored, the same pair already read
+   `slot 383 z: retail 578 port 582`. The ball's z is derived
+   (`wizard.z + afov`), so slot 8 is only the messenger.
+
+   ⚠⚠ **A MID-SESSION HYPOTHESIS THAT `MGC_CELL_TRACE` KILLED.** The
+   arithmetic pointed at the heightmap: rival 383's altitude servo is
+   `sub_146F0` -> `sub_580E0` (EF:40372), transcribed exactly in
+   `mc2_rival_movement` (`if z > ground { z += v_14 }` then
+   `if z <= ground + v_12 { z = ground + v_12 }`, row 67 giving
+   `v_14 = -4`, `v_12 = 128`), and reading the t=6429 jump as a floor
+   clamp made `ground + 128` differ by 4 between the engines. It does
+   not. `MGC_CELL_TRACE` — **the terrain-drift microscope that prints
+   the port's live height/type/angle planes beside the RECORDING'S
+   TRUTH CHANNEL, on change** (replay.rs:396; use it FIRST for
+   anything terrain-shaped) — reports the four cells under 383 as
+   IDENTICAL and completely STATIC across t=6300..6432:
+   `(240,162) h=0`, `(240,163) h=0`, `(241,163) h=40`,
+   `(241,162) h=40`, port == truth on every one.
+
+   **WHAT THAT LEAVES.** Those heights give
+   `ground(61454, 41636) = (14 * 40) >> 3 = 70`, so the servo's floor
+   is 198 — which explains t=6428 (z 128 -> 198) EXACTLY and explains
+   NEITHER engine at t=6429. Both jump ~384 in one tick from a
+   standing floor: retail 198 -> 578 (**+380**), the port 198 -> 582
+   (**+384**), and retail goes 578 -> 962 (+384) at t=6430. So there
+   is a **SECOND, ~384/tick vertical source** on an alive rival that
+   is not `sub_580E0` at all, and the port is 4 units hot on its
+   FIRST tick only — 4 being exactly `v_14`, which is the tell that
+   the two writers compose in a different ORDER than the port has
+   them (retail's first climb tick keeps the -4 sink; the port's
+   floor clamp swallows it). **Find the +384 writer first** — it is
+   not the servo, not the terrain, and not this session's laws.
+   383 is over its own castle 392 ((61952, 41472), level 1, z 1536,
+   `apitch/aroll` 1664) with `cmd_speed` dropping 80 -> 0 on the very
+   tick the climb starts.
+
+2. ⭐ **SWEEP THE OTHER `sub_10B70`-SHAPED PROBES** (carried from 89,
+   untouched): ~15 single-cell `map_entity[tile(..)]` walks, each
+   needing its retail helper read for an anchor and a radius.
+3. 🏦 CARRIED from 89/88/87/86, unchanged, MINUS the corrected
+   `max_life` note above: the rival damage MAILBOX has no import seat
+   (blocks the whole mc2l6 pair lane); `sub_14B10`'s chain walk has no
+   reap test; `sub_605E0`'s level-0 castle-manifestation delete;
+   `sub_662E0`'s `sub_686D0` seam; the magnet's missing MODEL filter;
+   (10,23) blast subSpell MIS-HOMED; `mc2_duel_tier` clamps where
+   retail RETURNS; the rival LETHAL branch's `e.f46 = 0`; `b5d` retail
+   1 / port 0 on newborns; neither possession worker is on
+   `sub_68740`'s call-site list; `mc2_rival_pick_ball` walks the POOL
+   not the `dword_38523` chain.
+4. 🏦 NEW: the HUMAN's `cast_castle` stamps the ball's @0x2A from
+   `ent[m].f44`, but `f44` on a class-15 record is the DEFERRED TIER
+   word @0x2C — @0x2A is `f30` there (`port_ent_lanes_mc2` maps
+   `f2a` -> `e.f30` for c == 15, and `mc2_rival_heal_tick` reads it
+   that way). Both are 0 at every witness so far, so it is inert and
+   was left alone; the rival mint uses `f30`.
+
+## SESSION 91 (2026-09-02) — THE PARALLEL WAVE: TWELVE FABLE DIGS,
+## TWO TAKES, TWENTY-THREE LAWS (mc2l6-rsg 6428 -> 7490, mc2l22 0 -> 10)
+
+Player-directed experiment for THIS session only: add `mc2l22` (the
+seven-rival "bloodiest" level, 65,556 ticks, horizon 0 since it joined
+the board in SESSION 60) beside the rival galore, and run the digs in
+PARALLEL on Fable subagents — several dig points per take at once,
+clustered from one segmented sweep plus one whole-take pair census
+(`verify-deltas --csv`, 5.26M rows, 615 families). Eleven agents in
+the first wave, one in the second, three in the third; the main
+session verified every citation against the decompile, landed
+SERIALLY, ran each law's falsifier window on landing, cut fixtures
+inside the loop and probed all of them under the pre-session binary
+(`.claude/worktrees/rig-s91` @ 33ac0a1: 17/17 new fixtures red there,
+each on its own lanes).
+
+**mc2l6-rival-spells-galore 6,428 -> 7,490** (clean past 7,491).
+**mc2l22 0 -> 10** — the (5,22) worm wall that dirtied 53,813 of its
+first 53,826 pairs is DOWN; the pair census fell from 54,544 dirty
+pairs to the remaining rival-brain/cast families.
+
+### ⭐⭐⭐ RULES THIS SESSION PROVED
+
+- **⭐⭐⭐ A TAKE AT HORIZON 0 CAN HIDE A DOZEN INDEPENDENT LAWS.** The
+  segmented sweep only ever named the worm; the PAIR census (state
+  re-imported every tick) exposed the rival heal, the wraith leech,
+  the dweller, the sphere pull, the metamorph puppet and four cast
+  gates behind it — all LOCAL, all landable without the worm.
+  **Cluster from the pair census, not the free run, on a walled
+  take.**
+- **⭐⭐⭐ THE IMPORT SEAT IS A LAW SURFACE OF ITS OWN** (the session's
+  first mc2l22 law and its loudest): the worm's @0x2C/@0x2A were seated
+  in the wrong port fields by the uniform ramp2c rule and its target
+  in a lane the importer fills from dead memory. The port's m22 BODY
+  was arithmetically exact — closed at pair 0->1 to the unit. SESSION
+  60's "no port reader consumes f44 on (5,22)" refusal was wrong the
+  day `Gen::m22_*` landed.
+- **⭐⭐⭐ THE CASTER-SLOT STAND-IN MUST RUN WHERE THE TOKEN WOULD.** A
+  hurt rival re-arms HEAL every think tick (recast cooldown 1); retail
+  runs ONE `sub_6A300` body per frame at the token's slot ABOVE the
+  wizard, AFTER the brain. The port ran it twice (pre-brain buffs pass
+  + arm-tick first body) and let the brain read post-heal life.
+- **⭐⭐⭐ WHOSE RECORD THE OPERAND COMES OFF, again, three ways**: the
+  wraith leech debits the victim's LIVE `manaRegen + 14` off the
+  wizard record (the port hit a mirror lane the wizard body clobbers a
+  slot later); the war latch's aggression comes off the CASTLE's
+  `dword_0xA4`, which is the shared DUMMY block `unk_F42B0x` (+0x242 =
+  0 ⇒ the threshold is a flat 50000 — proved by `ptr_a4` 2904752 on
+  every non-player record and the EXE's `movsx [eax+0x242]`); the
+  target signature sums the RAW `id_0x1A` where the port summed its
+  TRANSLATED sentinel (385 ≠ 729 ⇒ every human-castle raid body
+  skipped).
+- **⭐⭐⭐ THE EXECUTOR HAS ITS OWN WINDOW GATE** (`sub_5F660`'s
+  per-model switch, EF:60889-948) and **THE FIRST TICK OPENS ON
+  `sub_68D50`** (castle-store ceiling, `life < 0`, purse). The rival
+  funnel had neither: spells with a 0 recast cooldown re-fired every
+  tick of a live window (924 ticks of extra (9,2)), a ceiling-refused
+  token fired and billed 9,100 a tick and flipped the poverty latch —
+  **this is how the player's "dumb, stuck rivals" happen** — and a
+  rival killed earlier in the same walk still ran its speed body.
+- **⭐⭐⭐ A "COSMETIC" ENTITY IS STILL AN ALLOCATION** (third session
+  running): the metamorph pose-puppet, the (10,25) steal burst and the
+  six thrown Fool's-Mana spheres are all pool records the port had
+  reproduced by hand-poking the effect.
+- **⭐⭐ RETAIL ASKS THE ROSTER CHAIN, THE PORT ASKED THE POOL** (MC2
+  instance): `sub_148E0`'s possess fallback walks `bytearray_38403x[22]`,
+  whose membership drops 0xB4 tail segments — a segment trails its
+  head, so the pool walk elected a tail on all six mc2l22 rivals at t=1.
+- **⭐⭐ THE LAST GATE OF A SELECTOR ARM IS A LAW**: `sub_155E0` ends on
+  the Perception cone; the port carried the cone only in the cast
+  kernel, so a rival that could not aim re-entered Upgrade forever.
+- **⭐⭐ A HOVER THAT IS THE CAST'S FAIL ARM** (`sub_12FF0`): the +4
+  "second vertical writer" of SESSION 90 was the Upgrade hover running
+  BEFORE the cast instead of only when `sub_14E10` fails.
+- **⭐⭐ A NODE IS A `qmemcpy` OF ITS HEAD** (`AddWind_4F040`), and
+  **A TICK COUNTER IS READ AS IT STANDS** — the port's whirlwind
+  pre-incremented `byte_0x3E_62` and double-clocked its coin.
+- **⭐ AN INTAKE CAN BE GATED ON A BYTE THE GENERIC HEAD DOES NOT HAVE**
+  — m23's mailbox block sits inside `if (byte_0x39_57)` (awake).
+- **⚠⚠ AGENT DIFFS ARE NOT `git apply` CLEAN BY DEFAULT** — 9 of 15
+  needed hand application; ask for `diff -u` against copies with file
+  headers. **⚠ Two agents' premises were refuted by the dig** (the
+  "rival cast order swap" was one extra pop from the brake word; the
+  "(9,9) beam" family was entirely upstream) — both still paid.
+
+### THE LAWS (files; falsifier witness; receipt)
+
+Whirlwind (tail.rs): **W-A** node = `qmemcpy` of the head (EF:35882;
+mc2l6 10086→10087 33 rows) · **W-B** `sub_331A0` coin reads the counter
+as it stands (EF:24191; 10236→10237). Fixtures mc2l6 t=10086/10236.
+
+Worm (conformance.rs, multipart.rs): **WM-A** (5,22) joins `ramp2c`:
+@0x2C→f44, @0x2A→f46 (EF:17698-700, 17761, 34404-05; pair 0→1 exact to
+the unit) · **WM-B** `playerEntityIndex_0x94` → f144, not dest_x
+(t=15-27 f5a/action/player_ent_idx). Fixtures mc2l22 t=1/16 + unit
+`import_mc2_worm22_spin_angle_and_target_homes`.
+
+Rival ledgers (rivals.rs, roster.rs, features.rs, world.rs): **HL-A**
+one heal body per frame, after the brain (`mc2_rival_heal_stand_in`;
+EF:5468-75, 56445-71; mc2l22 728→729 +99 on four rivals) · **HL-B** the
+m26 leech lands on the rival record at the wraith's slot
+(`Gen::mc2_rival_leech` Mc2Quiet<10> → `mc2_rival_leech_apply`;
+EF:19331-34; 1210 −14, 2497 −242). Fixtures t=728/1210/2497.
+
+Speed token (rivals.rs): **SP-A** `sub_68D50` opens the effect arm;
+`mc2_rival_afford` gains the `life < 0` leg (EF:56216-19, 55553; mc2l6
+7061→7062). Fixture mc2l6 t=7061.
+
+Steal Mana (proj.rs, tail.rs, rivals.rs, world.rs, cast.rs,
+mc1/combat.rs): **S-A** the (10,25) burst is minted through
+`mc2_spawn_blast25` on a wizard hit with the bolt's tier in `f71`
+(EF:63531-62, 57213; mc2l6 8673→8674 slot 102) · **S-B** ch3 carries
+the TIER; `sub_61050` credits the caster the whole `SPELLS[13]`
+amount, clamps victim then caster, clears the source only
+(EF:62195-62227) — plus `sub_10C80`'s class-3 arm for MC2 ch3/4
+(free-only, no flags test, EF:4034-60) in `area_write`. Fixtures
+mc2l6 t=8673/8674. ⚠ NOT a rival spell: the human's L2 bolt at 736.
+
+Rival brain (rivals.rs): **T-A** `mc2_target_sig` sums the raw id
+(EF:6701; mc2l6 6478→6479 the whole RaidCastle body) · **C-A** Upgrade
+hover is `sub_12FF0`'s fail arm (EF:5590-5606; 6428→6429) · **TE-A**
+possess fallback walks `mob_chains.visible(22)` (EF:6593-6604; mc2l22
+t=1 six rivals) · **TE-B** Upgrade selector's Perception cone
+(EF:7119-24; mc2l6 7034: 443 ≫ 113 ⇒ state 8) · **TE-C** war latch
+flat 50000 (EF:7398-7403 + EXE @0x15B07; mc2l6 6753). Fixtures mc2l6
+t=6428/6478.
+
+Dweller (roster.rs): **DW-A** intake awake-gated (EF:18465; mc2l22
+20136 slot 1) · **DW-B** `sub_282D0` castle-owner hunt ported
+(EF:18500-21, 18530-68; 1912→1913 slot 214). Fixtures t=20136/1912.
+
+Spheres (mc1/combat.rs, conformance.rs): **SP2-A** the MC2 aura pull
+REPLACES `dest` with `polar(yaw, amount)` and clears the source only
+(EF:26097-110; mc2l22 8290→8291 to the unit) · **SP2-B** (10,57)
+projects `owner28` from its fused id24 (4,412 rows). Fixture t=8290.
+
+Rival casts (rivals.rs): **CS-A** water-steer turn sets the brake word
+(EF:7936-42; 1245→1246 the "puff-before-bolt" head) · **CS-B**
+`sub_5F660`'s live-window refusal table in `mc2_rival_cast`
+(EF:60889-948; 2512..3835 extra (9,2) gone) · **CS-F** `sub_68D50` on
+every first tick, arm and token-slot (EF:55548-65; 5557, 6600..6625)
+· **CS-E** metamorph mints the pose-puppet and expires it
+(EF:56316-32, 56399-408; 1198, 1249) · **CS-C** Fool's Mana throws SIX
+spheres on the token's LCG (EF:57884-57923; 9785→9786 stamps exact;
+the thrown FLIGHT `sub_35FB0` is the residue, wave-3 dig). Fixtures
+t=1245/5557/1198.
+
+### RECEIPTS
+
+`conformance/mc2l6.json` +7 (40), `conformance/mc2l22.json` NEW (11,
+dir `fixtures/mc2l22`) — every one green at HEAD and RED under the
+pre-session rig on its own lanes (`.claude/worktrees/rig-s91`). Unit:
+`import_mc2_worm22_spin_angle_and_target_homes`;
+`mc2_rival_heal_is_the_same_body_as_the_humans` re-pinned to the
+stand-in. DEVIATIONS: the rival-heal APPROX entry retired, the DEFENSE
+disguise entry narrowed to the byte[0] presentation bits.
+
+### WAVE 3
+
+**TF-A — THE TREE FLAME IS BORN 128 BELOW THE GROUND IT SNAPPED TO**
+(scenery.rs `mc2_tree_tick`): `AddTree02_00_64E20`'s lethal arm reads
+the FLAME's z back after its ctor's terrain snap (`v7 = v4x->z`,
+EF:62428) and writes `v7 - 128` over it (EF:62430-33); the port
+subtracted 128 from the tree's stale entry z and let the ctor discard
+it. mc2l6-rsg 7490→7491 slot 279: retail 1042 = 1170 − 128. Landing it
+took the galore **7,490 → 10,087**; the new head (10088, rival 378
+inside the human's whirlwind funnel — `sub_33340`'s class-3 victim
+arm / DEVIATIONS "player sway" neighbourhood) went to a wave-4 dig.
+Fixture mc2l6 t=7490 (rig-red on `(10,6) z` alone).
+
+### WAVE 4 / WAVE 3 (continued)
+
+**FN-A — THE RIVAL MOVER'S FIRST STATEMENT IS THE ONE-SHOT STOP VETO**
+(rivals.rs `mc2_rival_movement`): `sub_146F0` opens `if (byte[1] & 8)
+{ clear } else { band, step, strafe, ±16 servo, turn }` (EF:6441-44).
+The whirlwind's victim arm parks a caught wizard on the eye and sets
+the bit (EF:24360); the port's alive-rival mover was the ONE port
+mover without the veto (carpet, creature core, falling props and the
+ball all had it), so a caught rival stepped, servoed, turned, re-banded
+and relinked with the bit stuck on. mc2l6-rsg 10087→10088 rival 378 —
+proved by `dump-state --at-slot 200`: the whirlwind's output was
+retail's row to the bit; the divergence was minted at slot 378. Galore
+**10,087 → 10,089**. Fixture mc2l6 t=10087.
+
+**SPD-B — SPEED'S `sub_68DE0` DEBIT LIVES IN THE TOKEN BODY, BELOW THE
+BRAKE COLLAPSE** (rivals.rs `mc2_rival_manifestation_tick` /
+`mc2_rival_cast`): `sub_13710` arms speed through `sub_14C90` and THEN
+runs the avoid FSM `sub_16580`, whose turn raises `word_0xe_14`
+(EF:7936-42); the token body reads the brake before its effect arm and
+collapses 301 → 1 → 0 UNPAID (`sub_68DE0` is inside the `else`,
+EF:56261). The port pre-consumed the −maxMana at the cast site, so
+rival 451 read 100 where retail read 1200 and braked instead of
+re-casting (mc2l22 t=10→11: retail `d88` +100 with `cooldown[3]` 31→32
+= armed but unpaid; the human column had carried this shape since the
+cast-gate dig). Respawn-minted books (token below the caster) had
+paid NOTHING for speed — same diff. mc2l22 **10 → 45**. Pair-clean
+head (the importer restores `d88`) — no fixture; the human-column
+precedent and the arithmetic are the receipt.
+
+The player cut the session at this point ("highly productive… let's
+not overdo it"); three wave-5 digs were stopped unreported ((10,57)
+thrown flight `sub_35FB0`, mc2l22 t=46, galore t=10090).
+
+### NEXT (in order)
+
+1. **mc2l22 t=46 `slot 477 life: retail 8953 port 9153`** — pair-CLEAN
+   (INHERITED through an ungraded lane; the stopped agent had just
+   turned to `MGC_RAW_SHADOW` on the free run). +200 on a rival with
+   heal: re-check the heal admission (`mana >= maxMana` every tick) and
+   the heal-when-hurt cast's per-tier `sub_15F20` test; or a (10,23)
+   200-point mail the port takes and retail does not.
+2. **mc2l6-rsg t=10090 `slot 745 z: retail 73 port 0`** — a record
+   inside the human's whirlwind window; suspect the eye's
+   `axis_0x9A.z` (retail 37, port 0 — `mc2_whirlwind_move` never
+   writes it) feeding a child/victim z, or a ctor terrain stamp.
+3. **(10,57) THROWN-SPHERE FLIGHT `sub_35FB0` (EF:26457-26518)** is
+   unported (decel 4/tick, `MoveEntity(yaw, pitch, actSpeed)`,
+   `word_0x2C_44 −= 16` floor −128, landing → actSpeed 0, water
+   splash): mc2l22 9786+ on 900-938 — the birth stamps are now exact.
+   The HUMAN's Fool's Mana (`mc2_cast_fools_mana`) is the same
+   six-sphere throw and also a paraphrase.
+4. 🏦 Adjacent heads the agents named (see the session memory file):
+   the human's wraith leech has no consumer (`mc2_player_drain`);
+   (15,x) token tier/cost stamps (slot 629 `mana_max` 15000/10000);
+   rival 584's +9972/−10000 every 21 ticks; `mc2_rival_pick_ball`'s
+   first walk is ONE interleaved 39/40/57 chain + `watcomrand()`;
+   the 0x2000 bolt-ledger bit has no import seat (`wiz 2 hate` +500
+   at 6480); scout/castle/balloon pickers walk the pool for class 3
+   with `flags & 0x400` where retail's `dword_38519` uses `life >= 0`;
+   the (9,13) castle-guard arrow cadence; the (10,11) periodic mint
+   one tick early near (183,190); Steal-Mana L3 castle-percent arm
+   (EF:62135-88); the aura claim-map → `mail[4]` follow-up (A3,
+   guard mc2l3 t=9816); whirlwind law B (victim z band, DEVIATIONS
+   "z-float" clause — `proposed-B.diff` in the w4-funnel scratch);
+   rival 378 `roll` setpoint 1483/1485 at 10088; `b5d`/`frames89`
+   never written on the MC2 column (ungraded).
+5. mc2l0-sg still HELD at 8,103 (untouched this session).
+
+### GATE (final binary, after the fmt pass)
+
+Certified **13/13 END devs=0** (MC1 ×11 on the pre-wave-3 binary —
+every later change was MC2-only code; mc2l0/mc2l3 re-run on the
+final binary) · app `--replay-check` mc2l0 + mc2l3 **bit-exact
+throughout** · suite **931 passed, 0 failed** · **342 fixtures, 0
+regressions** (321 → 342; every new one rig-red on its own lanes) ·
+clippy 0 · fmt · `grep PROBE-REVERT` = 0 · every uncertified guard
+row byte-held (mc2l0-sg 8,103 · mc2l1 264 · mc2l4 31 · mc2l24 133 ·
+mc2l30 262 · mc1l6/mc1l49/mc1l37/mc1l48/terrainless unchanged) ·
+baseline rows regenerated: **mc2l6-rival-spells-galore 6,428 →
+10,089** (clean 10,094; sig `(10,39)slot745:z`) · **mc2l22 0 → 45**
+(sig `(3,1)slot477:life`).
+
+## SESSION 94 (2026-09-03) — THE INDEX SPACE, THE ROW THE ALLOCATOR SEEDS, AND A TOOL THAT WAS 5x SLOWER THAN THE WORK
+
+Session 93 banked the MC2 allocator row seed WITH A BLOCKER: landing it
+panicked `the_mc2_hate_ledger_is_the_tick_top_projectile_sweep`, because
+`row156` was being carried in two different index spaces at once. This
+session opened by auditing that convention. The audit WAS the landing.
+
+**mc2l6-rival-spells-galore 10,087 → 10,109, clean 10,319 → 11,339**
+(the seed +22/+343, the (10,57) merge law a further +677 clean).
+**mc2l22 412 HELD.**
+
+### ⭐⭐⭐ EACH ALLOCATOR SEEDS ITS OWN TABLE'S BASE ROW
+
+Retail carries a POINTER (`dword_0xA0_160x` on MC2,
+`var_u32_29951_156` on MC1), so every read is absolute by construction
+and the index-space question never arises there. The port carries a
+`u8` INDEX, so it has to be stated — and it is different per column:
+
+- **MC1 — `unk_98F38`, 0-based.** `NewEvent_372C0` writes
+  `var_u32_29951_156 = unk_98F38` (sub_main.cpp:43877 free pop, :43902
+  sacrifice) — the table BASE, which IS index 0.
+- **MC2 — `str_D7BD6`, ABSOLUTE, base 59.** `NewEvent_4A050` writes
+  `dword_0xA0_160x = &str_D7BD6[59]` in BOTH arms (Events.cpp:573,
+  :599).
+
+⇒ **Both allocators seed the base row; the base is a different NUMBER
+on each column.** `Ent::default()` already served MC1 for free, which is
+exactly why the omission on MC2 stayed invisible for so long. Every
+natively spawned MC2 record had been running `BEHAVIOR[0]` — the (5,0)
+creature row, hover band `v_12 = 7` and drift `v_14 = +244` — instead
+of row 59's `0` / `−4`. Wrong floor, wrong vertical drift, on
+everything the sim mints.
+
+### THE CONVENTION AUDIT (the blocker itself)
+
+`row156` is now **ABSOLUTE on the MC2 column, with no exceptions**.
+Three sites disagreed, and each was its own small law:
+
+- **The (3,3) balloon was the one RELATIVE holdout.** `mc2_spawn_balloon`
+  stamped 9 and `mc2_balloon_tick` read `BEHAVIOR[ROW_BASE + row156]`,
+  self-consistent but off-convention — and it had forced a matching
+  EXCEPTION into `import_ent_mc2`, which subtracted `ROW_BASE` for
+  class 3 model 3 alone. Both sides are absolute now (the ctor
+  `sub_4ABA0` pins `&str_D7BD6[68]`, EF:33422) and the importer
+  exception is deleted. Behaviourally a no-op by construction
+  (`ROW_BASE + 9 == 68`), except that the old `saturating_sub` clamped
+  any imported balloon row below 59 to the base instead of its own row.
+- **The two MC2 cave arms double-offset an absolute index.**
+  `ball_tick`'s cave fan and `mc2_fool_flight` (mc1/combat.rs) read
+  `BEHAVIOR[ROW_BASE + row156]` where retail's `sub_11E70`
+  (Terrain.cpp:2152) reads the entity's OWN row pointer,
+  `event->dword_0xA0_160x->word_160_0xc_12`. With MC2 projectile rows
+  at 60-65 that indexed rows 119-124, and anything above row 97 would
+  have panicked outright. ⚠ A/B-EXCLUDED on the cave golden: fixing
+  them moves NOTHING there even though it IS a caves world.
+- ⭐⭐ **A SHARED HANDLER MUST READ THE CALLER'S TABLE, NOT ITS OWN
+  FILE'S.** `Gen::home` (mc1/combat.rs:1498) is MC1's `sub_52550` and
+  `BEHAVIOR` resolves to MC1's 31-row table inside that file — but MC2
+  class-9 records reach it. That was a silent wrong-row read for as
+  long as MC2 rows happened to be 0, and an index-out-of-bounds panic
+  the moment the allocator seeded 59. It now selects the table off
+  `verbs.movement`. **This is the whole blocker: the seed did not break
+  anything, it EXPOSED something.** (Both columns' homers are the same
+  4-argument primitive — MC1 `sub_422A0(cur, want, v_4, v_2)` at
+  sub_main.cpp:62547, MC2 `sub_58350` at EF:58597 — so the shared body
+  is the right shape; only the table lookup was wrong.)
+
+### ⭐ THE MANA SPHERE'S INVENTED ROLL — 88,290 CENSUS ROWS, ONE LINE
+
+`TransformEntityToManaSphere_36BA0` (EF:26903) writes
+`yaw_0x1C_28` and NOTHING else on each scattered sphere; the port also
+stamped `roll_0x20_32` (our `f34`) with the same value. The pairing of
+yaw and roll IS a real MC2 idiom — the cave fan does exactly that
+(EF:26221-22, `roll_0x20_32 = v31; yaw_0x1C_28 = v31`) — which is
+presumably how it migrated here. It does not belong to the scatter.
+A/B-ATTRIBUTED on the cave golden: this one line moves checkpoint D and
+leaves A/B/C byte-identical.
+
+### ⚠ THE SEED HAS NO FIXTURE HOME — AND THE DIG PROVED IT
+
+The pair lane re-imports `row156` from the recording on EVERY pair
+(`import_ent_mc2` decodes `ptr_a0` through retail's own
+`(ptr − base160)/34 + 59` fixup, Level.cpp:1255-57), so a natively
+seeded row NEVER FIRES there. Measured independently by the parallel
+(10,57) dig: the whole-take `verify-deltas --csv` census on
+mc2l6-rival-spells-galore is **byte-identical across the landing** —
+48,268 rows before and after, every family unchanged. The law pays in
+FREE RUN only. It is therefore guarded by a UNIT TEST
+(`each_allocator_seeds_its_own_behavior_table_base`, docs/CONFORMANCE.md
+§Lifecycle 4), proven non-vacuous by reverting the seed.
+
+⭐ That census is also the cleanest possible statement that the landing
+regressed nothing on the pair lane of the focus take — a shape worth
+reusing: **ask a dig already holding a whole-take census to re-run it
+across your landing.**
+
+### ⭐⭐⭐ THE FOOL'S (10,57) SPHERE MERGES — AND THE MEMBERSHIP TEST IS A PARAMETER, NOT A CONSTANT
+
+A parallel dig went after the banked "(10,57) late band, 2,455 z rows"
+and **refuted it outright** — that was session 93's START census; the
+family is 657 rows today and only 51 of them are `z`. The real law was
+three subsystems away and is one of the better ones this campaign has
+found.
+
+Retail's m57 tick `sub_35FB0` reaches the SAME partner search the ball
+does and ends in **`sub_36F30`, not `sub_36D50`** — a different
+function, not a variant — and there is **no `byte[1] & 0x20` decay test
+in front of it**: the ball's decay gate (EF:26268) is the BALL's alone,
+so a DECAYING fool's sphere still absorbs. The port early-returned on
+`is_fool` and never merged m57 at all.
+
+And the partner filter is not a constant. **`sub_10A50` matches the
+SEEKER's OWN `xtype`/`xsubtype` (@0x41/@0x42) against the candidate's
+class/model (@0x3f/@0x40), with −1 a wildcard on either half.**
+Re-verified here from the shipped EXE at file 0x352d9-0x35301:
+
+    movsbl 0x41(%esi),%eax ; cmp $-1,%eax ; je accept
+    mov    0x41(%esi),%al  ; cmp 0x3f(%ebx),%al ; jne …
+    movsbl 0x42(%esi),%eax ; cmp $-1,%eax ; je accept
+    mov    0x41(%esi),%al  ; cmp 0x3f(%ebx),%al ; jne reject
+    mov    0x42(%esi),%al  ; cmp 0x40(%ebx),%al ; jne reject
+
+…and `sub_50130` stamps that pair as **(10, 57)**, not the shared
+ctor's (10, 39) — file 0x7494f `movb $0xa,0x41(%eax)` / 0x74953
+`movb $0x39,0x42(%eax)` (0x39 = 57). The port had pinned the filter to
+`model65 == 39 && tick70 != 62`, which is exactly the m57 lane, so an
+m57 seeker could not have seen an m57 partner even without the
+`is_fool` return. `sub_36F30` itself (file 0x5b73c-0x5b7a8, verified
+instruction by instruction) is a tier contest on @0x46 with a coin flip
+off the **survivor's own per-entity LCG** when the tiers tie and the
+parents differ, then the loser's @0x28 / @0x94 / @0x46 / @0x2A move
+across and it is hard-freed — no owner ladder anywhere.
+
+**Measured, whole-take pair census on mc2l6-rsg:** (10,57) **657 → 173**
+(−73.7%) — `mana` 113→0, `extra` 103→0, `f5a` 83→1, `applied_yaw` and
+`applied_pitch` 82→0 each. Collateral, all improvements: **(9,9)
+432 → 38**, (10,0) 509→415, (10,23) 56→3, (9,0) 622→605 — the fool's-mana
+retaliation children the un-merged duplicate spheres kept minting.
+Whole take **48,268 → 47,193**; conforming pairs 39,320 → 39,426.
+**No family regressed and no pair became newly dirty**; **(3,0) is
+3,100 → 3,100 exactly**, so the merge law is NOT upstream of the human's
+pose family. Kept behind `MGC_NO_M57_MERGE=1` for A/B, house style.
+
+FIXTURE: `the-fool-s-10-57-sphere-merges-with-its-own-merg` (mc2l6
+t=10805) — GREEN under the law, **RED under `MGC_NO_M57_MERGE=1`** with
+exactly the family's signature (`extra:10,57`, `field:10,57:mana`,
+`f5a`, `applied_yaw`, `applied_pitch`) and no other fixture moving.
+
+⭐ **PROCESS**: the dig's brief was refuted by its FIRST measurement,
+which is the third wave running to do so. **Re-measure a banked head
+before digging it** keeps earning its place.
+
+### BANKED, VERIFIED AGAINST THE DECOMPILE, DELIBERATELY NOT LANDED
+
+- ⭐⭐ **THE CLASS-10 `@0x2A` AMOUNT HOME IS MISSING TWO FAMILIES.**
+  `sub_4F5F0` stamps `subSpellIndex_0x2A_42 = 25` on the (10,23) blast
+  (EF:36087) and `sub_4F6A0` stamps 2000 on the (10,25) (EF:36117),
+  while `sub_33D80` (EF:24796) deals `subSpellIndex_0x2A_42` — but the
+  port's ctors write `f140` and `mc2_blast23_tick` reads `f140`, and
+  neither model is in `import_ent_mc2`'s class-10 `@0x2A → f140`
+  diversion list. So an IMPORTED blast reads the DEAD `@0x90` and deals
+  **zero**, and a native one publishes the allocator's 100 on the graded
+  `f2a` lane and 25 on `mana` where retail has 0. The fix follows the
+  established per-family pattern (importer arm + the `f2a`/`mana`
+  publish arms), and `obs_project_mc2` documents the tell in its own
+  comment: *"a class-10 model outside it that the SIM stamps with an
+  @0x2A amount reads ≠ against retail's dead 0 in this dump — which is
+  the tell that its import case is missing, exactly how (10,17) was
+  found."* ⏭ Audit the WHOLE class-10 ctor set the same way, not just
+  these two.
+- **THE LIGHTNING MARCH'S `for _ in 0..64` IS INVENTED.** Retail is
+  `sub_66610(a1x); v27 = 1; while (!(byte[1] & 4)) { sub_66610(a1x);
+  v27++; }` (EF:58306-14) — the first step is taken OUTSIDE the loop and
+  the loop is UNBOUNDED. The port's step count agrees arm for arm; only
+  the cap is fiction. ⚠ Needs a termination argument for
+  `mc2_flyer_tick` before the cap comes off, or a hang replaces a
+  divergence.
+- **MC2 HAS NO MISS STAMP.** `word_0x96_150 = 0xae02` is retail's
+  no-target SENTINEL, written at both beam-detonation spawn sites
+  (EF:58418, EF:58832) and READ as an early return at EF:10051
+  (`if (v4 == 0xae02) return;`). Recorded at mc2l22 t=1703/1835/2407.
+- ⭐⭐ **`sub_10A50`'S PARTNER LOOP SKIPS A CANDIDATE WITH THE SAME
+  @0x1A, AND THE PORT SKIPS ONLY THE SAME SLOT.** Immediately after the
+  xtype/xsubtype accept, the shipped EXE runs
+  `mov 0x1a(%esi),%ax ; cmp 0x1a(%ebx),%ax ; je <next candidate>`
+  (file 0x35303-0x3530b) — an IDENTITY test, not the port's `j != i`.
+  For a default record `@0x1A` is the slot and the two coincide, but a
+  ctor that stamps the caster there makes them differ, and `@0x1A` is
+  fused into the port's `id24` alongside @0x28. An enumerated condition
+  present in retail and absent in the port is a law by this corpus's
+  own rule; it was NOT touched by the m57 landing and wants its own
+  measurement.
+- ⚠ `known-deviations` **`mc2-sphere-terrain-z` is stale on at least
+  one of its four takes**: measured whole-take on mc2l30 it absorbs
+  **zero** rows and no (10,39) row appears at all (the only rules
+  firing there are `mc2-flyer-drift-m0` 82, `mc2-cast-timing-fields`
+  21, `mc2-fire-churn-m0` 12, `mc2-hit-flash-churn` 2). mc2l0 / mc2l4 /
+  mc2l24 not yet checked. ⏭ re-triage before it hides the law that
+  replaces it. (`mc2-balloon-z`'s note described the OLD relative
+  row convention and has been corrected in place.)
+- **The m57 has two more divergences the merge dig did not touch**: on
+  a CAVE level retail's grounded test compares against the CEILING
+  (`v24` is reassigned by the ceiling clamp before `if (v24 ==
+  pred.z)`, EF:26578-91) where the port compares terrain; and retail's
+  m57 tick has no decay tail and no unconditional resize where the port
+  runs `ball_decay_tail` and the ball's gated `ball_resize` every
+  moving tick. Also unstamped by `mc2_spawn_mana_sphere`:
+  `byte_0x43_67 = 10` / `byte_0x44_68 = 1` (EXE 0x74994 / 0x749a5) —
+  the port homes those in `f68`/`f69`, which the MC2 column already
+  uses as the IMPACT (class, model) pair, so writing (10,1) there needs
+  its own dig into the readers.
+
+### ⭐⭐⭐ `mgc-conform` IS 5x FASTER, AND THE SIM WAS NEVER THE PROBLEM
+
+The player flagged the tool's speed as a first-class blocker (~10 min
+for a 60k-tick take sets the parallel-dig cap and every session's
+cadence). A profiling dig ran it in an isolated sandbox. **The sim is
+~1% of the profile.** Two findings:
+
+- ⭐⭐⭐ **`mc2_take_replayed` IS A WHOLE-FILE PREPASS, AND `--limit`
+  DID NOTHING.** `verify-deltas mc2l22 --limit 1` cost **202 s** —
+  `--limit 200` cost 211 s, `--limit 2000` cost 160 s. Every MC2 entry
+  point (`verify_mc2::run`, `run_mc2`, `for_each_pair_mc2`) calls it
+  before building the world; it scans for the first `(14,5)` scroll,
+  mc2l22 has none, so it read all 532 MB — full `serde_json::Value`
+  tree plus a full `RetailMc2` decode (1,000 entity structs + 1,200
+  thing rows) per row — and threw every byte away. `perf --children`
+  put **82%** of the run under it. **A windowed probe that is slower
+  than you expect may not be windowed at all.**
+- **The cost is INGEST, not simulation.** Flat profile of
+  `verify-deltas mc2l22 --limit 200`: glibc malloc/free ≈31%,
+  `BTreeMap` (= `serde_json::Map`) ≈23%, serde_json `Value` parse ≈19%,
+  base64 5.5%, `memmove` 6.1%, zstd 2.8% — and the only sim-adjacent
+  entry above 0.3% was `decode_retail_ent_mc2` at **1.6%**, with
+  `World::tick_inner` below the cut. The obs channel was deep-copied
+  THREE times per tick on the way to the typed struct every consumer
+  actually wanted.
+
+Landed: the prepass scans state only (structural token skip, entity
+bytes scanned directly for the three lanes); `TickRecord::from_line`
+parses to borrowed fields with `obs` as a `Box<RawValue>`; `Recording`
+reuses one line buffer; `midwalk_ground` zipped instead of indexed; two
+`MGC_*` `getenv` calls hoisted out of per-entity / per-pair loops into
+`OnceLock`. Plus ⭐ **`replay --stop-at-divergence`** (opt-in, refuses
+to combine with `--segmented`/`--pose-only`, prints a `stopped=<t>`
+marker so a truncated count can never be read as a full one).
+
+| command | before | after |
+|---|---|---|
+| `replay mc2l22 --brief` (65,556 ticks) | **803.9 s** | **151.7 s** |
+| …same horizon via `--stop-at-divergence` | — | **33.6 s** |
+| `verify-deltas mc2l22 --limit 5000` | 196.6 s | 41.4 s |
+| `replay mc2l0 --brief` | 51.6 s | 20.4 s |
+| `replay mc1l0 --brief` | 32.8 s | 9.9 s |
+| `explain mc1l0 500` | 1.60 s | 0.30 s |
+
+mc2l22 goes **82 → 432 ticks/s**. ⚠ And the takes were never uniformly
+slow — mc2l3's 22,798 ticks replayed in 45 s (~500 t/s) before any of
+this; the "~100 ticks/sec" figure came from the take whose prepass was
+worst.
+
+**PROOF OF NEUTRALITY — the strongest available.** The full 16-take
+`--brief` sweep and the whole 361-fixture suite were run on the binary
+BEFORE this change and again after, and both are **byte-identical**.
+That is the receipt to demand for any future tool change: not "the
+tests pass", but *the corpus verdicts diff clean*. The sweep itself
+went **~40 min → ~12 min** end to end, on the same box, with the same
+16 verdicts.
+
+🏦 NOT LANDED, on purpose: an opt-in on-disk **witness memo**
+(prepass answer keyed on path+len+mtime; 29 s → 0.01 s warm) — a
+staleness failure mode this corpus should adopt deliberately or not at
+all; **SIMD base64**, now the single biggest remaining cost (~25% of
+what is left) but either `unsafe` or a new dependency in the tool whose
+numbers are ground truth; zero-copy line handling (~10%); and deriving
+obs from `state.struct_b64` instead of reading the stored channel —
+which changes what the runner compares against and is a design call.
+⚠ Two behavioural edges, neither reachable on this corpus: the typed
+row parse rejects a few MALFORMED shapes the `Value` walk tolerated
+(non-object `state`/`terrain`, duplicate keys), and an EXPLICIT
+`"obs": null` would now read as absent — verified absent across all
+361 fixture files (1,083 rows) and the 400-row heads of 7 takes.
+
+⚠ **AN AGENT'S SANDBOX IS AN OLD TREE, AND IT WILL MISREAD ITS OWN
+EVIDENCE ACCORDINGLY.** This dig reported a "pre-existing `mc2l6`
+REGRESSION already present in the working tree". It was not
+pre-existing: its sandbox carried HEAD's sim while `conformance/` was
+symlinked to the LIVE manifest, so it was running this session's brand
+new (10,57) fixture against a tree without the law — i.e. it had
+independently reproduced my non-vacuity proof and read it as a defect.
+
+### ⚠⚠ NEVER PIPE A GATE VERDICT THROUGH `head`
+
+`cargo test -j4 2>&1 | grep -E "^test result|FAILED" | head -20`
+reported ALL GREEN while `mc2_slice_behaviors_and_goldens` was failing.
+The workspace has **44 test targets**; `head` cut the verdict at 20
+lines and the failing one was past the cut. It surfaced only because a
+parallel dig ran the suite its own way and reported it back. **A
+truncated gate is worse than no gate — it manufactures a confident
+false PASS.** Redirect the full run to a file and AGGREGATE
+(`grep -c "^test result"`, sum the passed/failed columns). ⭐ And the
+corollary that saved it: a second party running your gate differently
+is a real check.
+
+### GATE
+
+- **Fixture suite: 361 fixtures ran, 361 pass, 0 regressions** (360 →
+  361; the new mc2l6 t=10805 exemplar), and that new fixture is RED
+  under `MGC_NO_M57_MERGE=1` with no other fixture moving.
+- **Workspace tests: 44 targets, 932 tests, 0 failures** (the lib goes
+  579 → 580 with `each_allocator_seeds_its_own_behavior_table_base`).
+- `cargo clippy --workspace --all-targets`: 0 warnings. `cargo fmt`
+  clean.
+- **Two goldens re-pinned, each with full A/B attribution in its own
+  comment**: `mc2_cave` (all four — the seed moves A/B/C/D, the mana
+  sphere's roll moves D alone, the cave arms move nothing) and
+  `mc2_slice` (all six — the seed ALONE; reverting it makes the test
+  pass on the previous pin with the other four laws still in).
+- **Certified takes bit-exact end to end**: mc2l0 (22,695), mc2l3
+  (22,798), mc1hwl0 (53,043), mc1l32-quick (41,600),
+  mc1l0-spells-galore (10,747).
+- **Every guard row byte-held**: mc2l0-sg 8,103 · mc2l1 264 · mc2l4 31
+  · mc2l24 133 · mc2l30 262 · mc1l6 3,907 · mc1l49 4,654 · mc1l37
+  2,734 · mc1l48 934. ⭐ All four MC1 guards holding is the receipt for
+  the one cross-column risk in this batch — the m57 dig widened
+  `ball_merge_candidates`' membership test from a hardcoded `(10,39)`
+  to retail's seeker-parameterised form, and the MC1 column runs
+  through the same predicate.
+- ⚠ **mc2l30's head RESHAPED at the same tick**: 262 held, but the
+  signature moved `extra(10,12)slot209x1` → `(10,57)slot118:rand`.
+  That is the merge law changing what the boundary tick is ABOUT, not
+  a regression — and it names the next head on that take.
+
+### THE HEADLINE, MEASURED TWICE
+
+| take | before | after |
+|---|---|---|
+| mc2l6-rsg horizon | 10,087 | **10,109** |
+| mc2l6-rsg clean boundaries | 10,319 | **11,339** |
+| mc2l22 horizon | 412 | 412 (held) |
+
+Attribution: the row156 seed is worth +22 horizon and +343 clean; the
+(10,57) merge law adds the remaining **+677 clean** on top.
+
+### NEXT
+
+1. **The class-10 `@0x2A` amount home** (banked above) — importer arm +
+   the `f2a`/`mana` publish arms for (10,23)/(10,25), then audit the
+   WHOLE class-10 ctor set the same way. An imported blast dealing zero
+   is the biggest single correctness hole named this session.
+2. **mc2l30's new head** `(10,57)slot118:rand` at t=262 — the merge law
+   named it; it is a fresh, small, fully-instrumented target.
+3. **`sub_10A50`'s @0x1A identity skip** (banked above) — measure it on
+   both columns before landing; it changes ball merging everywhere.
+4. Session 93's still-unlanded pair: **the rival cast fires one tick
+   early** and **Summon Army is a TWO-STAGE spawn** (both diagnosed in
+   SESSION 93's NEXT, neither re-measured since).
+5. Re-triage **`mc2-sphere-terrain-z`** on mc2l0 / mc2l4 / mc2l24 — it
+   is measured stale on mc2l30.
+6. **Use `replay --stop-at-divergence` for horizon checks** — it is
+   the campaign's most-run query and now costs 34 s instead of ~10 min
+   on mc2l22. Remaining tool headroom is banked in the perf section
+   above (SIMD base64 ≈25% of what is left, the witness memo,
+   zero-copy lines).
+7. ⚠ **The parallel-dig cap stays at 2-3 until it is re-measured WITH
+   the player.** The tool half of its cause is paid; the hardware half
+   (8 usable performance cores, 8 GB per process, and an i915 crash on
+   the record) is unchanged, and widening is the player's call from a
+   measured trial — not an inference from the speedup.
+
+## SESSION 93 (2026-09-02) — THE SECOND OPUS WAVE: SIXTEEN DIGS, THIRTEEN LAWS, AND A HARDWARE CEILING
+
+`mc2l22` **72 → 412** (clean 408 → 412). `mc2l6-rival-spells-galore`
+horizon **10,087 HELD**, clean **10,165 → 10,319**. Sixteen Opus digs on
+the two focus takes, clustered from fresh whole-take pair censuses.
+
+### ⚠⚠ THE WAVE WAS TOO WIDE — THE CAP IS NOW 4-5
+
+The player stopped this wave mid-run: the laptop (16 cores, **8 usable
+performance cores**) was pinned so hard they could not type into the
+prompt. It cost quality as well as comfort — `tools/conform` sets
+`ulimit -v` = **8 GB per process**, so heavy instruments were SIGKILLed
+with empty output files, one agent got nothing out of a plain
+`verify-deltas --limit 2` **in 35 minutes** at load ~50, and three digs
+had to deliver their law on the decompile + census with the confirming
+re-measure owed. Two also lost time to a tree that another agent's
+in-flight edit had left uncompilable. **Run 4-5 at a time, in more
+waves.**
+
+🔧 **THE LANDING SANDBOX** (new, keep it): an `rsync` copy of the repo
+(minus `target`/`.git`, symlinking `recordings`/`gamedata`/`baked`/
+`assets`) with every agent-probed file restored via
+`git show HEAD:<path>`. The main session builds and measures there, so
+each landing is attributed to its own law and never races the wave's
+shared tree. ⚠ `--exclude assets` also strips `baked/assets` — symlink
+both.
+
+### ⭐⭐⭐ RULES
+
+- **THE PORT ASKED A QUESTION RETAIL DOES NOT ASK — and it was the
+  whole horizon wall.** `sub_1F6D0`'s vertical homing dereferences
+  `Entities_EA3E4[word_0x96_150]` and reads `position.z +
+  array_0x52_82.yaw` with NO life, reap or class test: NETHERW.EXE
+  0x43f17's pointer load runs into the z store at 0x43f5d with **zero
+  conditional branches between**. The guard belongs to `sub_1C310` /
+  `sub_1ED30` (EF:9295-9301), ONE CALL LATER at EF:11521. The port
+  wrapped the lift in `mc2_target`, which rejects `act_life < 0`, so
+  the lift was skipped the tick a victim died, the altitude servo's
+  −32 went uncancelled, and 25 goats sank 32 units apiece.
+  **mc2l22 72 → 412 on this one law.**
+- **WHICH OF THREE LOOK-ALIKE PRIMITIVES A SITE CALLS IS A LAW.** MC2
+  has three ch0 area-damage writers; only `sub_10C80` (EF:3953) walks
+  the `dword_38527` building list, and only it carries the matching
+  `(class != 10 || model != 45)` ring exclusion (EF:4135).
+  `sub_11400` (EF:4208) has NEITHER — EXE: `sub_10C80` @0x35480 loads
+  `0x9677` AND `0x967f` and compares `$0x2d`; `sub_11400` @0x35c00
+  loads only `0x9677`. Its ONLY two call sites are the (10,6) standing
+  fire's (EF:23111/23152) — a bijection with the port's only two
+  `building_tenth` callers, which is what makes that flag the
+  fingerprint. The port paid every overlapped building 50 a tick.
+  ⭐ The port's own comment enumerated the variants and omitted
+  `sub_11400`: **an enumerated list's absence is a law, including the
+  port's own.**
+- **A GRADING CHANNEL CAN BE BLIND TO A REGISTER THAT WAS ALWAYS
+  RECORDED.** The pair/pose sampler passed `leash: None` on a written
+  premise — "none of the three is in the MC2 import, so arming one
+  here would be fiction". All three duel-lock words
+  (`dword_0x142_322`, `word_0x146_326`, `word_0x14A_330`) sat inside
+  the 2124-byte player block in every capture; only the DECODER was
+  missing. Six lock windows, six dirty-pair runs, matched exactly, and
+  three consecutive ticks reproduce to the unit. ⭐⭐ **WHEN A PORT
+  COMMENT EXPLAINS WHY A LAW CANNOT BE LANDED, CHECK THE CLAIM BEFORE
+  THE CODE** — twice now.
+- **AN IMPORT WHITELIST DROPS BITS SILENTLY, AND A DROPPED BIT KILLS A
+  GATE THE PORT ALREADY HAS.** `import_ent_mc2` never mapped
+  `byte[0] & 1`, so `mc2_awake_one`'s hidden-skip — which cites the
+  right EF line and calls bit 0 "a verbatim byte[0] mapping" — was
+  DEAD on every pair. `sub_68C70` returns on that bit BEFORE the
+  0x2400000 proximity test (EF:55515; EXE 0x8D481 `testb $0x1,0xc(%ebx)`
+  → bare `ret`), so retail never wakes a hidden record; the port woke
+  every one inside 24 tiles of the human.
+- **THE IMPORT SEAT IS A LAW SURFACE, AGAIN — TWICE.** The (10,67)
+  flood keeps its **dome-top reference** in `word_0x2C_44` and the
+  (10,71) fissure its **ramp reference** (`maxLife >> 3`) there too,
+  with the damage in `@0x2A`. The uniform fall-through swapped both:
+  every flood victim read `z − 3000 <= 96` and took the DAMAGE arm
+  instead of the PUSH (one LCG step per tick, forever), and every
+  imported fissure fell into the GROW arm and never reached the PIN
+  arm that draws at all. Fissure A/B over its whole 1,600-pair window:
+  **720 → 42 dirty pairs, 1,534 → 171 unexplained rows.**
+- **A LAW LANDED ON ONE CALL PATH IS NOT LANDED** — three times in one
+  wave: the mid-burst regen pin's enumerated exempt list (learned by
+  `cast.rs` in session 92, never by the conformance import — HEAL (5)
+  is off it entirely, `sub_6A300` never calls `sub_68DE0` at all);
+  Fool's Mana's no-muzzle-lift (rival arm right, human arm wrong);
+  and `sub_26070`'s head-0-**or**-1 body (m21's attack twin right, its
+  idle arm wrong).
+- **A `case` THAT FALLS THROUGH IS ONE TICK, NOT TWO.** `sub_28860`'s
+  `case 1:` arms the counter and `goto LABEL_20`s into `case 2` in the
+  same tick (EF:18908-13; EXE 0x4d141-0x4d14c has no branch between),
+  so a split mini's BIRTH tick already spins `roll_0x20_32` by +0x100
+  and the mover chases it by row 95's `v_2 = 170`. The port's
+  "one-tick skew accepted" left every mini's heading exactly 170 short.
+- **A DELIBERATE APPROXIMATION HAS AN EXPIRY DATE.** `sub_66FD0`'s
+  detonation is a CONSTANT, not a descriptor: it spawns
+  `_4A190(pos, 10, 38)` **literally** (EF:58813; EXE 0x8ba23
+  `6a 26 push $0x26 / 6a 0a push $0xa`) and keeps its own `(9,9)` only
+  to CHAIN onto the storm, whose tick rains beams as
+  `_4A190(pos, storm->b43, storm->b44)`. The port had stamped
+  `(10,38)` on the BOLT — a value retail never holds — so the pair
+  lane, which IMPORTS b43/b44, handed the impact the real `(9,9)`, for
+  which the port has **no class-9 arm at all**. 82 storm births in
+  mc2l22, zero minted. A/B over 8,000 pairs: non-rng rows
+  **4,639 → 3,985 (−14.1%)**, `(10,38)` closed, nothing regressed.
+- ⚠⚠ **AGENT SELF-REPORTS NEED CHECKING.** One dig reported the tree
+  clean while leaving a live `MGC_DIGD_FIX` env gate in
+  `conformance.rs`. Another **fabricated** a system notice about MCP
+  connectors, asserted a turn later that it had been confirmed, then
+  retracted both unprompted. Verify probes with `git diff`, not with
+  the report.
+
+### REFUTATIONS / CONFIRMATIONS
+
+- **(9,9) carries no internal law — session 92's banked line SURVIVES
+  re-measurement.** Handed retail's own state, all 49 lightning-trail
+  nodes come out bit-exact in x and y. `sub_66750` builds ONE rounded
+  step vector and ACCUMULATES it down every node, so a 1-unit aim
+  error is 1 unit *per node*: mc2l22 t=2210 closes arithmetically —
+  victim z 64 low ⇒ pitch 227 vs 234 (atan to the unit both ways) ⇒ a
+  monotone −1…−49 ramp with **zero exceptions**. One bad victim z ⇒
+  ~50 (9,9) rows. The family's real mass (77%) is allocation/reuse
+  forks at three ticks, not geometry.
+- **m21's wander idiom was ALREADY LANDED** in a1900d6 and the EXE
+  (0x4A8AD-0x4A917) confirms the port byte-exact — a stale brief.
+- **`mc2_player_drain` has no reader because it is DEAD LEGACY**, not
+  because a biller is missing; the human's mana deficit was a missing
+  CREDIT in the import, not a spend.
+- **The (10,72) "8 allocations" are real but RE-AIMED**: the port does
+  allocate 8 records at the cast, it just puts the creature in them.
+  The missing 8 are the hatchlings at **t+16**. And the `life +1` is
+  not a fuse off-by-one — the port has **no tick body for actions
+  0x4F/0x50 at all**, so an imported node's life freezes.
+- ⭐⭐⭐ **THE EXE CONTRADICTS THE LISTING ON THE PITCH FOLD — DO NOT
+  "FIX" THE PORT TOWARD EF.** EF:59661-64 renders the climb-ramp fold
+  as `(… − my_sign32(…) * 255) >> 8`, exactly one less than truncation
+  for a positive product — which *looks* like the fix for an observed
+  +1. `NETHERW.EXE` @0x81ed6 is `cwtl / neg / imul / sar $0x1f /
+  shl $0x8 / sbb / sar $0x8` = canonical truncate-toward-zero ÷256,
+  i.e. Rust's `/ 256`. EF's second asymmetry (one arm taking
+  `my_sign32` off the MASKED pitch) is likewise absent. Two more
+  hand-conversion artifacts. The residual +1 is the ground sample
+  landing on the 216/217 bin boundary — a terrain question.
+
+### THE LAWS (file; witness)
+
+Pose pair (verify_mc2.rs, fixtures.rs): **DEFAULT ON** — the session-92
+opt-in flipped. mc2l22 census 130,624 → 92,511 rows; mc2l6-rsg non-rng
+17,452 → 13,932. Certified takes and all 350 then-existing fixtures
+re-graded green under it before the flip.
+m2 lift (mc2/roster.rs): `sub_1F6D0` reads the target record RAW.
+mc2l22 pair 72, 25 z rows at −32 → 0. **The take's horizon: 72 → 412.**
+Duel leash (mgcr.rs, world.rs, pose_lane.rs, replay.rs): the lock
+register decoded and seated. mc2l6-rsg t=1376.
+Hidden bit (conformance.rs): `byte[0] & 1` imported. mc2l22 t=42406.
+Fire footprint (mc1/combat.rs): `!building_tenth`. mc2l22 t=9744 —
+a pair whose ONLY unexplained row in a 706-entity world is
+`slot 873 life 8000/7950`, RNG and pose bit-exact.
+Regen pin (mc2/cast.rs, conformance.rs): `NO_MID_BURST_REGEN_PIN`
+shared by both call paths + the HEAL skip. mc2l22 pairs 18501/18502,
+re-measured conforming from two independently built binaries.
+m21 hit tick (mc2/roster.rs): head 0 **or** 1 runs the body.
+mc2l22 t=3751 slot 301, 7 rows → 1.
+m25 hatch (mc2/roster.rs): `case 1` falls through. mc2l22 t=1246.
+Fool's Mana (mc2/cast.rs): no muzzle lift. mc2l6-rsg t=10633.
+Lightning storm (mc2/cast.rs, mc2/proj.rs): the literal `(10,38)`
+detonation + the `(9,9)` chain. mc2l22 t=1079.
+Defense brake (mc2/rivals.rs): `word_0xe_14 = 1` is the second half
+of EF:7804-05. mc2l22 t=1675.
+Flood seat (conformance.rs): (10,67) `f44 ← @0x2C`. mc2l6-rsg t=26314.
+Fissure seat (conformance.rs): (10,71) `f44 ← @0x2C`, `f140 ← @0x2A`.
+mc2l6-rsg t=24708.
+
+### ⚠ BANKED WITH A BLOCKER — THE ALLOCATOR ROW SEED
+
+`NewEvent_4A050` stamps `dword_0xA0_160x = &str_D7BD6[59]` in BOTH arms
+(Events.cpp:573 free pop, :599 sacrifice). `Gen::new_event` reproduces
+every other default of that same reset block — maxLife 300, flags 8,
+actSpeed 16, subSpell 100, id, xtype/xsubtype −1, `byte_0x39_57` −6,
+`byte_0x43_67` 10 — and omits this one, so a natively spawned MC2
+record runs on `BEHAVIOR[0]` (the (5,0) creature row, `v_12 = 7`,
+`v_14 = +244`) instead of row 59's `0` / `−4`. **Measured: mc2l6-rsg
+horizon 10,087 → 10,109, clean 10,165 → 10,508, entity-set fork
+10,284 → 10,653, nothing regressed earlier.**
+
+**It is REVERTED, and the blocker is a live convention split.** Landing
+it panics `the_mc2_hate_ledger_is_the_tick_top_projectile_sweep`:
+`mc1/combat.rs:1498` indexes **MC1's 31-row `BEHAVIOR`** by `row156`
+(`BEHAVIOR` resolves to MC1's table inside `mc1/combat.rs`), and MC2
+entities reach that site. That is a PRE-EXISTING bug the seed merely
+exposes — an MC2 entity was already reading MC1's table there, just
+without crashing. The split is wider: `castle.rs:2850` stamps
+`row156 = 9` natively ("native abs 68 = ROW_BASE + 9", i.e. RELATIVE)
+and reads `BEHAVIOR[ROW_BASE + row156]` at `castle.rs:1495`, while
+`conformance.rs:2362-72` imports ABSOLUTE; `ball_tick`'s MC2 cave arm
+(`mc1/combat.rs:6925/7221`) is relative too and is already wrong for
+imported spheres. **⏭ Audit the `BEHAVIOR` indexing convention first,
+then land the seed — it is worth +22 horizon and +343 clean.**
+
+### THE CENSUS MOVE (whole-take pair lane, start → end of session)
+
+| | non-rng rows |
+|---|---|
+| mc2l22 | **26,955 → 21,068** (−21.8%) |
+| mc2l6-rival-spells-galore | **13,932 → 7,859 (−43.6%)** |
+
+Family closures: mc2l22 `(10,38)` **517 → 0**, `(10,39)` 1,913 → 345,
+`(10,45)` 685 → 114, `(3,0)` 523 → 252, `(9,9)` 8,947 → 7,722;
+mc2l6-rsg `(10,57)` 3,116 → 657, `(3,0)` 4,551 → 3,100, `(10,71)`
+729 → 13, `(10,39)` 606 → 22, `(10,67)` 235 → 34.
+
+### FIXTURES
+
+**Ten cut, every one proven non-vacuous** (RED under a full revert of
+the session's twelve landed laws, GREEN under them): mc2l22 t=72, 1079,
+1246, 1675, 9745, 18501, 42407; mc2l6-rsg t=10633, 24708, 26315.
+Suite **350 → 360**.
+
+⚠ **THE DUEL LEASH IS NOT FIXTURE-GUARDABLE THROUGH THIS ROUTE, AND
+THAT IS ITSELF WORTH KNOWING.** A cut at t=1376 passes under full
+revert: the fixture runner grades `fixture verdicts`, and the leash
+moves the **POSE CHANNEL** only — `verify-deltas --start 1375 --limit 6`
+reports *6 conforming, 0 field diffs* beside *POSE CHANNEL … 1 bit-exact
+(16.7%), pose.yaw 5 rows, max |d| 10, first t=1376 want 1167 got 1164*.
+🏦 **A unit test is owed** for `mc2_duel_leash_recorded` (per
+docs/CONFORMANCE.md §Lifecycle 4), and more generally: **a law that
+lives in the pose lane has no fixture home today.**
+
+⚠ **PAIR-ANCHOR LABELLING DIFFERS BETWEEN INSTRUMENTS** — three of the
+ten anchors were off by one and only the revert caught it. `--csv`
+labels a pair by its START tick; `verify-deltas`'s "first divergent
+pair (t=N)" and `explain` label by the END. When an agent's brief says
+"head at t, anchor at t−1", check which instrument produced the t.
+
+### GATE
+
+**360 fixtures ran, 360 pass, 0 regressions** · suite green (one
+failure appeared and was the allocator-row seed above; reverting it
+restored green) · clippy 0 · fmt clean · certified takes bit-exact
+end-to-end (mc2l0, mc2l3, mc1hwl0, mc1l32-quick, mc1l0-spells-galore)
+· **every uncertified guard row byte-held**: mc2l0-sg 8,103 · mc2l1 264
+· mc2l4 31 · mc2l24 133 · mc2l30 262 · mc1l6 3,907 · mc1l49 4,654 ·
+mc1l37 2,734 · mc1l48 934.
+
+### NEXT
+
+1. **Audit the `BEHAVIOR` index convention** (absolute vs
+   `ROW_BASE + row156`), then land the allocator row seed.
+2. **The rival cast fires one tick early** — diagnosed, NOT landed:
+   `sub_5F660`'s LABEL_16 band refuses while `word_0x2E_46` is live
+   (EF, `case 0x11` earthquake), and the token's countdown runs at the
+   TOKEN's slot, below the brain. The port's `mc2_rival_buffs` runs at
+   the TOP of the rival body, so the executor's gate reads a window it
+   just zeroed. ⚠ Moving it interacts with the previously-measured
+   `token_later` decrement (mc2l6 t=244) — needs isolated A/B.
+3. **Summon Army is a TWO-STAGE spawn** — diagnosed, NOT landed: the
+   `(9,24)` carrier's death mints N `(10,72)` ring nodes (`sub_51800`,
+   head allocated FIRST and map-linked LAST, children literal
+   `qmemcpy`s) that hatch their creature 16 ticks later
+   (`sub_3A5B0`); the port collapses both stages. Ring size off the
+   creature model: **2|19 → 8, 25 → 4, else 2** (the port's `_ => 8`
+   default is backwards). Also `sub_1E580` mints the `(10,73)` puff
+   BEFORE the `(10,0)` fire. Probe: 138 rows → 0 in the mint window.
+   ⚠ Changes allocation counts take-wide and requires rewriting
+   `summon_army_ring_is_eight_allied_fireflies`.
+4. The (10,57) late band — **2,455 rows, 79% of the galore's biggest
+   family**: retail's sphere z is FROZEN while the port's alternates
+   +32 / drop-to-ground, i.e. the port runs sphere physics on ticks
+   where retail's sphere is inert. Suspect a `kicked`/tether latch.
+5. 🏦 named, not dug: `(10,39) roll` — **88,290 rows, an INVENTED
+   WRITE** (`mc2_mana_spheres` writes `f34 = yaw`;
+   `TransformEntityToManaSphere_36BA0` EF:26867-918 writes
+   `yaw_0x1C_28` ONLY), a one-line deletion; two ungraded (10,57) ctor
+   lanes (`sub_50130` stamps `xsubtype = 57` and `byte_0x44_68 = 1`,
+   the port leaves 39 and 0 — and `(f68,f69)` is the IMPACT pair);
+   four invented guards in the lightning trail, including a
+   `for _ in 0..64` cap where retail's march is UNBOUNDED; the (5,21)
+   residual `life` row (a letter with a valid SOURCE but a ZERO
+   amount ⇒ `sub_11900`); `mc2_blast23_tick` deals `f140` where
+   `sub_33D80` EF:24796 deals `@0x2A`; **MC2 has no miss stamp**
+   (retail writes `word_0x96_150 = 0xae02`, recorded at mc2l22
+   t=1703/1835/2407); the port never runs `sub_1E700` for StageVar2
+   13 (16 records per army); ⚠ `known-deviations` rule
+   `mc2-sphere-terrain-z` may be masking the same +7 the allocator
+   row seed fixes.
+
+## SESSION 92 (2026-09-02) — THE OPUS PARALLEL WAVE: FIFTEEN DIGS,
+## 27 LAWS (mc2l22 45 -> 72, mc2l6-rsg 10,089 -> 10,087 / clean +71)
+
+Player-directed repeat of SESSION 91's experiment, this time with the
+main session AND every dig agent on **Opus** (91 used Fable): keep
+`mc2l22` beside `mc2l6-rival-spells-galore`, run many digs in parallel
+in waves, land the outcomes serially. Fifteen agents in three waves
+(9 + 3 + 3); the main session verified every `EF:`/`Level.cpp:` citation
+against the listing before applying, landed serially, cut fixtures
+inside the loop and probed them red under a pre-session worktree build
+(`.claude/worktrees/rig-s92` @ 1a35d99).
+
+**mc2l22 45 -> 72** (clean 45 -> 408). **mc2l6-rsg 10,089 -> 10,087**
+— a 2-tick horizon SLIP against clean 10,094 -> 10,165; see "THE SLIP"
+below, it is inherited, not a defect in anything landed.
+
+### ⭐⭐⭐ RULES THIS SESSION PROVED
+
+- **⭐⭐⭐ A WHOLE GRADING PHASE CAN BE MISSING ON ONE COLUMN.** The
+  biggest single family in mc2l22 — `(9,1)` at 20,056 rows, and 37.7%
+  of ALL non-rng dirt in the take — is not a sim defect at all: MC2's
+  pair driver never got the **POSE PAIR** that MC1's has had since the
+  pose-pair landing. `verify_mc2.rs` pinned ONE pose sample for the
+  whole walk, so a manifestation token BELOW the carpet's slot (the
+  human's book sits at 40, the carpet at 424) launched from pose@N+1
+  where retail's `sub_69900` reads the caster's pre-move record
+  (EF:56045-67, the mover `sub_5D530` is downstream at EF:59994).
+  `World::tick_pose_pair` and `mc2_carpet_dispatch`'s swap already
+  existed and were simply never called. Landed OPT-IN behind
+  `MGC_MC2_POSE_PAIR=1` (the MC1 twin was staged the same way):
+  mc2l22 pair 10169 goes 5 field rows -> **conforming**.
+- **⭐⭐⭐ THE PORT SNAPS WHERE RETAIL RE-AIMS.** 2,140 of mc2l22's
+  segments are one mistake made twice: `sub_26220` (the m21 devil,
+  EF:16871/16880) and `sub_26AA0` (the m22 worm head, EF:17348) each
+  write `roll_0x20_32` — the TARGET bearing — and nothing else; the
+  live yaw belongs to `sub_1B8C0`'s capped commit turn, which runs
+  AFTER (EF:16895) and is frozen outright on a pinned frame
+  (`byte[1] & 8`, EF:8786-90). Retail's own changelog shows roll
+  moving with yaw ABSENT. Same law as the MC1 militiaman's "turns,
+  never snaps", never crossed. ⚠ m21's WANDER is the opposite idiom
+  from the generic walker (`yaw += kick; roll = yaw`, EF:16787-90),
+  so it must land WITH the snap removal.
+- **⭐⭐⭐ A MAILBOX THE READER DOES NOT CLEAR SNOWBALLS.** MC2's
+  wizard intake `sub_5EFA0` (EF:60671-725) clears the mail SOURCE and
+  never the AMOUNT — and even the source only on the SURVIVE branch
+  (`if (v1 != 2)`, EF:60721-25). It is the OUTLIER of MC2's three
+  intakes; the castle (EF:61748-49) and the house (EF:28270-71) wipe
+  both, and the port's rival body had been written to their shape.
+  Because MC2 point damage uses the INVERSE protocol (`sub_11900`
+  EF:4381-84 overwrites a pending box and ACCUMULATES onto a consumed
+  one), leaving the amount standing is exactly what makes melee
+  snowball: mc2l22 rival 477 takes ten identical 200-point grunt hits
+  and the box climbs 200/400/.../2000, killing him at t=72 where the
+  port kept him alive. This was the take's head at t=46.
+- **⭐⭐⭐ WHICH TERRAIN PROBE A SITE CALLS IS A LAW** (the distance-
+  function rule, one field over). MC2 has TWO roughness functions:
+  the tight `sub_1B7A0` (2x2) and the WIDE `sub_1B830` (a 2-tile span,
+  exactly DOUBLE on a planar slope), and `sub_1B830`'s only callers in
+  the whole listing are the m27 hydra's three sites (EF:19498, 20912,
+  20926). The port called the tight one at all three, so the hydra
+  crested slopes retail refuses. ⭐ The listing's fourth corner
+  (`Terrain.cpp:1620` `x += 2` -> tx+3) is a hand-conversion error
+  that contradicts the function's OWN ASCII stencil AND the shipped
+  NETHERW.EXE (`sub al,0x2` at linear 0x1B86C) — THE EXE OUTRANKS THE
+  LISTING, again, and this time the listing's own comment agreed with
+  the EXE.
+- **⭐⭐⭐ AN ALLOCATION THAT FAILS IS NOT A DEATH.** Every MC2 flight
+  worker gates its whole post-impact tail on the effect entity
+  existing — `sub_65820`'s `if (!v11x) return 0;` (EF:62979-81),
+  `sub_65C20`'s `if (v18x) {...}` (EF:63183-97), `CastPosses_65F60`'s
+  (EF:63310-19) — so with the pool saturated retail's projectile
+  SURVIVES its own landing, keeps its slot, and delivers no mail and
+  no XP (`sub_65780`/`sub_686D0` are inside the arm). The port raised
+  0x400 unconditionally; the tick-top sweep then freed a slot ABOVE
+  everything else that tick, it landed on TOP of the free stack, and
+  a 28-child meteor ring popped it first and slid every child one slot.
+- **⭐⭐ THE AUTHORED RIVAL START IS A LEVEL, NOT A SELECTION.**
+  `InitialiseSpells_54A50` zeroes the SELECTED tier for all 26 spells
+  (EF:38658) and the AI arm writes the authored byte into
+  `SpellLevels` ONLY (EF:38692); the mint then stamps tier 0
+  (Level.cpp:1319). Retail's own player blocks confirm it —
+  `levels = [2;26]`, `sel = [0;26]` on every mc2l22 rival at t=0.
+  ⚠ Masked in conformance: `retail_import_mc2` seats `sel` from the
+  recording every pair, so this bites NATIVE PLAY only.
+- **⭐⭐ THE ONE COST FUNCTION.** `SetSpell_6D5E0` prices every
+  manifestation through `GetSpellManaCost_6D710` against
+  `Entities[parentId]` — the token's own wizard, human or rival, with
+  no fork — and the castle arm multiplies the rung by 320/256 at
+  tier 1 and 384/256 at tier 2 (Level.cpp:1761-70), returning the raw
+  `manaCost_6` when the wizard is castle-less. The port's rival copy
+  returned the bare rung and its own comment said so.
+- **⭐⭐ WHICH ARM THE DRAW LIVES IN, again**: `sub_38F70`'s paralyze
+  stamp puts the LCG step, the grunt, the -80 kick and the damage mail
+  all inside `if (!mobilizeCounter_0x14E_334)` (EF:28434-40); only the
+  two latch writes below are unconditional. A re-stamp on an already-
+  stunned wizard costs retail nothing and the port one draw.
+- **⭐⭐ A STALE `known-deviations` RULE HIDES THE LAW THAT REPLACES
+  IT.** `mc2l24-player-mana-regen` and `mc2l24-wizard-mana-regen` are
+  unconditional take-wide capture rules absorbing ~24,465 pairs EACH
+  (45% of the take) on the premise that the carpet's `+0x88` register
+  is un-recorded. It IS recorded and IS seated every pair — and the
+  rows they were absorbing are `-(manaRegen + 14)`, five ticks
+  running, to the unit: the HUMAN's wraith leech. `sub_28FF0`
+  (EF:19310-34) bills `(!v7 || v7 == 1)` — model 0 the human OR
+  model 1 a rival — in ONE unforked statement; the port billed rivals
+  and tallied the human into `mc2_player_drain`, which HAS NO READER.
+  ⚠ Those two rules want re-scoping; sized at ~1,298 of the 24,465.
+
+### THE LAWS (files; witness; receipt)
+
+Whirlwind (tail.rs, mobs.rs): the victim float band + unconditional
+commit (EF:24381-95, `v37` init :24291 / far-grab :24315) — mc2l6
+t=10090 slot 745 z 73/0. Fixture t=10089.
+Summon Army (conformance.rs, cast.rs, rivals.rs): the parentId chain
+(EF:57669/59170/29609-11) + the direct arms take the caster boost RAW
+and neither lift the muzzle nor re-price mana. Fixture t=15631.
+Thrown flight (mc1/combat.rs, cast.rs): `sub_35FB0` PORTED
+(EF:26457-26524) — reproduces retail bit-exactly for 30 consecutive
+ticks off mc2l22 t=9787.
+Import seat (conformance.rs): the class-9 hate-ledger bit
+`byte[1] & 0x20` (EF:7337/7347) had only a sphere-scoped seat —
+mc2l6 `wiz 2 hate` +500 on four consecutive pairs.
+Pickers (rivals.rs): `sub_148E0` walks ONE interleaved `dword_38523`
+chain with an own-claim skip and a `watcomrand()` 57-break
+(EF:6538-45); the three class-3 pickers walk `dword_38519`, whose
+membership is `class == 3 && life >= 0` and NOTHING else (EF:39975).
+Mail residue (rivals.rs): EF:60671-725. Fixture-less (INHERITED);
+mc2l22 45 -> 49 alone.
+Hydra (mc1/mobs.rs, multipart.rs): `roughness_wide` = `sub_1B830`.
+Fixture mc2l22 t=17587.
+Heading (roster.rs, multipart.rs): the devil + worm snap. Fixtures
+t=49 / t=12182.
+Drains (roster.rs, rivals.rs, cast.rs, world.rs): the human leech +
+Steal-Mana L3's castle-percent arm (EF:62130-99; 858 = 10% of 8580 as
+500+358, two victim-LCG draws). Fixture mc2l6 t=19303.
+Token purse (rivals.rs): mint at tier 0 + `GetSpellManaCost`'s tier
+multiply. Fixture mc2l22 t=6615.
+Paralyze (proj.rs): EF:28434-43. Fixture mc2l22 t=375.
+Alloc-fail (proj.rs, mobs.rs): the survive-on-failed-mint law, the
+effect FUSE `byte_0x46_70` (EF:62994), and `NewEvent`'s 100 belongs
+to @0x2A not @0x2C (Events.cpp:569) — the fire ctor seed.
+Pose pair (verify_mc2.rs, fixtures.rs, replay.rs): OPT-IN.
+
+### THE SLIP (mc2l6-rsg 10,089 -> 10,087)
+
+The galore's free-run horizon fell two ticks while its clean-boundary
+count rose 10,094 -> 10,165. **It is not a regression in a landed
+law**: `verify-deltas --start 10086 --limit 6` returns **6 conforming,
+0 field diffs** — every one-tick law in that window, INCLUDING the old
+head at 10090, is now right. The new first divergence (t=10088,
+`slot 745 z: retail 0 port 7`) is INHERITED: the free run's carried
+state parts through an ungraded lane earlier. Per the standing rule
+(PAIR-CLEAN + free-run-diverged => `MGC_RAW_SHADOW`), that census is
+the next session's opener.
+
+### REFUTATIONS (banked claims that did NOT survive measurement)
+
+- **rival 584's "+9972 / -10000 every 21 ticks" (SESSION 91) is NOT
+  RETAIL'S**: over all 65,557 samples `+9972` occurs ONCE and the 75
+  `-10000` events are irregularly spaced (188..518), never 21. The
+  port shows no sawtooth either.
+- **the (9,13) guard-arrow cadence and the (10,11) "one tick early"
+  mint (SESSION 91) are both REFUTED as cadence laws** — the cadence
+  gate is bit-exact (and `byte_0x3E_62` is zero-extended in the EXE,
+  so the port's `u8 % period` is right), and the (10,11) drop is at
+  the same position with a different SLOT. Both were allocation-order
+  collateral of two other families: mc2l22 rival 584's 21-tick
+  Earthquake re-cast, and a (10,38) lightning burst the port never
+  mints (41 missing / 0 extra).
+- **mc2l4 is NOT the exposure for the rival castle price** (ledger
+  :18645-51): its rivals are `ssl = 0` and every stamp matches. The
+  real exposure is mc2l22 rival 530.
+- The (9,9) lightning family carries **no (9,9)-internal law** — all
+  9,339 rows root in a `(5,2)` z -64 head, a +200 damage-timing lag,
+  and the allocation forks above.
+
+### GATE
+
+Certified **13/13 END devs=0** (MC1 x11, mc2l0, mc2l3) · suite **931
+passed, 0 failed** · **350 fixtures, 0 regressions** (342 -> 350; all
+8 new ones RED under `rig-s92` on their own lanes) · clippy 0 · fmt ·
+`grep PROBE-REVERT` = 0 in code · every uncertified guard row byte-held
+(mc2l0-sg 8,103 · mc2l1 264 · mc2l4 31 · mc2l24 133 · mc2l30 262 ·
+mc1l6 3,907 · mc1l49 4,654 · mc1l37 2,734 · mc1l48 934) · goldens
+re-pinned with SINGLE-LAW A/B attribution (mc2_cave checkpoint A and
+mc2_slice checkpoint D both move for the fire ctor's @0x2C seed ALONE;
+the Cruise-roll and mint-tier laws were each independently reverted and
+moved neither).
+
+### NEXT
+
+1. **`MGC_MC2_POSE_PAIR=1` -> default.** Re-grade the frozen MC2
+   fixture signatures and mc2l0/mc2l3 under it, re-pin, flip. It is
+   worth ~37.7% of mc2l22's dirt and the same lane on every MC2 take.
+2. mc2l22 t=73 `(5,2) z` — 302 rows, 200 of them exactly -64, slots
+   13-44, from t=72. The take's head AND the root under the (9,9)
+   lightning family's aim-pitch ladder.
+3. mc2l6-rsg t=10088 — raw-shadow the free run for the ungraded lane
+   (see THE SLIP).
+4. The +200 damage-timing lag (687 rows): retail debits the castle in
+   the SAME tick the mail is written, from a writer ABOVE it in the
+   walk; the port's `area_write` ch0 castle pass only mails.
+5. 🏦 named, not dug: the (10,38) lightning burst (41 missing); rival
+   584's 21-tick Earthquake re-cast; the (10,72) ring-node record the
+   port does not mint at all (8 allocations); the `(10,65)` slow half
+   of the paralyze gate (needs a rival stun latch); Law C of the token
+   purse (the castle-want gate reads the stamp); `mc2_rand_perturb`
+   takes u32 where retail's is u8; `MobCtx::mc2_turn` snapshotted pre-
+   increment; the two mc2l24 mana-regen capture rules want re-scoping.
+
+## SESSION 95 — THE STALE REGISTER AND THE READER LIST (mc2l22 412 → 522, mc2l6-rsg 10,109 → 10,787)
+
+Six parallel Opus digs (player-set width for this session), clustered
+from the whole-take PAIR CENSUS of both focus takes rather than from
+the segmented head list; main session verified every citation against
+the shipped EXE and landed serially out of a landing sandbox.
+
+**mc2l22 412 → 522 (+110). mc2l6-rival-spells-galore 10,109 → 10,787
+(+678).** Census: mc2l22 86,625 → 84,189 rows, mc2l6-rsg 47,194 →
+44,460 (−5.8%). Five digs landed; one returned a refutation set.
+
+### ⭐⭐⭐ AN INVENTED WRITE, AND THE HALF THAT WAS NOT WRITTEN AT ALL
+
+`sub_38F70` (paralyze, EF:28437) and `sub_38E70` (web-slow, EF:28411)
+write `moveBoost_0x1E_30 = -80` and NOTHING ELSE. In the shipped EXE
+the entire write is one instruction — `mov WORD PTR [eax+0x1e],0xffb0`
+at NETHERW.EXE 0x5d7b3 — and nothing in either function touches
+`+0x20`. **The heading is a SEPARATE register that keeps whatever
+bearing the last buffet left in it**, and the mover consumes the two
+apart: EF:59695-711 is `MoveEntity_57FA0(&pred, ext->yaw_0x1E_30, 0,
+ext->moveBoost_0x1E_30)` with a **ONE-SIDED clamp** (`> 128` only — a
+negative magnitude passes through BY DESIGN) and a decay toward zero
+that zeroes below `|4|`. The sign goes straight into the polar step, so
+the kick lands 180° off the stale bearing. The port fabricated BOTH
+halves (heading `pyaw + 0x400`, magnitude `+80`).
+
+⭐ **WHY IT SURVIVED TWO SESSIONS AT THE SAME HEAD**: the same stamp
+also mails damage, and the damage buffet (`player_knock = (dir,
+amt/10)`) overwrites both halves before the mover consumes them. The
+−80 only survives when the mail does no damage. mc2l22 t=411→412 is the
+one such tick in the window — retail steps (+66,+45) = polar(1729,−80),
+the port stepped (−77,+25) = polar(1434,+80). **The head was gated AND
+rare.** Pair-blind (pairs 405..416 grade 12 conforming, 0 field diffs)
+⇒ unit pin `the_debuff_stamp_writes_only_a_negative_magnitude`.
+
+### ⭐⭐⭐ THE READER LIST, NOT THE WRITER LIST, IS THE LAW
+
+The class-10 `subSpellIndex_0x2A_42` amount home is an ENUMERATED list
+and `import_ent_mc2` was missing three of its fifteen rows — **(10,23)
+blast, (10,38) storm, (10,51) ridge beam** — so an IMPORTED one took
+`f140` from the dead `@0x90` and dealt ZERO. (10,23)'s tick `sub_33D80`
+spends it (EF:24800; EXE 0x585af `xor eax,eax` / `mov ax,WORD PTR
+[ebx+0x2a]` — a ZERO-extended 16-bit read — into `sub_10C80`), and its
+ctor `sub_4F5F0` stamps 25 (EXE 0x73e15, after class 0xA / model 0x17
+at 0x73e0a/0x73e0e). Width confirmed: `global_types.h:343` says
+`uint16_t` and both writes carry the `0x66` prefix.
+
+⭐ **THE AUDIT'S OWN LESSON — THE CTOR STAMP IS NOT THE TEST.** (10,38)
+and (10,51) stamp nothing in their ctors (38 inherits `@0x2A` from the
+impact core EF:62993, 51 keeps `NewEvent`'s default 100) yet both spend
+it every tick; conversely ~25 models stamp `@0x2A` and no tick ever
+reads it. **Enumerate the READERS.**
+
+⚠ **(10,25) REFUTED** — the banked brief was half wrong. Its tick is
+`sub_33E20`, not `sub_33D80`, and it spends a **sign-extended BYTE at
+@0x46** (EXE 0x5864f `movsx eax,BYTE PTR [ebx+0x46]`); 2000 could never
+have fit there, and its ctor's `@0x2A` stamp **has no reader at all**.
+
+mc2l22 −2,031 rows / 2,037 fixed / 6 introduced; mc2l6-rsg −115 / 0
+introduced. Kill: t=4261 slot 939, retail's blast takes a (5,25) to
+life −120 where the port's left it at 80, still walking. Fixture
+`the-class-10-0x2a-amount-home-is-an-enumerated-r` (t=4261).
+⚠ The 6 introduced rows (mc2l22 t=21539, t=38099/38100/38150) are the
+blast's area write reaching a wizard retail's does not — a separate
+`sub_10C80` reach law, banked.
+
+### ⭐⭐⭐ THE HUMAN'S CARPET IS JUST ANOTHER POOL RECORD
+
+`sub_1F6D0`'s vertical servo takes its target's top as
+`Entities_EA3E4[word_0x96_150]->position.z + ->array_0x52_82.yaw`
+(EF:11509-20) off the RAW record, **with no human special case
+anywhere in the function** — NETHERW.EXE 0x43f1e-0x43f2c is
+`movsx 0x50(%eax)` / `movsx 0x52(%eax)` / `add` / `movsx 0x50(%ebx)` /
+`sub` (a 32-bit subtract), then `je` → 0 else ±1, `imul` by the row's
+`word_0xe_14`. The port's out-of-pool stand-in used bare `ctx.pz`,
+which does not merely bias the servo — **it FLIPS ITS SIGN** whenever
+the m2 hunter sits within 100 units above the carpet: retail lifts +32,
+the port sank −32, **64 per tick**.
+
+⭐⭐ **A DEVIATION'S PREMISE HAS AN EXPIRY DATE — AND THIS ONE'S WAS
+FALSE WHEN IT WAS WRITTEN.** The entry read "the human's half-height
+isn't modeled"; `mc1::combat::PLAYER_HH` existed, three MC2 sites
+already added it to `ctx.pz`, and **its own doc-comment already
+recorded that the MC2 carpet's `ayaw` lift is 100 and `PLAYER_HH` is
+right on both columns.** Entry RETIRED in docs/DEVIATIONS.md.
+mc2l22 −405 rows, dirty ticks 1,656 → 1,417 (−14.4%), the 200
+exactly-`+64` z rows → **0**, pair 2210→2211 54 rows → 0. Fixture
+`the-m2-servo-s-target-top-includes-the-human-s-o` (t=8393).
+
+### ⭐⭐⭐ THREE MAILBOX PROTOCOLS IN ONE SPELL, AND THE WHIRLWIND HAD THE INVERSE ONE
+
+`sub_11900` (EF:4375-88) is `if (dst->word_0x62_98) dword_0x5E_94 =
+a4; else += a4` — EXE 0x3611f `cmpw $0x0,0x62(%eax)` / `je 0x36130`,
+ASSIGN at 0x3612b while the source is PENDING, ACCUMULATE at 0x36135
+once consumed. The area writer is its **exact inverse**. The whirlwind
+lift (EF:24400) is a bare `sub_11900` call and the port had it on the
+area protocol.
+
+⭐ **IT IS LOAD-BEARING BECAUSE RETAIL'S OWN DISC WALK VISITS ONE
+VICTIM TWICE**: `CopyEntityPosition_57CF0` (EF:24395) relinks the
+victim mid-walk into a tile the ring walker has not reached yet, so it
+is lifted, moved AND billed again. Retail's second letter overwrites a
+pending box; the port's accumulated, **doubling every whirlwind hit**.
+mc2l6-rsg t=10110: head 159 lifts rival 378 across (25,105)→(25,106),
+retail bills 20 and the rival's regen pins it at max_life 10000, the
+port billed 40 and landed on 9980. ⚠ The double VISIT is retail's own
+behaviour — both columns land the identical two steps and agree on the
+final (6600, 27378). Only the billing differed.
+
+The contact pass has a THIRD protocol: `sub_33710`'s building arm is
+`sub_11900` (EF:24429) but its CASTLE arm is an **open-coded
+unconditional accumulate** (EF:24438-40, no source test at all).
+
+⚠ **NO FIXTURE HOME** — `retail_import_mc2` does not restore mailbox
+state, so the pair channel is structurally blind (whole-take census
+byte-identical either way) and only the free run can see it. Unit pins
+`the_whirlwind_lift_bills_on_the_single_protocol_not_the_area_one` +
+`the_whirlwind_lift_call_site_uses_sub_11900`.
+⭐ The first pins the two PRIMITIVES apart; the second pins WHICH ONE
+the call site reaches for, using a pre-loaded PENDING box as the
+discriminator so one visit suffices. **Pinning the primitive alone
+would have been vacuous** — the primitives were never wrong.
+
+### ⭐⭐⭐ A GRADING CHANNEL READING THE PORT'S OWN FUTURE
+
+`sub_5DE30` (the duel leash) is called from INSIDE the carpet's own
+mover (`sub_5D530`, EF:59721), so it dereferences the opponent's live
+`Entities[]` record at the carpet's walk phase. The pose channel's
+shadow step runs AFTER `exec_pair_mc2` has ticked the whole world, so
+its entity table held **the port's own N+1** — the last un-recovered
+input in a lane whose every other operand comes from the recording.
+Sourcing the opponent from the recording (`pst` for a higher-slot
+opponent, `st` for a lower one) takes the pose channel **96.2% →
+99.4%**, eliminates the `pose.yaw` lane entirely (2,985 → 366 rows,
+−87.7%, = 38.7% of the take's whole remaining dirt), and leaves the
+rest of the 89-line report **byte-identical**. The leash's arithmetic
+was byte-correct all along (EXE 0x5dec6: `3·minSpeed/2` = 120,
+`1024/120` = 8, the ±120 clamp) — **only the operand's phase was
+wrong.**
+
+⚠ **`verify_mc2.rs` NEVER STAMPED `DEBUG_TICK`** (`verify.rs:318` does
+it on the MC1 column). Every `DEBUG_TICK`-gated sim probe —
+`MGC_CARPET_PROBE`, `MGC_WRITE_TRACE`, `MGC_MAIL_TRACE` — has been
+silently producing NOTHING on the whole MC2 `verify-deltas` column.
+`emit_carpet_probe`'s own doc warns that an instrument which no-ops for
+one game "reads as *the port is clean here*"; it was true of that very
+probe. One line, fixed.
+
+### ⚠ THE DECOMPILE'S FIELD NAME LIED ABOUT ITS OWN OFFSET
+
+remc2 calls the mobilize decay counter `mobilizeCounter2_0x150_336`,
+but `global_types.h:254-255` declares it as the SECOND of two
+consecutive `int8_t`, so its home is `0x14F` = **+335**;
+`engine_support_converts.cpp:101` serializes it there and `:103` puts a
+DIFFERENT field (`byte_0x150_336`) at 0x150. The EXE agrees —
+`sub_38F70` does `mov BYTE PTR [eax+0x14e],0x1` then
+`mov BYTE PTR [eax+0x14f],0xa` for the decompile's `= 1` / `= 10`.
+Reading +336 fed `Mc2Ext.mobilize_ctr` a neighbour byte at every
+re-anchor (a constant 232 on mc2l22 = a 232-tick stun seeded into every
+segmented replay) where the true lane walks 10,10,9,8,7… Witness
+mc2l22 t=412..420. Unit pin
+`the_mc2_mobilize_counter_is_at_335_not_336`.
+⭐ **[[remc2-source-corruption-class]] now has a THIRD form: not a
+corrupted statement and not a wrong declared TYPE, but a field NAME
+that misstates its own offset.**
+
+### REFUTATIONS AND RESOLUTIONS (dig 4, no landable diff)
+
+- **`(9,13)` carries NO law of its own.** Its 1,403 field rows are pure
+  allocation-slot collateral, proven by slot-for-slot content matching
+  (t=2555: port slot 929 holds retail's slot-952 arrow verbatim;
+  t=2513 is a PERMUTATION, not a shift).
+- **`(10,38)` REFUTED** — the banked "41 missing / 0 extra" family has
+  **zero rows of any kind** in today's census. The note is stale.
+  ⚠ It is nonetheless one of the two models dig 3 added to the `@0x2A`
+  reader list on EXE evidence alone; unmeasured on these takes.
+- **Rival 584's 21-tick cast IS real and now dated.** Charge-drop ticks
+  2400-3500 are 48/48 at `t ≡ 16 mod 21`. ⭐ The ledger's earlier doubt
+  was measuring the MANA lane, not the cast edge. The port's spurious
+  allocation is at `t ≡ 14 mod 21` — **exactly one pair early.**
+- **The `(5,15)` volley gate is bit-exact against the EXE** (0x487b3-
+  0x487cb, `byte_0x3E_62` zero-extended, row 83 `v_26`=15 `v_28`=3840,
+  behaviour table byte-identical to `Level.cpp:11`). 15 pairs still
+  mint a volley retail does not, with the guard bit-identical on both
+  sides and the whole world differing only in the free-stack depth ⇒
+  **retail carries an unrecovered extra condition.** Minimal repro
+  mc2l22 pair 1887 (the take's first non-rng divergence of any kind).
+- ⭐⭐⭐ **THE REAL UPSTREAM FISH — RETAIL REVIVES, THE PORT POPS.** At
+  pair 2513 retail mints its `(10,0)`s by REVIVING dead pool records in
+  place (slots 256, 813, 817, 985) with 240 slots still free, while its
+  free-stack top 810 goes to the guard arrow; the port pops 810 for a
+  `(10,0)`. **One extra pop per 21-tick cast permutes every later
+  slot**, and that is what generates the bulk of `(9,13)`'s 1,403 rows
+  and much of `(10,0)`'s 3,011. `NewEvent_4A050` (Events.cpp:561-608,
+  EXE 0x6E850) has the free arm FIRST and the recycle arm only on
+  exhaustion — **the decompile's ordering condition is what to check
+  against the EXE.** Nobody owned `(10,0)` in this wave.
+
+### GATE
+
+**44 test targets / 936 tests / 0 failures** (932 → 936: four new unit
+pins, each proven non-vacuous by its own kill switch or an inverse
+edit) · **363 fixtures / 363 pass / 0 regressions** (361 → 363; both
+new fixtures fail under their own law's revert and ONLY their own) ·
+clippy 0 · fmt · `grep PROBE-REVERT` = 0.
+
+**13/13 certified takes horizon=END devs=0** (mc1hwl0, mc1l0,
+mc1l0-spells-galore, mc1l1, mc1l2, mc1l3, mc1l32, mc1l32-quick, mc1l4,
+mc1l42, mc1l5, mc2l0, mc2l3).
+
+**Every guard row byte-held**: mc2l0-sg 8,103 · mc2l1 264 · mc2l4 31 ·
+mc2l24 133 · mc2l30 262 · mc1l6 3,907 · mc1l49 4,654 · mc1l37 2,734 ·
+mc1l48 934 · mc1hwl1 345 · mc1hwl2 69 · mc2l15 6,996.
+⚠ mc1hwl1/mc1hwl2/mc2l15 were NOT in the session-open baseline; mc2l15
+was closed by an all-switches-reverted A/B on the same binary
+(byte-identical: 6,996 horizon, 7,571 clean, same signature), and the
+MC1 pair by construction (every edit this session is on an MC2 path)
+plus the eleven MC1 END rows.
+
+⚠ Landings were measured in a LANDING SANDBOX (a HEAD copy with
+`recordings`/`baked`/`conformance` symlinked) so the main session
+neither waited for the wave nor raced its tree. Digs 2, 3 and 6
+reported ABSOLUTE numbers taken from the shared tree while other digs'
+work was in flight; those are not comparable to the baseline, and only
+their own ON/OFF pairs are. The sandbox reproduced the two horizon laws
+independently, and the two census laws **compose exactly** there
+(−2,031 + −405 = −2,436, the measured mc2l22 delta to the row).
+
+### NEXT
+
+1. ⭐⭐⭐ **`NewEvent_4A050`'s revive-vs-pop ordering** (dig 4's fish).
+   Retail revives dead records with 240 slots free; the port pops. One
+   extra pop per cast permutes every later slot. Check the decompile's
+   ordering condition against EXE 0x6E850. This is the root under
+   `(9,13)`, much of `(10,0)`, and probably the `(9,9)` residue, which
+   dig 2 independently found is now **dominated by whole-record
+   identity swaps** (t=10030 910 rows, t=20369 536, t=18529 513).
+2. **mc2l22's new head t=523** `extra(10,12)slot729x1` — a spawn the
+   port makes and retail does not, no pose/field rows before it.
+3. **mc2l6-rsg's new head t=10788** `(3,1)slot378:z` — rival 378
+   docking at castle 528 (mana-regen fork flips to the at-castle
+   `max/200 max 1000` arm, `invuln 0 → 1`). ⚠ Castle 528 is itself
+   still RISING and `at_castle` is `ent_overlap` with a z leg, so the
+   two z errors are coupled.
+4. **The mc2l6 pose residue is a THIRD population**, all 64 x / 65 y /
+   214 z rows starting at t=11297, no duel active, carpet on a steep
+   slope ⇒ terrain-shaped, `MGC_CELL_TRACE` first.
+5. ⭐⭐ **`obs_project_mc2` is still not the exact inverse of the
+   import, and its own comment says it must be**: models 9, 18, 19, 71,
+   76, 77 are diverted at import but still published as `mana` from
+   `f140`, and model 1 is in the zero list but is NOT diverted (mc2l22
+   carries 5 dirty `(10,1) mana` rows). Latent false positives on
+   mc2l1/mc2l3/mc2l24.
+6. 🏦 named, not chased: the `mc2-lightning-blast-churn` rule (class 10
+   model 23, takes mc2l0/l4/l24/l30) may have been absorbing dig 3's
+   law for months — its hit count should now drop, and if it drops to
+   ~0 the rule is dead; the `(5,22)` worm's 165 z rows at exactly −64
+   (opposite sign to dig 2's, different subsystem); the two other
+   `Entities_EA3E4[t]->ayaw + z` readers in the whole decompile
+   (EF:55621, EF:55649 — `sub_68E50`'s hand-muzzle placement, an
+   enumerated three-item list); the port's `v4` computed in i16 where
+   the EXE subtracts in 32 bits; `Gen::mc2_dist3` not i16-truncating
+   the z delta where `sub_583F0` truncates all three.
+
+## SESSION 95 WAVE 2 — THE RESIDUE CHANNELS (mc2l22 522 → 825, mc2l6-rsg 10,787 → 11,663)
+
+The player ratified **sequential waves of six** at wave 1's close
+(*"The load was alright. It can be repeated in multiple waves."*), so
+the census was re-cut against the landed tree and six more digs went
+out against the NEW families. **5 of 6 landed; the sixth is a partial
+whose diff was deliberately defaulted OFF (below).**
+
+**mc2l22 522 → 825 (+303). mc2l6-rsg 10,787 → 11,663 (+876).**
+Non-rng census: mc2l22 18,632 → **15,580**, mc2l6-rsg 4,037 → **2,845**.
+
+### ⭐⭐⭐ A SCRATCH RECORD IS AN ARGUMENT-PASSING CHANNEL, AND ITS RESIDUE IS READ
+
+`sub_605E0`'s castle downgrade does not PASS `RemoveCastleStage_385C0`
+an operand — it **builds one inside the shared scratch record
+`Entities_EA3E4[0]` and leaves it there** (EF:61628-35). The EXE makes
+it unmistakable: `mov esi,ds:0x1a3e4` — a FIXED global pointer to pool
+slot 0, so this is not a failed allocation — then
+`lea edi,[esi+0x4c]` / `lea esi,[ebx+0x9a]` / `movs dword` +
+`movs word`, **six bytes: x, y AND z** (NETHERW.EXE 0x84e5c-0x84eba).
+
+It is load-bearing because an unrelated subsystem READS the residue:
+`sub_13B00`'s rival build-site scout (EF:6070-90) borrows the same slot
+0, writes only `id_0x1A_26`, `position.x` and `position.y`, then copies
+the **whole** position back out — so **every rival's build datum
+`site_z` is the site-z of the last castle anywhere on the map that lost
+a level.** The port never wrote slot 0, so `site_z` was permanently 0
+and the Build-state whiff hover (`z += v_14 * sign(z − (site_z + 512))`,
+row 67 `v_14 = −4`) servoed toward 512.
+
+The corroboration is the proof: slot 0's record changes **exactly 20
+times in 40,423 ticks**, every one on the tick a castle's `action45`
+goes 6→4, and rival 378's `dest_z` follows one tick later every time.
+
+⚠ **PAIR-BLIND** — the importer re-seeds `ent[0]` every pair, so the
+whole-take census is BYTE-IDENTICAL either way. ⭐ **A LANE THE
+IMPORTER RE-SEEDS CAN CARRY AN UNBOUNDED FREE-RUN DEBT AND GRADE
+PERFECTLY CLEAN.** Unit pin
+`a_castle_downgrade_leaves_its_site_in_the_shared_scratch_record`.
+
+### ⭐⭐⭐ THE VICTIM GATE BELONGS TO THE WORKER, NOT TO THE PAYLOAD
+
+`sub_674C0` (the LEVELED possession, class-9 **action 18**) wraps its
+ENTIRE spawn block in `if (v6x)`, the `sub_108B0` claim-probe result
+(EF:59029-58) — EXE 0x8be27 `test edi,edi` / `je 0x8bed4` jumps clean
+past both `_4A190` spawns to a bare `DisableEntityDrawing04_57F10`. Its
+basic twin `CastPosses_65F60` (action 1) has no such gate. The port
+carried the gate on the `(10,54)/(10,69)` **payload** arm instead.
+
+Underneath it, ⭐⭐⭐ **A LAW LANDED ON ONE CALL PATH IS NOT LANDED**:
+`sub_69640` stamps the possession payload per tier — `byte_0x44_68` =
+54 at `life_0x1A == 1`, 69 at 2, and **at 3 it writes NOTHING**, leaving
+the ctor default (EXE 0x8df46's `jb`/`jbe`/`je` ladder falls through to
+no store); `life > 3` fails the `<= 3u` gate and casts nothing at all.
+The human's arm has carried the whole table for sessions; the rival
+funnel hardcoded the BASIC bolt's `(10,12)` on every tier, so rival
+611's Mana Lock bolt flew with `b44` 12 where retail records 69 and its
+victimless expiry then took the wrong impact arm. ⚠ PAIR-BLIND; unit
+pin `an_action_18_bolt_with_no_claim_victim_allocates_nothing`.
+
+### ⭐⭐⭐ THE WINDOW COUNTS DOWN AT THE TOKEN'S SLOT — AND THE BRIEF'S PREMISE WAS REFUTED
+
+A level-load spell book is allocated ABOVE the wizard that owns it, so
+its countdown body (`sub_693F0`/`GetScroll_69DB0`, EF:56216+) runs
+AFTER the whole wizard body, brain included. The port's caster-slot
+stand-in ran it FIRST, so the executor's window gate (`sub_5F660`,
+EF:60889-948) read a window already one tick short and **every
+zero-recast rival spell re-fired ONE TICK EARLY.** Witness from the
+recording's own `struct_b64` (token 602 `@0x2E`): retail counts
+3,2,1,0 over t=2512..2514 and re-arms to 20 at 2515 — period 21; the
+port read 2,1,0,0 and cast at BOTH 2513 and 2514. `extra(9,2)` 15 → 0,
+census −1,804 rows. **The port already carried this exact reasoning for
+spell 5 ALONE** (`mc2_rival_heal_stand_in`: "runs LAST — retail's token
+sits ABOVE the wizard"). Fixture mc2l22 t=2513.
+
+⚠⚠ **THE WAVE BRIEF'S PREMISE — "retail REVIVES pool records where the
+port POPS, with 240 slots still free" — IS REFUTED.** It was a
+misreading of `explain`'s `[REVIVED]` tag, which fires for **a slot
+reaped and re-popped in the SAME tick**. Retail's tick-top reap
+(`UpdateEntities_57730` → `sub_57F20`, which PUSHES onto the free
+stack) frees the five flagged records first; both engines then pop the
+same six slots in the same order, and the port's free stack, reap
+timing, push order and pop order at pair 2513 are byte-for-byte
+retail's. The EXE **confirms the listing**: `mov edx,[eax+0x35]` /
+`test edx,edx` / `jl` takes the recycle arm **only on a negative
+free-stack index** — a pure exhaustion fallback, no candidate
+predicate, no reap-flag test, no class test (0x6e85b). Session 94's row
+seed is live in the shared tail at 0x6e955. **NO ALLOCATOR CHANGE IS
+OWED.** ⭐ Only a raw push/pop trace settles an allocation question.
+
+### ⭐⭐ THE SUMMON RING IS A RING OF NODES, NOT OF CREATURES
+
+`sub_51800` (EF:37459) mints one `(10,72)` per ring member — EXE
+0x7603e stamps action `0x4F`, class 10, model 0x48, `life = maxLife =
+16` and `and dl,0xf7` clearing the collide bit — with nodes 1..N−1 a
+**`qmemcpy` of the head** (so all share the head's entity RNG seed —
+visible in the recording as identical `rand` across ring members) and
+the head placed LAST at angle 0. Only when a node's own life reaches
+zero does `sub_3A5B0` (EF:29590) hatch the class-5 creature. Neither
+`strA0[0x4F]` nor `strA0[0x50]` (`sub_3A630`, the `(10,73)` puff, whose
+call site EF:10745-46 is **StageVar2-13 exclusive** and precedes the
+`(10,0)` fire) had **any port home at all**, so both fell to the
+terrain catch-all, whose default arm despawns WITHOUT decrementing —
+that alone is the 461 `want = got − 1` life rows. `(10,72)` 435 → 6,
+`(10,73)` 259 → 8, take field rows −668 (−21%). Fixtures mc2l6 t=15642
+and t=15708. ⚠ Pair 15641 stays dirty both ways (one node carries
+retail `heading 632 / pitch 14` with no writer in `sub_51800`) — a
+named residue, not a claim.
+
+### ⭐⭐ A GRADING CHANNEL BLIND TO THE REGISTER THAT CARRIES THE STATE
+
+The `(10,76)/(10,77)` fire-sphere orb keeps its breathe step in
+`fontTypeIndex_0x3D_61` (@0x3D), not `word_0x2E_46` — `sub_4F440`
+stamps 18 there (EF:36006; EXE 0x73c53 `c6 42 3d 12`, immediately
+followed by the `@0x2C` write) and the tick reads it back SIGNED
+(0x58292 `movsx ax,BYTE PTR [ebx+0x3d]` / `mov di,[ebx+0x2c]` /
+`sub edi,eax` / `jge`, and on the NEGATIVE arm `push 0; push 0xa;
+call _4A190` — the death `(10,0)` — then the 26-record chain
+teardown). `import_ent_mc2`'s class-10 fall-through routed the DEAD
+@0x2E into `f46`, so every IMPORTED orb breathed with **step 0**: the
+radius froze, the collapse never went negative, **the (10,0) was never
+minted and the chain never torn down** — one missing `NewEvent` that
+re-seats every later pop.
+
+⭐ **IT HID BECAUSE @0x2C, @0x3D AND `flags` ARE NOT IN THE GRADED
+FIELD SET** — the collapsing hub graded perfectly clean while in the
+wrong phase, since the tumble runs in both phases so yaw/pitch matched.
+The `rand` rows were the proof: retail's satellites carry
+`9377*3623+9439`, the port's `9377*3622+9439` — **the hub took its seat
+one pop early.** Pair 20296: 132 field + 1 missing → BIT-EXACT.
+Fixture mc2l22 t=20296.
+
+### ⚠ THE PARTIAL THAT WAS DEFAULTED OFF (dig 6, and the reasoning matters)
+
+The `(10,71)` fissure's tick adds `life & 1 ? +1 : −1` to
+`mapHeightmap_11B4E0` across its whole disc EVERY tick (EF:29529-37 /
+:29560-69), so the recorded terrain endpoints ALTERNATE by one height
+unit under the carpet — and one height unit is **32 engine units**
+(`32*p1`, Terrain.cpp:113-172), exactly the size of the `pose.z`
+residue. Retail's mover resolves its floor against whichever phase
+stood at its OWN walk slot, an image neither recorded endpoint holds.
+The dig also found the MC2 column was **excluded from the mid-walk
+ground snapshot by construction** (`world.rs` guarded both carpet
+anchors with `if !matches!(self.game, GameId::Mc2)`).
+
+**All of that is solid and is landed as plumbing.** What is NOT known
+is WHICH phase: retail demonstrably reads the RAISED image on both
+parities at t=24874 and t=26120 and the LOWERED one at t=24746-24764,
+and **no single-endpoint rule or fixed slot order expresses that.** The
+dig's "cells that moved by exactly ±1 take the higher endpoint" rule is
+a HEURISTIC fitted to the corpus: it fixes 163 rows and **INTRODUCES
+83**.
+
+⭐⭐⭐ **A GRADING ORACLE TUNED TO ITS OWN SCORE CAN HIDE A PORT BUG.**
+The dig shipped it default-ON; the main session **inverted it to
+opt-in** (`MGC_MC2_JITTER_GROUND=1`), so the reported pose number stays
+the honest 39,844 / 99.4% and the machinery is there for whoever closes
+the mechanism. ⭐ The dig's own refutation is the reason to be careful:
+wiring the MC1 port-witnessed oracle for MC2 scores **39,833 — WORSE
+than baseline**, because the port's fissure token sits above the carpet
+on every pair, so it picks `measured@N` uniformly and merely swaps
+which parity fails. **The plumbing gap was real; closing it alone pays
+nothing.**
+
+### GATE
+
+**44 targets / 938 tests / 0 failures** (936 → 938) · **367 fixtures /
+367 pass / 0 regressions** (363 → 367; all four new ones fail under
+their own law's revert and ONLY their own) · clippy 0 · fmt ·
+`grep PROBE-REVERT` = 0.
+**13/13 certified takes horizon=END devs=0.**
+**Every guard row byte-held**: mc2l0-sg 8,103 · mc2l1 264 · mc2l4 31 ·
+mc2l15 6,996 · mc2l24 133 · mc2l30 262 · mc1l6 3,907 · mc1l49 4,654 ·
+mc1l37 2,734 · mc1l48 934 · mc1hwl1 345 · mc1hwl2 69.
+
+⚠ Every landing was re-measured in the LANDING SANDBOX (a HEAD copy,
+one dig's hunks at a time). It earned its keep twice: dig 2 measured
+its own fix reaching 825 on one tree and only 534 on another, blaming
+an unknown in-flight edit — the sandbox confirmed 825, and dig 1 later
+identified the 534 as **its own** partial state (moving the stand-in
+without switch-gating the pre-consume decrement spends the window
+twice). And `rivals.rs` carried hunks from THREE different digs at
+once, which had to be separated by hand.
+
+### SESSION 95 TOTAL (both waves)
+
+mc2l22 **412 → 825**, mc2l6-rsg **10,109 → 11,663**. Non-rng census
+21,068 → 15,580 (−26%) and 6,771 → 2,845 (−58%). Twelve laws, two
+refutations, 361 → 367 fixtures, 932 → 938 tests.
+
+### NEXT
+
+1. **mc2l22 head t=826** `(3,1)slot611:z,heading,rand` — a rival wizard,
+   fresh ground.
+2. **mc2l6-rsg head t=11664** `missing(9,0)slot729x1` plus
+   `slot 510 class: retail 10 port 9` — an allocation-ORDER divergence
+   (a `(9,0)` retail mints and the port does not). ⚠ Read the wave-2
+   refutation above first: `NewEvent_4A050` itself is bit-exact, so
+   this is a MISSING SPAWN upstream, not an allocator bug.
+3. ⭐ **The one-tick-early window shape almost certainly survives on
+   other rivals/spells** — `(10,0)` still carries 2,514 rows,
+   `extra(9,9)` 177 (t=4667 slot 192), `extra(10,0)` 154 (same tick,
+   slot 188), `extra(10,45)` 77 (t=17888 slot 626).
+4. **mc2l22's worst remaining ticks**: t=10030 (929 rows), 9783 (874),
+   18529 (670), 20369 (550), 6521 (501), 30486 (339). ⚠ The t=9783
+   "mass revive" reading is suspect given the `[REVIVED]` refutation —
+   re-derive it from a raw push/pop trace before briefing it.
+5. **Close the fissure-phase mechanism** (which endpoint, and why it
+   flips between windows) and the pose lane's remaining two
+   populations: t=11297 is the STRAFE step, not terrain (no terrain
+   delta anywhere near it), and the t=22004/22244-22502 x/y cluster is
+   a one-tick LAG with the carpet nearly stationary.
+6. 🏦 named, not chased: `Ent::f26` is `i16` where retail's
+   `dword_0x10_16` is 32-bit, so `scratch10 = (subSpell<<8)²` (26,214,400)
+   **cannot be held at all** — a graded lane carrying a permanent
+   static debt delta-grading cannot see; neither possession arm stamps
+   `subSpellIndex_0x2A_42` (an invented write on a graded lane); the
+   `(10,78)` Magic Mine's ctor has FOUR one-line deviations
+   (hardcoded `maxLife = 1000`, `byte[0] |= 8` where the port CLEARS
+   it, a raw un-ground-snapped position, and an invented `ent_rand`
+   draw where retail's ctor has no RNG at all)
+   — ⚠ **ALL FOUR ARE NOW PAID (96 + 97) AND THE FIRST WAS NEVER A
+   DEVIATION**: `maxLife = 1000` is a literal in `sub_50840` (EF:36965)
+   and case 0 re-arms it to the tier's lifespan one tick later; the
+   solid bit and the RNG draw landed in 96; the un-ground-snapped
+   position landed in 97 and was mc2l6-rsg's whole free-run wall
+   (13,831 → 14,996); `terrain-diff` reports
+   **533 height cells already wrong in the stock bake at t=0** on
+   mc2l6-rsg (a real bake debt, invisible to grading because the pair
+   lane installs measured terrain).
+
+## SESSION 96 (2026-09-04) — THE THROTTLED QUEUE: 24 digs, ~35 laws, EVERY UNCERTIFIED HORIZON MOVED
+
+The wave shape the player set at 95's close, run for the first time: a **work
+queue** built from the whole-corpus `replay --brief` sweep — one dig per distinct
+horizon PLUS census-family digs — with ~6 subagents ACTIVE at a time, refilled on
+each completion and landed in the same turn. Mid-session the player narrowed the
+target set to `mc2l22` + `mc2l6-rival-spells-galore`; all refills went there.
+
+### RESULT: all 14 uncertified horizons moved, **+24,688 ticks**
+    mc1l6      3,907 ->  9,816   mc2l0-sg   8,103 -> 12,378   mc1l48   934 -> 4,897
+    mc2l30       262 ->  2,972   mc1hwl1      345 ->  2,927   mc2l6-rsg 11,663 -> 13,544
+    mc1l49     4,654 ->  5,687   mc2l24       133 ->  1,092   mc2l15  6,996 -> 7,574
+    mc1hwl2       69 ->    448   mc2l22       825 ->  1,197   mc2l4     31 ->    64
+    mc1l1        264 ->    271 (mc2l1)        mc1l37     2,734 -> 2,741
+GATE: `cargo test -p mgc-sim --lib` **588 pass / 0 fail**; **367 fixtures, 0
+regressions**; all 13 certified takes still clean to END.
+CENSUS: mc2l22 15,586 -> ~5,881 dirty rows (**-62%**); mc2l6-rsg 3,349 -> ~2,312.
+
+### ⚠⚠ A CENSUS-COUNTING CORRECTION THAT CHANGES EVERY REMEMBERED NUMBER
+`verify-deltas --csv` emits one `kind=rng` row PER PAIR unconditionally, with
+`want == got`. **Those are not divergences.** Filtered, mc2l22's real dirt at
+session open was **15,586 rows, not 84,189**, and mc2l6-rsg's **3,349, not 44,460**.
+Every "census" figure in earlier entries includes that padding.
+
+### ⚠⚠ LABELLING, SETTLED EMPIRICALLY BY FIVE DIGS (the banked note was WRONG)
+`--csv` **and `verify-deltas --dump <t>`** both label a pair by its **START** tick.
+**Only `explain <t>` is END-labelled.** Also: `--dump <t>` runs the WHOLE take —
+pair it with `--limit <t+2>` (3 s vs 165 s on mc2l22); there is **no `--start` on
+`verify-deltas`**, only on `replay`; and **`--dump <t> --limit 1` grades pair 0**,
+which nearly cost two digs their law.
+
+### ⭐⭐⭐ THE SESSION'S DOMINANT SHAPE: THE INVENTED GUARD/WRITE, ~14 TIMES
+An invented `mc2 ||` widening on the area-writer player probe; an invented
+`flags & 0x400` skip in the anti-stack walk; an invented `+146 == 0` early return in
+the MC1 chase (its **third, fourth and fifth** copies); an invented `.max(1)` in the
+rival hover; an invented per-tick Invisibility cloak rebuild; a `!matches!(Mc2)`
+gate on the allocator's roster blank; a decoder validator that was the wrong
+predicate. **A RESET's writes and a helper's CALL SITES are ENUMERATED LISTS — an
+absence is a law**, and twice a SPLIT was the law: **7 of 9** `sub_49F90` call sites
+clear `dword_0x11e6` and the odd one out is the death payout; **6 of 26** class-15
+handlers nest their regen pin.
+⚠⚠ **BUT THE CONVERSE HELD, AND IT MATTERS**: of eight sibling chase guards
+audited, **THREE were LEGITIMATE**. Never generalise — check each site against its
+OWN retail function.
+
+### ⭐⭐⭐ THE SHIPPED EXE OUTRANKED THE LISTING IN THREE NEW WAYS
+- **A ROSTER NAME**: EF:14074 says `dword_38519` where the EXE reads `dword_38535`
+  (`0x47357 mov 0x9687(%esi),%esi`; the singles run 38519/23/27/31/35 at
+  `0x9677/7B/7F/83/87`).
+- **THE DECOMPILE'S OWN HEADER TYPE**: `axis_3d.h` declares `position.x/y` as
+  `uint16_t`, but four separation-box sites all emit `movsx` — they are **int16_t**.
+  That wrong header produced a real 16-bit-wrap bug worth 165 rows. ⚠ **Anywhere
+  the port reasoned "plain u16, no cast" from that header is suspect.**
+- **A JUMP MNEMONIC, TWICE**: `jg` (not `jge`) proved the castle pre-clear box is
+  INCLUSIVE, on an exact boundary hit (|dx| = 4352 against a limit of 4352).
+
+### ⭐⭐⭐ THREE LAWS WORE ANOTHER SUBSYSTEM'S MASK
+- mc2l22's `(9,9)` wall was **the allocator**: retail seizes nine live `(5,15)`
+  archers to mint lightning-trail nodes.
+- a `(3,2) life` head (200 points of castle damage) was **the allocator** one tick
+  upstream — the roster blank.
+- mc2l24's `pose:` head was **a phantom 1,200-damage bill** whose knockback moved
+  the pose.
+⇒ **Do not trust a signature's subsystem.** Two more heads were INHERITED, their
+causes 251 and 80 ticks earlier.
+
+### ⭐⭐⭐ THE RECORDING DECODER WAS HIDING FRAMES (the single biggest row movement)
+`mc2_pool_base` recovers the pool base from the FREE stack's pointer cells; a FULL
+pool leaves that empty, and the live-victim fallback validated a candidate base with
+*"every cell lands on an OCCUPIED record"* — which 999-of-1000 occupancy satisfies
+ambiguously ⇒ **both stacks decoded EMPTY on exactly the frames that sacrifice.**
+Fixed by validating on the SACRIFICABLE bit (`byte[2] & 2`, the only thing
+`sub_49F90` pushes — `NETHERW.EXE` 0x6E819 inside the descending 999->1 scan at
+0x6E7CC). **mc2l22 -4,223 dirty rows (-40.5%)**, pair 10030 BIT-CLEAN, recovering
+retail's exact 67-deep stack where the port had 0. `check-decode` 0 mismatched
+across 165,110 ticks; fixture output byte-identical.
+⚠⚠ **THE SYNTHETIC REBUILD IS ACTIVELY WRONG** — `rebuild_recycle` pops ASCENDING,
+retail's live stack is SCRAMBLED because `sub_57F20` removes by SWAP-WITH-TOP.
+
+### ⭐⭐⭐ LANES THE IMPORTER RE-SEEDS — now proven three more times
+The MC1 castle-rate arm, the whole allocator/recycle SEEDING lane, and
+`player.invisible` all grade **perfectly clean** while carrying unbounded free-run
+debt. **Grade allocator/recycle work by `replay`, never by `verify-deltas`.**
+⚠ BUT NOT A BLANKET RULE: roster VISIBILITY *is* census-visible (-20 rows), and one
+lane whose wall pair graded clean still moved 120 whole-take rows. **Check the
+whole-take family count before concluding import-invisibility.**
+
+### ⭐⭐ A NEW FAILURE MODE
+**A GRADING CHANNEL THAT RECOVERS ITS INPUT BY INVERTING THE PORT'S OWN MODEL
+CANNOT SEE A FORCED WRITE ON THAT LANE.** The whirlwind's `roll_acc += 28` kick is
+real and proven to the unit, but the replay's stick recovery had already absorbed
+it; adding it made things worse. Landing it needs the recovery to subtract the
+whirl term first.
+
+### ⚠⚠ SEVEN STALE DOCS HID OR MISDIRECTED A LAW — three stated the false claim in
+### their own text
+Corrected this session: `DEVIATIONS.md`'s m12 veto clause (named class-2 twice; the
+true classes are class-3 and class-10, and two of three are now ported); the
+"Presentation-only" claim on wizard `byte[0] 0x20` (it is the **mob-scan gate**);
+two `mc2l24` `known-deviations` rules absorbing a **1,200-point damage hit labelled
+"regen"**; the `mc2_spawn_m15` comment claiming the sacrificable bit "has no reader
+in our port" (it has three); a `mc2_rival_pick_castle` comment claiming the rival
+entry gates were unported (they are ported at the CALL SITE); a `ball_tick` comment
+misreading a short-circuit `&&`; and `mc2_whirlwind_lift`'s "both columns agree"
+claim, silently false until the grab bit was imported.
+⚠ **A `capture` rule can report a pair "fully explained" while the free run still
+breaks on it.** ⚠ And `mc2-fire-churn-m0`'s count JUMPED 2,294 -> 2,418 because the
+decoder fix made a 603-deep seizure burst executable for the first time — **that
+rule now hides ~2,400 rows of real fire behaviour. NEXT-SESSION DIG.**
+
+### ⚠⚠⚠ A REGISTERED, PLAYER-RATIFIED DEVIATION'S PREMISE IS REFUTED — RULING OWED
+`DEVIATIONS.md:224` (+ `spell-audit/magic-mine.md` §6 Q1) record that *"in retail
+the player could not get a mine to trigger AT ALL"* because *"nothing is known to
+write the `word_0x36_54` armed gate"*. **`sub_68AC0` writes it** (EF:55430-47):
+detonating a projectile on a `(10,78)` whose `word_0x32_50 == projectile.id` and
+`word_0x36_54 == -1` stamps the SPELL index and the TIER. **The `(10,78)` is a GUIDE
+BEACON** (`sub_68940` EF:55315 makes your own projectiles home on it) and the whole
+trigger machine is live. The three "better than retail" choices there were made on
+the player's ruling *given a dead spell*; **that basis no longer holds. Entry
+annotated; behaviour untouched; the ruling is the player's to re-make.**
+
+### ⚠⚠ THE BIGGEST UNGRADED SURFACE IN THE CORPUS — NOBODY HAS DUG IT
+mc2l22's per-entity TEAR census: **2,298,158 slot-exclusions over 48,484 pairs** —
+`(5,27)` **1,725,255** (~74% of ALL pairs), `(9,9)` 418,917, `(10,77)` 95,380,
+`(10,0)` 45,459. `torn_slots` (`verify_mc2.rs:~1027`) excludes any slot whose
+`phase3e` did not advance by exactly 1, and **its own doc says a family
+concentration is the tell that an exclusion is hiding a law.**
+⚠ **THIS MAKES THE "DIRTY TICKS REMAINING" FIGURE A FLOOR, NOT A TOTAL.**
+
+### 🎯 THE METRIC THE PLAYER CORRECTED, AND IT IS THE RIGHT ONE
+Horizon percentage understates a take by two orders of magnitude, because the
+parallel wave closes walls BEYOND the current frontier. Measured at close:
+**mc2l22 has ~907 dirty ticks in 65,556 pairs (98.6% of pairs beyond the frontier
+are already CLEAN, longest clean stretch 4,555); mc2l6-rsg ~750 (97.2% clean).**
+Today's jumps are that mechanism visible — +5,909, +2,710, +2,582, +4,275 each from
+ONE law releasing runway prior work had already cleared. **REPORT DIRTY TICKS
+REMAINING, NOT HORIZON PERCENTAGE** — and note ~910 dirty ticks is nowhere near 910
+laws: on mc2l22 ten families cover 84% of them, on mc2l6-rsg six cover 91%.
+
+### ✅ SESSION 96's FIXTURE DEBT — **PAID IN-SESSION** (see the settlement below)
+**ONE fixture was cut for ~35 laws.** The doctrine at the top of this file
+("resolving an entry is what EARNS it a fixture, cut by name in the same change")
+was not honoured: the session landed serially and ran ONE batched gate, but did not
+cut fixtures in the loop. The laws are all correct and measured — they are simply
+**unpinned**, so nothing stops a future change silently reverting them.
+
+**SIX TAKES NOW CARRY LANDED LAWS AND HAVE NO MANIFEST AT ALL** — `mc1hwl1`,
+`mc1hwl2`, `mc1l6`, `mc2l0-spells-galore`, `mc2l15`, `mc2l30`. Four of them hold the
+session's LARGEST gains (+5,909, +4,275, +2,972, +2,582). Each needs
+`conformance/<take>.json` and `conformance/fixtures/<take>/` created first.
+
+**FIXTURE OWED (pair-visible — these moved census rows), ~17:**
+  m12 site vetoes (−4,933, the biggest) · decoder sacrificable bit (−4,223) ·
+  m15 chase-hit fallthrough (−712) · summon core (−433) · grab-latch import (−255) ·
+  anti-stack span (−165) · fool's-trap fallthrough (−152) · m27 perturb (−126) ·
+  rival regen pin (−120) · probe self-id unfuse (−78) · the mine cluster ·
+  a18 ceiling pre-clamp · fool's aim phase · m57 parent-zero · area-write window ·
+  inclusive pre-clear · m4 scratch target.
+**UNIT TEST OWED (pair-BLIND by construction), ~11:** whirlwind far band and
+  mid-ring · metamorph cloak · shadow-walk back-off · death payout · seize blank ·
+  and the citation-only/vacuous ones (anti-stack roster, packbox span, m15/m16
+  scratch target, war early-out, rival metamorph cloak) — ⚠ several of those the
+  CORPUS CANNOT EXERCISE AT ALL, which is itself worth recording beside them rather
+  than leaving them to look unpinned by neglect.
+**ALREADY PINNED (4):** jar water-sink (fixture + non-vacuity) · castle painter ·
+  castle bind-level · castle register (unit tests, all non-vacuity proven).
+
+⭐ **WHAT MAKES THIS CHEAP**: every law landed behind an `MGC_NO_*` kill switch, so
+**non-vacuity is a FLAG FLIP, not a code revert** — cut the fixture, re-run the
+suite under the switch, confirm it reports `REGRESSION`. That is exactly what the
+jar fixture did (`MGC_NO_JAR_WATER_SINK=1` → `REGRESSION … field:12,23:z`).
+⚠ And the lesson for the wave shape: **cut the fixture in the SAME turn the law
+lands.** The queue's interleave makes that easy — there is always a dig running to
+wait behind.
+
+### ✅ THE FIXTURE DEBT WAS PAID IN THE SAME SESSION — settlement
+Six agents, one manifest each (fixtures are per-LEVEL JSON, so no collisions).
+**Corpus 367 → 386 fixtures (+19: 18 in this round plus the jar cut earlier);
+0 regressions; 588 unit tests green; every certified take still clean to END.**
+FOUR manifests CREATED: `mc1hwl1`, `mc1hwl2`, `mc2l15`, `mc2l30` (⚠
+`mc2l0-spells-galore` needed none — fixtures are keyed by LEVEL and it shares
+`mc2l0.json` via `source`, which is also why the "6 missing manifests" figure in
+the debt note above was one too many).
+
+**18 FIXTURES COVERING 17 LAWS** (the m4 scratch target is pinned twice, once per
+game column), each with its `REGRESSION` line recorded in the manifest note:
+  mc2l22 (6): m12 site vetoes t=17804 · decoder sacrificable bit t=10030 ·
+    anti-stack span t=1093 · m27 perturb t=20913 · rival regen pin t=5420 ·
+    **the seize blank t=18691** (I had written this off as pair-blind — it is not)
+  mc2l6  (4): fool's-trap short-circuit t=13600 · probe self-id t=11663 ·
+    summon core t=15660 · grab latch t=10109
+  mc1l49/mc1l37/mc1hwl1 (3): m15 chase-hit t=4654 · m4 scratch target t=2734 and
+    t=345 (the hwl1 pin is the PURE chase tick — `f63` 194→195 means no re-bear
+    inside the window, which mc1l37's cannot offer)
+  mc1hwl2 (1): inclusive pre-clear t=69 · mc2l15 (1) · mc2l30 (1) · mc2l24 (2)
+
+**5 CONFIRMED PAIR-BLIND, with whole-take evidence — do NOT re-attempt from the
+pair lane**: the bound-castle register (mc1l6, 559 CSV rows byte-identical ON/OFF),
+the castle painter (mc1l48, 29,977 rows byte-identical), the metamorph cloak
+(mc2l0-sg 37,748 pairs AND mc2l0 22,695 pairs byte-identical, while `replay` shows
+8,103 → 12,378), the whirlwind disc walk (mc2l6, bounded census byte-identical), and
+the death payout. All want UNIT TESTS; three already have them.
+
+### ⚠⚠ TWO LAWS HAD LANDED WITHOUT A KILL SWITCH — both fixed
+`area_write`'s player-window gate and the death payout's victim rebuild were bare
+source edits, so their A/B required a source revert. Added
+`MGC_NO_MC2_AREA_WINDOW` (mc2l24 horizon 1,092 → 133 under it) and
+`MGC_NO_DEATH_PAYOUT_VICTIMS` (mc2l22 1,197 → 1,113). ⭐ **EVERY LAW NEEDS ITS
+SWITCH AT LANDING TIME** — it is what makes a fixture's non-vacuity a flag flip.
+
+### ⚠⚠ THREE OF MY STATED WITNESS TICKS WERE WRONG, AND THE FIXTURE AGENTS CAUGHT IT
+- m27 perturb: **t=20913**, not 16824 — the t=16824 row is dirty in the CURRENT
+  baseline too and byte-identical under both arms. It was never that law's.
+- rival regen pin: **t=5420**, not 1092-94 — the tick I named is the FREE-RUN wall
+  and is pair-CLEAN under both arms.
+- the seize blank: not pair-blind at all — 20 rows in 3 pairs; the t=1113 witness I
+  named IS blind, so the pin went to the largest visible pair instead.
+⭐ **A LAW'S FREE-RUN WALL AND ITS PAIR WITNESS ARE OFTEN DIFFERENT TICKS.** Find
+the pin with a whole-take ON/OFF census differential, not from the horizon.
+
+# ROUND 97 (2026-09-04) — THE STUBBED GUARD, AND THE MINE THAT WAS ALIVE ALL ALONG
+
+**SHAPE:** the throttled queue again, width **5** (player-set, down from 6). A
+server-side outage killed five in-flight digs and the main session mid-wave; the
+recovery is itself a finding (below). Focus takes: mc2l22 + mc2l6-rival-spells-galore.
+
+## RESULT — measured in an isolated landing sandbox, every landing attributed
+```
+mc2l22        horizon 1,197 -> 1,199     census 5,619 -> 3,692 rows (-1,927, 0 introduced)   dirty ticks 673 -> 571
+mc2l6-rsg     horizon 13,544 -> 13,831   census 1,864 ->   921 rows (  -943, 0 introduced)   dirty ticks 512 -> 271
+```
+GATE: **394 fixtures, 0 regressions** · all 13 certified takes END-clean · all 12
+uncertified takes at exactly their prior horizons · 702 unit tests.
+
+## ⭐⭐⭐ A PROBE STUB LEFT IN A LANDED PATH IS AN INVENTED GUARD WITH THE SIGN REMOVED
+Round 96 banked the castle-death token purge (`sub_605E0`'s level-0 rival arm,
+EF:61645-58) as **"measured net-negative"** — it cost mc2l6-rsg 9,486 ticks. It was
+never net-negative. Its LEVEL GATE was a stub:
+```rust
+/// PROBE STUB — the real reader is the level header's `gfx_type & 4` …
+fn mc2_castle_purge_level(&self) -> bool { true }
+```
+Retail gates the arm on `terrain_2FECE.byte_0x2FED2 & 4` — `NETHERW.EXE` file
+`0x84f18` reads `f6 80 d2 fe 02 00 04` (`test byte [eax+0x2fed2],4`) followed by
+`74 40`. Unzipping `level.json` from every `baked/mc2/level-*.mgcl` shows the bit
+is set on exactly **two shipped levels: 022 (`gfx_type` 4) and 062 (7)**; 000, 003,
+006, 024 and 030 are all clear. So the arm fired on mc2l6 (level 6), where retail
+falls through. Wire the gate and it is a pure win: **mc2l22 1,198 → 1,199, rsg
+unmoved.** ⭐ **A stub is false exactly on the takes you did not tune on.**
+⚠ THE PROCESS LESSON: I had re-derived "net-negative" myself from a clean A/B and
+written it into the source as banked truth. **The A/B was right and the conclusion
+was wrong** — a kill-switch A/B measures the arm, not the arm's premise.
+
+## ⭐⭐⭐ THE MAGIC MINE IS A LIVE SPELL-SWALLOWING BEACON — the registered deviation is DEAD
+`docs/DEVIATIONS.md:224` and `spell-audit/magic-mine.md` §6 Q1 both recorded that
+*"in retail the player could not get a mine to trigger AT ALL"*. All three of the
+port's cut wires are now ported and proven on the recording:
+- (a) `sub_68940`'s **±0xAA guide cone** (2.4x the generic 0x71 autoaim) runs
+  **BEFORE** `sub_67CB0` at EF:62907 / 63093 / 63450 / 63589 — a wizard's own
+  qualifying bolts BEND onto his own mine;
+- (b) the ctor `sub_50840` sets `byte[0] |= 8` (EF:36969) making it **SOLID** — the
+  port CLEARED that bit, so the victim probe could never return it;
+- (c) `sub_68AC0` **SWALLOWS** the bolt: spawns a bare `(10,0)`, records the spell,
+  disarms one-shot (`word_0x36_54 = spell model`, EF:55438) and suppresses the tail.
+⭐ **A MINE IS ARMED WITH WHATEVER SPELL YOU SHOOT INTO IT, AT THAT SPELL'S TIER** —
+which is why `sub_6DCA0`'s a3-map was never going to list 23 (§6 Q2's premise).
+Two further ABSENT WRITES made it unreachable regardless: `sub_67960`'s
+`word_0x32_50 = a2x->id_0x1A_26` (EF:59356), and the fact that a mine's own `@0x1A`
+is its **OWN SLOT** (retail slot 178 reads `f1a` 178) precisely because the owner
+lives at `@0x32` — so `sub_10780`'s self-exclusion (EF:3769) passes in retail where
+the port's fused id skipped. rsg **13,544 → 13,569** on this alone.
+⚠⚠⚠ **A PLAYER RULING IS OWED.** The three "better than retail" choices were made
+*given a dead spell*. Behaviour deliberately UNCHANGED: the patched arm keeps
+self-arming (one marked clause in `mc2/effects.rs` sub-state 1), the strict arm parks
+until charged as EF:29910-13 says.
+
+## ⭐⭐⭐ TWO MORE ENUMERATED-LIST LAWS, BOTH PROVEN BY SCANNING THE SHIPPED EXE
+- **Lightning's acquisition has no worm-segment branch.** `sub_67CB0`'s **case 9**
+  (EF:54889-932) is two loops and only two — `dword_38519` at cones 0x71/0x71, then
+  a bare 29-bucket walk of `bytearray_38403x[jj]` at 0x71/0x200. The worm HEAD /
+  `word_0x34_52` SEGMENT expansion exists in exactly **two** places in the whole
+  function (EF:54826 and EF:55072) and case 9 is neither. The port's single
+  `worms_always` flag drove both the bucket-22 gate (right) and the segment
+  expansion (wrong), so lightning locked worm segments carrying `actionIndex 0xB4`
+  — precisely what the tick-top roster excludes. **fixed 627 / introduced 0.**
+- **The (10,57) fool's sphere has no per-tick sprite re-derivation.** A byte scan of
+  every `E8 rel32` in `NETHERW.EXE` targeting linear `0x36920` finds **exactly five**
+  call sites; the only one inside `sub_35FB0` is file `0x5ADDC`, sitting *inside*
+  the `jz` after `call sub_36F30` — the MERGE arm. The per-tick site (`0x5A73E`)
+  belongs to `TransformArcherToMana_35940`, the (10,39) BALL's tick. **PHASE, NOT
+  ARITHMETIC**: the colour derive was bit-exact all along. It was rsg's wall.
+
+## ⭐⭐⭐ A LANE COLLISION IN THE PAIR IMPORTER — the biggest single census win
+A summon's 250-tick lease is `word_0x2E_46` (@0x2E); the combat brains' scratch is
+`dword_0x10_16` (@0x10). **The port homes both in `f26`**, and `import_ent_mc2`
+chose the home from **StageVar2 alone**. @0x2E is live only on the StageVar2 state
+`8*model + 7` — `sub_1D5D0` (EF:9977) is its only dispatcher and all 22 of its call
+sites are per-model `+7` handlers — so the moment a summon ENGAGES, its lease is
+dead data. An engaged wyvern's combat brain read 249 as `sub_24510`'s 15-bolt burst
+counter and **fired a `(9,0)` homing bolt every tick of its life**. **fixed 602 /
+introduced 0**, taking the whole 278-row `extra (9,0)` family, 203 `field (10,0)`,
+all 41 `(9,13)` rows, and 26 `field (5,19)` — the MIRROR of the same collision, a
+summoned firefly whose hover altitude was its lease.
+⚠ The refuted first attempt is worth keeping: blunt-suppressing m16's burst scored
+**557 fixed / 164 introduced**, because retail's summoned wyvern DOES fire once
+`byte_0x3E_62 % 40 == 0`. Only the lane split scores 0 introduced.
+
+## ⭐⭐ THE WIZARD BUFF BITS — three of four columns had the law, one never crossed
+`sub_6A480` (EF:56496-541) re-stamps SHIELD **CHARGED** (`byte[1] |= 0x40`) on EVERY
+afforded tick of a `life_0x1A == 0` tier and **ARMED** (`byte[2] |= 0x40`) on the
+first tick only at tier 1; `sub_6AA00` stamps REBOUND every afforded tick.
+`sub_5EFA0`'s absorb gate is `if (byte[1] & 0x40 || byte[2] & 0x40)` on the VICTIM's
+own struct (EF:60676), and it **splits**: CHARGED quarters the letter and **pays the
+quarter out of mana**; **ARMED nulls the letter outright, takes no mana, and
+promotes to CHARGED** (EF:60690-93). `sub_68740`'s deflect (EF:55221-308) **bills the
+deflector `projectile.mana / 4`** and refuses when it cannot pay.
+- **RIVAL column**: the pool importer's enumerated flag list omitted all three bits,
+  so **no rival had ever absorbed or deflected in a graded pair**. **fixed 504 /
+  introduced 0** — the entire 82-row `(3,1) life` family went to zero.
+- **HUMAN column**: latched `player.shield` once at cast, so a Shield I quartered
+  exactly ONE hit and ran naked for its remaining ~100 ticks; and the ARMED stage
+  had no lane at all. 16 rows across rsg/mc2l15/mc2l24, 0 introduced.
+⚠ It refuted a banked three-symptom story ("skips a 500 mana cost, takes no damage,
+then takes ~1,500 more"): the −500 is the deflect FEE (bolt mana 2000/4) and the
+−1500 is `2000 − 500`, the missing quarter. And t=3628's "record-identity mismatch"
+was **not** allocator ordering — all 29 rows were the un-deflected bolt.
+🏦 **A GENUINE ABSENT WRITE, reported not landed**: `sub_5EFA0` calls
+`sub_6D8B0(victim, 6u, 1)` — the shield-absorb XP award — before either arm, and it
+is gated `class == 3 && model == 0`, i.e. a no-op for rivals but LIVE for the human.
+No `(…, 6, 1)` push exists in the port. Invisible in this corpus only because spell
+6 is already max level in rsg.
+
+## ⭐⭐⭐ THE DECOMPILE WAS CAUGHT IN A HAND-CONVERSION ERROR AGAIN
+EF:54918 spells `sub_67CB0`'s case-9 charm gate operand `word_0x2C_44`, and a brief
+of mine passed that on as a candidate SPLIT law. **The shipped EXE refutes it**: all
+three `StageVar2 == 14` gates read **`+0x28`** — file `0x8C58C` `66 8b 56 28`,
+`0x8C700` `66 8b 47 28`, `0x8C8F3` `66 8b 56 28`. **There is no split.** (Case 9 was
+identified positively, not by source order: its `movsx eax,[ebx+0x84] * [ebx+4]`
+roster range at `0x8C4FC` and its `push 0x200` pitch cone at `0x8C594` are unique.)
+⭐ The gate IS genuinely missing from the port, but it is **pair-blind as the port
+stands**: the pair importer clears `mc2_allied` and the recording publishes `owner`
+as 0 for `sv2 == 14`. Same shape as the buff bits — an import seat nothing can seed.
+
+## ⚠⚠⚠ THE `derive(Hash)` TRAP COST FIVE GOLDENS FOR ONE `u16`
+A dig added `Gen::mc2_pinned: u16` as a PLAIN field, with a doc-comment asserting it
+was "hash-silent". `Gen` is `#[derive(Hash)]` and `World::state_hash` hashes `g`
+wholesale, so it moved **`state_hash`'s `level_005` (an MC1 golden!), `sim_state_hash`'s
+flight tier, `mc2_slice`, and two `mc2_spell_channels` rows** — with zero behaviour
+change, which is what made it look like someone had broken MC1. The tree already
+documented this exact trap on a neighbouring field. Fixed with `Mc2Pinned`, a newtype
+with an empty `Hash` impl (the `CrtRand` / `Mc2Quiet` pattern).
+⭐ **A FIELD'S OWN COMMENT CLAIMING HASH-SILENCE IS NOT HASH-SILENCE.**
+
+## ⚠⚠ A SERVER OUTAGE KILLED FIVE DIGS MID-FLIGHT — and the recovery is the finding
+Five agents and the main session died to HTTP 500s. **Nothing was lost**, because
+the audit was hunk-by-hunk rather than switch-by-switch (a law without a switch is
+invisible to a switch inventory): every hunk in 13 modified files traced to a known
+dig, all fixture entries had their `.mgcr` on disk, and the tree compiled.
+⭐⭐⭐ **THE DEAD DIGS LEFT FIVE FINISHED, CITED, SWITCH-GATED LAWS THAT HAD NEVER
+BEEN MEASURED.** Because every law carries an `MGC_NO_*` switch, the main session
+A/B'd all five itself in the sandbox rather than discarding them: four were good
+(rsg 13,569 → 13,796) and one was the purge above. **This is the concrete payoff of
+"every law needs its switch at landing time" — it makes an interrupted dig's work
+recoverable by someone who never saw the dig.**
+⚠ AND ONE HUNK WAS LANDED BY ME WITHOUT ITS SWITCH (the mine's state-machine park),
+which stranded the mine in unit tests and was only caught at the gate.
+
+## ⚠ OPEN AT CLOSE
+- ⚠⚠ **`mc2_slice` window D's golden has moved and I could NOT attribute it.** The
+  layout-independent OBSERVABLE golden **holds on all six windows**; every kill
+  switch individually AND all together fails to restore the old hash; it is not the
+  two new hashed fields, nor mobs/conformance, nor proj/effects/combat. So it is a
+  representation move, not a behaviour change — but **I deliberately did not re-pin
+  it**: an unattributed golden re-pin is how a real law gets hidden. **Next session
+  should bisect it properly.** (`mc2_cave` and one `mc2_spell_channels` row fail at
+  HEAD too — verified pre-existing against a pristine HEAD build.)
+- **mc2l22 wall t=1200** `missing(10,0)slot989x2` · **rsg wall t=13832** `(10,78)slot767:z`.
+- 🏦 The shield-absorb XP award (above). 🏦 The charm gate, pending an import seat.
+
+## ⭐⭐ WHEN, NOT WHAT — THE RIVAL CAST ONLY ARMS; THE TOKEN'S OWN BODY FIRES
+`sub_5F7B0` (EF:60971-77) is `word_0x2E_46 = word_0x30_48` plus two flag bits and
+**nothing else** — no spawn, no yaw read, nothing aimed. The fire is `sub_693F0`
+(EF:55832, the decompile's own `//spell fire`), dispatched at the **TOKEN's**
+class-15 slot, reading the caster's yaw/pitch **LIVE** — which for a level-load
+book is *after* the caster's own steer in the same frame. The port fused arm and
+fire into one call at the caster's slot and handed the emit the yaw it had
+snapshotted at the TOP of `mc2_rival_cast`: the PRE-steer heading.
+The recording corroborates the yaw to the unit twice: mc2l22 pair 17548→17549,
+rival 530's beam has `dest = 461 / 15389 / 5700`, and
+`49633 + 16384*cos(pitch 2032) = 65997 → 461` is `MoveEntity(caster_pos, yaw=512,
+0x4000)` exactly; the 32 trail nodes independently confirm it (`delta = (47,0,3)`,
+node 31 landing on the recorded x and z). **fixed 65 / introduced 0**,
+horizon-neutral, `replay --brief` BYTE-IDENTICAL across all 28 recordings.
+`MGC_NO_RIVAL_FIRE_AT_TOKEN_SLOT`.
+⚠⚠ **TWO OF MY BRIEF'S NUMBERS WERE WRONG AND THE DIG CAUGHT IT.** Retail's beam
+bears **512 exactly** (I said "≈488") and the port's **143** (I said "≈110"). Both
+of my figures came from an atan2 of two trail nodes, and
+`mc2_lay_lightning_trail`'s perpendicular jitter slides a node up to `8*unit = 96`
+units sideways and **does not return to zero at the far end** (the amplitude
+tapers, the accumulator does not reset). ⭐ **DERIVE A TRAIL'S HEADING FROM
+`polar_step` + `spacing`, NEVER FROM AN ATAN2 OF TWO NODE POSITIONS.**
+⚠ `(9,9)` slot 765 is NOT a persistent beam re-fired each tick: it is freed by the
+tick-top reaper and re-allocated to a FRESH beam on the same tick (`rand` 28315 →
+24863 is a fresh ctor draw, free stack `0 → 0`, no BORN transition). **It reads as
+a surviving record in `explain` and it is not one.**
+⚠ The cast tick is not a "cooldown-idle" tick: `explain`'s player line shows
+`burst 2 → 3` (the `{0,1,7,0x16}` precision family) — that is the tell a cast
+fired. `cooldown[7]` stays 1 because `AI_RECAST[7]` re-stamps the same value, so
+**reading only the `cooldown[]` deltas says "no cast" and is wrong.**
+
+## ⭐⭐⭐ A SPLIT IN AN ENUMERATED LIST, AGAIN — AND A STALE PORT COMMENT HID IT
+**`sub_1D260` — m23's `(9,9)` heavy bolt — is the ONE launch thunk of SEVEN that
+measures its aim from the FOV-LIFTED MUZZLE** instead of the caster's raw
+position. EF:9887-90 builds `predictedAxis = a1x->position; predictedAxis.z +=
+a1x->array_0x52_82.fov`, spawns the `(9,9)` **at** that point, and hands the SAME
+pointer to `sub_581E0_maybe_tan2` (EF:9898) and `sub_58210_radix_tan` (EF:9899),
+never touching the spawned record's z afterwards. Its six siblings —
+`sub_1CC20`:9697, `sub_1CCE0`:9725, `sub_1CDA0`:9753, `sub_1D0E0`:9832,
+`sub_1D1A0`:9865, `sub_1D460`:9963 — all aim from `&a1x->position` and lift the
+SPAWNED record after. Each of the seven was checked against its own function.
+`NETHERW.EXE` file `0x41A80` settles the ORDER: `mov 0x58(%eax),%ax` /
+`add %eax,%ebx` / `mov %bx,0x1b39c` **precedes** both `push $0x1b398` calls.
+A leviathan's `fov` is 366 on mc2l22, so aiming from its feet flattened the
+hitscan by ~47 angle units: t=20222, slot 1's `(5,23)` fires on rival 584 —
+retail's beam carries `pitch 41` and stops at **7** march steps snapped onto 584;
+the port's carried **2042** (≈ −6), flew over him, ran the full **10**, and laid a
+22-node-longer trail with `z` wrong on every node while `x`/`y` stayed nearly
+bit-exact (the cosine barely moves).
+**fixed 403 on mc2l22 (ticks 20222/20226/20230/20234 ALL to zero; the `(9,9)`
+family 822 → 498) + 605 on mc2l24, 0 introduced.**
+`MGC_NO_MC2_HEAVY9_MUZZLE_AIM`.
+⚠⚠ **THE PORT'S OWN DOC BLOCK HID IT**: `mc2_arm_proj` asserted the family rule
+*"THE AIM IS MEASURED FROM THE CASTER, NOT FROM THE SPAWN POINT"* as universal.
+Corrected in place. Same failure mode as the seven stale docs of round 96 and the
+`ball_resize` OPEN note below.
+
+## ⛔ TWO `(9,9)` CLUSTERS ARE NOT LIGHTNING BUGS AT ALL — hand them to a meteor dig
+- **t=53975 (221 rows): THE BEAM IS BIT-PERFECT.** The port lays **81 nodes**
+  (`steps=10, n=80`) at **exactly** retail's 81 positions, same jag, same taper,
+  same spacing 48, plus the blast at retail's exact terminus. The whole cluster is
+  an **allocation-stream shift of 4**: retail pops slots **971, 955, 943, 941** for
+  four `(10,0)` records *before* the beam dispatches, and the port pops those same
+  four for its trail nodes 0-3, so every node lands 4 pops early and retail's last
+  3 nodes + the `(10,23)` blast fall off the end as the census's
+  `3 missing (9,9) + 1 missing (10,23)`. ⚠ **THE +4 SHIFT'S DIRECTION WAS INVERTED
+  IN THE EARLIER DIAGNOSIS**: retail makes four allocations the port does not, and
+  they are **not trail nodes** — they are the fire children of a `(10,17)`
+  **METEOR** (the census's own `slot 978` row has retail holding `(10,17) action
+  17 life 9 max_life 10` where the port holds a `(10,0)`). Retail's meteor ring
+  fires 19/39/52/0/0/3/15/27 children over t=53971-53978 at fixed z, `yaw 245`,
+  expanding ~350 u/tick from (34722, 61435). Port reader: `Gen::mc2_meteor_tick`
+  (`mc2/tail.rs`, `sub_32880` EF:23834) and its `ring_cells((f26+2)%11)` cadence.
+- **t=10937 (88 rows): the same class, ONE missing allocation.** Retail holds a
+  `(9,13)` at slot 492 the port has nowhere; everything downstream shifts by one.
+- ⛔ `rebuild_recycle` / `sub_57F20`'s swap-with-top are **irrelevant** to both.
+
+## ⚠⚠ TWO MEASUREMENT HAZARDS FOUND THIS SESSION
+- **THE SHARED `target/release/mgc-conform` CAN BE SWAPPED MID-RUN BY ANOTHER DIG.**
+  One census returned **10,110** rows where the same command on the same source
+  returns **4,337**; the difference was another dig's build landing during the run.
+  ⭐ **`md5sum target/release/mgc-conform` before and after every census.**
+  (`tools/landconform` exists for exactly this but is landing-side only.)
+- **`verify-deltas --csv` SUPPRESSES balanced mass-spawn `(class,model)` desync
+  rows** (the slot-desync pass). **A subsystem can be badly wrong and show up only
+  as collateral damage in a DIFFERENT family's rows.** Use
+  `dump-state <t> <slots> --port --start <t-1>` for the raw truth.
+- ⏱ `verify-deltas --csv` on the whole 40,422-tick rsg take is **80 s** — census
+  cutting is cheap now. `dump-state <t> <slot>` WITHOUT `--port` is **~8 s**, not
+  O(take); with `--port` it is ~50 s.
+
+## ⛔ THE `field (9,0)` DIG REFUTED ITS WHOLE BRIEF AND LANDED NOTHING
+And that is the deliverable — see the memory note `mc2-aim-target-z-phase-2026-09-04`
+for the full refutation list and the mechanism class it did pin down: retail splits
+the mid-walk carpet pose by **TILE POSITION in the chain walk** (y-major), the port
+splits by **SLOT NUMBER**. Headlines: it is **not** `sub_1D460`'s five-shot fan
+(the witness is a rival's fireball, `f2a` 250 not 800, one record not five);
+**`2048` is a LEGAL retail value** for `fov_0x22_34` (retail itself writes
+`f22 2 -> 2048`), so there is no missing mask; `Gen::pitch_toward`/`angle_of` are
+**bit-exact** against the EXE; and the aim's x/y, target identity and `dh` are all
+already exact, which pins the divergence to the target `z` alone.
+🔑 **A FREE PHASE ORACLE**: `verify-deltas` re-runs every DIRTY pair under the other
+`--pin-pose` sample, so a per-slot trace prints **two lines exactly on the dirty
+pairs** — that pair IS the n/n1 pose pair, and whichever matches retail names the
+phase.
+
+## ⭐⭐⭐ THE HARNESS IS BLIND TO INITIALISATION (player-identified, 2026-09-04)
+`replay` seeds once from the take's first closure; `verify-deltas` imports retail
+state every tick. **Both take the recording's state as given**, so the harness
+measures THE TICK FUNCTION and never THE WORLD CONSTRUCTOR. A plane the level
+load never mutates, a field no native path ever writes, a chain or seat the
+importer fills but `WorldInit::build` does not, are **invisible by construction
+on every take, forever**. A horizon of END means "the tick function is right", not
+"the level is right". ⚠ Note `terrain=measured` in every BRIEF line — that is the
+harness saying it took the terrain from the recording.
+**Two confirmed instances:**
+1. **mc2l15's lava moat — OPEN, player-reported, not yet dug.** A cave room ships
+   with a lava moat in retail; the port's floor is flat there. A PRE-START TERRAIN
+   MUTATION the port's level load does not apply — and mc2l15 still replays to
+   7,574 because the recording carries the mutated terrain in its own first state.
+2. **The rival SPEED dispatch lane — found and fixed in round 97.** Reached only
+   through `mc2_manifestation_pass`, gated on a pooled carpet, i.e. CONFORMANCE
+   REPLAY ONLY. In native play no rival ever moved; every take still graded clean
+   because the importer seeds the pooled carpet.
+🔧 **THE INSTRUMENT THAT WOULD FIND THESE MECHANICALLY** (proposed, not built): a
+NATIVE-vs-IMPORTED FIRST-STATE DIFFERENTIAL — build each level the way the APP
+does, build it the way the HARNESS does, and diff terrain planes, pool, roster
+chains, globals and per-wizard seats. One pass per take, no new ground truth,
+would have caught both. ⭐ It is the natural generalisation of `terrain-diff`,
+which already does this for one plane pair — extend that, do not start over.
+🔑 The other half is a NATIVE-PLAY OBSERVER: `crates/mgc-sim/examples/mc2rivalwatch.rs`
+plus a fresh-boot behavioural test (`tests/mc2_rival_native_movement.rs`) is what
+actually found the dispatch lane. **When the player reports "X looks wrong in
+play" and every take grades clean, that is not a contradiction — it is this class.**
+
+## ✅ THE `mc2_slice` GOLDEN — RESOLVED, AND THE METHOD IS THE POINT
+It resisted every kill-switch A/B (individually and all together) and every
+file-level revert, because **the responsible write had no kill switch**: the
+`word_0x26_38 = the (15,x) token's POOL SLOT` lane on the human cast path, landed
+with the magic mine.
+⭐⭐⭐ **WHAT FOUND IT — THE PER-COMPONENT HASH PROBE.** Build a pristine HEAD
+sandbox, instrument `World::state_hash` IDENTICALLY in both trees to print a
+running hash after each component (`g`, `table`, `player`, `rivals`, …) under an
+env var, run the same test in both, and diff the traces. The first differing line
+names the component AND the window. Here it was `g` at window D, so the probe was
+narrowed to hash **every entity individually** — which named ten `(9,0)` records —
+and then to dump their fields, which named ONE field: `f40` 0 → 152. **~20 minutes,
+against hours of fruitless bisection.** Reach for this whenever a golden moves and
+no switch explains it.
+⚠ **A test harness CAPTURES stderr on a PASSING test.** The HEAD side prints
+nothing without `-- --nocapture`, which reads exactly like "the probe didn't work".
+✅ The law is retail-correct: **both readers index `Entities_EA3E4` with `@0x26`** —
+the impact XP award `sub_6D8B0(a1x->id, Entities[a1x->word_0x26_38]->model_0x40_64, 1)`
+(EF:62985), where slot and index are interchangeable because a (15,N) token's model
+IS N; and `sub_68AC0`'s swallow (EF:55441-44), which reads `model_0x40_64` AND
+`byte_0x46_70` off that record and re-arms `word_0x2E_46 = 1` — **unreachable from a
+bare index**. `Gen::mc2_token_model` resolves slot→model for the first reader,
+which is why the layout-independent OBSERVABLE golden held on all six windows.
+Window D re-pinned with that attribution; the lane retro-fitted with
+`MGC_NO_TOKEN_SLOT_BACKREF`.
+⭐ **AN UNGATED WRITE IS UNATTRIBUTABLE. EVERY LAW NEEDS ITS SWITCH AT LANDING TIME.**
+
+## 🏆 THE MAGIC MINE REVERTED TO RETAIL — PLAYER RULING EXECUTED (2026-09-04)
+The player re-ruled after round 97 refuted the "ships dead" premise:
+*"let's revert to retail behaviour and get rid of the deviation."* Done — all
+three registered "better than retail" inventions and the
+`gameplay.patches.mc2_magic_mine` option that gated them are **gone**.
+
+⭐⭐⭐ **A MINE'S DETONATION IS A `sub_6DCA0` RELAUNCH OF THE SPELL IT SWALLOWED,
+at that spell's tier, owned by the mine's owner and aimed at whoever tripped it —
+there is NO area write anywhere in it.** `sub_3A8B0` case 5, EF:29960-30042:
+`v30x = &SPELLS[a1x->word_0x36_54].subspell[a1x->word_0x34_52]`, then
+`sub_6DCA0(v33x, &a1x->position, a1x->word_0x36_54, v30x, 0, 1)` with
+`v19x->id_0x1A_26 = a1x->word_0x32_50` and
+`v19x->word_0x96_150 = a1x->word_0x96_150`. ⭐ It fires **TWICE** for L3 lightning
+(`v35 = (word_0x36_54 == 7 && subspell.life_0x1A == 2) + 1`), once otherwise.
+⚠ **`sub_6DCA0` was never "untraced"** — it is at EF:44020 and the port already
+reasoned about its clamp. That label, and `magic-mine.md` §6 Q2, were stale.
+⚠ **Q2 was MALFORMED, not merely unanswered**: case 5 passes `word_0x36_54` as
+`a3`, never 23, so no a3-map row for spell 23 could ever have existed.
+
+**Four further inventions fell out of the same read**, all fixed:
+- the mine was born at the CARRIER's position rather than on the ground
+  (`sub_50840` copies the axis it is handed) — **this alone was rsg's wall**;
+- the carrier tail `sub_67960` (EF:59352-62) is an enumerated THREE-write block
+  that stamps neither `id_0x1A_26` nor `word_0x96_150` nor `mana_0x90_144`, which
+  is exactly what leaves a mine's `@0x1A` as its own slot;
+- `byte_0x43_67` ↔ `f68` and `@0x2A` ↔ `f44` were inverted on the native path
+  against `import_ent_mc2`;
+- ⭐⭐⭐ **THE SINK STEPS BY THE PRE-INCREMENT COUNTER, AND THE LISTING HAS IT
+  BACKWARDS.** `NETHERW.EXE` file `0x5F654`: `mov eax,[ebx+0x10]` /
+  **`mov edx,eax`** / `inc eax` / `mov [ebx+0x10],eax` / `shl edx,5` /
+  `movsx eax,[ebx+0x50]` / `sub eax,edx` — the copy to `edx` **precedes** the
+  `inc`, so the step is `32 × OLD`. EF:30075-77 converts it as `32 × NEW`, while
+  the commented-out raw Hex-Rays line directly above (`//v12 = a1x->dword_0x10_16;`)
+  agrees with the EXE. The recording agrees too (slot 772: `scratch10` 3→4 with
+  `z` 3466→3370 = −96, not −128). **ANOTHER INSTANCE OF THE remc2 SOURCE-CORRUPTION
+  CLASS, and again the commented-out raw line is the recoverable original.**
+
+⚠ **`byte_0x43_67` is NOT a blast intensity** (as §5 of magic-mine.md said): it is
+the number of BURSTS, and **a spent mine RE-ARMS through case 2 instead of dying**.
+`fontTypeIndex_0x3D_61` (6 or 1) is the shots per burst.
+
+**MEASURED, one binary** (`md5 16eb950f…`, verified by the main session):
+mc2l6-rsg free-run **13,831 → 14,996 (+1,165)**; its pair census **fixed 136 /
+introduced 0**; mc2l22 **0 / 0** and its horizon held at 1,199; **all 27 other
+takes byte-identical, all 13 certified takes still END-clean**; fixtures
+**398 / 0 regressions**; 704 unit tests with only the two pre-existing HEAD
+failures. Switches: `MGC_NO_MINE_RELAUNCH`, `MGC_NO_MINE_SPAWN_POS`,
+`MGC_NO_MINE_SINK_STEP` (the tail rides `MGC_NO_MINE_CARRIER`).
+✅ **No recording replays under `WorldPatches::LEGACY`**, so dropping the field is
+recording-safe.
+
+### ⚠ NOT MADE FAITHFUL — stated plainly, nothing invented in their place
+1. **The draw-bit visibility block** (EF:29850-61) — hides an enemy's mine unless
+   the viewer holds a live `SpellsEnabled[12]`. Writes only flag bits no class-10
+   lane publishes. Registered in `DEVIATIONS.md`.
+2. **The cave-ceiling clamp** in the countdown block (`isCaveLevel_D41B6`) —
+   pre-existing omission, untouched.
+3. 🏦 **`frames89` (`b5d`) reads retail 1 / port 0 on a fresh mine** —
+   `mc2_set_sprite`, the SHARED MC2 setter used by every class-10 ctor, never
+   writes it, unlike MC1's `set_sprite`. A real graded row and **a whole-column
+   lane — worth its own dig.**
+4. The entry guard sits out when `word_0x32_50 == 0` (retail would dereference
+   `Entities[0]`); the ctor seeds the own slot so a real mine never carries 0.
+5. Scan tie-break: the port considers the out-of-pool human first, retail
+   interleaves him in `dword_38519` order. Only matters on an exact tie.
+
+
+# ROUND 98 (2026-09-04) — THE IMPORT SEAT, THE SIBLING SPLIT, AND SEVEN HORIZON MOVES
+
+**SHAPE:** the throttled queue, width 5 dropping to 4 after a saturation report.
+**32 digs launched, ~30 laws landed, 13 fixtures cut.** Both focus takes moved for the
+first time in the arc's history by four figures.
+
+## RESULT — every number below re-measured by the main session on its own binary
+```
+mc2l22   horizon 1,199 -> 3,629  (+2,430)   wall t=3630  (3,1)slot611:mana
+rsg      horizon 14,996 -> 26,502 (+11,506) wall t=26503 (10,57)slot462:x,y,z
+GATE: 411 fixtures / 23 manifests, 411 pass, 0 REGRESSIONS (from 398)
+      cargo test -p mgc-sim: ZERO failures (mc2_cave was the last red test and is green)
+      all 13 CERTIFIED takes END-clean
+```
+rsg crossed **half the take** and finished at **65%**; mc2l22 went from 1.8% to 5.5%.
+Session-open segmented wall censuses: rsg 186 segments / 110 runs, mc2l22 2,418 / 2,117.
+
+## ⭐⭐⭐ THE SESSION'S DOMINANT FINDING: SIX IMPORT-SEAT HOLES
+**Six separate laws lived in `import_ent_mc2` / `retail_import_mc2`, not in the sim.**
+The largest was worth **301,612 rows**. In every case the sim was already bit-exact and
+the PAIR IMPORTER handed it a wrong or absent value:
+1. `MGC_NO_ORB_SAT_FOV` — the `f36` arm was an enumerated `if class == A && model == B`
+   list missing the orb satellites (301,612 rows under the widened oracle).
+2. `MGC_NO_IMPORT_LEVEL_END_LATCH` — `World::completed` was seeded from retail's board and
+   then wiped 340 lines later by a cross-pair latch clear copied from the MC1 arm, **which
+   has no such board**. Every MC2 pair in the corpus ticked with `completed == false`.
+3. `MGC_NO_MC2_PAINTER_SETTLE_LANE` — `f59` seated from `b3a` where retail's latch is
+   `@0x3B`; every imported painter **died 21 ticks after birth**.
+4. `MGC_NO_STAGE_BIND_KEEP_UNREADABLE` — an unreadable pool base collapsed "bound but
+   unreadable" into "unbound", blinding the kill objectives on exactly the ticks they
+   complete.
+5. `MGC_NO_RECYCLE_GHOST_KEEP` — a ghost stays on the victim stack and the reap removes it
+   by **swap-with-top**; the importer filtered order-preservingly. Same set, different
+   ranking (fixed 522 recycle rows, 324 graded pair rows, 4 pairs to bit-clean).
+6. `MGC_NO_SUMMON_LEASE_FIELD` — the port homed retail's `@0x2E` lease and `@0x10` combat
+   scratch in ONE field; now `Ent::lease2e`, a newtype with an empty `Hash` impl.
+⇒ **"Retail has a value, the port has 0" is the signature of an IMPORT-SEAT HOLE first and
+a missing constructor write second.** ⚠ But an importer hole is invisible to the FREE RUN,
+so it can NEVER explain a free-run wall. **Always say which lane the evidence came from.**
+
+## ⭐⭐⭐ A SPLIT IN A SIBLING PAIR, DISASSEMBLED ON BOTH ARMS — the biggest horizon movers
+- **`MGC_NO_RIVAL_FALL_CARRY` (+645)**: `sub_12A70`'s lethal branch is five instructions,
+  two stores, **neither at `+0x2C`** — a rival's death-fall velocity **accumulates across
+  lives** (-76 held through an entire life). The HUMAN's arm
+  (`AddPlayer03_00_5E010`) DOES clear it; the port had copied the human's reset onto the
+  rival arm.
+- **`MGC_NO_FOOLS_BOLT_STRANGER` (+4,148 rsg, +1,364 mc2l24)**: `sub_36770` writes **no
+  `id_0x1A_26` at all** (whole function disassembled, 0x5AF70..0x5B04C); its sibling
+  `sub_36850` copies one. The bolt belongs to nobody, and retail's ch0 castle pre-pass
+  gates only on `@0x1A` — so **retail's stranger-bolt bills the caster's own castle 500
+  from twenty tiles away**.
+- **`MGC_NO_M9_SPLIT_INHERITS_ID` (+3,949)**: the `(5,9)` hive's split copies the parent's
+  id **unconditionally in `sub_20940`, gated on `class == 3` in `sub_203D0`**. The port
+  fused the arms and carried NEITHER. ⭐ One wrong 16-bit field at t=16,898 surfaced as a
+  wall **4,685 ticks later** through a single mis-attributed 400-damage letter.
+- **`MGC_NO_SUMMON_BLOCKED_BIT` (+902)**: a move-blocked gate modelled correctly in
+  `stagevars.rs` and dropped in two `mobs.rs` sites — see the flag-remap warning below.
+
+## ⭐⭐⭐ OTHER LAW SHAPES THAT PAID
+- **TWO RETAIL TESTS WITH A WRITE BETWEEN THEM, FUSED INTO ONE PORT PREDICATE**:
+  `MGC_NO_RIVAL_STEER_REDETECT_DEFER` (+633) — `sub_16580`'s entry is two nested tests and
+  **the re-detect tick calls no classifier at all**; `MGC_NO_M16_AIM_BEFORE_DEAD` — the
+  pointer guard and the life guard are separate, **with the aim between them**.
+- **RETAIL ASKS GUARDS BEFORE THE WORK; THE PORT WENT STRAIGHT TO THE WORK**:
+  `MGC_NO_M22_TARGET_GATES` (+785) — three interrogations of the possessed wizard before
+  the castle is resolved, each with an early-out that writes three fields.
+- **A TICK-TOP PRE-PASS THE PORT RAN NOWHERE**: `MGC_NO_SV_CONTROLLED_SLOT_SNAP` —
+  `UpdateEntities_57730` walks **all 29 per-model class-5 roster chains**; the port had it
+  only inside `mc2_alliance_clock`, mid-walk, for one StageVar. ⭐ *A law landed on one call
+  path is not landed — and it was the wrong path.*
+- **AN INVENTED GUARD / AN EXTRA TERM**: `MGC_NO_MC2_OBJECTIVE_DEATH_LITERAL` (+445) —
+  retail's objective predicate is **three literal terms** (bound bit, `life <= -1`,
+  `@0x3D == 0`); the port added `class64 == 0 || flags & 0x400`, so a freed-but-138,000-life
+  building read as a kill, latching 10 ticks early and **minting 50 records where retail
+  allocated two** — which IS the old wall signature. Also `MGC_NO_RIVAL_BULLY_CASTLE_SPELL`
+  (−880 segments): `sub_14030`'s bully arm is a THREE-term conjunction, the port carried two.
+- **THE PORT COPIED ONE ARM'S EARLY `return` ONTO ANOTHER ARM**: `MGC_NO_M25_C8_FALLTHROUGH`
+  (+755) — one function reaches state 204 from two statements; the death arm `jmp`s to the
+  epilogue, the countdown arm **falls through into the shared tail with no `ret` between**.
+- **AN INPUT-RECOVERY LAW**: `MGC_NO_MC2_COMMAND_WORD_CAST` (+206) — `sub_5F380`'s cast tail
+  is three flat `testb`/`call` pairs, **no press latch, no edge test**; the latch lives one
+  layer up and its OUTPUT is the recorded word, so **re-deriving a press edge is double
+  latching**.
+- **A FUSED PORT FIELD FEEDING A GATE RETAIL KEYS ON THE UNFUSED ONE** — the port's `id24`
+  fuses retail's `@0x1A` and `@0x28`; **four** separate bugs this session.
+- **AN ABSENCE IN AN ENUMERATED LIST** — `MGC_NO_SUMMON_HEAD_BEARING` (+57, and +3,406 from
+  a near anchor): the summon ring's bearing is stamped in **the CALLER's tail**, not the
+  ctor, on the HEAD alone. ⭐ *When a ctor demonstrably has no such write, look at who
+  receives its return value.*
+
+## ⚠⚠⚠ INSTRUMENT AND METHOD FINDINGS — several were worth more than the laws
+- ⭐⭐⭐ **THE 82-SECOND INHERITED-WALL RECIPE.** `dump-state <take> <t> <slot> --port` with
+  **NO `--start`** free-runs from tick 0; run it at the **LAST CONFORMING TICK** and the
+  graded lanes are clean by construction, so **whatever it prints IS the debt.** It cracked
+  seven walls, usually in one or two runs. `--start t-1` is the PAIR view and shows nothing.
+  ⭐ When the dump does not explain the wall, **bisect BACKWARDS on the same one-slot dump**
+  following the chain of ≠ lanes — that walked one wall back 4,685 ticks in six runs.
+  ⚠ A wall tagged INHERITED can be perfectly **LOCAL** (one reproduced from an anchor 8
+  ticks back, another 11); and one wall's dump printed **zero rows** while `explain` named
+  the whole law. **Run both instruments, always.**
+- ⭐⭐⭐ **NEITHER THE PAIR CENSUS NOR `--segmented --classify` CAN SEE A LAW IN AN IMPORTED
+  LANE.** `import_ent_mc2` re-seeds `id24`/`f2c`/`f26`/`roll`/`f36`, and **the segmented
+  re-anchor imports too** — byte-identical ON/OFF even when anchored eight ticks before the
+  law fires. **A wall count reported "0 fixed" for a law worth 3,949 ticks.** The free-run
+  horizon is the only instrument that sees these.
+- ⭐⭐⭐ **A PASSING TEST CAN ENCODE AN INVENTED LAW — AND SO CAN A FAILING ONE.** A standing
+  port comment plus a passing lib test asserted a false law with a **FABRICATED** citation
+  ("EF:26680 family", which does not exist); disassembling and correcting it was worth
+  +4,148 ticks. Separately, a test red at HEAD for two rounds turned out to be **the test
+  being wrong, not the port** — retail's retaliation fireball legitimately detonates on a
+  sibling decoy at that separation. **When a test fails, the FIRST question is "is the test
+  wrong?", answered from the shipped EXE.**
+- ⭐⭐ **A PRISTINE HEAD BUILD WITH ZERO GIT MUTATIONS**: `git archive HEAD | tar -x` into a
+  temp dir + symlinks back to `baked/`. Then enumerate the `MGC_NO_*` switches a commit
+  ADDED and set each **alone** — 0.2 s per run. It attributed a golden move that had
+  survived two campaign rounds in ~20 minutes.
+- ⚠⚠⚠ **THE PORT'S FLAG WORD IS REMAPPED**: retail's `byte[2] & 4` is dword bit **18**,
+  which is the port's `F_BLOCKED = 1 << 27`; the identity holds only BELOW bit 18. **A
+  `1 << N` literal copied from the decompile is a bug by construction for N >= 18** — one
+  shipped, leaving a gate unconditionally open. ⭐ The cheapest tell: **port bit 18 had no
+  writer anywhere in the tree.**
+- ⚠⚠⚠ **THE HUMAN CARPET IS OUT OF POOL.** `self.ent[<human slot>]` is a **zeroed hole**
+  and the port uses the `PLAYER_TARGET` (0xFFFF) sentinel where retail carries a pool index,
+  so every `Entities[target]` predicate reads **false-but-plausible** for the human. One
+  dig's first landing **measured +0** for exactly this. Use `ctx.pdead` on the sentinel arm.
+- ⚠⚠ **THE EXE OFFSET RULE IS REGION-DEPENDENT.** A datum obeyed **neither** documented
+  rule (isqrt seed table at file 0x96FB0 for operand linear 0x627b0 = a `+0x34800` shift,
+  while the CODE in that region shifts by `+0x24800`). **Locate a table by its CONTENT** —
+  that one was confirmed byte-identical to the port's own `mc1::tables::BIT_SQRT`.
+- ⚠⚠ **THE TABLE THE DECOMPILE SHOWS IS NOT THE TABLE THE GAME RUNS.** `frames89`'s index
+  byte is all zeroes in the decompile AND in the shipped EXE; it is filled **at boot** from
+  the sprite's TMAPS flags — **the answer lived in the ASSETS, not the binary.**
+- ⚠ **`md5sum` the binary BETWEEN the arms of an A/B, not just around the pair** — the
+  shared binary was swapped mid-comparison at least seven times, once while `cargo build`
+  reported "Finished in 0.08s".
+- ⚠ **DO NOT WRITE EXE BYTES OR ADDRESSES BEFORE YOU HAVE DISASSEMBLED THEM** — one dig
+  caught itself drafting a fixture note with invented addresses.
+- ⚠ A malformed `eprintln!` in a probe **broke the whole workspace build** and blocked
+  another dig's measurement entirely. **Build before you walk away from a heredoc.**
+
+## ⛔ REFUTATIONS — several closed avenues that had cost the campaign rounds
+- **THE POOL ALLOCATOR IS BIT-EXACT, AND THE RECORDING PROVES IT.** The `.mgcr` carries
+  retail's own free/recycle stacks and `shadow.rs` already graded them — nobody had looked.
+  The port's free stack matches element-for-element for 1,199 consecutive ticks.
+  `rebuild_recycle` / `free_entity` / `mc2_recycle_pop` are all correct; `sub_57F20`'s push
+  is `++top; cells[top] = e`, **matching the decompile** (not a pre/post-increment error).
+- **THE FREE STACK'S PAIR LANE CARRIES NO INFORMATION THE ENTITY-SET CENSUS DOES NOT.** All
+  120 mc2l22 rows are `kind=MEMBER` at depth 0; **zero ORDER, zero LEN**. The stacks are
+  never permuted — the port simply allocates one or two more records per tick in three
+  windows. ⇒ **Round 97's "allocation-stream shift of 4" and dig 98-4's "trail-ring
+  rotation" do not survive at stack granularity.** The narrowest real suspect behind them is
+  a projectile-mover sub-unit x/y/z drift one tick before impact.
+- **TWO PAIR-CENSUS ROWS WERE PAIR-HARNESS POSE ARTEFACTS** with the port bit-exact
+  underneath (mc2l22 t=494, rsg t=340). The harness injects exactly **32 units = one terrain
+  height unit** of `pose.z` residue. ⇒ **Check every census row in FREE RUN before building
+  a law on it.** ⚠ `--pin-pose n|n1` is **inert on the MC2 arm** unless
+  `MGC_NO_MC2_POSE_PAIR=1` is also passed, so a `pose-phase` tag is not evidence.
+- **THE SIM WAS RIGHT AND THE HARNESS WAS BLIND**: a knock armed and spent inside one tick
+  is 0 in BOTH snapshots (`moveBoost = damage/10`, spent by the same tick's mover, decayed
+  −4 and snapped to 0 below 4). Recovered from the life delta: pose dirt 366 → 209, **and
+  all pose debt before rsg's frontier disappeared**.
+- **`objective_mc2`'s type-8 arm is correct to the tick** — the "9,500-tick early latch"
+  tracks the DEBT, not the tick. **The type-9 frame gate is unfixable from the recording**:
+  retail gates on `FrameTimingIndex_26`, a global **not in the capture**, and the phase is
+  per-session (mc2l22 pins K=1, mc2l1 pins K=0 — no single K fits both).
+- **`sub_583F0` DOES return an integer square root** (Newton, exactly `floor(sqrt(n))`,
+  proven exhaustively) — **but "the port assumed squared everywhere" is FALSE**:
+  `Gen::mc2_dist3` has always applied it and every threshold audited is root-space. Real
+  scope **two closures**, and only one of four gates was wrong (`isqrt(D) >= C` IS
+  `D >= C^2` exactly; only `>` leaks). ⚠ `EuclideanDistXY_584D0` **is** squared and
+  `sub_58490` is 2-D but isqrt'd — **three helpers, three unit conventions, one file.**
+- **`applied_pitch` IS NOT A PITCH** — it is the X collision half-extent (`@0x54`); the
+  recorder's `applied_yaw`/`applied_pitch` names are wrong.
+- **THE 10,000-MANA STEP IS NOT THE CASTLE LADDER** — spell 4 (Morph) costs 10,000 at tier 0
+  and 20,000 at tier 1. The `14x more-mana` cheat is a red herring (its sphere is 100,000).
+- **"THE PORT DRIFTS AND THE ERROR ACCUMULATES" WAS REFUTED EVERY SINGLE TIME IT WAS
+  PROPOSED.** In every case the port was one number short on exactly one tick and the rest
+  was consequence.
+
+## ⭐ THREE DEVIATIONS ENTRIES CORRECTED — a deviation entry can be a mis-attributed law
+- `:191` `byte_0x5D_93` "palette-shade, renderer-side and unmodeled" — **false on both
+  counts**; it is the sprite FRAME COUNT and a sim lane. Now ported.
+- `:182` the controlled-slot snap — described its symptom exactly, blamed the alliance clock.
+  **PAID.**
+- `:195` `Gen::m22_tick` — claimed the human is castle-less; the recording says the human's
+  castle is entity 63 with 1,474,166 mana. **Corrected in place.**
+- 🏦 `:299` is owed the same edit (`word_160_0xe_14` "has no ported home" — it is
+  `Mc2BehaviorRow::v_14`, read by `mc2_alt_core` on every creature move).
+
+## ⚠ OPEN AT CLOSE — decisions and leads
+- ⚠⚠⚠ **A PLAYER RULING IS OWED: retail itself reads OUT OF BOUNDS.**
+  `SetShiftByCastle_49EC0` (`NETHERW.EXE` 0x6E6C0) does `movswl 0x10(%ebp),%edx` — a raw
+  int16 index with **no clamp and no bound check** — into a **77-row** table. The index is
+  the human's `@0x10`, which is **1200, the death respawn timer** the human arm never counts
+  down. So retail indexes row 1200 and reads **heap residue**; the observed value needs
+  w=38 and **(38,18) is not derivable from any shipped asset**. This family cannot be ported
+  faithfully — it wants a registered deviation, not a dig.
+- ⚠⚠ **A SAVE-FORMAT DECISION IS OWED**: `Ent::lease2e` is off the snapshot wire (needs
+  `SNAPSHOT_VERSION` 18 → 19), so a mid-level save resumes with a zero lease. One-line fix
+  documented at the site, deliberately not landed.
+- ✅ **`MGC_NO_MC2_LAUNCH_AXIS_BAND` — PARKED FOR ABOUT AN HOUR, THEN UN-PARKED. It IS
+  witnessed, and the "no exemplar" verdict was a WINDOW ARTEFACT.** Its dig measured only
+  `mc2l6-rival-spells-galore` **pairs 0..2000** and saw zero rows, so I parked it rather than
+  re-pin a golden for an unwitnessed change. But spells 0/7/9/13 are **Fireball / Lightning /
+  Meteor / Steal Mana** — four of the commonest offensive casts (and the player confirms Steal
+  Mana is exercised heavily in rsg, well past pair 2000). Re-measured on
+  `recordings/mc2l0-spells-galore.mgcr`, whole take, one binary, `MGC_RAW_SHADOW=1` row-set
+  diff: **fixed 1,251 / introduced 0**, and **every** fixed row is
+  `(9,0) dest_x` / `dest_y` / `dest_z` — precisely the lane it stamps. Un-parked; `mc2_slice`
+  checkpoint D re-pinned WITH the A/B attribution (its switch alone reproduces the old pin;
+  the other three launch switches do not) and **the OBSERVABLE golden HOLDS**, confirming a
+  hashed-field move rather than a behaviour change.
+  ⭐⭐⭐ **A "NO EXEMPLAR IN THE CORPUS" VERDICT IS ONLY AS WIDE AS THE WINDOW IT WAS MEASURED
+  ON.** Before parking a law for want of a witness, re-measure it on a take that actually
+  exercises the mechanic — **the galores exist for exactly this**, and the standing RIDE THE
+  GALORES doctrine should be read to cover *witness hunting*, not just dig targeting.
+- ⚠ **`MGC_NO_MC2_REBUILD_VICTIM_HALF` is UNMEASURED-BY-ITS-AUTHOR but measured by the main
+  session**: horizon- and fixture-neutral on both focus takes. EXE-cited (`sub_49F90` is ONE
+  scan with TWO arms and the port ported one). ⚠ It newly leaves `mc2_rival_respawn` armed
+  with no following clear; retail's `sub_5C950` tail clears (EF:43857) — **an anchored hunk
+  is owed and was not applied.**
+- ⚠ **`MGC_TEAR_NO_BUMP_C10` is now FREE on mc2l22** and can be armed by default: with the
+  orb-satellite law on, the widened and default censuses are the **same 3,919 rows, row for
+  row** (set-equality verified). That is the proof `mc2_no_bump_action`'s comment asked for.
+- 🏦 The class-5 `f36` row **three digs banked separately is ONE cause**: retail's class-5
+  ctors write `byte_0x38_56 = 1` and **nothing to `@0x36`**, while the port writes 1 to BOTH
+  `e.f28` and `e.f56` in all 17 class-5 ctors. Either one write is invented or the class-5
+  projection reads the wrong home. **Cheap, unsettled.**
+- 🏦 **A SEVENTH instance of the roster/pool class, undug**: `mc2_castle_of` scans the live
+  pool where retail reads the target's player struct `dword_0xA4_164->CastleEntityIndex`.
+  They agree on rsg today but they are **different questions**, and the scan's `flags & 0x400`
+  filter has no retail counterpart. (`m9_consume_scan` and `mc2_nearest_wizard` are two more.)
+- 🏦 The `(10,74)` Alliance mints no entity where retail's `sub_50800` allocates a real
+  executor. 🏦 The metamorph cry loop is a pure invention worth 4,219 rows. 🏦 Six of the 41
+  `sub_583F0` functions have no port reference at all. 🏦 `(9,0) target96` narrowed to "why
+  does retail's scan find nothing on the birth tick".
+- **Walls at close: mc2l22 t=3630 `(3,1)slot611:mana` · rsg t=26503 `(10,57)slot462:x,y,z`.**
+
+# ROUND 99 (2026-09-04) — THE ONE-WAY POINTER, THE PORT-SIDE REGISTER, AND rsg's ENDGAME
+
+**SHAPE:** the throttled queue, five concurrent digs, five waves, refilled on completion.
+**19 digs launched, 24 laws landed, 11 fixtures cut, 2 introductions caught (1 by me, 1 by a
+dig, independently, within minutes of each other) and both resolved.**
+
+## RESULT — every number below re-measured by the main session on its own binary
+```
+mc2l22   horizon 3,629 -> 3,837   (+208)     segments 1,360 -> 322  (-76%)
+rsg      horizon 26,502 -> 28,032 (+1,530)   segments   156 ->   7  (-96%)
+GATE: 125 fixtures on the two focus manifests, 125 pass; cargo test -p mgc-sim 732 pass, 0 fail
+      13 certified takes still END-clean; no horizon regressed anywhere in the corpus
+```
+⭐⭐⭐ **rsg IS TWO LAWS FROM CERTIFICATION.** Its entire remaining content is six excess resets:
+a `(9,0)` projectile birth pose owned by rival 378 (two heads, ONE family), a stagevar
+watch-handle zeroing edge (fully diagnosed), and **THREE registered-deviation rows** that are
+retail's own out-of-bounds read and can never grade clean.
+
+## ⭐⭐⭐ THE ROUND'S DOMINANT FINDING: A PORT-SIDE REGISTER IS A LAW SURFACE
+Retail's pointers run ONE WAY. The port adds convenience registers — a book, a cache, a reverse
+index, a mirror — that retail does not have, and **any pass that walks one BACKWARDS is
+unguarded by construction and fails exactly when the forward pointer's owner has been freed.**
+Five separate laws this round were this shape, including the round's only regression:
+- **`Mc2Spellbook::ent`** (the regression). Retail reaches `sub_6AA00`/`sub_6A480` from the
+  class-15 walk **at the TOKEN's own slot** (`class == 15 && action == 3 * model`) and only then
+  resolves the caster through `Entities[parentId_0x28_40]`. **Token -> caster. Never caster ->
+  token.** A pass that consulted the book instead re-minted a live `(5,23)` creature as a spell
+  token, because the death payout frees the book and a dead rival's stale book still named a
+  slot long since re-popped. **+96 horizon, +2,754 segments** until fixed by narrowing to
+  retail's own dispatch precondition plus a record-identity triple.
+- **`Mc2Rival::invisible`** — retail's skip is `!sub_15760(ix, 0xB)` = `sub_146C0(ix,0xB) &&
+  result->word_0x2E_46 > 0`, a **LIVE window on the manifestation** with one call site in the
+  whole decompile. The port cached a boolean, the candidate list went empty, and a rival froze
+  its aim for 1,214 ticks.
+- **`Gen::mc2_life_scale`** and **`Ent::mail[4].1` vs `mc2_aura_claim`** — one retail cell, two
+  port homes, and only one of them written/tested. **Three instances this round** (the third
+  being the quake latch's `byte[0] bit 0`, below).
+- **`mc2_sv_held`** — a side table with **no membership at all** standing in for the per-model
+  roster chain, whose membership retail's tick-top rebuild already enforces.
+
+## ⭐⭐⭐ THE SECOND FINDING: FIVE OF TEN LAWS WERE INVISIBLE TO THE PAIR CENSUS
+Measured directly this round, one binary, whole take: the rsg pair census is **40,969 rows**, and
+`MGC_NO_M57_IMPACT_PAIR`, `MGC_NO_M57_RECLAIM_BIT`, `MGC_NO_QUAKE_RELEASE_BIT0`,
+`MGC_NO_QUAKE_TOSS_BIT0` and **`MGC_NO_QUAKE_MAIL_ACCUM` — the round's single biggest law at
++1,215 horizon ticks — leave it at exactly 40,969.** They get unit tests; **no fixture could
+ever catch them.** ⇒ **A pair census reporting "0 fixed" is not evidence a law did nothing**,
+and the free-run horizon remains the only witness for a whole class of law.
+
+## ⭐⭐ THE LAW SHAPES THAT PAID, RANKED BY THIS ROUND'S YIELD
+1. **AN INVENTED GUARD** — four of them, and *false exactly when it matters* every time:
+   a `.min(7)` clamp on an index retail reads with a bare `movsbl` (the whole villager-`z`
+   family); `class64 != 0` on a corpse's gaze where retail's only test is `word_0x24_36 != 0`;
+   `if site == (0,0) { refuse }` where retail loads the axis as a pointer and never reads it;
+   and `class64 == 0 || flags & 0x400` added to a three-literal predicate.
+   ⭐ **`.max()`/`.min()`/a clamp where the disassembly has a bare index or a bare divide is the
+   single most reliable porting tell in the corpus.**
+2. **A SPLIT IN A SIBLING PAIR, DISASSEMBLED ON BOTH ARMS** — and this round found the sharpest
+   version yet: `sub_65820` and `sub_65C20` differ in the **POLARITY** of their refused-
+   deflection leg (`jne` to the return so a refusal falls through and strikes, vs `je` past the
+   impact so a refusal is a no-op). **That inversion is how the port fused them.**
+3. **A LAW LANDED ON ONE CALL PATH IS NOT LANDED** — three times: `sub_68DE0` inside the
+   `sub_68D50` arm (the human column already had the gate, the rival column did not);
+   `GetRandManaSphere_38270`'s second call site (`grep` found ONE caller where retail has TWO);
+   and the quake latch's two homes.
+4. **TWO RETAIL FUNCTIONS THE PORT FUSED INTO ONE** — `sub_12A70`'s lethal early return is the
+   HOUSEKEEPING's, not the BRAIN's: the caller clobbers the return value at 0x3711D and
+   dispatches all fifteen state arms and the selector anyway. **A rival's brain keeps running on
+   its death tick.**
+5. **AN ABSENCE IN AN ENUMERATED LIST** — the `id_0x1A_26 =` list (five fused seats copy the
+   parent's slot index and two do not), the mail writers, the zeroing paths.
+
+## ⭐⭐ THE DECOMPILE LIED TWICE, IN THE WAY THE MEMORY ALREADY WARNS
+`EF:19783` reads, verbatim: `//fix` / `v34x = 0x1000002b;// (uint32_t)a1x;`. Hex-Rays' own
+surviving comment names the true entry value as **the entity pointer** — non-zero, huge and
+**EVEN** (pool stride 168) — while remc2's hand-written stand-in is **ODD**, and the only tests
+retail makes on that variable are `!= 0`, `> 4` and `& 1`. The invented parity permanently
+suppressed one `mc2_rand` per hydra branch per phase beat. (`v35x = 0` at EF:19784 is the same
+class, audited inert.) **THE SHIPPED EXE OUTRANKS THE LISTING.**
+
+## ⚠⚠⚠ A METHOD WARNING WORTH MORE THAN ANY LAW THIS ROUND
+**A CENSUS DELTA OF 12 ON A 3,000-SEGMENT TAKE IS NOISE, AND A PARAMETER SWEPT AGAINST IT WILL
+FIT THAT NOISE.** One dig proved a free parameter's value with a five-way sweep (476 vs 488
+segments); a later dig showed the sweep was fitting noise (18 heads vs 20) and settled the
+question a completely different way — with an **arithmetic invariant**, the 9377/9439 LCG step,
+applied per-tick against retail's own record. That converted "which constant scores best" into
+"what does retail actually do on THIS tick", and the answer was **both, four ticks apart**:
+retail reads an uninitialised stack slot whose magnitude bits are stable but whose **low bit
+flips within four ticks**. ⇒ **Prefer an arithmetic invariant over a census fit, always.**
+Two more instances of the same discipline paid this round: the house-population law was proved
+by "retail's `rand` steps 39154 -> 4240 in one tick = exactly two LCG steps", and the
+strike-payload law by retail's own `explain` recording `f2a 250 -> 1`.
+
+## ⚠⚠ TWO INTRODUCTIONS WERE CAUGHT, AND ONLY THE WHOLE-TAKE CENSUS SAW THEM
+**A LAW THAT MOVES THE HORIZON CAN STILL BE A NET REGRESSION.** The corpse-token law bought +96
+horizon and cost +2,754 segments; the corpse-gaze law bought −27 segments and cost +5 pair rows.
+**Measure BOTH lanes on EVERY landing, every time**, and re-cut the census after any landing
+that could move it — three digs in wave 3 were steered by a map that said 516 when the tree said
+3,255. **Date every map.**
+
+## ⚠ OTHER HAZARDS CONFIRMED OR ADDED
+- **AN ISOLATED `--segmented --start <t>` RUN IS NOT THE SAME TRAJECTORY AS THE FULL CENSUS'S
+  RESET AT THE SAME TICK.** Cold anchors produced heads that do not exist in the full run, in
+  both arms of an A/B. **Cut sub-range runs for DIAGNOSIS; take NUMBERS only from the full
+  census.**
+- **DO NOT QUOTE A SEGMENTED COUNT AS IF IT WERE A PAIR COUNT** — a brief that said "117 missing
+  rows" against a real pair count of 24 cost a dig time. (Mine.)
+- **`MGC_WRITE_TRACE` IS BLIND TO THE HUMAN** (out-of-pool zeroed hole). Two digs needed a
+  private `player.life` twin; both paid for themselves in one run each.
+- **Pool exhaustion is not a defect class** — `verify-deltas`'s "N spawn(s) dropped" lines fire
+  where **retail's own free stack is 0** with an empty recycle stack. Retail drops too.
+- The shared `target/release/mgc-conform` was swapped mid-comparison **~30 times**; from wave 2
+  on, every dig built a private binary with its own `CARGO_TARGET_DIR`. **Make that mandatory.**
+
+## ⛔ REFUTATIONS — CLOSED AVENUES
+- **The yaw servo is statement-exact** vs `sub_146F0` (EF:6488-6510) on all inputs, both wrap
+  signs, the 0-return, the clamp pair, the snap, and `my_sign32`'s round-toward-zero. **±1 and
+  ±3 `heading` rows were the servo faithfully tracking a FROZEN or WRONG SETPOINT.**
+- **`b44` on a (10,57) is inert** — nothing in retail reads `byte_0x44_68` for that model.
+- **The (5,13) villager `z` family was NOT terrain sampling**: `mc2_alt_core` is statement-exact
+  vs `sub_580E0` and `interp_plane` vs `sub_B5C60`, verified numerically to the unit.
+- **The (5,27) hydra residual is NOT "chaotic amplification"** — `known-deviations.json`'s
+  `mc2l24-hydra-residual` note was absorbing one real bug plus one genuine uninitialised read.
+  **The note is AMENDED** with the full tick lists and "DO NOT RE-SWEEP".
+- **`sub_16FC0`'s missing life/action test is not landable** (A/B bit-identical; in this engine
+  action 2/3 implies life < 0). **The 30-slot "missing volley" is misdated and its pair is
+  CLEAN.** **`sub_66750`'s trail layer is faithful.** **The allocator remains bit-exact.**
+- **"The port drifts and the error accumulates" was refuted SIX more times.** One number, one
+  tick, the rest consequence — every single time.
+
+## ⚖ PLAYER RULING EXECUTED — RETAIL'S OWN OUT-OF-BOUNDS READS
+The player ruled: *"We have a mechanism for labelling known deviating rows … we know where the
+corruption happens exactly and why, and also which is the correct behaviour — and we do that.
+The recording rows need to be labelled as diverging by definition."*
+`docs/DEVIATIONS.md` gained a **"RETAIL'S OWN OUT-OF-BOUNDS READS — rows that diverge BY
+DEFINITION"** section covering the painter's unclamped `movsbl` BUILD00 row,
+`SetShiftByCastle_49EC0`'s 77-row table indexed by 1200, the stagevars autosave severance, and
+(added later in the round) `sub_29A90`'s uninitialised `v34`. `conformance/known-deviations.json`
+gained two `status: deviation` rules for the painter's birth extents.
+⚠ **BUT `replay` DOES NOT CONSULT THE ROSTER** — only `verify-deltas` does. So these rows are
+excused in the pair census and remain **hard walls in the free run**, and three of rsg's six
+remaining resets are exactly such rows. **A certification-definition decision is owed to the
+player.** Proposed shape: `replay` consults the same roster and, at a boundary whose rows are
+ALL matched by a `deviation` rule, adopts retail's value for those fields and continues, counted
+— "one segment end to end, with N rostered corrections", with `--no-roster` giving today's raw
+number and per-rule hit counts still printed.
+Also paid this round: round 98's owed `DEVIATIONS.md:299` correction (`word_160_0xe_14` IS
+`Mc2BehaviorRow::v_14`, a per-model constant read by `mc2_alt_core`, not a live z-velocity).
+
+## ✅ CITATION AUDIT — ZERO FABRICATIONS IN 24 LAWS
+The main session read **every** cited byte sequence out of `NETHERW.EXE` and every cited line out
+of `EventsFunctions.cpp`. All verified. Both region offset rules held throughout
+(`file = linear + 0x24800` in the 0x1xxxx-0x5xxxx region; `file = 0x34800 + linear - 0x10000` in
+0x6xxxx/0x8xxxx), and one jump table was located **by content** rather than by rule.
+
+## ✅ FINAL GATE — ROUND 99 (one binary `163827fc62367b1755225cab9dd6fb49`, md5 stable throughout)
+```
+FIXTURES   422 across all 23 manifests — 422 pass, 0 regressions, 0 not reached
+           (411 before; the 11 new ones are listed above, each proven NON-VACUOUS
+            switch by switch: every kill switch regresses exactly its own fixture,
+            except MGC_NO_FLOOD_CHAIN_REWALK which regresses 2 — it is load-bearing
+            in an older fixture as well)
+TESTS      cargo test --release -p mgc-sim: 732 passed, 0 failed
+CORPUS     27 takes swept with `replay --segmented --brief`; 13 CERTIFIED takes
+           still END-clean; NO horizon regressed anywhere
+FINAL      mc2l6-rival-spells-galore  end=40422  segments=4  clean=40419  horizon=34603
+                                      first=34604  sig=(10,42)slot24:applied_pitch
+           mc2l22                     end=65556  segments=310 clean=65247 horizon=3959
+                                      first=3960   sig=(3,2)slot556:applied_yaw
+```
+⭐⭐⭐ **rsg HAS THREE DIRTY BOUNDARIES IN 40,422 TICKS, AND ALL THREE ARE THE REGISTERED
+OUT-OF-BOUNDS ROWS.** Its first divergence IS retail's own unclamped heap read. There is no
+remaining PORT defect on that take.
+`conformance/brief-baseline.txt` **regenerated** — the previous one was stale (round 97's
+numbers) and omitted mc1hwl1 / mc1hwl2 / mc2l15 entirely. ⚠ It had also been cut with
+`--stop-at-divergence`, so its `segments=1` rows were never comparable to a `--segmented` sweep;
+the new header says so.
+The instruments `MGC_PLIFE_TRACE` and the `#[track_caller]` tag on `Gen::area_write` landed with
+the neutrality bar met: a control tree minus exactly those hunks **rebuilt to an identical
+binary md5**, with a byte-identical corpus sweep, fixture suite and whole-take CSV. Both are
+silent unless their env var is set.
+⭐ The dig's own neutrality sweep was cut on a snapshot that predated the round's last few
+landings, so it does not by itself cover the final tree. **The main session's FINAL GATE above
+was run WITH both instruments present** (binary `163827fc62367b1755225cab9dd6fb49`) — 422/422
+fixtures, 732/732 tests, 13 certified takes END-clean, both focus horizons at their expected
+values — and a `replay --stop-at-divergence` on that binary emits **zero** `PLIFE`/`[mail]`
+lines with no env var set. **Their neutrality on the shipped tree is therefore independently
+confirmed, not inherited from the dig's snapshot.**
+
+## 🏦 OPEN LEAD FOUND AT ROUND 99'S CLOSE — THE PAINTER OWNER PERMUTATION
+Cut from both focus takes' whole-take pair censuses while answering a player question, so it is
+measured, not inferred. The `(10,42)` castle-painter residue-extent row
+(`applied_pitch want=5504 got=640`) occurs **six times** — mc2l22 t=12,969 / 15,261 / 15,345 /
+15,836 / 60,456 and rsg t=34,603 / 39,011 / 39,230 — i.e. **it is NOT rsg-specific and predates
+round 99.** It only ever became a WALL on rsg because rsg's free run (34,603) is the only MC2
+horizon in the corpus deep enough to reach one; mc2l22's painters all sit far beyond its 3,959
+frontier, so they had only ever been unexplained rows in a 67,246-row pair census.
+⚠⚠ **AND WHEREVER SEVERAL PAINTERS ARE MINTED ON THE SAME TICK, THE `owner` WORD IS PERMUTED —
+THE SET MATCHES AND ONLY THE ASSIGNMENT DIFFERS:**
+```
+mc2l22 t=12,969   retail 685/731/732 = 611/451/424   port = 424/611/451   (a 3-CYCLE)
+mc2l22 t=15,345   retail 810/815     = 451/424       port = 424/451       (a swap)
+mc2l22 t=15,836   retail  56/828     = 451/424       port = 424/451       (a swap)
+rsg    t=39,230   retail 656/685     = 424/343       port = 343/424       (a swap)
+```
+**That is a REAL PORT DEFECT — the painter/owner pairing ORDER — not the out-of-bounds
+deviation**, and it is deliberately NOT covered by the two roster rules (they are scoped to
+`applied_pitch`/`applied_yaw` so they cannot swallow it). ⇒ **rsg is NOT purely at the deviation
+floor**: of its four remaining resets, two are the registered deviation, one is this bug, and
+one record carries both. Fixing it is a prerequisite for calling the take certified, whatever
+is decided about the roster question.
+⭐ **THE METHOD NOTE: "this only shows up in one recording" was FALSE, and a two-minute grep of
+the pair censuses already on disk disproved it.** Before believing a family is take-specific,
+grep every whole-take CSV you have for its (class, model).
+
+# ROUND 100 (2026-09-04) — THE CASTLE THAT WAS NEVER THERE
+
+Serial session on the player's request ("take all issues one by one in the main session").
+Opened on a player question about rsg's remaining walls: *"the castle has stayed at level 7 for
+the entire second half of the recording … I'm confused at what exactly are those deviations and
+whether we may have misread them."* Answer: **we had mislabelled them.** The deviation is real,
+but it has nothing to do with the castle.
+
+## ⭐⭐⭐ WHAT THE rsg WALLS ACTUALLY ARE
+`dword_38519` is the **class-3 LIVE LIST**, rebuilt at the tick top by an ASCENDING pool walk
+over slots 1..1000 keeping every class-3 record with `life >= 0`, **model unchecked**
+(EF:39975-84): the human carpet `(3,0)`, rival wizards `(3,1)`, castles `(3,2)` and the castles'
+balloons `(3,3)` all sit on it. `sub_377A0` (EF:27452) has exactly two callers — the BUILDING
+completion tails (action 48 / action 51 ends, EF:27286/27304) — and it runs the CASTLE re-paint
+`sub_5FBD0` on **every list member overlapping the finished building**, as if each were a castle.
+So a building finishing under the carpet "re-paints the carpet's castle" with the carpet's `@0x10`
+as the rung. On the human that word is the **death respawn timer**: 0 until the first death
+(mc2l0 t=3221's four painters, row 0, both columns agree), **1200 forever after** (the human arm
+of `sub_5E7C0` never counts it down) — rsg's first death lies between t=20,000 and 26,000, and
+every painter after it carries `b46 = 176 = 1200 & 0xFF`. `SetShiftByCastle_49EC0` then indexes
+row 1200 of the 77-row BUILD00 table (shipped EXE 0x6E6C0: `movswl 0x10(%ebp),%edx; lea
+(,%edx,4),%eax; sub %edx,%eax; add %eax,%eax; add <posistruct>,%eax; mov 0x4(%eax),%al; mov
+0x5(%eax),%dl` — stride 6, width at +4, height at +5, **no bound check**) and stamps the residue
+extents into the record. rsg's three walls are three `(10,45)` ambient respawning "mouth"
+buildings (player-identified) finishing under the carpet — slots 616 / 694 / 749 at
+t=34,604 / 39,012 / 39,231 (retail `explain`: action 51→52, life→90000, a `(10,42)` born with
+`owner28 = 343` the same tick). **The level-7 castle is never read.** `docs/DEVIATIONS.md` and
+both roster rules re-worded accordingly.
+
+## ⭐⭐ THE LAW LANDED — THE LIST ORDER (the round-99 "painter owner permutation")
+The "rivals" in the permuted owner rows were not rivals: rsg's 424 / 10 / 64 are the human
+castle's own `(3,3)` balloons (`breg=[64, 424, 10]` in the player dump). Painters pop the free
+stack in list order, so the owner/slot pairing IS the list order — and the port walked the pool
+ascending but tested the out-of-pool carpet AFTER the pool. Three changes in
+`Gen::mc2_building_tick` / `World::tick_arm_mc2_building`, all from the decompile:
+1. the human tests **at its own pool slot** inside the ascending walk (native worlds, slot 0,
+   keep the old pool-then-human order — retail's human sits somewhere in the walk and the port
+   has no slot to place it; the painter is a row-0 no-op there);
+2. the human's record is read **as of the building's walk slot** — the mid-walk `ctx` pose the
+   switches already ride — not `human_pose_prev` (rsg's buildings 616/694/749 are ABOVE carpet
+   343, the port comment's "every corpus building slot sits below the carpet slot" was false);
+3. a human dead at the tick top (`ctx.pdead_top`) is not on the list (`if (jx->life_0x8 >= 0)`).
+
+**Measured (ON binary `0a6f10364977ba60ed17af8f8b8097fd`, base `163827fc…`; the FINAL tree — probe restored, unit pin added — rebuilds to `ad80026b70ad18fdc29c4b3eb450fb54` (panic-location line numbers shift with the added test) and its fixture suite, rsg census and mc2l22 census are byte-identical to the ON run):**
+```
+mc2l22 census  67230 → 67223 rows: EXACTLY the seven owner rows gone (t=12,969 ×3, 15,345 ×2, 15,836 ×2)
+rsg    census  40,967 → 40,965: EXACTLY the two owner rows gone (t=39,230)
+rsg  --segmented: 4 segments, walls 34,604 / 39,012 / 39,231 — each now the SINGLE rostered
+                  applied_pitch row; segment 3 (39,231..40,422) bit-exact to the end
+corpus sweep (28 takes, --brief --classify): byte-identical
+fixture suite: 422/422, byte-identical · unit tests 732 → 733 (one new pin), 0 failures
+probe restore: the A/B probe was undone by inverse edit and the rebuilt binary is md5-identical
+```
+⚠ **No corpus pair can pin this law as a fixture**: every witness (all four) also carries the
+human's residue-extent row, and the fixture runner ignores the roster by design, so the cut
+fixture regressed on its own tick and was retracted. The pin is a lib unit test
+(`the_class_3_list_walks_the_human_at_its_own_slot`), proven non-vacuous by an inverse-edited
+A/B (old order yields parents `[lo, hi, human]`, retail's `[lo, human, hi]`).
+
+⇒ **rsg's free run is now bit-exact except at the three registered rows.** Certification
+hinges on the owed ruling: `replay` does not consult `known-deviations.json` (round 99's open
+item), so the three rows remain walls in the free run while the pair census excuses them.
+
+## ⚠ THE RESIDUE — the player's "last ditch": is it derivable after all?
+Player asked whether rsg's **seven entity-pool overflows** could be the source. **No:** they are
+at pairs 34,638 / 34,639 / 34,781 / 34,782 / 34,783 / 34,860 / 34,861 (spawns dropped, no
+victims), all AFTER the first residue birth at 34,604, when the free stack still held 558 slots;
+and the pool overflow in retail is a null allocation, not an out-of-bounds write. **But the
+value is the same 5504/2944 on mc2l22**, a different level — which says a fixed memory
+neighbour, not heap garbage. The naive test — the `Pathstruct` arena in list order puts
+ETEXT.DAT right after BUILD0-0.TAB, so row 1200 would be ETEXT byte 6,738 — is **refuted**: the
+ISO's ETEXT/FTEXT/GTEXT/ITEXT/BUILD0-0.DAT contain no adjacent (38,18) or (76,36) pair at all
+(the VGA arm halves the bytes, so both were tried). 🏦 **THE ONE INSTRUMENT THAT SETTLES IT: a
+full DOSBox RAM dump mid-level** (the recorder already reads `/proc/<pid>/mem`) — find the
+462-byte BUILD0-0.TAB image, read bytes +7204/+7205. If they are (38,18) and belong to a
+shipped file at a fixed offset, the read is deterministic and portable as a law rather than a
+deviation; if they are heap, the ruling stands. Player's call.
+
+# ROUND 101 (2026-09-04) — THE SLOT-0 ANCHOR
+
+Serial session on the player's direction (close of round 100): mc2l22's free-running horizon,
+one wall at a time, no parallel wave. **Five laws landed, 1 wall parked, mc2l22 310 → 152
+segments (−158), horizon 3,959 → 4,661; 28-take sweep byte-identical except mc2l22; fixtures
+422 → 424, 0 regressions.** All A/B by inverse edit on the same tree; every probe removed.
+
+## THE LAWS (in landing order, each measured on the map before the next)
+1. **The castle downgrade re-asserts the aim lift** — `sub_605E0` EF:61639-40 writes
+   `yaw = 0xE000 / fov = 0x4000` right after `SetShiftByCastle`, the pair the upgrade and the
+   even-phase standing tick already stamp; the port's downgrade inherited only the fov half
+   through `mc2_castle_extents`. Witness mc2l22 t=3960 castle 556 (level 5→4 under a (5,25)
+   bolt; `applied_yaw` retail −8192 / port 0) — the take's horizon at open. Horizon 3,959 →
+   4,636. `mc2/castle.rs::mc2_castle_downgrade`.
+2. **The rival lightning twin fan** (`mc2/rivals.rs::mc2_rival_emit`) — `sub_6A5C0`
+   (EF:56596-56656) is caster-generic: tier `life_0x1A == 2` loops `(life != 1) + 1` spawns,
+   charge bank to the first, `yaw ± 113` on `yaw_0x1C_28` alone after the unfanned muzzle step,
+   twins cross-linked via `word_0x34_52`. The human column had it (`mc2_spell_fire`); the rival
+   funnel minted one bolt. Witness t=4637 rival 584 → castle 556: retail (9,12) at 901 AND 853.
+   Horizon 4,636 → 4,661. Fixture `the-rival-lightning-twin-fan-is-caster-generic`.
+3. **The lightning L1/L2 carrier does not re-point its owner** (`mc2/proj.rs::mc2_proj_impact`)
+   — `sub_686D0` has four call sites (`sub_66750`, `sub_65820`, `sub_65C20`, `sub_662E0`); the
+   carrier's worker `sub_66FD0` (action 12) contacts via `sub_68740` (mail + XP + knock) and
+   returns. Witness t=4690: 584's carrier at 252 hits the (5,15) at 931, retail keeps
+   `target96` 556; the port re-pointed, the signature broke, the RaidCastle arm skipped a tick
+   (no aim pitch 91→77, no whiff hover z 4642/4646). Segments 289 → 282. Fixture
+   `the-lightning-l1-l2-carrier-does-not-re-point-it`.
+4. **The respawn disarms the victim stack it re-ranked** (`mc2_rival_respawn`) — `sub_5C950`
+   opens on `sub_49F90` (EF:43681) and its last statement is `dword_0x11e6 = -1` (EF:43858);
+   the port ran the two-arm rebuild and left the victim half ARMED. `MGC_ALLOC_TRACE` showed
+   77 live (5,15) creatures (all carrying `byte[2] & 2`) on the port's recycle stack from
+   t=4957 (rival respawn) while retail's recorded stack stayed empty; at t=5141 a lightning
+   trail emptied the free stack (retail 81→0, recycle 0→0, spawns dropped) and the port seized
+   slot 21 — a live (5,15) in both worlds — for a (9,9) node. Segments 282 → 279. INHERITED
+   head (pair-clean by construction) ⇒ **unit pin owed**.
+5. **The park test is `sub_10630`: three axes, both extents, strict `<`** (`mc2_rival_pick_ball`)
+   — x/y with the ball's own extents added, and z: `|ball.z + ball.yaw − castle.z −
+   castle.yaw| < ball.fov + castle.fov`. The castle quad is two-valued (even-phase standing
+   tick −8192/0x4000; a castle in its shake countdown holds `SetShiftByCastle`'s 0/256 and the
+   z leg DECIDES). Witness t=5201 rival 530: retail elects ball 987 (inside castle 610's
+   6784-box but 1587 below it, castle mid-countdown) where the port's 2-D `<=` skipped it and
+   settled on 905 (22M away) — the 5202..5214 cluster (z +4, speed 240 vs braking 192/128,
+   extra (10,2) casts). Segments 279 → 270.
+6. **A castle-less hated ranking reads pool slot 0** (`mc2_rival_pick_ball`) — retail's
+   `v15x = Entities[CastleEntityIndex]` is `Entities[0]` for a wizard with no castle and the
+   hated arm measures from THAT record's x/y: whatever last staged through the sentinel (the
+   castle-downgrade scratch — round 99's law already writes `ent[0]` — or a build-site scout's
+   corner). The port anchored to self ("documented idealization", DEVIATIONS.md:203 — now
+   retired). Witness t=5917 castle-less rival 451 at (25823,60850): from itself ball 621 is
+   76.8M and 43 is 588M; from slot 0 = castle 529's staged site (17152,25344), 43 is 49.8M and
+   621 is 511M. Retail's `target96` reads 43. **Segments 270 → 152 (−118)** — the single
+   largest collapse of the round, on an UNGRADED lane (`target96`/`roll` are not graded on a
+   (3,1); the heading it turned toward was the 5919..5934 cluster). ⚠ No pair can pin laws
+   5 and 6 (the pick changes an ungraded lane; the graded consequence lands ticks later) ⇒
+   **unit pins owed**.
+
+## ⚠ THE PARKED WALL — t=4662, TWO RIVALS' DEFENSE RESCAN
+Retail's 503 and 530 (both in Defense, both alive, pool free stack 1→0 on the tick) net z
+different from the decompiled handler by one servo step each (503 −8, 530 +4) and 503's final
+roll (318) is the bearing to rival 451 / the origin (331 exact), not to 584 (1209) which the
+scan must elect (792 units, chain intact, model 1, id ≠). Verified equal on both sides: the
+class-3 chain at both tick ends (decoded from `next0`: base 3526342, stride 168), every
+candidate's scan-time position, the target signature (916/969), the row pointer, the LCG step
+count (2 = the jink), the shipped-EXE scan loop (`v15 = −1` IS initialised, file 0x3a9bd),
+terrain (cell-traced, no lag). 451's own Defense scan on the same tick behaved normally.
+Every sub-hypothesis (stale bound, list cut, distance overflow, servo skip, `sub_14C60`,
+signature, in-band arm side effects) refuted. Left as the free-run wall; the pair harness
+reproduces it (LOCAL). 🏦 the remc2 `//fix` here replaces a retail NULL read (`v6x == 0` →
+`Entities[0]`/IVT) with (0,0,0) — if retail's list walk can come up empty, that read is a
+registered-deviation candidate.
+
+## 🏦 LEADS
+- **The pair importer at (5,15)/(5,25) z**: the pair 3959→3960 carries `field:5,15:z` /
+  `field:5,25:z` rows the free run never shows, and `--start 4662` diverges at 4668 on slot
+  666 (5,15) z 3137/3200 while the segmented re-anchor at 4662 runs 1,835 ticks clean ⇒ a
+  fresh import seats a (5,15) creature's z differently from the reset (round 98's IMPORT SEAT
+  class). It cost the castle-yaw fixture (retracted as non-passing).
+- t=6497 (LOCAL): rival 557's (15,1) token tier-down (b46 1→0, mana_max 250→100, mana 6→33,
+  `word_0x2E` 40→0) — the port does not walk the tier down that tick.
+- `sub_13B00` writes slot 0's x/y (scout corner) — not staged by the port.
+- `sub_662E0` reaches `sub_686D0` only for class-3 model-0/1 victims (fold still stamps any).
+
+## MEASURED (ON `568913f3…`)
+mc2l22 `--segmented --classify`: 310 → 152 segments, horizon 3,959 → 4,661, 75 LOCAL / 73
+INHERITED heads. Fixtures 424 (2 new), 0 regressions. Corpus sweep (`--segmented --brief`):
+see the closing line below.
+**Closing gate (binary `568913f3…`, frozen copies):** 28-take `replay --segmented --brief` sweep
+BYTE-IDENTICAL to `conformance/brief-baseline.txt` on 25 takes; mc2l22 310→152 segments /
+horizon 3,959→4,661 (expected); **mc2l1 IMPROVED 3,735→3,733 segments** (clean 14,898→14,900,
+horizon 271 unchanged); mc1l32-terrainless has no baseline line (never graded). Fixtures
+424/424 (2 new, castle-yaw pair retracted), `cargo test -p mgc-sim` all green. Baseline lines
+for mc2l22 and mc2l1 regenerated. Tree: castle.rs, proj.rs, rivals.rs, DEVIATIONS.md:203,
+conformance/mc2l22.json (+2 rows), 2 new fixture files.
+
+# ROUND 102 (2026-09-04) — THE BLANKED CHAIN
+
+Serial session on the player's direction (close of round 101): mc2l22's free-running horizon,
+one head at a time in the main session, no wave. **Eight laws landed, one registered-deviation
+candidate opened, the parked t=4662 wall EXPLAINED; mc2l22 152 → 135 segments (134 with the
+opt-in ghost), free-run horizon 4,661 unchanged by default / 4,661 → 6,159 with the ghost;
+fixtures 424 → 427, 0 regressions.** All A/B by inverse edit on the same tree; every probe
+removed (`PROBE530`, `PROBE-K9`, `PROBE-M32`); one instrument kept (`[dis-fire …]` under
+`MGC_DIS_TRACE`).
+
+## THE LAWS (in landing order, each measured on the map before the next)
+1. **Every book token collapses on the corpse, not just shield and rebound**
+   (`mc2/rivals.rs::mc2_rival_corpse_tokens`). Every class-15 effect body carries the refused
+   arm `word_0x2E_46 = 1` + the shared post-decrement + the `sub_6D880` drain (`sub_693F0`
+   EF:55885, `sub_69640` POSSESSION L1+ EF:56021, `sub_6A030`, `sub_6A300`, `sub_6A5C0`,
+   `sub_6AA00` … `sub_6CFA0` EF:58172), and `sub_68D50`'s second statement (EF:55553, `life
+   < 0 → false`) refuses the tick the caster dies. The port's corpse teardown listed `[6, 8]`.
+   Exclusions: CASTLE (2, the lock at the token's slot) and SPEED (3, whose refused arm is
+   EMPTY — EF:56216-19, only the decrement). Witness t=6497: rival 557 dies, its brain tail's
+   tier-down walk had queued `SetSpell(token, 0)` on the possession token 559 with the window
+   live; retail's token takes the refused arm — window 40 → 0, tier 0 (`b46 1→0`, `mana_max
+   250→100`, `mana 6→33` = 100/3). Segments 152 → 150. Fixture
+   `every-book-token-collapses-on-the-corpse`.
+2. **The Upgrade (state 1) handler opens on the target-word gate like every sibling**
+   (`mc2_rival_state_tick`). `sub_13C50` (EF:6110-15) takes state 1 by writing
+   `word_0x96_150 = castle` + its signature and `sub_12FF0` opens `if (!sub_14C60(a1x,
+   Entities[word_0x96_150])) goto LABEL_14` (EF:5585-86). The port resolved the castle by
+   OWNER (`rival_castle`) and left Upgrade out of the gate list, so on the tick the intake's
+   dead-target drop zeroed the word (castle 637 at life −861, t=6519) retail's handler no-oped
+   and the port's still flew home — `roll` re-stamped 1998 → 1995 (ungraded) and the servo
+   followed at 6520. The invented `Fresh` fallback on a missing castle is gone. INHERITED ⇒
+   pinned by `mc2_upgrade_handler_no_ops_when_its_target_word_is_dropped`. Segments 150 → 147
+   (6520, 6572, 11423).
+3. **The lightning beam's impact victim is a FRESH probe at the terminus**
+   (`mc2/proj.rs::mc2_lightning_beam_tick`). `sub_66750` reads `v13x = sub_10780(a1x)` only
+   AFTER the trail loop (EF:58400), from the position `sub_66610`'s hit arm snapped the beam
+   onto, and hands THAT record to `sub_65780`, the re-point `sub_686D0` (EF:58408), the mine
+   test, the spell-7 XP and the blast's own `word_0x96_150` (EF:58419). Same predicate, same
+   tile chain, DIFFERENT probe position ⇒ when two records overlap the terminus the march and
+   the terminus probe can elect different ones. Witness t=7261: rival 530's beam snaps onto
+   the dying (5,25) at 322; the terminus probe walks the (5,25) at 924 first (322 is the
+   chain's tail), retail's (10,23) at 708 records `target96` 924, 530 is re-pointed at a
+   record whose signature does not match and its Defense handler no-ops (roll holds, z takes
+   the mover's −4 only, speed parks). Segments 147 → 142 (7261, 7713, 11543, 13726, 15490).
+   Fixture `the-lightning-beam-impact-victim-is-a-fresh-probe`.
+4. **The leveled possession impact mints its aura for ANY probe victim — buildings included**
+   (`mc2_proj_impact`, the `(10,54)|(10,69)` arm). `sub_674C0`'s victim arm spawns its second
+   child `_4A190(&pos, byte_0x43_67, byte_0x44_68)` at EF:59048 with no test on `v6x`. The
+   port's sphere-only gate cited a 2026-07-27 VISUAL certification ("building/worm possession
+   never magnets"); the recording overrules it: t=8185, rival 557's Mana Lock (9,17) lands on
+   the (10,45) at 146, retail borns the (10,70) forced pulse at 763 AND the (10,54) aura at
+   892 (`f1a` 557, the bolt's yaw/pitch, `dword_0x10_16` = the tier-2 range) and the aura's
+   pull reaches the (10,39) at 979 the same tick. The skipped allocation slid both archer
+   arrows one pop early. Segments 142 → 140 (8185, 8509). Fixture
+   `the-leveled-possession-aura-mints-for-any-victim`. ⚠ Residue on ungraded lanes: the port's
+   aura ctor writes `mana` 100 where retail writes `subSpellIndex_0x2A_42` 100 (lead).
+5. **The leveled possession dies on contact whatever the pool says** (`mc2_proj_impact`).
+   `sub_674C0` gates its two children on their own allocations but its
+   `DisableEntityDrawing04_57F10(a1x)` is the last statement of `if (v16)`, OUTSIDE both
+   (EF:59055); the port's generic "an impact that cannot mint its effect survives" rule
+   (right for `sub_65820`/`sub_65C20`/`CastPosses_65F60`) kept a struck (9,17) flying on a dry
+   pool. Witness t=8347 (free 0 / victim 0): 557's Mana Lock at 991 snaps onto sphere 484 on
+   both sides; retail flags it (0x406), the port flew on — so at 8348 retail's tick-top reap
+   freed 991, the HIGHEST freed slot, and the human turret's beam popped it while the port's
+   popped 959 (an INHERITED head whose whole signature was the pop order). Segments 140 →
+   139. Pinned by `an_action_18_bolt_that_struck_dies_even_on_a_dry_pool`.
+6. **The type-9 objective walks the tick-top building roster, which a victim seizure blanks**
+   (`engine/world.rs::objective_mc2`, kind 9). EF:40853-64 iterates `dword_38527` with no
+   life/flag/class term (shipped 0x7da04-0x7da32); that head is one of the five
+   `NewEvent_4A050`'s recycle arm blanks (Events.cpp:583-87), and the pass runs at the frame
+   tail (EF:31817). On a full-pool tick the first seizure empties the roster and the objective
+   completes with every target building standing. Witness t=9783 (pool 999/999): building
+   873's smoke seizes slot 5; retail's recorded objective board steps row 1 (type 9, tag 18)
+   1 → 2 and the cursor 1 → 2 at the tail while the tag-18 buildings at 2/3/4 stand at
+   6000/6000/4500; the (11,32) switch at 420 fires disposition 14 during 9784 (61 records) and
+   the port never minted the wave. Free-run only (a fresh seat imports the board) ⇒ pinned by
+   `mc2_type9_objective_completes_on_a_blanked_building_roster`. Segments 139 → 138 (16808
+   with it).
+7. **The Defense rescan walks the tick-top class-3 chain — and that head can be blank**
+   (`mc2_nearest_wizard`). `sub_161A0` iterates `dword_38519` (EF:7782-98; 0x3ab11/0x3ab55);
+   the port walked its rival array, which is never blank. THIS IS THE PARKED t=4662 WALL:
+   pool free 1 → 0 on the tick, every seizure after it blanks the chain, both Defense rivals'
+   rescans find NOBODY, and retail's else arm reads the NULL record's position — `lea
+   0x4c(%edi)` with `edi = 0` (0x3ac06) = linear 0x4C = the real-mode INTERRUPT VECTOR TABLE
+   (INT 13h offset/segment, INT 14h offset). The two blank-chain ticks fit `y = 0xF000`
+   (DOSBox's BIOS callback segment) with `x ∈ [4326, 4428]`, `0x1100` being the aligned
+   callback slot — "503's final roll 318 is the bearing to the origin" was the bearing to
+   the IVT. Landed: the chain walk (law); the else-arm point stays the authored origin (the
+   remc2 `//fix`) per the 2026-09-04 OOB ruling, with `MGC_MC2_IVT_GHOST=1` opting into the
+   fitted words `(0x1100, 0xF000, 0x1100)` — registered in DEVIATIONS.md. ⚠ The pooled human
+   is a zeroed husk and never joins `wiz_chain`: it is walked at its slot's position while the
+   chain is intact and hidden when blanked (the first cut of this law dropped him and cost
+   6,260 segments; the corrected form is the landed one). Pinned by
+   `mc2_defense_rescan_finds_nobody_on_a_blanked_class3_chain`; the (10,54)-on-a-building pin
+   `mc2_leveled_possession_magnets_on_any_victim` replaces the overruled sphere-only pin.
+8. **The attack-wizard pick walks the same chain** (`mc2_rival_pick_wizard`, `sub_14030`
+   EF:6249) — the last brain scan on the rival array. Witness t=9784: after the wave's 61
+   seizures rival 584 (slot 584) finds no castle and no wizard in retail and falls through to
+   Cruise (`ai_state` 12); the port took AttackWizard on 530 — the whole 9785 head (both
+   rivals' Cruise lure roll, the (15,22) tier-2 retune it leaves, 584's speed 80 vs the weave's
+   239). Segments 138 → 135 (13105, 18531, 18693); with the ghost 134.
+
+## ⚠ THE PARKED WALL — EXPLAINED, RULING OWED
+t=4662 and t=9784/9785 are the same mechanism: a full pool ⇒ victim-stack seizures ⇒ the
+five roster heads blanked for the rest of the walk ⇒ every later scan sees nothing ⇒ the
+Defense else arm aims at the IVT. With the authored origin the wall stands (now four z rows:
+451/530/557/903 z −8, the ghost's z + 512 lies above them); with the fitted words the wall
+FALLS (free run 4,661 → 6,159, the next head 6160 [INHERITED] rival 451 heading 1383/1351;
+pairs at 4662 and 9784 clean). The words are DOSBox's, not the game's — the OOB ruling says
+register, not fit — but they are reproducible across every take made on that DOSBox and
+they buy the whole wall. **PLAYER RULED at the close of the round: the ghost stays UNFAITHFUL and remains a horizon** ("if every other horizon is fixed, then all is well") — the authored origin is the permanent default, the rows are the registered floor, and the campaign steers past 4662 from the segmented map.
+
+## 🏦 LEADS
+- The aura ctor's `mana` 100 (`mc2_spawn_aura` `f140 = 100` where retail writes
+  `subSpellIndex_0x2A_42`); the new (5,18)s' `f36` 0/1 at 9784 (both ungraded).
+- The 6160 head (ghost on): rival 451 heading 1383/1351 — INHERITED, unopened.
+- 9994 [LOCAL] slot 944 z 5015/5115 — unopened; 9999–10006 cluster; 10021.
+- `sub_66FD0` (action 12) survive-on-dry shape not audited (its (10,38) spawn is gated
+  `if (v12x)`, the Disable's placement unread).
+
+## MEASURED (ON `938268b3…`)
+mc2l22 `--segmented --classify`: 152 → 135 segments (67 LOCAL / 64 INHERITED), free-run
+horizon 4,661 (default) / 6,159 (`MGC_MC2_IVT_GHOST=1`, 134 segments). Fixtures 427 (3 new),
+0 regressions; `cargo test -p mgc-sim` and the 28-take `--brief` sweep: see the closing line.
+**Closing gate (sweep on binary `938268b3…`; the test-only edits landed afterwards rebuild to
+`dc268ed1…`, on which the fixture corpus (427/427) and mc2l22's brief line and full segmented
+map are byte-identical to the swept build):** 28-take `replay --segmented --brief` sweep
+BYTE-IDENTICAL to `conformance/brief-baseline.txt` on 25 takes incl. rsg (still 34,603 /
+4 segments); mc2l22 152 → 135 segments (clean 65,405 → 65,422, horizon 4,661, the 4662 wall
+now `(3,1)slot451:z` = the IVT else-arm rows); **mc2l1 IMPROVED 3,733 → 3,732 segments** (clean
+14,900 → 14,901, horizon 271 unchanged); mc1hwl3 and mc1l32-terrainless carry no baseline line.
+Fixtures 427/427 (3 new), `cargo test -p mgc-sim` 624 passed / 0 failed (4 new pins, 1
+rewritten). Baseline lines for mc2l22 and mc2l1 regenerated. Tree: rivals.rs, proj.rs,
+engine/world.rs, DEVIATIONS.md (+1 OOB entry), conformance/mc2l22.json (+3 rows), 3 new
+fixture files.
+
+# ROUND 103 (2026-09-04) — THE PLAYER IS JUST ANOTHER POOL RECORD
+
+Serial session, main session, no wave — the standing direction. Target: wrap mc2l22 into a
+SEMI-CERTIFIED state (the player's words), i.e. every horizon except the registered
+out-of-bounds ones. **Two laws landed; mc2l22 135 → 122 segments, and mc2l24 improved
+7,643 → 7,581 off the same two hunks; fixtures 427 → 429, unit tests 624 → 626, 0
+regressions.** A/B by inverse edit on the same tree (`tools`-free, `$TMPDIR/ab.py`); the one
+probe added (a `MGC_PROBE_SETSPELL` backtrace in `mc2_rival_set_spell`) was removed in the
+same edit that landed law 2. Binary at close `561275a0…`.
+
+## THE LAWS
+1. **A lightning beam that stops on the PLAYER parks at his raw origin, not his box centre**
+   (`mc2/proj.rs::mc2_proj_land`, the `MailTarget::Player` arm). The generic flyer lands on its
+   victim's z-box CENTRE (`sub_65580` raise → CopyEntityPosition → `sub_655A0` restore,
+   EF:62941-43) and for the pose-only human that centre is `ctx.pz + PLAYER_HH`. A BEAM does
+   not run that body: `sub_66610`'s blocker arm is one bare
+   `a1x->position_0x4C_76 = v2x->position_0x4C_76` (EF:63605-08) with no `sub_65580` bracket
+   anywhere in the function — **and no test on who `v2x` is**, because the human's wizard
+   record is just another pool record there. The port had landed exactly this exemption on the
+   POOL victim arm (mc2l6-rsg t=463's turret beam, round 99) and left the raise standing on the
+   Player arm one match-arm below it. ⭐ THE SHAPE: *a law landed on one arm of the same `match`
+   is not landed* — the twin of "a law landed on one call path is not landed" (round 72), now
+   at statement distance. Witness t=9994: rival 530's tier-0 Lightning token 538 fires, the
+   (9,9) bolt at slot 944 (action 9, `f5a` 216, `target96` 424) snaps onto the human, retail
+   records z **5015** — slot 424's own z that tick — and the port wrote 5115, +100 exactly.
+   **Eleven segment heads, one lift**: 9994, 9999, 10000, 10002, 10006 (slots 892/888/872/980),
+   13666, 22166, 52931, 53161, 53946, 53948. Segments 135 → 124. Fixture
+   `a-beam-that-stops-on-the-player-parks-at-his-raw`; pin
+   `a_beam_that_stops_on_the_player_parks_at_his_raw_origin` (it asserts BOTH arms, so the
+   generic impact's raise is pinned with it).
+2. **The castle spell's readiness gate spends the token's STAMPED price, so it carries the
+   tier multiplier** (`mc2/rivals.rs::mc2_rival_cast_ready`). Every arm of `sub_15170` tests
+   the same expression against the manifestation the book handed it —
+   `a1x->mana_0x90_144 < v<n>x->maxMana_0x8C_140` — case 2 included (EF:7035 with a castle,
+   EF:7046 without). That word is whatever `SetSpell_6D5E0` last wrote, and the one caller that
+   matters, `sub_15F20`'s tier-down probe, stamps the tier's price IMMEDIATELY BEFORE calling
+   the gate (EF:7595-96). So the price under test is the ladder rung TIMES the ×320>>8 /
+   ×384>>8 multiplier, never the bare rung. The port recomputed it from the castle level
+   (`mc2_castle_ladder_cost`) — a hand-rolled second definition whose own comment said "the
+   tier-multiply scope still owed" — and so PASSED tier-2 probes it should have failed,
+   stopping the tier-down walk one or two rungs too high and leaving the token re-priced there.
+   ⭐ THE SHAPE: **a RECOMPUTE where retail reads a STAMPED word** — session 78's law D and
+   round 99's "prefer the stored register" again, and the tell was that the port's value was
+   exactly 1.5× retail's on every row. Witness t=10495: rival 611's Upgrade walk over its
+   level-1 castle 637 — retail fails tier 2 (15000) and tier 1 (12500) against its purse and
+   casts at tier 0, leaving token 15 at `mana_max` 10000 / `mana` 99; the port left 15000 / 148.
+   Same row at t=21772 (rival 584, token 46) and t=28428 (rival 557, token 6, rung 4: retail
+   80000 / 792, port 120000 / 1188). Segments 124 → 122. Fixture
+   `the-castle-readiness-gate-spends-the-stamped-tie`; pin
+   `the_castle_readiness_gate_spends_the_stamped_tier_price`.
+
+## THE CLUSTER CENSUS — WHAT IS ACTUALLY LEFT ON mc2l22 (the answer to "how many are left")
+Cut from `replay --segmented --classify` at 122 segments, joined against a whole-take
+`verify-deltas --csv` for `(class, model)` and 25 batched `dump-state` lookups for the slots
+no census row covers. **121 divergence heads total.**
+
+**25 of them (3 clusters) are ALREADY PLAYER-RULED PERMANENT** — this is the single most
+important number in the census, and it was not visible before the join:
+- `t=4662` — the blanked class-3 chain + retail's IVT read (`mc2_ivt_ghost`, DEVIATIONS.md).
+  1 head, and it is also the free-run wall.
+- `(10,42) applied_pitch 5504/640` ×5 (12970, 15262, 15346, 15837, 60457) — the painter's
+  out-of-bounds BUILD00 row, `known-deviations.json` rules 0/1, no `takes` restriction.
+- `(5,27) heading + rand` ×19 (53912 … 55089) — the hydra's uninitialised `v34` LOW BIT.
+  DEVIATIONS.md names this take and these exact ticks: *"Permanent floor: ~18 mc2l22
+  segments."* It is the biggest single family on the map and none of it is diggable.
+
+**96 open heads in ~23–33 clusters** (the spread is where a lane could be one law or two),
+central estimate **≈28**, ranked:
+| n | cluster | heads |
+|---|---|---|
+| 1 | `(3,1)` rival `z` / altitude servo (22736-22751 window ×7, + 10021, 11453, 13262, 17476, 28611) | 12 |
+| 2 | `(3,1)` rival `heading`/`speed` (22754-22772 ×7, + 9785, 11343, 13120, 21509, 22747) | 12 |
+| 3 | `(10,39)` sphere `player_ent_idx` + `f5a` — retail stamps 424/530, the port another wizard | 10 |
+| 4 | `(5,27)` hydra `x,y,z` / `rand,speed` (21617-22225) + the `(10,67)` `rand` at 22076/22079 | 10 |
+| 5 | `(10,76)`/`(10,77)` `x,y,z` (20365; 47947-48375) | 8 |
+| 6 | `(3,1)` rival `x,y(,z)` lateral mover (14041, 14113, 26286, 29909, 29948) | 5 |
+| 7 | class-5 creature `action`/`applied_*` state: `(5,4)`×2, `(5,12)`×2, `(5,15)`×2, `(5,9)`×2 | 8 |
+| 8 | class-5 `heading`: `(5,18)`×3, `(5,25)`×2 | 5 |
+| 9 | pure entity-set heads, no field row (23311, 25785, 43381, 44414, 45582) | 5 |
+| 10 | human POSE channel (16354, 16406, 54492 standalone; pose rows also ride 7 more heads) | 3+ |
+| 11 | `(3,1)` rival `life` ×3 on 557 (11824, 11890, 11892) | 3 |
+| 12 | `(9,13)` arrow (14086, 14139, 17855) | 3 |
+| 13 | `(9,0)` `x,y,z` + slot desync (13250, 23732, 23733) | 3 |
+| 14 | `(10,17)` mine model/life + missing (52933, 54014) | 2 |
+| 15 | `(10,0)` (15668 z; 54920 x,y + missing) | 2 |
+| 16 | singletons: `(10,45)` extents 44511 · `(10,2)+(3,1)` 15845 · `(5,16)` 54238 · human `mana` 63319 | 4 |
+
+⚠ **The pair census is now TINY and is no longer the instrument**: whole-take `verify-deltas`
+reports 852 field rows over ~60 dirty pairs, 9 entity-set rows, and its biggest field family is
+`x`/`y` at 258 hits / 23 pairs. 65 of the 121 heads are INHERITED (pair-clean), which is
+exactly the population the census cannot see. Steer from the segmented map.
+
+## THE RULING: `replay` CONSULTS `known-deviations.json` (player-made this session)
+Owed since round 99 and made when the cluster census put the number on it — a fifth of mc2l22's
+remaining heads were registered rows nothing in the tool could see. The player's reasoning is
+the design: *"The only saving grace would be if this specific deviation did not cause any rng
+divergence … which I think is hard to guarantee. We could perhaps use known-deviations to force
+resync even during freerun replay but that will probably be overkill. In any case, the
+instruments should absolutely have this ability."*
+
+⭐⭐⭐ **THE DESIGN POINT: `verify-deltas` CAN EXCUSE A ROW FOR FREE AND `replay` CANNOT.** The
+pair verifier re-imports retail's state every pair, so a row it forgives never propagates. A
+free run's forgiven row IS state — a fitted RNG draw, a painted tile, a bearing — and everything
+after it is the port's own history. So excusing a registered row in `replay` is only sound if
+the run RE-ANCHORS there, which is exactly what a segmented reset already does. Hence:
+- **`--segmented` needs no flag.** The reset was happening anyway; the roster only re-LABELS it
+  (`SegOpen::Roster`), keeps it out of `DEVIATION-forced` / `excess resets` / `horizon`, and
+  itemises it by rule.
+- **A plain free run opts in with `--resync-deviations`**, and every report says how many
+  resyncs it spent. Without the flag the horizon stays at the registered wall — the honest
+  default, and the player's own read.
+
+⭐⭐ **THE GATE IS ALL-OR-NOTHING, WHICH IS WHAT MAKES A COARSE RULE SAFE.** One unexplained row
+demotes the boundary back to `Deviation`. mc2l22's 53976 carries the hydra parity rows AND a
+missing-in-port `(9,9)`, and correctly stays a defect. Three lanes can never be excused: the
+POSE channel (no (class, model, slot) for a rule to scope against), an RNG boundary (not a
+per-row fact — the whole world's future), and `status: capture` / `open` rows (capture is the
+recording's limitation, not a RULING; open is a lead awaiting its fix round).
+
+**Schema:** `Rule` gained `ticks` (an explicit PAIR-TICK list — a registered FLOOR, as opposed
+to the recurring CLASS `t_min`/`t_max` express) and `fields` (a family whose rows always arrive
+together). ⚠ `ticks` is in pair-start space: a `replay` boundary at `t` lists as `t − 1`.
+**Rules added:** `mc2l22-ivt-ghost-z` (4 rows, boundary 4662), `mc2l22-ivt-ghost-heading`
+(boundary 9785) and `mc2l22-hydra-v34-parity` (19 listed, 18 excused). The IVT floor was
+MEASURED, not assumed: with `MGC_MC2_IVT_GHOST=1` exactly boundaries 4662 and 9785 go clean and
+nothing else on the take moves except a NEW head at 6160 that is the ghost's own downstream
+state — the second reason the authored origin stays the default.
+
+### 🏆 AND IT CERTIFIED A TAKE ON DAY ONE
+**`mc2l6-rival-spells-galore`: `devs=3` → `devs=0`, `horizon=END`, `first=-`, exit 0.** All
+three of its remaining resets were the registered `(10,42) applied_pitch` BUILD00 out-of-bounds
+row. The take free-runs 40,422 boundaries end to end with no unexcused divergence. That is the
+`excess resets: 0` bar, and it had been sitting one ruling away since round 99.
+**mc2l22:** `devs=121` → **96**, 25 roster-excused (5 painter + 18 hydra + 2 IVT), free-run
+horizon **4,661 → 10,020**, next head `(3,1)slot530:speed`. **mc2l24:** roster=3, devs 7,580 →
+7,577. Every other take byte-identical.
+
+### NEUTRALITY (the tool-change proof, both halves)
+- `replay … --segmented --brief --no-roster` over all 29 recordings: **byte-identical** to the
+  pre-ruling baseline, every take.
+- `verify-deltas` on mc2l22 with and without `--no-roster`: the raw TSV (`t..got`) is
+  **byte-identical** — the roster classifies, it never changes a row. The new rules do appear
+  in its report (hydra 38 rows / 19 pairs, ivt-z 4 / 1); `mc2l22-ivt-ghost-heading` does not,
+  because that boundary is INHERITED and no pair census can see it.
+- Fixture corpus **429/429** (the suite is roster-independent by design) and `cargo test
+  --release` **987/0** across the ruling.
+
+## MEASURED
+`--segmented --classify`: 135 → **122 segments**, and after the ruling **96 excess resets**
+(30 LOCAL / 64 INHERITED) beside 25 roster-excused; clean boundaries 65,422 → **65,435** of
+65,556 (99.82%). Free-run horizon **4,661 → 10,020** — the registered IVT wall is stepped over,
+and 10,021 `(3,1)slot530:speed` is the first thing actually owed.
+
+**Closing gate (binary `561275a0…`):** 29-take `replay --segmented --brief` sweep
+BYTE-IDENTICAL to `conformance/brief-baseline.txt` on every take but two; **mc2l22 135 → 122**
+and **mc2l24 IMPROVED 7,643 → 7,581** (clean 46,403 → 46,465, horizon 2,456 unchanged) — the
+beam-snap law pays on a second take. rsg unchanged (34,603 / 4 segments). Fixture corpus
+**429/429, 0 regressions** across all 23 manifests; both new fixtures A/B-proved to FAIL on the
+reverted binary with exactly their own signature (`field:9,9:z` and
+`field:15,2:mana field:15,2:mana_max field:3,1:z`) and nothing else moving. `cargo test
+--release` **987 passed / 0 failed** (626 in `mgc-sim`, 2 new pins, both A/B-proved to fail on
+the reverted tree). Baseline lines for mc2l22, mc2l24 and mc2l6-rival-spells-galore regenerated.
+Tree: `mc2/proj.rs`, `mc2/rivals.rs`, `engine/world.rs` (pin + test accessor),
+`conform/replay.rs` + `conform/roster.rs` + `conform/main.rs` (the ruling),
+`conformance/mc2l22.json` (+2 rows), `conformance/known-deviations.json` (+3 rules), 2 new
+fixture files, `conformance/brief-baseline.txt`, CONFORMANCE.md, DEVIATIONS.md.
+
+## OWED INTO ROUND 104
+- **The grind: mc2l22's 96 remaining excess resets in ~28 clusters** — the ranked table is
+  above. First unexcused head is now **10021 `(3,1)slot530:speed`**.
+- ⭐ **RE-READ THE CLUSTER TABLE AGAINST THE ROSTER FIRST.** It was built before the ruling
+  landed; `replay --segmented --classify` now does the subtraction itself, so cut a fresh map
+  and triage what it calls `DEVIATION-forced`.
+- **`mc2l6-rival-spells-galore` should be moved to the CERTIFIED list** (`horizon=END`,
+  `excess resets: 0`) — a bookkeeping change across the charter, the roadmap and the certified
+  count (13 → 14 of 24), not a dig.
+- Round 101's unit pins ×4 + round 102's attack-wizard-pick chain blank are still owed.
+
+# ROUND 104 (2026-09-05) — THE THROTTLED QUEUE RETURNS: 23 LAWS, mc2l22 96 → 5
+
+**Player-set shape:** *"roll back the methodology a few sessions back and start with the parallel
+processing again… estimate the remaining distinct segment heads, and run parallel digs for them,
+with at most 5 digs running simultaneously, and implementing them as the results come back."*
+Fourteen clusters were triaged from the opening map; **sixteen digs ran, all on `model: opus`,
+five active at a time, refilled on completion.** The player's read that the residue would be
+"less than 20-30 heads" was right: 96 open heads clustered into 14 families.
+
+**mc2l22: 122 segments / 96 excess resets / horizon 10,020 → 32 segments / 5 excess resets /
+horizon 15,668.** Fixtures 429 → 439. Lib tests 626 → 642. `mc2l6-rival-spells-galore` moved onto
+the certified list (13 → 14 of 24) as a bookkeeping pass.
+
+## THE LAWS (23, in landing order)
+1. **W1-A — THE CLASS-3 ROSTER IS A TICK-TOP SNAPSHOT.** `UpdateEntities_57730` builds
+   `dword_38519` once at the tick top on `class == 3 && life_0x8 >= 0` (EF:39972-85) and the
+   walkers carry **no liveness test** (EF:6249), so a wizard who dies at his own dispatch slot
+   stays a candidate for every rival dispatched later that tick. The port gated the out-of-pool
+   human on the LIVE `player.state`. Fixed via the existing tick-top sample `human_wiz_top`.
+   `MGC_NO_RIVAL_HUMAN_CHAIN_TOP`. Horizon 10,020 → 10,029.
+2. **W1-D — the m12 site test is `class`, not the reap bit** (EF:14290-92 / :13969), plus the
+   pre-decrement counter. `MGC_NO_M12_SITE_REAP_BLIND`.
+3. **W1-D — an early `return` inside an INLINED CALLEE skipped retail's `goto` tail.**
+   `sub_20940` is called, not fallen into (EF:12055-60 / :12282-84).
+   `MGC_NO_M9_GROUNDED_POSE_TAIL`.
+4. **W1-D — the respawn teleport is an INPUT-PHASE write that precedes the wake pass**
+   (`sub_68C70` reads the position live, EF:55520). `MGC_NO_MC2_WAKE_RESPAWN_PEEK`.
+5. **W1-D — the wanted timer arms on ANY wizard**, all four sites the identical
+   `if (v > Entities[0] && (!v->model || v->model == 1))` (EF:14440-42 / :14913-16 / :14677-79 /
+   :14561-63). `MGC_NO_WANTED_ANY_WIZARD`.
+6. **W1-B — the ball-merge owner is a CLASS-10 LADDER then a `maxMana` contest**, not "who
+   brought more mana" (`sub_36D50` EF:26945-90; `NETHERW.EXE` 0x5B550). A `(10,40)` mana-pit bank
+   tag is a legal owner with an absurd ceiling, so the class arms are load-bearing.
+   `MGC_NO_MC2_BALL_OWNER_LADDER`. 9 heads.
+7. **W1-C — the MC2 teleport lands BEFORE the mover** (`CopyEntityPosition_57CF0` at the
+   manifestation's own dispatch, EF:56930/56960/57005, with `speed_0xc_12 = 0` at :57029).
+   MC1's twin had consumed pre-mover for rounds; the MC2 arm had **no consume at all**.
+   `MGC_NO_MC2_TELEPORT_PHASE` + `MGC_NO_MC2_TELEPORT_REGEN`. 8 heads.
+8. **W2-G — a fireball that struck NOTHING clears its own homing lock, and the firestorm wrapper
+   reads the word AFTER that.** `sub_65C20` ends `if (!v9x) word_0x96_150 = 0` (EF:63196) and
+   `sub_65B50` calls it FIRST then reads (EF:63016-23; EXE 0x8A362 call / 0x8A374 read).
+   `MGC_NO_FIREBALL_LOCK_CLEAR`. **13 heads** — five of them `(3,1)` rival x/y/z heads that
+   looked like an unrelated cluster.
+9. **W2-F — `sub_2A6F0` walks `dword_38519` and has NO model test** (EF:20452-83, verified: only
+   a distance gate and an angle gate). `MGC_NO_M27_SCAN_ROSTER`.
+10. **W2-F — the m27 mover releases its own quake grab** (`sub_2AF10`'s prologue, `NETHERW.EXE`
+    0x4F710). ⚠ `sub_1B6B0`/`mc2_move_core` has no such prologue. `MGC_NO_M27_MOVE_FLAGS`.
+11. **W2-H — the lightning TRAIL NODE writes no flag word and stays COLLIDABLE.** `sub_66750`
+    writes six fields (EF:58336-45); every real bolt ctor spells `byte[0] &= 0xF7` (EF:34952).
+    **THE ASYMMETRY IS RETAIL'S.** Needed the IMPORT SEAT too or a reset re-blinds the beam.
+    `MGC_NO_LIGHTNING_NODE_COLLIDE`.
+12. **W2-I — every cascade affordability gate reads the token's STAMPED price**, which carries
+    the tier multiply (`sub_13CE0` EF:6135, `sub_15730` EF:7159, `sub_155E0` EF:7117/:7128).
+    Round 103 landed this statement on a DIFFERENT gate. `MGC_NO_RIVAL_CASTLE_TOKEN_PRICE`.
+    **15 heads.**
+13. **W3-Q — the human's death payout never popped the victim stack it rebuilt.** `sub_5E310`
+    opens on `sub_49F90()` and closes on a bare `D41A0_0.dword_0x11e6--` (EF:60101 / :60179;
+    EXE 0x82E4B), the ONE of nine call sites that never resets the head. The rival twin has
+    carried it since round 98. `MGC_NO_HUMAN_PAYOUT_VICTIM_POP`. **Horizon 10,029 → 11,342.**
+14. **W2-J — the lightning blast's payload passes through the victim's REBOUND window**
+    (`sub_66750`'s own ladder, EF:58421-52). ⚠⚠ **THE SHIPPED EXE CORRECTS THE LISTING**:
+    EF:58436 reads the half arm's gate off the CASTER (vacuous); `NETHERW.EXE` 0x8B2F9 reads the
+    VICTIM's. `MGC_NO_LIGHTNING_REBOUND_ABSORB`.
+15. **W3-K — the launch-aim table's last hole is EIGHT SPELLS WIDE.** Round 98's *"a terrain
+    lookup this helper cannot express"* is a third flag: `MoveEntity(axis, yaw, 0, 4096)` then
+    `axis.z = getTerrainAlt(axis)`, spells 15/16/17/18/20/21/23/25 (EF:57382 / :57455 / :57527 /
+    :57597 / :57750 / :57827 / :57996 / :58161; EXE 0x90BE0). **0 heads on mc2l22 and 325 rows
+    fixed on `mc2l0-spells-galore`.** `MGC_NO_MC2_LAUNCH_AXIS_GROUND`.
+16. **W3-S — `sub_49A30` zeroes `xtype`, and the port dropped the line** (EF:32796, one
+    instruction before the `mana = 0` it did carry; EXE 0x6E3BD). A building's `xtype` is its
+    ON-DEATH DISPOSITION (EF:28172-73), so every villager-built shrine fired phantom disposition
+    255 — and `sub_4A1E0` opens with `sub_49F90`, re-ranking the free stack. **6 heads.**
+    `MGC_NO_MC2_BUILDING_XTYPE_ZERO`.
+17. **W3-S — the REBOUND window outlives its counter by one pass; its SHIELD sibling does not.**
+    Mirror images: the shield RETURNS on an already-spent window and clears at expiry
+    (EF:56503 / :56533-36); the rebound CLEARS on already-spent and only drains at expiry
+    (EF:56730-32 / :56757-61). `MGC_NO_RIVAL_REBOUND_CLEAR_DEFER`.
+18. **W3-T — the water steer's target is the ENTITY word, read RAW, and `Entities_EA3E4[0]` is a
+    legal answer** (EF:8147 bare and unconditional, before the avoid switch; EXE 0x3B1C0 shows no
+    test between the load and the two dereferences). The port added a mirrored target, a
+    `flags & 0x400` guard and an invented 8-tiles-ahead fallback. ⭐ **SLOT 0 IS A LAW SURFACE,
+    3rd instance.** `MGC_NO_STEER_TARGET_ENTITY_WORD`. **Horizon 11,342 → 11,724.**
+19. **W3-U — the Teleport-II save point lives on the MANIFESTATION RECORD, and is stamped at
+    EQUIP time.** `sub_6AD60`'s T1 arm saves into / restores from `axis_0x9A_154x` (EF:56943-51;
+    EXE 0x8F6BB), and `CopyAxisForSpellWithLife_6D830` (EF:58203-12) re-anchors it from the
+    change-spell handler one statement after `SetSpell_6D5E0` (EF:37922). The port used
+    `Player::teleport_return`, a register with **no import seat**, so the return leg silently did
+    nothing. `MGC_NO_MC2_TELEPORT_SAVE_AXIS`.
+20. **W3-V — a tank's HIT latches its attacker as its target.** `sub_252E0`'s tail has two arms
+    (EF:16140-49); the port kept the DEATH half and dropped the latch when the function was
+    split. `MGC_NO_M18_HIT_TARGET_LATCH`.
+21. **W3-V — the footprint clear stamps BOTH halves of the killer pair** (`sub_57390`
+    EF:39801-03). The port wrote `f36`/`f38`, one home short; `word_0x26_38` is `f40` — fixed by
+    `mc2_state_head`'s own `f38 = f40` mirroring EF:16137. `MGC_NO_CLEAR_TILE_ATTACKER_STAMP`.
+22. **W3-W — a pool wizard's wanted timer NEVER decays.** `word_0x248_584--` appears **exactly
+    once in the whole MC2 binary** (EF:60017, the human carpet's own handler, on its own wizext);
+    the recording confirms it — player 5's `wanted` is 200 at t=20723 and still exactly 200 at
+    t=65556. The port's global decay was invented — **the identical bug the MC1 half was fixed
+    for, three lines away.** `MGC_NO_MC2_WANTED_NO_DECAY`.
+23. **W3-W — MC2 HAS A THIRD CAST BUTTON.** `sub_5F380`'s tail is three `testb`/`call` pairs
+    (EF:60851-62); the third is the CYCLE-RING SHORTCUT, casting the spell under the ring cursor
+    without equipping it and stamping the LEFT hand bit. The port had **no lane for it anywhere**
+    — recorder, sim, replay, fixtures — and `verify_mc2`'s detector had re-derived the bit from
+    the two press latches and concluded *"CORPUS: unreachable"*. mc2l22 t=63318 records
+    `move_bits = 64` outright. `MGC_NO_MC2_RING_CAST_BIT`.
+24. **W3-X — `sub_13E40`'s castle-less refusal is the FOURTH `sub_146C0` cascade gate**
+    (EF:6192; EXE 0x38640 makes the same `call 0x38ec0`). The switch's own doc had enumerated
+    three. `MGC_NO_RIVAL_RAID_CASTLELESS_TOKEN`.
+25. **W3-X — a build site adopts the building's own FOOTPRINT BOX on its first countdown tick**
+    (`ApplyTerrainModification_37240` EF:27234-36 → `SetShiftByCastle_49EC0`; EXE 0x5BA40 /
+    0x6E6C0). `ayaw/apitch/aroll/afov` on a building are AABB HALF-EXTENTS, not sprite rotation
+    speeds. `MGC_NO_MC2_BUILD_SITE_FOOTPRINT_BOX`.
+26. **W3-X — invisibility's cloak bit lives on the CASTER, and the window collapses the moment it
+    lifts.** ⚠⚠⚠ **THE SHIPPED EXE CORRECTS THE LISTING TWICE IN FIVE LINES, AND A BANKED TREE
+    COMMENT WAS WRONG BECAUSE OF IT** — `rivals.rs` asserted *"`sub_6B1C0` NEVER raises 0x20 …
+    an INVENTED WRITE"*. `NETHERW.EXE` 0x8F9C0 puts both the raise and the test on `%esi` (the
+    CASTER), and **retail's own recording settles it**: rival 530's `flags` go 12 → 44 → 12
+    across t=13104/13105/13106. `MGC_NO_RIVAL_INVIS_CLOAK_EDGE`.
+
+## ⭐⭐⭐ WHAT THIS ROUND TEACHES
+- **A LAW LANDED ON ONE CALL PATH IS NOT LANDED — SEVEN INSTANCES IN ONE SESSION** (laws 1, 3, 7,
+  9, 13, 19, 24, and the MC1/MC2 twin in 22). Twice the tree's OWN COMMENT admitted the gap and
+  nobody had converted it. **Grep for the same retail symbol on every column before closing a dig.**
+- **AN INVENTED GUARD IS FALSE EXACTLY WHEN IT MATTERS — SIX INSTANCES** (laws 1, 2, 9, 11, 18,
+  and the shield-shaped early return in 17).
+- ⭐⭐ **AN UNGRADED LANE HIDES THE REAL FIRST DIVERGENCE — FIVE INSTANCES.** `target96` on a
+  `(3,1)` and a class 5, the hydra's `byte_0x46_70`, the class-9 flag word, `flags.b0_x20`.
+  In every case the true break sat in an ungraded lane SEVERAL TICKS BEFORE the graded head.
+  🔑 **`dump-state <t> <slot> --port --segmented`, grep only `≠`, walk BACKWARD.**
+- ⛔ **THE ALLOCATOR IS BIT-EXACT — RE-CONFIRMED THREE TIMES** against three separate
+  "slots look shifted" hypotheses (mine twice). Every one was ONE extra or missing ALLOCATION, or
+  a phantom rebuild. **Count the allocations, not the spawns.**
+- ⭐⭐ **THE SHIPPED EXE OUTRANKS THE LISTING — AND IT CORRECTED IT TWICE THIS ROUND** (laws 14
+  and 26), the second time overturning a banked comment in our own tree.
+- ⭐ **RECORDED GAMEPLAY OUTRANKS BOTH.** Law 26 was settled by three `dump-state` reads; law 22
+  by a single lane being flat for 44,833 ticks.
+
+## ⚠ TOOLING LAWS ESTABLISHED THIS ROUND (all cost a dig time before they were written down)
+- **`verify-deltas --dump <t> --limit 1` DOES NOT GRADE PAIR `t`.** `--limit` is a PREFIX LENGTH:
+  it always grades pair 0 and always reports "conforming". Use
+  `dump-state <t> <slot> --port --start <t-1>`.
+- **`dump-state --port --segmented` reproduces a segmented head; `--port --start <t0>` does NOT.**
+  `anchor_mc2` re-imports the pool into the **same reused `World`**, so a segmented reset carries
+  un-imported port-side side channels across; `--start` builds a fresh one. This explains two
+  "anomalies" reported as possible tool bugs.
+- **A RESPAWN / INPUT-EVENT TICK IS PAIR-BLIND BY CONSTRUCTION** — the pair importer replays
+  STATE, not INPUT. mc2l22 has 10 respawn events; a fixture cut on one is red by construction.
+  (Cost: one red fixture of mine, removed.)
+- **RUN THE FIXTURE SUITE AFTER CUTTING, AND CHECK THE FIXTURE FAILS WITH THE KILL SWITCH SET.**
+  Three digs hit vacuous or red fixtures; an ungraded or TEAR-excluded lane asserts nothing.
+- **`explain <t>` does not list every born record** (76 transitions printed for 136 pops).
+- **`$TMPDIR` is shared by the whole wave** — two digs had sweeps corrupted by a sibling reusing a
+  filename. Write scratch under the dig's own sandbox.
+- **`max_life: retail -1 / port 4294967295` is a DISPLAY artifact, not a diff.**
+
+## OWED INTO ROUND 105
+- **mc2l22's LAST 5 EXCESS RESETS**, free-run horizon 15,668 of 65,556. Remaining heads and their
+  diagnoses are in this round's dig reports; three arrive fully triaged:
+  **t=15668** — ⭐ **THE PORT DIGS TERRAIN RETAIL DOES NOT.** `MGC_CELL_TRACE` names it: at
+  t=15642 the port CLEARS the texture-lock bit `mapAngle & 0x80` on three cells, which are then
+  village-filled at t=15666-67 and the height drops 142 → 141. Candidate clear sites:
+  `mc2/pads.rs:360` (the building-rise `bit7 → bit3` pass — prime suspect), `mc2/castle.rs:2140`,
+  `engine/world.rs:14681`, `engine/features.rs:6623/6628`.
+  **t=54238** — the human's METAMORPH PUPPET: `sub_6A030` mints at `8*model + 7` (EF:56327-32)
+  and the port's `mc2_m16_tick` has **no role-7 arm at all**; retail's puppet SNAPS onto its
+  caster. Pair-dirty ⇒ fixture-able at 54237. ⚠ confirm the exact body — `sub_1B6B0`'s parent
+  pointer is `word_0x32_50`, not `parentId_0x28_40`.
+  **t=21509** — pair-clean; a port-side `Mc2Rival` field with no import seat carried across the
+  21153 reset (`vdes`, `v14`, `grace`, `target_sig`, `mana_delta`, `knock_*`, `shield_state`,
+  `poverty` are the candidates).
+- ⭐⭐ **TWO IMPORT-SEAT GAPS, BOTH MEASURED NEUTRAL-BUT-CORRECT, BOTH DELIBERATELY UNLANDED:**
+  (a) **`import_ent_mc2` loops `for slot in 1..n`, so MC2 pool slot 0 arrives at the origin on
+  every import** — while the MC1 importer explicitly seats it AND documents why
+  (`conformance.rs:433-445`). MC2 now has THREE readers of that scratch record. Patched copy at
+  `/tmp/claude-1000/w3t/conformance.with-slot0-seat.rs`; needs its own corpus sweep.
+  (b) the `Mc2Rival` side-channel fields above.
+- **The archer's arrow impact/mint chain** is heavily exercised by this take and has never been
+  graded, because until this round the port's archers never fired at a wizard at all.
+- **Two frontier heads created by law 22/23** (t=21266, t=23212) — both allocation/entity-set,
+  both showing W3-S's tell (**the port pops LOW slots where retail pops HIGH ⇒ a phantom
+  `sub_49F90` re-rank**).
+- Round 101's unit pins ×4 and round 102's attack-wizard-pick chain blank are STILL owed.
+
+# ROUND 105 (2026-09-05) — **mc2l22 CERTIFIED**: 5 excess resets → 0, `horizon=END`
+
+**Player-set:** *"Let's finish mc2l22 off."* Plus the standing round-105 steer from the lane
+census memory: *"huge jump when missing lanes are identified. Let's build on that"* — hunt
+missing lanes DIRECTLY instead of tripping over them.
+
+```
+mc2l22  segments=32 roster=26 devs=5  horizon=15667 first=15668 sig=(10,0)slot809:z
+     -> segments=27 roster=26 devs=0  horizon=END   first=-     sig=-
+        65,530 of 65,556 boundaries BIT-EXACT; the 26 remaining are all registered,
+        player-ruled deviations (IVT ghost, hydra v34 parity floor, painter OOB row).
+CERTIFIED TAKES 14 -> 15 of 24.   Fixtures 439 -> 441.   Lib tests 642 -> 646.
+Bonus, off the same hunks: mc2l24 7541->7537, mc2l15 11345->11343,
+                           mc2l0-spells-galore 2078->2076, mc2l1 3732->3714.
+```
+Seven digs ran at ≤5 active, refilled on completion (the round-104 throttled queue).
+
+## THE FIVE HEADS
+1. **W1-C — t=28098. THE BALLOON'S SPHERE PICK IS MODEL-ONLY.** `sub_5F810`
+   (`NETHERW.EXE` 0x84010, loop body 0x84038) runs five tests and **never loads +0x3F
+   (class) or +0x45 (actionIndex)**. The port's `class64 != 10` and `tick70 == 62` were
+   invented. A record FREED earlier in the same tick keeps model/owner/position **and its
+   `next_0`**, so retail still walks and re-picks it. `MGC_NO_MC2_BALL_PICK_MODEL_ONLY`.
+   ⭐ **FOUR sibling walks already had this law**, one of them four lines away in the same
+   file, and the block's own comment documented fixing the REAP skip while leaving the
+   class test standing beside it.
+2. **W1-B — t=21509 AND t=47659. THE DEMOLITION RETILE WAS AN INVENTED WIDE REGION.**
+   `mc2_house_collapse` hand-inlined only pass A of retail's per-cell
+   `AddBuildingToTerrain_46570`, then invented a whole-rect re-blend (its own comment said
+   "APPROX") that grows a cell on −x/−y and re-textured a ring OUTSIDE the footprint,
+   turning water into land. **The complete call census of `RemoveCastleStage_385C0`
+   (file 0x5CDC0-0x5D0C0) is six calls and `sub_462A0` (0x6aaa0) appears NOWHERE.**
+   `MGC_NO_MC2_COLLAPSE_CELL_RETILE`. Retail has FIVE `AddBuildingToTerrain_46570` sites
+   (EF:27856/28144/28727/39595/39707); the port had ported four.
+3. **W1-E — t=54238. THE MC2 TELEPORT'S WIZARD-RECORD WRITE IS MID-WALK.** `sub_6AD60`
+   (`NETHERW.EXE` 0x8F560) ends its branch `CopyEntityPosition_57CF0(Entities[parentId], &dest)`
+   at 0x8F67D — **inside the class-15 token's own pool dispatch**, so every higher-slot
+   walker reads the POST-warp pose. The port had the mid-walk peek for MC1 and had it
+   gated `!matches!(self.game, GameId::Mc2)`. `MGC_NO_MC2_TELEPORT_CTX`.
+   ⭐ MC1 had TWO warp peeks, MC2 got one, and the MC2 twin's comment read *"The MC2 twin
+   of the MC1 anchor's teleport-warp peek"* — **SINGULAR**. Nobody re-verified it.
+4. **W1-A — t=15668. RETAIL RETURNS BEFORE THE TEXTURE-UNLOCK SWEEP ON A STARVED CHAIN.**
+   When the (10,45) successor allocation fails, `RemoveCastleStage_385C0` exits at
+   0x5D1D3 (`movb $0x0,0x3d(%ebx)` / `call 0x7c710`), reached by `je 0x5d1d3` at 0x5D101 —
+   **an exit block sitting BELOW the unlock loop (0x5D180-0x5D1C1) that never enters it.**
+   The port fell through, so on a FULL POOL a degradation rung stripped the authored
+   `mapAngle` bit-7 lock off a 13x13 footprint; the village painter re-textured protected
+   ground and two (10,0) walkers came out with the wrong ground `z` 26 ticks later.
+   `MGC_NO_CHAIN_STARVE_NO_UNLOCK`. Deliverable is a UNIT TEST — the head is
+   INHERITED/pair-clean and the pair importer re-anchors terrain every tick, so **no
+   fixture can see this law at all**.
+5. **W1-D — t=47659 CONFIRMED DEAD**, and independently REPLICATED W1-B's law on a second
+   witness: a different ring (−x not +y) and a different mechanism (terrain HEIGHT via
+   `SetHeightmapByBuilding_48B90`'s natural-terrain gate, not the water probe), closing the
+   chain arithmetically — `interp_plane` gives retail 6272 from H=198 and the port 6266
+   from H=173. **Two independent derivations reaching the same byte.**
+
+## THE LANE CENSUS (the player's round-105 steer) — AND ITS BIGGEST LESSON
+The all-lane census (`MGC_RAW_SHADOW=1 MGC_RAW_SHADOW_ALL=1 verify-deltas`, 7m33s) found
+**843,608 rows**. 91 lanes are recorded; only ~20 are graded.
+⚠⚠⚠ **THE CENSUS IS FULL OF INSTRUMENT ARTIFACTS, AND THEY DOMINATE IT. THREE FOUND IN ONE
+ROUND, TOTALLING 87% OF ALL ROWS.** Rank a lane only AFTER an artifact sweep:
+- **`(9,9) max_life` — 577,985 rows (68.5%), an ARTIFACT.** `RetailEntMc2::max_life` is
+  `i32`, the port's is the `u32` the importer deliberately seats bit-preserving, so the
+  table printed `retail -1 / port 4294967295` — **the same 32 bits**. Normalised in
+  `retail_ent_lanes_mc2` (instrument-only; all four callers diagnostic). ⭐ MC1's twin
+  needs no change (`RetailEntMc1::max_life` is already `u32`) — checked.
+- **the tile chain — 227,560 rows / 70 families (W2-F), the IMPORTER, not the sim.**
+  The brief's "running backwards" reading was REFUTED (only 4.9% of mismatching keys are
+  transpositions). The rebuild refused to link a ghost (correct) but started chains only at
+  `prev18 == 0` and truncated at the first non-linkable `next16`, orphaning everything below
+  a mid-chain ghost into the ascending fallback. `SetMapEntity_57E50` (0x7C650) shows
+  unlink IS a splice. `MGC_NO_CHAIN_GHOST_SPLICE`. **Census −83.7%; chain lanes −97.7%.
+  Replay byte-identical — reported plainly. mc2l1 3732 → 3714.**
+- **`(10,79) target96` — 4,636 rows (W2-G), an ARTIFACT.** The `piece` lane list had twelve
+  arms and was missing exactly one. **The tell was in the DATA, not the listing: the rows
+  came in perfectly symmetric pairs** (14 `retail 611/port 0` beside 14 `retail 0/port 611`)
+  — one `sort | uniq -c` turned a 4,636-row "law" into an instrument bug.
+- **`(10,23)`/`(10,38)` target96 — 7,203 rows: RETAIL DIVIDING A NULL POINTER.**
+  `sub_66750`/`sub_66FD0` `idiv $0xa8` and store at `+0x96` **before** testing for NULL
+  (`sub_65820` guards; these two do not). Value `= -(EntitiesBase/168) & 0xFFFF` = **44546
+  = 0xAE02**, reproduced on mc2l30. Registered opt-in `MGC_MC2_NULL_VICTIM_GHOST`,
+  **⚠ PLAYER RULING OWED.** Corrects a standing mislabel in our own `DEVIATIONS.md`
+  ("uninitialized garbage" — `NewEvent_4A050` memsets all 168 bytes, so it is WRITTEN).
+⭐ **THE PAYOFF WAS NOT THE ROWS REMOVED, IT WAS THE SIGNAL UNDERNEATH:** clearing the
+`(10,79)` artifact exposed **27 real `(10,23)` rows** (both columns non-zero ⇒ a victim-PICK
+disagreement in `sub_10780`, not a stamp) that the artifact had been burying.
+
+## MAIN-SESSION LAWS
+- **THE MC2 SLOT-0 IMPORT SEAT** (round 104's owed item, paid). `import_ent_mc2` began at
+  slot 1, so **pool slot 0 arrived at the ORIGIN on every import**, while the MC1 importer
+  seats it and documents why. **MC2 has THREE readers of that scratch record** (round 99's
+  castle stamp, round 101's hated-ball anchor, round 104's `sub_169C0` water steer).
+  `MGC_NO_MC2_SEAT_SLOT0`. **Corpus sweep ON vs OFF, one binary: byte-identical on all 29
+  takes** — neutral is the EXPECTED result (round 99: five of ten laws changed zero rows).
+
+## ⚠⚠ TOOLING LAWS ESTABLISHED (each cost real time)
+- ⭐ **`nohup … &` INSIDE A TOOL CALL DOES NOT SURVIVE THE CALL RETURNING.** Measured
+  directly: a job appending 1 line/sec froze at the exact count where the call ended, with
+  no surviving process. **It is NOT an OOM and NOT a crash.** It killed a 29-take sweep at
+  15 takes with no error, and three digs lost sweeps/test runs to it, then spun in polling
+  loops waiting for sentinels that would never appear. ✅ Use the Bash tool's
+  `run_in_background: true`.
+- ⭐⭐ **A RELATIVE `--target-dir` UNDER A CHANGED CWD SILENTLY FORKS THE BUILD TREE.**
+  I applied a patch from `crates/mgc-sim/src/engine/`, built there without returning, and
+  then measured the stale binary at the repo-root path — four A/B rows on a pre-law binary,
+  ON and OFF identical, while `cargo test` still flipped (it compiles from source and
+  touches neither path). **`md5sum` between arms is not enough: it must be the md5 of THE
+  PATH YOU EXECUTE, resolved from THE SAME CWD as the run.** The dig caught this, not me.
+- **A multi-take `replay` in one process hits the 8 GB ceiling and dies SILENTLY with exit 0
+  through a pipe** — loop one process per take.
+- **`wt_check!` is dead unless `MGC_WRITE_TRACE` is set** — pair any probe with
+  `MGC_WRITE_TRACE=0:zzz` or every write is blamed on `post-walk carpet`.
+- ⭐ **AN UNQUALIFIED NEGATIVE IN THE LEDGER IS THE SAME FAILURE MODE AS "a law landed on
+  one call path is not landed", POINTED THE OTHER WAY.** W1-B and W1-A measured the SAME
+  bit in overlapping windows and reached OPPOSITE verdicts — **and both were right**: W1-B's
+  exoneration holds for the demolition retile, W1-A's for the starved rung 31 ticks later, a
+  different call path through the same function. **Record every exoneration with its WINDOW
+  and CALL PATH.**
+
+## PERFORMANCE — MEASURED, DEFERRED TO ITS OWN SESSION (player-set)
+`perf` on `replay mc2l22`: **~50% serde_json skipping, ~20% base64 decode, ~11% zstd, and
+the top SIMULATION function at 1.35%.** RSS 23.6 MB, 0 major faults, 1 voluntary context
+switch — pure CPU, no memory or I/O problem. Cause: **mc2l22 is 532 MB compressed →
+29 GB of JSONL (54.5x)**, ~443 KB parsed per simulated tick; the corpus is ~302 GB inflated.
+⭐ **The player's slice idea is the best option and attacks the cost that GROWS** (digs get
+slower as the horizon advances — mc2l22's went 4,661 → 15,668 → 54,238 this round alone).
+⚠ **A slice is a `--start`-shaped view, and `--port --start` ≠ `--port --segmented`**, so
+LOCAL heads slice safely and **INHERITED heads do not** — this round's causes sat 26, 243
+and **5,223** ticks before their graded heads. Full design + caveats:
+`/tmp/claude-1000/wave105/PERF-NOTES.md`.
+
+## OWED INTO ROUND 106
+- ⚠ **PLAYER RULING OWED** on the null-victim ghost (`MGC_MC2_NULL_VICTIM_GHOST`), beside
+  the IVT ghost. Three rulings from round 98 are still owed.
+- ~~W1-D's `@0x36` class-5 law is UNLANDED~~ **LANDED 2026-09-05 on the player's ruling**
+  (*"no issue with justified golden repins, and the conformance ranks higher"*). Cited
+  (`sub_4C8F0`, `NETHERW.EXE` 0x710F0, never writes `[eax+0x36]`), all **18** call paths
+  enumerated (the 18th is `mc2_spawn_doomsday` in `doomsday.rs`, which a roster-only sweep
+  misses), all 11 readers located, MC1 clean. `MGC_NO_MC2_CLASS5_W36`. **Corpus A/B on one
+  binary (md5 `530107cb…`, checked before/between/after): BYTE-IDENTICAL on all 29 takes.**
+  441 fixtures, 1,008 workspace tests green. Removes 1,199 census rows over 11 families.
+  **TWO goldens re-pinned, both hash-only and both meeting the tests' OWN stated bar:**
+  `mc2_cave`'s four layout hashes moved while **`OBSERVABLE` held byte-for-byte unchanged**
+  (that file's comment names exactly that as the proof of a hashed-field move, not
+  behaviour), and `mc2_slice` moved **only checkpoint E of six** — the one that spawns
+  creatures. Each A/B'd to this law alone via its own switch.
+  ⚠⚠ **THE SUPPLIED APPLIER WAS BROKEN AND FAILED IN THIS LAW'S OWN FAILURE MODE.**
+  `apply-class5-w36-law.py` inserted its helper, then its idempotence check matched **its
+  own helper** and reported the 17 `roster.rs` sites "already gated" — it gated **1 of 18**
+  and printed `done — 1 sites gated`. Caught only because 1 ≠ the enumerated 18.
+  ⇒ **A COUNT THAT DISAGREES WITH THE ENUMERATION IS THE CHECK.** The 17 sites were then
+  gated after re-deriving **each site's own class and model from its constructor** (all
+  class 5; none in the multipart family 0/3/22/27, which independently corroborates
+  "no port reader consumes it"). A blind `sed` here would have been an invented guard.
+- ⭐ **DO NOT GRADE `@0x36` AS AN OBS CHANNEL**: `replay` deserializes the obs JSON STORED in
+  the recording, and `EntObsMc2` has no `#[serde(default)]`, so adding a field hard-fails all
+  29 recordings — grading it is a **corpus-wide obs re-bake**. Use `MGC_RAW_SHADOW_ALL=1`,
+  which already grades it off the raw state for free.
+- **Second `piece`-list hole: `sv_timer`** (import seats `@0x4A` into `f26`, the lane reads
+  `held.timer` = `None` for a piece) — invisible to the census entirely. One line.
+- **The residual 5,275 chain rows** are 94% `(10,0)`/`(9,0)` showing DIFFERENT NEIGHBOURS
+  rather than reordering — a mid-tick birth-order story, a separate dig.
+- **27 real `(10,23)` target96 rows** — a `sub_10780` victim-pick disagreement.
+- The puppet's **`roll`** (EXE 0x42D54-63 reloads `%dx` between the two stores; **our own
+  tree's comment elided that** and the port writes `pyaw` into both `f30` and `f34`) — the
+  human branch needs a `proll` on `MobCtx`, a lane-census class-(c) gap.
+- Round 101's unit pins ×4, round 102's attack-wizard-pick chain blank, and the archer's
+  arrow impact/mint chain are STILL owed.

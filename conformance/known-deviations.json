@@ -2,6 +2,24 @@
  "_doc": "The KNOWN-DEVIATION ROSTER (docs/CONFORMANCE.md). Every rule cites its docs/CONFORMANCE-FINDINGS.md entry; status: capture = recording-closure limitation, deviation = DEVIATIONS.md-registered behavior, open = ledger-tracked port lead awaiting its fix. Rules match first-hit in order \u2014 keep specific rules above general ones. The runner prints per-rule hit counts every run: a rule whose count jumps an order of magnitude is a signal, not a mask.",
  "rules": [
   {
+   "id": "mc2-painter-oob-build-row-applied-pitch",
+   "status": "deviation",
+   "note": "PLAYER-RULED 2026-09-04 (DEVIATIONS.md 'RETAIL'S OWN OUT-OF-BOUNDS READS'): AddTerrainMod0A_2A_37BC0 (NETHERW.EXE 0x5C3C0, EF:27648) loads the castle painter's BUILD00 row as movsbl 0x46(%ebx),%edx at three sites - sign-extended, UNCLAMPED, no bound test - into a 77-row table, and sub_377A0 - the BUILDING-completion tail (EF:27286/27304), which runs the castle re-paint sub_5FBD0 on EVERY class-3 live-list member overlapping the finished building, model unchecked (the carpet (3,0), rival wizards, castles AND castle balloons; NOT a castle deviation - the human's castle is never read) - stamps byte_0x46_70 from the human's wizard->dword_0x10_16, which is the DEATH RESPAWN TIMER: 0 until the human's first death, 1200 forever after (the human arm never counts it down). Retail therefore indexes far outside the table (row 176 = 1200 & 0xFF on mc2l6-rival-spells-galore, after its first death between t=20000 and 26000) and reads heap residue as the painter's collision half-extents w=38 h=18, which the ctor stamps into the record at BIRTH. Those extents are not derivable from any shipped asset (exhaustive scan, round 98), so the port takes BUILD00 row 0 (the table's own empty row) for any out-of-range index and these birth rows DIVERGE BY DEFINITION. Witnessed: rsg t=34604 slot 24, t=39012 slot 631. Ledger ROUND 99 dig 99-5 (MGC_NO_MC2_PAINTER_ROW_VERBATIM). NOTE applied_pitch/applied_yaw are the X/Y collision half-extents (@0x54), NOT angles.",
+   "kind": "field",
+   "class": 10,
+   "model": 42,
+   "field": "applied_pitch"
+  },
+  {
+   "id": "mc2-painter-oob-build-row-applied-yaw",
+   "status": "deviation",
+   "note": "PLAYER-RULED 2026-09-04 (DEVIATIONS.md 'RETAIL'S OWN OUT-OF-BOUNDS READS'): AddTerrainMod0A_2A_37BC0 (NETHERW.EXE 0x5C3C0, EF:27648) loads the castle painter's BUILD00 row as movsbl 0x46(%ebx),%edx at three sites - sign-extended, UNCLAMPED, no bound test - into a 77-row table, and sub_377A0 - the BUILDING-completion tail (EF:27286/27304), which runs the castle re-paint sub_5FBD0 on EVERY class-3 live-list member overlapping the finished building, model unchecked (the carpet (3,0), rival wizards, castles AND castle balloons; NOT a castle deviation - the human's castle is never read) - stamps byte_0x46_70 from the human's wizard->dword_0x10_16, which is the DEATH RESPAWN TIMER: 0 until the human's first death, 1200 forever after (the human arm never counts it down). Retail therefore indexes far outside the table (row 176 = 1200 & 0xFF on mc2l6-rival-spells-galore, after its first death between t=20000 and 26000) and reads heap residue as the painter's collision half-extents w=38 h=18, which the ctor stamps into the record at BIRTH. Those extents are not derivable from any shipped asset (exhaustive scan, round 98), so the port takes BUILD00 row 0 (the table's own empty row) for any out-of-range index and these birth rows DIVERGE BY DEFINITION. Witnessed: rsg t=34604 slot 24, t=39012 slot 631. Ledger ROUND 99 dig 99-5 (MGC_NO_MC2_PAINTER_ROW_VERBATIM). NOTE applied_pitch/applied_yaw are the X/Y collision half-extents (@0x54), NOT angles.",
+   "kind": "field",
+   "class": 10,
+   "model": 42,
+   "field": "applied_yaw"
+  },
+  {
    "id": "mc2l24-ball-terrain-roll",
    "status": "capture",
    "note": "Resolved 'MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL' (2026-08-02) item 4 + UPDATED 2026-08-04 (fountain dig): the fountain spawner is BYTE-EXACT (3 births/tick, LCG-proven); the 'over-spawn' was retail merge DEATHS the port under-reproduced \u2014 ring-walk partner search + MC2 hard-free donor LANDED (native, cave golden re-pinned). Residual extras = summit merges the pristine terrain cannot host (retail deaths cluster on the doomsday mound z 2400-3300; the port ball hovers ~60 units up, never grounds, so the merge arm never runs) + one-snapshot decay-expiry linger; 12 missing = within-ring visit order (bitmaps_E9980x, DEVIATIONS combat.rs). Ball laws byte-exact (TTL/arc/bounce/friction).",
@@ -25,7 +43,7 @@
   {
    "id": "mc2l24-hydra-residual",
    "status": "capture",
-   "note": "Resolved 'MC2 HYDRA (5,27) - FOUR IMPORT FIELD-HOME BUGS' (2026-08-02) ruled-out list: post-fix residual = terrain-crater z on the ground-walking bodies (x/y match, z tracks cratered-vs-pristine planes), 64-tick body-brain wander phase drift (chaotic amplification class), and mass spawn/death-tick free-stack slot desync (t=40565). A hit-count jump here = hydra law regression signal (the suite's raw-sig fixtures are the hard guard).",
+   "note": "Resolved 'MC2 HYDRA (5,27) - FOUR IMPORT FIELD-HOME BUGS' (2026-08-02) ruled-out list: post-fix residual = terrain-crater z on the ground-walking bodies (x/y match, z tracks cratered-vs-pristine planes), and mass spawn/death-tick free-stack slot desync (t=40565). \u26a0 AMENDED 2026-09-04 (round 99, digs 99-11 / 99-17): the '64-tick body-brain wander phase drift (chaotic amplification class)' clause was WRONG and was absorbing one real bug plus one genuine uninitialised read. (a) sub_29A90's v34 ([ebp-0x10]) is FUNCTION-scope with ONE writer (NETHERW.EXE 0x4E351) and NO initialiser (83 ec 10 at 0x4E296 reserves 16 bytes; the only store before the chain loop is 30 d2 / 88 55 fc = v37 = 0 at 0x4E2CA), so it CARRIES down the branch chain - remc2's //fix at EF:19783 re-seeded it per branch AND made it odd, permanently suppressing one mc2_rand per branch per phase beat. FIXED: MGC_NO_M27_V34_CARRY. (b) What remains is NOT drift and NOT amplification: it is retail reading that uninitialised slot on every tick where no branch of the chain is in sub-state 1. Its != 0 and > 4 bits are STABLE (byte_0x46_70 = 4 at all 27 witnessed sites), but its LOW BIT is not - mc2l22 has retail SKIPPING the wander draw (odd) at t=53912/53922/53944/53954/53976/54038/54910/54912/54914/54946/54974/54978/55006/55010/55038/55042/55070/55074/55089 and TAKING it (even) at t=53168/53848/53857/53858/53880/53889/54882/54942, each verified as an exact +-1 step of the 9377/9439 LCG on the branch's own rand, flipping within four ticks. NO constant seed can be right; MGC_M27_V34_SEED picks the least-bad parity (even, 18 mc2l22 heads vs odd's 20). REGISTERED-DEVIATION class (uninitialised read - see DEVIATIONS.md 'RETAIL'S OWN OUT-OF-BOUNDS READS'), a permanent floor of ~18 mc2l22 segments. A hit-count jump here is still a hydra law regression signal.",
    "takes": [
     "mc2l24"
    ],
@@ -45,7 +63,7 @@
   {
    "id": "mc2l24-player-life-regen",
    "status": "capture",
-   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): player.life = same wizext regen-derivation class - retail holds post-damage life ~16 ticks then +5/tick (lifeRegen_0x163_355, EF:5427-49); port regens one quantum early, transient 9900-vs-9905 heals at cap.",
+   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): player.life = same wizext regen-derivation class - retail holds post-damage life ~16 ticks then +5/tick (lifeRegen_0x163_355, EF:5427-49); port regens one quantum early, transient 9900-vs-9905 heals at cap. \u26a0\u26a0 RE-AUDIT OWED 2026-09-04: this rule was HIDING A LAW. Session 96 found MC2's area writers have NO player arm at all (`sub_116A0` = NETHERW.EXE 0x35EA0..0x360F7 reaches every victim through the tile grid `mapEntityIndex_15B4E0`; the port's `Gen::area_write` carried an invented `mc2 ||` that skipped the window gate). At mc2l24 t=134 that billed the wizard 1,200 phantom damage from a (10,9) dome whose window ends one tile short of the wizard's link tile \u2014 and THIS RULE, whose note claims a 'transient 9900-vs-9905 heals at cap' regen quantum, was absorbing it. A whole-field capture swallowed a 1,200-point hit labelled 'regen'. The law landed (mc2l24 horizon 133 -> 1,024) and the count fell 35 -> 30; THE SURVIVING 30 ROWS HAVE NOT BEEN RE-TRIAGED and must not be assumed to be the regen story.",
    "takes": [
     "mc2l24"
    ],
@@ -67,7 +85,7 @@
   {
    "id": "mc2l24-wizard-life-regen",
    "status": "capture",
-   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): the (3,0) wizard entity's life lane, twin of player.life - retail holds post-damage ~16 ticks then +5/tick from the un-recorded wizext lifeRegen; port regens one quantum early, heals at cap.",
+   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): the (3,0) wizard entity's life lane, twin of player.life - retail holds post-damage ~16 ticks then +5/tick from the un-recorded wizext lifeRegen; port regens one quantum early, heals at cap. \u26a0\u26a0 RE-AUDIT OWED 2026-09-04: this rule was HIDING A LAW. Session 96 found MC2's area writers have NO player arm at all (`sub_116A0` = NETHERW.EXE 0x35EA0..0x360F7 reaches every victim through the tile grid `mapEntityIndex_15B4E0`; the port's `Gen::area_write` carried an invented `mc2 ||` that skipped the window gate). At mc2l24 t=134 that billed the wizard 1,200 phantom damage from a (10,9) dome whose window ends one tile short of the wizard's link tile \u2014 and THIS RULE, whose note claims a 'transient 9900-vs-9905 heals at cap' regen quantum, was absorbing it. A whole-field capture swallowed a 1,200-point hit labelled 'regen'. The law landed (mc2l24 horizon 133 -> 1,024) and the count fell 35 -> 30; THE SURVIVING 30 ROWS HAVE NOT BEEN RE-TRIAGED and must not be assumed to be the regen story.",
    "takes": [
     "mc2l24"
    ],
@@ -390,7 +408,7 @@
   {
    "id": "mc2-balloon-z",
    "status": "capture",
-   "note": "(3,3) balloon docked over the terraformed castle pad: retail floors at pad(~1536)+512=2048; the pristine-plane replay (ground=0) descends one servo step (+16/tick below). Terrain-closure twin of mc2-castle-pad-z. The two LAW bugs FIXED 2026-08-03 dig A (ledger 'MC2 BALLOON ALTITUDE'): behavior-row double-offset on import (balloon tick indexes BEHAVIOR relative to ROW_BASE; generic import fed absolute row 68 -> foreign servo v14=-128) + MC1 3-branch alt_clamp replaced by retail's 2-branch sub_580E0 servo (EF:40372, full v14 descent, floor ground+v12, ceiling arg dead). A hit-count jump here = servo/import regression signal.",
+   "note": "(3,3) balloon docked over the terraformed castle pad: retail floors at pad(~1536)+512=2048; the pristine-plane replay (ground=0) descends one servo step (+16/tick below). Terrain-closure twin of mc2-castle-pad-z. The two LAW bugs FIXED 2026-08-03 dig A (ledger 'MC2 BALLOON ALTITUDE'): behavior-row double-offset on import (the balloon tick used to index BEHAVIOR RELATIVE to ROW_BASE, so the generic absolute import fed row 68 -> foreign servo v14=-128; SESSION 94 removed the relative convention outright -- ctor, tick and importer are all ABSOLUTE now, and the importer's class-3/model-3 exception is gone) + MC1 3-branch alt_clamp replaced by retail's 2-branch sub_580E0 servo (EF:40372, full v14 descent, floor ground+v12, ceiling arg dead). A hit-count jump here = servo/import regression signal.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -730,6 +748,77 @@
    "kind": "field",
    "field": "flags",
    "t_min": 39508
+  },
+  {
+   "id": "mc2l22-ivt-ghost-z",
+   "status": "deviation",
+   "note": "PLAYER-RULED 2026-09-04 (close of ROUND 102, DEVIATIONS.md 'mc2/rivals.rs::mc2_ivt_ghost'): \"It's completely fair that the OOB ghost stays unfaithful and remains a horizon.\" sub_161A0's Defense else arm (EF:7815-40) aims at the record its class-3 rescan elected, and every NewEvent_4A050 recycle-arm seizure blanks dword_38519 for the rest of the walk (Events.cpp:583-87) - so on a full-pool tick a Defense rival dispatched after the first seizure sees NOBODY and the shipped code does `lea 0x4c(%edi)` with edi = 0 (NETHERW.EXE 0x3ac06): linear 0x4C, the real-mode INTERRUPT VECTOR TABLE mapped 1:1 under DOS/4GW. x/y/z are INT 13h's offset/segment and INT 14h's offset - the EMULATOR's words (DOSBox's BIOS callbacks live in segment 0xF000), not a game asset. The port keeps remc2's authored origin (0,0,0); MGC_MC2_IVT_GHOST=1 opts into the fitted (0x1100,0xF000,0x1100) and is a MEASUREMENT INSTRUMENT ONLY. THE FLOOR IS MEASURED, NOT ASSUMED: with the ghost on, replay's boundaries 4662 and 9785 both go clean and nothing else on the take changes except a NEW head at 6160 that is the ghost's own downstream state - which is why the authored origin stays the default. This rule is the 4662 half (pair 4661): z on the two blank-chain Defense rivals' targets and their knock-on. Ledger ROUND 102 / ROUND 103.",
+   "takes": [
+    "mc2l22"
+   ],
+   "kind": "field",
+   "field": "z",
+   "slots": [
+    451,
+    530,
+    557,
+    903
+   ],
+   "ticks": [
+    4661
+   ]
+  },
+  {
+   "id": "mc2l22-ivt-ghost-heading",
+   "status": "deviation",
+   "note": "The 9785 half of mc2l22-ivt-ghost-z (pair 9784) - see that rule's note for the mechanism and the player ruling. Retail's rival 530 takes the blank-chain Defense else arm at t=9784 and bears on the IVT origin (roll 303 at (50204,10724)); `roll` is not a graded lane on a (3,1), so the recorded face of it is the servo's heading one boundary later: retail 1532 / port 1533. Verified by the same discriminator as the 4662 half - MGC_MC2_IVT_GHOST=1 takes this boundary clean. Ledger ROUND 102 / ROUND 103.",
+   "takes": [
+    "mc2l22"
+   ],
+   "kind": "field",
+   "field": "heading",
+   "slots": [
+    530
+   ],
+   "ticks": [
+    9784
+   ]
+  },
+  {
+   "id": "mc2l22-hydra-v34-parity",
+   "status": "deviation",
+   "note": "PLAYER-RULED, DEVIATIONS.md 'multipart.rs::m27_drive / V34_ENTRY (the hydra's uninitialised branch scratch)' - the mc2l22 face of the registered floor that entry already sizes at '~18 mc2l22 segments'. sub_29A90 (NETHERW.EXE 0x4E290) reserves 16 bytes of locals and the only store before its branch-chain loop is v37 = 0 (0x4E2CA), so v34 at [ebp-0x10] - one writer (0x4E351), read at 0x4E401 and 0x4E452 - is ENTRY RESIDUE on every tick where no branch is in sub-state 1. Its magnitude bits are stable (byte_0x46_70 = 4 at all 27 witnessed sites) but its LOW BIT is not, and that bit decides whether the branch spends a wander-yaw draw: on mc2l22 retail SKIPS it (odd) at the 19 boundaries listed here and TAKES it (even) at 8 more, flipping within four ticks (54,942 even -> 54,946 odd), each verified as an exact +-1 step of the 9377/9439 LCG on the branch's own rand. NO CONSTANT CAN BE RIGHT; the port carries the least-bad even V34_ENTRY. Registered as a FLOOR and listed tick by tick rather than as a window or a bare (5,27) class scope, because a (5,27) heading/rand rule with no tick list would also cover the take's REAL hydra leads (the 21617-22225 mover window). Boundaries: 53912 53922 53944 53954 53976 54038 54910 54912 54914 54946 54974 54978 55006 55010 55038 55042 55070 55074 55089 (listed below as pair ticks, one less). NOTE 53976 also carries a missing-in-port (9,9) row, so replay's all-or-nothing gate leaves that boundary a defect - correctly. ⚠⚠⚠ DO NOT RE-SWEEP MGC_M27_V34_SEED (an earlier sweep read a 476-vs-488 census difference as signal when it was noise). Ledger ROUND 99 digs 99-11/99-17, ROUND 103.",
+   "takes": [
+    "mc2l22"
+   ],
+   "kind": "field",
+   "class": 5,
+   "model": 27,
+   "fields": [
+    "heading",
+    "rand"
+   ],
+   "ticks": [
+    53911,
+    53921,
+    53943,
+    53953,
+    53975,
+    54037,
+    54909,
+    54911,
+    54913,
+    54945,
+    54973,
+    54977,
+    55005,
+    55009,
+    55037,
+    55041,
+    55069,
+    55073,
+    55088
+   ]
   }
  ]
 }

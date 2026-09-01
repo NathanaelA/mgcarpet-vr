@@ -71,6 +71,38 @@ fn no_hit_trailers() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_HIT_TRAILERS").is_some())
 }
 
+/// `MGC_NO_M4_SCRATCH_TARGET=1` restores the pre-dig m4 CHASE guards:
+/// the `+146 == 0` early return and the `class64 == 0` conjunct in the
+/// target-lost test — see [`Gen::militia_chase_body`]. Retail's shared
+/// chase core `sub_1A120` (:21655-58) has neither. Kept so one binary
+/// can be A/B'd; read once, a whole-process arm.
+fn no_m4_scratch_target() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M4_SCRATCH_TARGET").is_some())
+}
+
+/// `MGC_NO_M15_CHASE_HIT_FALLTHROUGH=1` restores the pre-dig freeze on
+/// the castle guard's CHASE hit tick (the shared prologue's blanket
+/// `return`) — see the `Inbox::Hit` guard in [`Gen::creature_tick`].
+/// Retail's `sub_201D0` (:25789-825) carries its OWN inline mailbox
+/// that aborts on DEATH ONLY. Kept so one binary can be A/B'd.
+fn no_m15_chase_hit_fallthrough() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M15_CHASE_HIT_FALLTHROUGH").is_some())
+}
+
+/// `MGC_NO_M15M16_SCRATCH_TARGET=1` restores the pre-dig guards on the
+/// two chase handlers that carry their OWN target read instead of the
+/// shared core's: the wyvern's `sub_207E0` (:26144-52) and the castle
+/// guard's `sub_201D0` (:25830-34). Neither retail function tests the
+/// index or the class before dereferencing `&pool[+146]` — the third
+/// and fourth copies of the law `no_m4_scratch_target` names. Kept so
+/// one binary can be A/B'd.
+fn no_m15m16_scratch_target() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M15M16_SCRATCH_TARGET").is_some())
+}
+
 /// Per-tick context the creature handlers need: the player's position
 /// in engine units (the wizard list of the original, reduced to the
 /// one human player until AI wizards land).
@@ -692,6 +724,28 @@ impl Gen {
         (h00 + h01 - h10 - h11)
             .abs()
             .max((h00 + h10 - h01 - h11).abs())
+    }
+
+    /// MC2 `sub_1B830` (Terrain.cpp:1602) — the WIDE roughness probe:
+    /// the same max-cross formula as `roughness` (MC2's
+    /// `sub_1B7A0_tile_compare`, Terrain.cpp:1578) but on the
+    /// 2-tile-span stencil (tx-1,ty-1)/(tx+1,ty-1)/(tx+1,ty+1)/
+    /// (tx-1,ty+1), so on a planar slope it reads exactly DOUBLE.
+    /// The m27 hydra's ground mover and emerge probe are its ONLY
+    /// callers (EF:20912, EF:20926, EF:19498) — every other retail
+    /// roughness site calls the tight `sub_1B7A0` above.
+    /// The listing's fourth corner (`uindex._axis_2d.x += 2`,
+    /// Terrain.cpp:1620) is a hand-conversion error: the shipped
+    /// NETHERW.EXE walks BACK (`sub al,0x2` at linear 0x1B86C, file
+    /// 0x4006C) to tx-1, which is what the function's own ASCII
+    /// stencil draws.
+    pub(crate) fn roughness_wide(&self, x: u16, y: u16) -> i32 {
+        let (tx, ty) = ((x >> 8) as u8, (y >> 8) as u8);
+        let (xm, xp) = (tx.wrapping_sub(1), tx.wrapping_add(1));
+        let (ym, yp) = (ty.wrapping_sub(1), ty.wrapping_add(1));
+        let h = |hx: u8, hy: u8| self.t.height[((hy as usize) << 8) | hx as usize] as i32;
+        let (p1, p2, p3, p4) = (h(xm, ym), h(xp, ym), h(xp, yp), h(xm, yp));
+        (p1 + p4 - p2 - p3).abs().max((p1 + p2 - p4 - p3).abs())
     }
 
     /// sub_42000_42340 (:52576): altitude clamp toward the behavior
@@ -1694,18 +1748,30 @@ impl Gen {
             (ctx.px, ctx.py, ctx.pz, 3u8, ctx.pdead)
         } else {
             let t = tgt as usize;
-            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0 {
+            // ⭐ A `+146` OF 0 IS THE SCRATCH RECORD HERE TOO — the
+            // THIRD copy of the law [`Gen::mob_chase`] and
+            // [`Gen::militia_chase_body`] already carry. `sub_207E0`
+            // forms `v11 = &pool[+146]` at :26144 with NO validity
+            // test of any kind, re-bears off it at :26146-49 and only
+            // then runs the lost test `+12 < 0 || (+17 & 4)` at
+            // :26152. Retail DOES read `+64` in this handler, but as
+            // `*(v11 + 64) == 3` INSIDE the re-aim gate (the "target
+            // is a wizard" arm), never as a target-lost conjunct — so
+            // the port's `class64 == 0` here was a paraphrase of the
+            // wrong test, and the `t == 0` arm was invented outright.
+            // A wyvern handed 0 keeps hunting the ORIGIN: it moves,
+            // re-bears to (0,0) — slot 0's class is not 3 and the
+            // origin is far, so the gate opens — and stays in chase
+            // for as long as the scratch record reads alive.
+            if t >= self.ent.len() || (t == 0 && no_m15m16_scratch_target()) {
                 self.ent[i].tick70 = base + 1;
                 return;
             }
             let c = &self.ent[t];
-            (
-                c.x,
-                c.y,
-                c.z,
-                c.class64,
-                c.act_life < 0 || c.flags & 0x400 != 0,
-            )
+            let dead = (no_m15m16_scratch_target() && c.class64 == 0)
+                || c.act_life < 0
+                || c.flags & 0x400 != 0;
+            (c.x, c.y, c.z, c.class64, dead)
         };
         if self.ent[i].f63 & 7 == 0 {
             let e = &self.ent[i];
@@ -2322,14 +2388,31 @@ impl Gen {
             (ctx.px, ctx.py, ctx.pz, ctx.pdead)
         } else {
             let t = tgt as usize;
-            // Port guard only: retail dereferences +146 whatever it
-            // names (a freed slot reads its husk).
-            if t == 0 || t >= self.ent.len() {
+            // ⭐ A `+146` OF 0 IS THE SCRATCH RECORD HERE TOO — the
+            // law [`Gen::mob_chase`] already carries, landed on ONE
+            // call path. m4's chase IS the shared core (`sub_1BB20`
+            // :22698 = `sub_1A120(a1x, 24, sub_1A990)`), and the core
+            // forms `v12 = &pool[+146]` with NO validity test at all
+            // (:21655, hw :20211): it MOVES first (:21654), re-bears
+            // off `v12` (:21657) and only then tests `+12 < 0 ||
+            // (+17 & 4)` (:21658) — no index test, no class test. So a
+            // militiaman handed `+146 = 0` (the pack-death handoff
+            // :21746 passes the dier's `+40`, which is 0 whenever the
+            // fatal change did not arrive through its own +94 mailbox)
+            // keeps hunting the ORIGIN: he walks, and his target yaw
+            // becomes the bearing to (0,0). The port's `t == 0` early
+            // return and `class64 == 0` conjunct froze him instead and
+            // dropped him back to 25 — mc1hwl1 t=346 slot 33 and
+            // mc1l37 t=2735 slot 847 are the same tick shape in two
+            // games. The remaining bound is memory safety only.
+            if t >= self.ent.len() || (t == 0 && no_m4_scratch_target()) {
                 self.ent[i].tick70 = base + 1;
                 return;
             }
             let c = &self.ent[t];
-            let lost = c.class64 == 0 || c.act_life < 0 || c.flags & 0x400 != 0;
+            let lost = (no_m4_scratch_target() && c.class64 == 0)
+                || c.act_life < 0
+                || c.flags & 0x400 != 0;
             (c.x, c.y, c.z, lost)
         };
         // Retail runs the movement core (sub_196E0 :21654, via
@@ -3845,7 +3928,14 @@ impl Gen {
             (ctx.px, ctx.py, ctx.pz, !ctx.pdead)
         } else {
             let t = tgt as usize;
-            if t == 0 || t >= self.ent.len() {
+            // ⭐ …and the FOURTH copy. `sub_201D0` :25830 forms
+            // `v8 = &pool[+146]` with no index or class test, re-bears
+            // off `v8 + 72` at :25832-33 and tests `+12 < 0 ||
+            // (+17 & 4)` at :25834. A guard handed 0 aims at the
+            // ORIGIN and reads the scratch record's life; the port's
+            // "use my own position, target lost" stand-in froze it and
+            // broke it back to WANDER instead. Bounds only, otherwise.
+            if t >= self.ent.len() || (t == 0 && no_m15m16_scratch_target()) {
                 let e = &self.ent[i];
                 (e.x, e.y, e.z, false)
             } else {
@@ -4114,6 +4204,30 @@ impl Gen {
                 }
                 return;
             }
+            // ⭐ THE CASTLE GUARD'S CHASE IS NOT ON THE SHARED
+            // PROLOGUE. m15 state 92 is `sub_201D0` (:25771), and its
+            // mailbox block (:25789-825) is its OWN, inline: it debits
+            // `actLife`, latches `+40`, walks the `+54` chain — and
+            // then branches on `v2 > 1` ONLY. A non-lethal hit (v2 ==
+            // 1) falls straight through to the aim at :25832 and the
+            // bolt at :25845, and there is NO retarget arm anywhere in
+            // the function: the guard keeps the target it had.
+            //
+            // Both halves of the shared prologue are therefore wrong
+            // here — the blanket `return` (which freezes the every-4th-
+            // tick re-bear and swallows the bolt) and the class-3
+            // retarget. mc1l49 t=4655 slot 114 is the receipt: the
+            // guard takes 800 (mail0 800 from 331, act_life 1000 → 200,
+            // `+40` 0 → 331) on a tick whose `+63` is 12, and retail
+            // still re-bears `+34` 1256 → 1259 while keeping `+146` at
+            // 907. The port held 1256 — the take's whole horizon.
+            //
+            // m15's OTHER slots stay on the shared path and are right
+            // as they stand: the WANDER `sub_1FF60` (:25718-27) does
+            // `if (v1) { … goto LABEL_34 }` — freeze — with the class-3
+            // retarget, and the PACK `sub_203E0` (:25869) is a bare
+            // `sub_1A390(a1x, 0x5A)`.
+            Inbox::Hit(_) if (model, role) == (15, 2) && !no_m15_chase_hit_fallthrough() => {}
             Inbox::Hit(src) => {
                 // The "under attack" mark the villager families write
                 // instead of chasing (m12 :25057-63, m13/m14 twins)

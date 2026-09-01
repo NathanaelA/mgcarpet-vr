@@ -358,6 +358,31 @@ pub fn mc1_fire(mb: u32) -> (bool, bool) {
     (mb & 0x10 != 0, mb & 0x20 != 0)
 }
 
+/// ⭐ MC2'S **THIRD** CAST BUTTON. `sub_5F380`'s cast tail is three
+/// flat `testb`/`call` pairs on the wizard extension's command word
+/// `entityIndex_0x0`, not two (EF:60850-62):
+///
+/// ```text
+/// if (w & 0x10) sub_5F660(a1x, SpellEnabled[SpellIndexLeft ], 256);
+/// if (w & 0x20) sub_5F660(a1x, SpellEnabled[SpellIndexRight], 512);
+/// if (w & 0x40) sub_5F660(a1x, SpellEnabled[spellIndex_D94FF[spellIndex_0x458_1112]], 256);
+/// ```
+///
+/// The third arm is the CYCLE-RING SHORTCUT: it casts the spell under
+/// the ring cursor **without equipping it**, and it stamps the LEFT
+/// hand bit (256) like the left button. `spellIndex_D94FF`
+/// (GameUI.cpp:59) is the identity over 0..25, so the index IS the
+/// recorded cursor `byte_0x458_1112` (the `ring_cursor` lane).
+///
+/// The bit rides the SAME consumed command word `mc1_fire` reads, so
+/// it needs no latch reconstruction — which is what the port had, and
+/// which refused. Corpus traffic: **one record in ten MC2 takes** —
+/// mc2l22 t=63318, `move_bits = 64`, `ring_cursor = 20`, arming the
+/// `(15,20)` token while both hands held 9 and 1.
+pub fn mc2_ring_cast(mb: u32, ring_cursor: u8) -> Option<u8> {
+    (mb & 0x40 != 0 && ring_cursor <= 25).then_some(ring_cursor)
+}
+
 /// One pair's recovered input, format-domain (raw ids and bits; the
 /// consumer widens into its own input types). MC1 fills the equip
 /// lanes, MC2 the select lane; the stick lanes are per-axis Options
@@ -380,6 +405,9 @@ pub struct RecoveredPair {
     /// MC2: a recorded hand change as the pane select
     /// `(spell, tier, hand)`; `(255, 0, hand)` = the unbind commit.
     pub mc2_select: Option<(u8, u8, u8)>,
+    /// MC2: the cycle-ring cast bit (`move_bits & 0x40`) resolved to
+    /// the spell index under the ring cursor — see [`mc2_ring_cast`].
+    pub mc2_ring_cast: Option<u8>,
     /// Both MC2 hands changed in one pair — one select per tick, the
     /// left wins, the right is DROPPED (counted by consumers).
     pub rebind_dropped: bool,
@@ -587,6 +615,8 @@ pub fn recover_pair_mc2(
     // byte correctly omits (ledger §THE REPLAY VERIFIER).
     let mb = cp.move_bits;
     let (fire_left, fire_right) = mc1_fire(mb);
+    // The THIRD cast arm rides the same consumed word (`mc2_ring_cast`).
+    let mc2_ring_cast = mc2_ring_cast(mb, cp.ring_cursor);
     // Hand rebinds: a recorded hand change replays as the pane select
     // (tier = the recorded per-spell selection at N+1; out-of-range
     // spell = the unbind commit).
@@ -733,6 +763,7 @@ pub fn recover_pair_mc2(
         fire_left,
         fire_right,
         mc2_select,
+        mc2_ring_cast,
         rebind_dropped,
         respawn,
         demolish,

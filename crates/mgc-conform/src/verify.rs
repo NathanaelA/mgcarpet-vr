@@ -185,7 +185,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         // microscope — the suite could report a law failing while the
         // only tool that can say HOW refused to open the evidence.
         let obs: Option<ObsMc1> = match &tick.obs {
-            Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?),
+            Some(v) => Some(serde_json::from_str(v.get()).map_err(|e| format!("obs: {e}"))?),
             None => None,
         };
         // The cast lane rides dw_0, the CONSUMED move/fire word in the
@@ -267,11 +267,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                 h,
                                 ty,
                                 ceil,
-                                if std::env::var_os("MGC_NO_MEASURED_ANGLE").is_some() {
-                                    None
-                                } else {
-                                    an
-                                },
+                                if no_measured_angle() { None } else { an },
                             )
                             .map_err(|e| format!("t={pt}: terrain: {e}"))?;
                     }
@@ -393,11 +389,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                     h,
                                     ty,
                                     ceil,
-                                    if std::env::var_os("MGC_NO_MEASURED_ANGLE").is_some() {
-                                        None
-                                    } else {
-                                        an
-                                    },
+                                    if no_measured_angle() { None } else { an },
                                 )
                                 .map_err(|e| format!("t={pt}: pose terrain: {e}"))?;
                         }
@@ -1044,13 +1036,15 @@ impl PlanesAtN {
 /// measured failure families this rule threads: high-slot diggers
 /// (mc1l0 t=567 → @N), divergent low-slot terraform (mc1l0
 /// t=1210/1219 → @N+1), missing port twin (mc1l2 t=1112-14 → @N+1).
-fn midwalk_ground(mut snap: Vec<u8>, h0: &[u8], post: &[u8], h1: &[u8]) -> Vec<u8> {
-    for (c, s) in snap.iter_mut().enumerate() {
-        *s = if *s == h0[c] && post[c] != *s {
-            h0[c]
-        } else {
-            h1[c]
-        };
+pub(crate) fn midwalk_ground(mut snap: Vec<u8>, h0: &[u8], post: &[u8], h1: &[u8]) -> Vec<u8> {
+    // Same rule, expressed so the bounds checks hoist and the loop
+    // vectorises: the three reads are the SAME cell index the indexed
+    // form used, and the slicing panics on a short plane exactly where
+    // the indexing did.
+    let n = snap.len();
+    let (h0, post, h1) = (&h0[..n], &post[..n], &h1[..n]);
+    for (((s, &a), &p), &b) in snap.iter_mut().zip(h0).zip(post).zip(h1) {
+        *s = if *s == a && p != *s { a } else { b };
     }
     snap
 }
@@ -1089,16 +1083,7 @@ pub(crate) fn exec_pair(
     world.restore_planes(pristine);
     if let Some((h, ty, ceil, an)) = measured {
         world
-            .install_measured_terrain(
-                h,
-                ty,
-                ceil,
-                if std::env::var_os("MGC_NO_MEASURED_ANGLE").is_some() {
-                    None
-                } else {
-                    an
-                },
-            )
+            .install_measured_terrain(h, ty, ceil, if no_measured_angle() { None } else { an })
             .map_err(|e| format!("terrain: {e}"))?;
     }
     let report = world
@@ -1307,6 +1292,19 @@ impl PairDiff {
     }
 }
 
+/// `MGC_GRADE_TICK_BYTE` — read once (the toggle cannot change
+/// mid-process), the way the sim's own kill switches are.
+fn grade_tick_byte() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_GRADE_TICK_BYTE").is_some())
+}
+
+/// `MGC_NO_MEASURED_ANGLE` — read once, per the same law.
+pub(crate) fn no_measured_angle() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MEASURED_ANGLE").is_some())
+}
+
 macro_rules! cmp_field {
     ($out:expr, $slot:expr, $name:literal, $want:expr, $got:expr) => {
         if $want != $got {
@@ -1366,7 +1364,10 @@ pub(crate) fn compare(retail: &ObsMc1, port: &ObsMc1, human_slot: u16) -> PairDi
         // tick_byte is analyzed as the phase-clock channel by the
         // runner (retail steps +63 only through rows with a live
         // handler; see the presence table in the report).
-        if std::env::var_os("MGC_GRADE_TICK_BYTE").is_some() {
+        // (Read ONCE per process — this sits inside the per-entity
+        // loop of the per-pair comparison, so a `getenv` here is a
+        // full environment walk per entity per pair.)
+        if grade_tick_byte() {
             cmp_field!(out, s, "tick_byte", re.tick_byte, pe.tick_byte);
         }
         cmp_field!(out, s, "rand", re.rand, pe.rand);

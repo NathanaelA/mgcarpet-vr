@@ -53,7 +53,7 @@ generic `mob_chase` instead of `sub_201D0`'s (9,13) bolt cast
 rival guards harmless, own guards defend nothing. Both arms together.
 MC2's m15 is unaffected (own brain, walked MATCH).
 
-**D3. MC2 Magic-Mine trip XP dropped.** `mc2_mine_detonate`
+**D3. MC2 Magic-Mine trip XP dropped.** ✅ **CLOSED** — the award is in `Gen::mc2_mine_detonate` and rides `mc2_cast_xp`; it is the one thing session 97's revert-to-retail pass KEPT, because `sub_6D8B0(owner->id, 0x17u, 1)` (EF:29979) is retail's own. (Original entry:) `mc2_mine_detonate`
 (effects.rs:310) omits retail's `sub_6D8B0(id,23,1)` award (EF:29979).
 The comment's "Gen can't reach the spellbook" is stale — the
 `mc2_cast_xp` mail queue is pushed from Gen at proj.rs:709 and

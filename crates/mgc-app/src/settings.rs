@@ -1794,29 +1794,6 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Gameplay,
             group: "gameplay · patches",
-            label: "mc2_magic_mine",
-            class: Patch,
-            key: None,
-            cli: None,
-            cfg_path: "gameplay.patches.mc2_magic_mine",
-            read: |c| Val::Toggle {
-                on: c.gameplay.patches.mc2_magic_mine.on(),
-                faithful: false,
-            },
-            desc: "MC2 Magic Mine proximity trigger. Retail ships the spell dead: \
-                   nothing ever arms the trigger, so a mine floats, expires \
-                   and sinks without detonating on anyone.",
-            ctl: Ctl::Toggle {
-                set: |c, v| c.gameplay.patches.mc2_magic_mine = crate::config::PatchArm::from_on(v),
-                descs: [
-                    "Mines never detonate - a dead spell, as retail.",
-                    "Mines detonate on approaching enemies (default).",
-                ],
-            },
-        },
-        Spec {
-            domain: Gameplay,
-            group: "gameplay · patches",
             label: "mc2_dweller_invisibility",
             class: Patch,
             key: None,
@@ -2098,7 +2075,10 @@ mod tests {
         // castle_death_mana/balloons retired 2026-08-12 — the mc1l0
         // corpus proved the scatter + fleet cull are retail law
         // (sub_470E0's wrapper), so they are unconditional now.
-        assert_eq!(patches, 9, "nine of the ten patches ship on");
+        // mc2_magic_mine retired 2026-09-04 (session 97) on a player
+        // ruling — the mine's trigger is retail's, so the whole
+        // detonation column is unconditional too (DEVIATIONS.md).
+        assert_eq!(patches, 8, "eight of the nine patches ship on");
     }
 
     #[test]

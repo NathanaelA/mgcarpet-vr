@@ -1057,6 +1057,130 @@ fn mc2_stage0_typed_rows_register() {
     );
 }
 
+/// ⭐⭐ THE DUEL FIZZLE IS `sub_6B610`'s OWN `LABEL_19`, AND LABEL_19
+/// SKIPS `sub_68DE0` — so the mana-regen clamp does NOT run on the tick
+/// the window collapses. Retail's predicate is exactly `word_0x2E_46 <=
+/// word_0x30_48 - 28 && !wizext->word_0x146_326` (EF:57277-85) with no
+/// lower guard, and the RETRIGGER FAMILY pins the counter to 1 first: a
+/// cast press while one of `{4, 6, 8, 0xB, 0xC, 0xE}` is live CANCELS
+/// it rather than refusing (`sub_5F660`, EF:60914-27).
+///
+/// ⚠ THIS CANNOT BE A PAIR FIXTURE. The whole difference is a
+/// `mana_delta` the carpet applies on the FOLLOWING tick, by which time
+/// pair mode has re-imported retail's register — the t=1346 pair passed
+/// under law AND under revert and was deleted for this pin (the
+/// mc2l6-rsg t=1348 head `(3,0)slot343:mana`, retail 1416916 ->
+/// 1417629 where the port suppressed and held). Ledger SESSION 80 law C.
+#[test]
+fn a_duel_re_press_collapses_the_window_without_pinning_regen() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let idle = PlayerCommand::default();
+    let fire = PlayerCommand {
+        fire_left: true,
+        ..Default::default()
+    };
+    let p = PlayerPose::from_tiles(40.0, 12.0, 40.0, 0.0, 0.0, 0.0);
+    // ARM with `dev_spells` on — duel costs 10,000 against a 1,000
+    // ceiling that is re-derived from the castle ladder every tick, and
+    // the affordability gate is not what this pins. Then play the
+    // WINDOW for real: `dev_spells` short-circuits `suppress_regen`,
+    // which is exactly the half under test.
+    w.set_dev_spells(true);
+    w.mc2_select_spell(14, 0, 0);
+    w.tick(p, fire);
+    w.set_dev_spells(false);
+    // Headroom, so the wizard tick recomputes a POSITIVE regen each
+    // frame for `sub_68DE0` to clamp (the accumulator, not the pool —
+    // the pool is pinned by the ceiling in a castle-less world).
+    w.set_player_mana(600);
+    for _ in 0..8 {
+        w.tick(p, idle);
+    }
+    assert_eq!(
+        w.debug_player_mana_delta(),
+        0,
+        "a live cast window pins the regen accumulator \
+         (sub_68DE0 else, EF:55574-77)"
+    );
+    // THE RE-PRESS: `sub_5F660` case 0xE (EF:60914-27) pins the counter
+    // to 1 instead of refusing, and the token's own tick then reads
+    // `1 <= duration - 28` with no duel lock and takes LABEL_19 — which
+    // jumps past the whole else, `sub_68DE0` included.
+    w.tick(p, fire);
+    assert!(
+        w.debug_player_mana_delta() > 0,
+        "the collapse tick skips sub_68DE0, so the wizard's freshly \
+         recomputed regen stands: {}",
+        w.debug_player_mana_delta()
+    );
+}
+
+/// ⭐⭐ MC2's KILLER LATCH BELONGS TO THE LETHAL BRANCH ALONE —
+/// MC1's own law (`Gen::mail_inbox`, :21365-66 and its three
+/// siblings) one column over. `sub_5EFA0` splits the two words a
+/// delivered letter touches: `word_0x26_38` is republished on EVERY
+/// hit (EF:60674) after being cleared as the routine's first
+/// statement (EF:60633) — a one-tick flag — while `word_0x24_36`,
+/// the killer, is written only inside `if (a1x->life_0x8 < 0)`
+/// (EF:60712-16). `mc2_rival_intake` latched the killer on every hit
+/// and never published the flag at all, so mc2l6-rival-spells-galore's
+/// rival 370 carried a killer id of 343 from its first scratch to the
+/// end of the take where retail holds 0.
+///
+/// ⚠ NEITHER WORD IS A GRADED LANE, so no pair can assert this — it
+/// was found with `dump-state --port` on the free run at t=1656.
+#[test]
+fn the_mc2_killer_latch_belongs_to_the_lethal_branch_alone() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let views = w.rival_views();
+    assert!(!views.is_empty(), "level-004 spawns rivals");
+    let (rx, rz) = (views[0].x as u8, views[0].z as u8);
+    // An MC2 rival wizard is class 3 MODEL 1 (`mc2_spawn_rival`);
+    // model 0 is the human's own carpet.
+    let slot = w
+        .debug_pool()
+        .1
+        .into_iter()
+        .find(|e| e.class == 3 && e.model == 1 && e.tx == rx && e.ty == rz && e.life >= 0)
+        .map(|e| e.slot)
+        .expect("the rival's wizard record");
+    let pose = PlayerPose::from_tiles(0.0, 20.0, 0.0, 0.0, 0.0, 0.0);
+    let idle = PlayerCommand::default();
+    // ⚠ TWO GATES STAND BETWEEN A LETTER AND `sub_5EFA0`, and both
+    // are retail's: the 100-tick SPAWN GRACE, and the AT-CASTLE arm
+    // that re-pins it to 2 for as long as the wizard overlaps its own
+    // castle. Burn the first down, then step off the doorstep.
+    for _ in 0..105 {
+        w.tick(pose, idle);
+    }
+    let slot2 = w
+        .debug_place_mc2_rival(views[0].slot, rx as f32 + 40.0, rz as f32 + 40.0)
+        .expect("the rival relocates");
+    assert_eq!(slot2, slot, "same wizard record");
+    for _ in 0..3 {
+        w.tick(pose, idle);
+    }
+    // A survivable letter: the rival's life is in the thousands.
+    w.debug_mail_hit(slot, 100, 0xFFFF);
+    w.tick(pose, idle);
+    let (killer, attacker) = w.debug_hit_words(slot);
+    assert_eq!(killer, 0, "a hit the wizard SURVIVES latches no killer");
+    assert_eq!(attacker, 0xFFFF, "…but does publish word_0x26_38");
+    // And the flag is one-tick: a quiet dispatch clears it again.
+    w.tick(pose, idle);
+    assert_eq!(
+        w.debug_hit_words(slot).1,
+        0,
+        "word_0x26_38 = 0 is sub_5EFA0's FIRST statement, not a latch"
+    );
+}
+
 /// The DUEL spell effect (docs/spell-audit/duel.md). Cast next to a
 /// rival: the (10,26) tether grips the rival wizard → the LOCK forms
 /// {opponent, held dist ∈ [1024,3072], tier}, +duel XP; tier 1's drain
@@ -1074,9 +1198,37 @@ fn mc2_duel_locks_drains_and_breaks() {
     let views = w.rival_views();
     assert!(!views.is_empty(), "level-004 spawns rivals");
     let (rx, rz) = (views[0].x, views[0].z);
-    // Park 3 tiles from the rival (inside every tier range).
-    let near = PlayerPose::from_tiles(rx + 3.0, 20.0, rz, 0.0, 0.0, 0.0);
-    // Select duel tier 1 (drain mode 1), then fire.
+    let rslot = views[0].slot;
+    // ⚠ THE LETTER IS POSTED BY HAND, and that is the point: since
+    // SESSION 81 the lock is stamped by the VICTIM reading its own ch4
+    // mail, and TWO retail arms keep a fresh rival from reading
+    // anything at all — `word_0x159_345` starts at 100, and a wizard
+    // overlapping its own castle re-pins it to 2 forever; both memset
+    // `str_0x5E_94` and skip `sub_5EFA0` outright
+    // (`AddPlayer03_00_5E010` EF:59962-88). Burn the spawn window
+    // down, step the rival off its doorstep, THEN post. The
+    // dart-spawns-the-tether half is pinned by its own corpus fixture
+    // (`duel-fires-a-9-7-dart-and-only-a-struck-wizard`, mc2l6
+    // t=1325); this test owns the lock, the drain and the break.
+    let away = PlayerPose::from_tiles(rx + 30.0, 20.0, rz + 30.0, 0.0, 0.0, 0.0);
+    for _ in 0..105 {
+        w.tick(away, idle);
+    }
+    // ⚠ AND 12 TILES IS NOT OFF THE DOORSTEP: a castle's summed
+    // extents run ~6784 units (26 tiles) on the horizontal axes, so
+    // the at-castle box swallows most of its neighbourhood.
+    let (px, pz) = (rx + 40.0, rz);
+    let ent = w
+        .debug_place_mc2_rival(rslot, px, pz)
+        .expect("the rival relocates");
+    for _ in 0..3 {
+        w.debug_place_mc2_rival(rslot, px, pz);
+        w.tick(away, idle);
+    }
+    let ralt = w.rival_views()[0].alt;
+    // Park 1.5 tiles off, tier 1 selected (drain mode 1), and post the
+    // grip letter the (10,26) marker would have written.
+    let near = PlayerPose::from_tiles(px, ralt, pz + 1.5, 0.0, 0.0, 0.0);
     w.tick(
         near,
         PlayerCommand {
@@ -1084,6 +1236,13 @@ fn mc2_duel_locks_drains_and_breaks() {
             ..Default::default()
         },
     );
+    // ⭐ AND THE DUEL WINDOW HAS TO BE OPEN. `sub_5DE30`'s first
+    // liveness test is `v3x && v3x->word_0x2E_46` — the CASTER's duel
+    // manifestation, charged (EF:59916). A lock stamped with no live
+    // window is cleared by the very next enforcement pass, so the
+    // spell is genuinely cast here; its (9,7) dart flying off and
+    // missing is beside the point.
+    w.debug_place_mc2_rival(rslot, px, pz);
     w.tick(
         near,
         PlayerCommand {
@@ -1091,26 +1250,30 @@ fn mc2_duel_locks_drains_and_breaks() {
             ..Default::default()
         },
     );
-    // The 8-tick tether grips within its life.
-    for _ in 0..6 {
-        w.tick(near, idle);
-    }
+    w.debug_place_mc2_rival(rslot, px, pz);
+    w.debug_mail_ch(ent, 4, 1, 0xFFFF);
+    w.tick(near, idle);
     let lock = w.debug_mc2_duel();
-    assert!(lock.is_some(), "the tether gripped the rival wizard");
-    let (_, hold, tier) = lock.unwrap();
-    assert_eq!(tier, 1);
+    assert!(lock.is_some(), "the victim's own dispatch stamped the lock");
+    let (opp, hold, tier) = lock.unwrap();
+    assert_eq!(opp as usize, ent, "…on the wizard the letter landed in");
+    assert_eq!(tier, 1, "the tier rides the letter's AMOUNT");
     assert!((1024..=3072).contains(&hold), "held dist clamped: {hold}");
     // Tier-1 drain: the rival's mana goes NET NEGATIVE against its
     // own regen while the lock holds.
     let m0 = w.rival_views()[0].mana;
     for _ in 0..30 {
+        w.debug_place_mc2_rival(rslot, px, pz);
         w.tick(near, idle);
     }
     let m1 = w.rival_views()[0].mana;
     assert!(m1 < m0, "duel drains through the rival regen: {m0} -> {m1}");
-    // Fly far beyond the tier range → the lock breaks.
-    let far = PlayerPose::from_tiles(rx + 60.0, 20.0, rz, 0.0, 0.0, 0.0);
-    for _ in 0..3 {
+    // Fly beyond the tier's `subSpellIndex_2` range → the enforcement
+    // clears the lock (EF:59947). Nothing re-posts it here, so the
+    // break is immediate rather than waiting the marker out.
+    let far = PlayerPose::from_tiles(px + 60.0, 20.0, pz, 0.0, 0.0, 0.0);
+    for _ in 0..4 {
+        w.debug_place_mc2_rival(rslot, px, pz);
         w.tick(far, idle);
     }
     assert!(
@@ -1150,4 +1313,294 @@ fn the_human_carpet_takes_row_44_not_the_storm_cloud() {
     sorted.dedup();
     assert_eq!(sorted.len(), 8, "eight distinct carpet families: {heads:?}");
     assert!(!heads.contains(&202), "no wizard wears the storm cloud");
+}
+
+/// ⭐⭐⭐ THE RIVAL DEATH FALL OPENS ON THE CARPET MOVER — `sub_5E310`'s
+/// first statement is `sub_5D530(a1x)` (EF:60074), and that is a
+/// DIFFERENT mover from the alive brain's `sub_146F0` (EF:6416). A dead
+/// MC2 wizard therefore keeps flying: the forward polar step still
+/// runs at its `yaw_0x1C_28`, the row's `v_14` buoyancy still steps z,
+/// and `pitch_0x1E_30` is STAMPED 0 from the player accumulator no
+/// rival ever writes (`PlayerEvents_51BB0` is the local player alone).
+/// This arm had been Z-ONLY, so a corpse froze where it was hit and
+/// landed the same tick — mc2l6-rsg's rival 378 glides eight tiles
+/// downrange over 37 ticks and takes its whole death payout with it.
+///
+/// The pair channel cannot see this on mc2l6 (an imported world holds
+/// no duel lock, so the drain that killed 378 never runs), so it is
+/// pinned here.
+#[test]
+fn a_dead_mc2_rival_keeps_flying_under_the_carpet_mover() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let views = w.rival_views();
+    assert!(!views.is_empty(), "level-004 spawns rivals");
+    let (rx, rz) = (views[0].x as u8, views[0].z as u8);
+    let slot = w
+        .debug_pool()
+        .1
+        .into_iter()
+        .find(|e| e.class == 3 && e.model == 1 && e.tx == rx && e.ty == rz && e.life >= 0)
+        .map(|e| e.slot)
+        .expect("the rival's wizard record");
+    let pose = PlayerPose::from_tiles(0.0, 20.0, 0.0, 0.0, 0.0, 0.0);
+    let idle = PlayerCommand::default();
+    // ⚠ A DOCKED WIZARD READS NO MAIL: burn the 100-tick spawn grace,
+    // then step off the castle's own summed-extents box.
+    for _ in 0..105 {
+        w.tick(pose, idle);
+    }
+    w.debug_place_mc2_rival(views[0].slot, rx as f32 + 40.0, rz as f32 + 40.0)
+        .expect("the rival relocates");
+    for _ in 0..6 {
+        w.tick(pose, idle);
+    }
+    // Give the corpse a nonzero aim pitch to erase, and a heading to
+    // coast along.
+    let (_, _, _, yaw, pitch, action) = w.debug_ent_pose(slot).expect("alive");
+    assert_eq!(action, 1, "the rival is on the alive arm");
+    let _ = pitch;
+    // The lethal letter. `debug_kill_mc2_rival` mails u32::MAX/4 from
+    // entity 1, so the intake also arms the knock register.
+    w.debug_kill_mc2_rival(views[0].slot);
+    w.tick(pose, idle);
+    let (x0, y0, z0, _, pitch0, action0) = w.debug_ent_pose(slot).expect("the corpse");
+    assert_eq!(action0, 2, "the lethal branch parks the wizard on action 2");
+    // ⚠ THE DEATH TICK ITSELF DOES NOT MOVE — retail's lethal branch
+    // `return`s before `sub_146F0` (EF:5416-19).
+    w.tick(pose, idle);
+    let (x1, y1, z1, yaw1, pitch1, action1) = w.debug_ent_pose(slot).expect("the corpse");
+    if action1 == 2 {
+        assert!(
+            (x1, y1) != (x0, y0),
+            "the corpse DRIFTS: sub_5D530 still polar-steps it at yaw {yaw}, \
+             got ({x0},{y0}) -> ({x1},{y1})"
+        );
+        assert_eq!(
+            pitch1, 0,
+            "pitch_0x1E_30 is stamped from the (empty) player accumulator, \
+             was {pitch0}"
+        );
+        assert_eq!(yaw1, yaw, "a rival's roll accumulator is 0, so yaw holds");
+        let _ = (z0, z1);
+    }
+}
+
+/// ⭐⭐ THE MC2 RIVAL'S KNOCKBACK REGISTER, AND A LIVING RIVAL NEVER
+/// SPENDS IT. `sub_5EFA0` stamps `yaw_0x1E_30 = tan2(source → victim)`
+/// and `moveBoost_0x1E_30 = damage / 10` clamped to [0, 80] on every
+/// delivered letter (EF:60697-702) — the MC1 rival column's own
+/// SNAPSHOT-13 law, which had never crossed to MC2. The only reader is
+/// `sub_5D530`'s block 5, and the alive dispatch does not run
+/// `sub_5D530`, so the impulse simply accumulates: mc2l6-rsg's rival
+/// 378 carries the 20 its 200-damage letters stamp through its whole
+/// life and pays it out 4/tick over t=1846..1850.
+#[test]
+fn an_mc2_rival_banks_its_knockback_until_it_dies() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let views = w.rival_views();
+    assert!(!views.is_empty(), "level-004 spawns rivals");
+    let color = views[0].slot;
+    let (rx, rz) = (views[0].x as u8, views[0].z as u8);
+    let slot = w
+        .debug_pool()
+        .1
+        .into_iter()
+        .find(|e| e.class == 3 && e.model == 1 && e.tx == rx && e.ty == rz && e.life >= 0)
+        .map(|e| e.slot)
+        .expect("the rival's wizard record");
+    let pose = PlayerPose::from_tiles(0.0, 20.0, 0.0, 0.0, 0.0, 0.0);
+    let idle = PlayerCommand::default();
+    for _ in 0..105 {
+        w.tick(pose, idle);
+    }
+    w.debug_place_mc2_rival(color, rx as f32 + 40.0, rz as f32 + 40.0)
+        .expect("the rival relocates");
+    for _ in 0..3 {
+        w.tick(pose, idle);
+    }
+    assert_eq!(
+        w.debug_mc2_rival_knock(color).map(|k| k.1),
+        Some(0),
+        "no letter, no impulse"
+    );
+    // A survivable 300-damage letter from the human: 300/10 = 30.
+    w.debug_mail_hit(slot, 300, 0xFFFF);
+    w.tick(pose, idle);
+    assert_eq!(
+        w.debug_mc2_rival_knock(color).map(|k| k.1),
+        Some(30),
+        "moveBoost_0x1E_30 = damage / 10"
+    );
+    // …and it is STILL 30 many ticks later. Nothing on the alive path
+    // reads it back — `sub_146F0` has no moveBoost leg at all.
+    for _ in 0..12 {
+        w.tick(pose, idle);
+    }
+    assert_eq!(
+        w.debug_mc2_rival_knock(color).map(|k| k.1),
+        Some(30),
+        "a LIVING rival never spends its knock"
+    );
+    // The clamp is [0, 80], not the human's 128 — a big (but survivable)
+    // letter saturates rather than launching the wizard.
+    w.debug_mail_hit(slot, 900, 0xFFFF);
+    w.tick(pose, idle);
+    assert_eq!(
+        w.debug_mc2_rival_knock(color).map(|k| k.1),
+        Some(80),
+        "moveBoost clamps at 80"
+    );
+    // The death fall is what spends it: 4 per tick, snapped to 0
+    // below 4.
+    w.debug_kill_mc2_rival(color);
+    w.tick(pose, idle); // the lethal dispatch: action 2, no move
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        w.tick(pose, idle);
+        seen.push(w.debug_mc2_rival_knock(color).map(|k| k.1).unwrap_or(-1));
+    }
+    assert_eq!(
+        seen,
+        vec![76, 72, 68, 64],
+        "the death fall decays the impulse 4/tick"
+    );
+}
+
+/// ⭐⭐ THE DEATH PAYOUT'S SPELL-TOKEN SCATTER KEEPS THE OWNER AND
+/// LEAVES A BOOLEAN IN THE BOOK. `sub_5E310`'s landing arm (EF:60137-62)
+/// writes exactly four things per owned manifestation — flag bit 0
+/// cleared, `actionIndex++`, the position, the life — and sets the book
+/// entry to a BOOLEAN 1, the whole memory of what the wizard knew.
+/// `parentId_0x28_40` is NOT touched: retail's loose tokens go on
+/// naming the dead wizard (the graded `owner` lane on mc2l6-rsg slots
+/// 379-382, where this column had been zeroing it).
+#[test]
+fn the_mc2_death_scatter_keeps_the_token_owner() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let views = w.rival_views();
+    assert!(!views.is_empty(), "level-004 spawns rivals");
+    let color = views[0].slot;
+    let idle = PlayerCommand::default();
+    let pose = PlayerPose::from_tiles(8.0, 20.0, 8.0, 0.0, 0.0, 0.0);
+    let owned: Vec<u16> = w
+        .debug_mc2_rival_book(color)
+        .expect("the rival's book")
+        .into_iter()
+        .filter(|&m| m != 0)
+        .collect();
+    assert!(!owned.is_empty(), "the authored rival owns manifestations");
+    let wiz = w
+        .rival_views()
+        .iter()
+        .find(|v| v.slot == color)
+        .map(|_| ())
+        .map(|_| {
+            w.debug_pool()
+                .1
+                .into_iter()
+                .find(|e| e.class == 3 && e.model == 1 && e.life >= 0)
+                .map(|e| e.slot as u16)
+                .expect("a live wizard record")
+        })
+        .unwrap();
+    // Run to the grave, the same way `mc2_dead_wizard_grave_is_possessable`
+    // does (a respawn-capable rival can revive between attempts).
+    let mut landed = false;
+    for t in 0..2000 {
+        if t % 16 == 0 {
+            w.debug_kill_mc2_rival(color);
+        }
+        w.tick(pose, idle);
+        if count(&w, 10, 40) > 0 {
+            landed = true;
+            break;
+        }
+    }
+    assert!(landed, "the death fall reaches its payout");
+    // The book reverted to booleans — 1 for every entry that held a
+    // manifestation, never 0 (EF:60146).
+    let book = w.debug_mc2_rival_book(color).expect("the book");
+    assert!(
+        book.contains(&1),
+        "owned entries become the boolean 1, got {book:?}"
+    );
+    // Every scattered token still names the dead wizard.
+    let pool = w.debug_pool().1;
+    let toks: Vec<&mgc_sim::engine::world::DebugEvent> = pool
+        .iter()
+        .filter(|e| e.class == 15 && owned.contains(&(e.slot as u16)))
+        .collect();
+    assert!(!toks.is_empty(), "the manifestations survive as tokens");
+    for t in &toks {
+        assert_eq!(
+            t.id24, wiz,
+            "slot {} keeps parentId_0x28_40 = the dead wizard {wiz}",
+            t.slot
+        );
+    }
+}
+
+/// ⭐⭐⭐ A LAW LANDED ON ONE CALL PATH IS NOT LANDED — the TOKEN
+/// BACK-REF. `word_0x26_38` on a spawned projectile carries the (15,x)
+/// manifestation token's **POOL SLOT**, not a spell index: retail
+/// dereferences it at the impact XP award (`sub_6D8B0(a1x->id,
+/// Entities_EA3E4[a1x->word_0x26_38]->model_0x40_64, 1)`, EF:62985)
+/// and at the Magic Mine's swallow (`sub_68AC0` EF:55441-44, which
+/// reads `model_0x40_64` AND `byte_0x46_70` off the record and re-arms
+/// `word_0x2E_46 = 1` — unreachable from an index). The HUMAN arm
+/// (`mc2/cast.rs`, `MGC_NO_TOKEN_SLOT_BACKREF`) and this file's own
+/// (9,10) upgrade-ball tail already stamped the slot; the shared rival
+/// funnel `mc2_rival_emit` kept the retired spell index.
+///
+/// The lane is INVISIBLE to the obs projection (`EntObsMc2` carries no
+/// `@0x26`), so no pair fixture can see it — this is the unit lane the
+/// conformance doctrine asks for. The recorded witness is
+/// mc2l6-rival-spells-galore t=341: rival 378's newborn (9,0) at slot
+/// 60 records `@0x26` = 379, exactly 378's own (15,0) hand token,
+/// where the port wrote 0. Whole raw-shadow census, pairs 0..2000:
+/// 187 (9,0) rows + 33 (9,1) rows, all gone.
+///
+/// `MGC_NO_RIVAL_TOKEN_BACKREF=1` restores the spell index and this
+/// test fails.
+#[test]
+fn a_rival_bolt_carries_its_token_slot_not_a_spell_index() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let idle = PlayerCommand::default();
+    let pose = PlayerPose::from_tiles(64.0, 40.0, 64.0, 0.0, 0.0, 0.0);
+    let mut seen = 0usize;
+    let mut bad: Vec<(u16, u8, u16, u16)> = Vec::new();
+    for _ in 0..2000 {
+        w.tick(pose, idle);
+        for (slot, model, id24, back) in w.debug_mc2_proj_backref() {
+            // Retail's own `if (v4)` gate: a null back-ref is the
+            // castle turrets and every pre-token spawner.
+            if back == 0 {
+                continue;
+            }
+            seen += 1;
+            if !w.debug_mc2_is_token(back) {
+                bad.push((slot, model, id24, back));
+            }
+        }
+    }
+    assert!(seen > 0, "the authored rivals cast class-9 bolts in 2000 ticks");
+    bad.sort_unstable();
+    bad.dedup();
+    assert!(
+        bad.is_empty(),
+        "every class-9 back-ref must name a live (15,x) token, got \
+         (slot, model, id24, @0x26) = {bad:?}"
+    );
 }

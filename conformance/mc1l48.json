@@ -3,6 +3,12 @@
  "pin_pose": "n1",
  "fixtures": [
   {
+   "t": 3761,
+   "file": "a-jar-that-falls-into-the-sea-sinks-past-the-floor.mgcr",
+   "source": "mc1l48",
+   "note": "A JAR THAT FALLS INTO THE SEA SINKS 768 BELOW THE SURFACE AND IS FREED THERE: sub_42090 (:52605) is not a `.max(ground)` clamp - its floor is `a2 + a3`, and the a3 the jar servo passes as 0 (sub_55A40 :64766, `sub_42090(pos, ground, 0, 0, -128)`) is REWRITTEN to -768 whenever the position is over water (sub_11760 & 1, the angle-nibble probe) AND the sampled ground reads 0; the step is the full -128 only while z is ABOVE the ground, at or below it the servo moves 25*a5/100 = -32, and the tick z lands exactly on -768 the servo returns -1 and the caller soft-frees the record. mc1l48 slot 216 (the spell-23 jar, +70 = 70) is the witness: retail 133 -> 5 -> -123 -> -155 -> -187 and class 0 by t=3789. The port's `.max(alt)` parked it on 0 forever - mc1l48's free-run horizon at 3762, and 87 census pairs."
+  },
+  {
    "t": 27413,
    "file": "the-dead-owners-castle-token-freezes-and-releases.mgcr",
    "source": "mc1l48",

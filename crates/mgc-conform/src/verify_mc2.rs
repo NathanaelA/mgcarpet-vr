@@ -43,6 +43,70 @@ use mgc_sim::engine::world::conformance::{PinnedMc2, ThingTable};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use std::collections::BTreeMap;
 
+/// THE MC2 POSE PAIR — the MC1 law's MC2 face
+/// ([`crate::verify::pose_pair`], landed there as the default after
+/// mc1l42 went 54,746 CSV rows -> 330). Retail's carpet moves MID-WALK
+/// (`sub_5D530` at EF:59994, inside `AddPlayer03_00_5E010`, which the
+/// walk reaches at the carpet's own pool slot), so NO single sample is
+/// the right phase for the whole pass: a walker BELOW the carpet slot
+/// reads the pose settled last frame (state@N) and one ABOVE the pose
+/// this frame's mover just wrote (state@N+1). `World::tick_pose_pair`
+/// already encodes exactly that for MC2 — `mc2_carpet_dispatch` takes
+/// the `post` sample and swaps `*player` in place at the carpet slot
+/// (engine/world.rs, the `else if let Some(p) = post` arm) — but this
+/// arm never called it and kept the retired single-sample walk, so the
+/// `pose-phase` tag has been absorbing the difference: 24,467 of
+/// mc2l22's 130,624 CSV rows, 20,056 of them the (9,1) possession
+/// bolt's own birth (its manifestation token sits at pool slot 40,
+/// far below the carpet at 424, so retail launches it from the
+/// PRE-move pose while this arm pinned N+1).
+///
+/// DEFAULT ON, exactly as the MC1 twin ended up: the staging opt-in
+/// (`MGC_MC2_POSE_PAIR=1`) has served its purpose — every frozen MC2
+/// fixture signature and the certified mc2l0 / mc2l3 takes were
+/// re-graded under the two-phase walk. `MGC_NO_MC2_POSE_PAIR=1`
+/// restores the retired single-sample walk for A/B.
+pub(crate) fn mc2_pose_pair() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_POSE_PAIR").is_none())
+}
+
+/// ⚠ **OPT-IN, AND DELIBERATELY NOT THE DEFAULT**
+/// (`MGC_MC2_JITTER_GROUND=1`). The DIAGNOSIS behind this is solid: the
+/// (10,71) fissure's tick adds `life & 1 ? +1 : -1` to
+/// `mapHeightmap_11B4E0` across its whole disc EVERY tick
+/// (EF:29529-37 / :29560-69), so the recorded terrain endpoints
+/// alternate by one height unit under the carpet — and one height unit
+/// is 32 engine units (`32*p1`, Terrain.cpp:113-172), exactly the size
+/// of the `pose.z` residue. Retail's mover resolves its floor against
+/// whichever phase stood at its OWN walk slot, an image neither
+/// recorded endpoint holds.
+///
+/// What is NOT known is WHICH phase. Retail demonstrably reads the
+/// RAISED image on both parities in the t=24874 and t=26120 windows and
+/// the LOWERED one in t=24746-24764 — **no single-endpoint rule and no
+/// fixed slot order expresses that**, so the "cells that moved by
+/// exactly +-1 take the higher endpoint" rule below is a HEURISTIC
+/// fitted to the corpus, not retail's law. It fixes 163 rows and
+/// INTRODUCES 83.
+///
+/// ⭐⭐⭐ A GRADING ORACLE TUNED TO ITS OWN SCORE CAN HIDE A PORT BUG,
+/// so the default stays on the settled `measured@N+1` image and the
+/// reported pose number stays honest. Turn this on to work the
+/// mechanism, not to book the rows.
+pub(crate) fn mc2_jitter_ground() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_MC2_JITTER_GROUND").is_some())
+}
+
+/// W2-6 A/B (`MGC_MC2_MIDWALK_GROUND=1`): use the MC1 arm's
+/// port-witnessed per-cell phase oracle for the MC2 pose lane's ground
+/// image instead of the raised-phase reconstruction.
+pub(crate) fn mc2_midwalk_ground() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_MC2_MIDWALK_GROUND").is_some())
+}
+
 pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     let pin_n1 = match args.pin_pose.as_str() {
         "n" => false,
@@ -121,6 +185,12 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     // two graded rows it did show. Off by default; it grades nothing,
     // it only reports, and it must not move the UNEXPLAINED headline.
     let mut shadow = crate::shadow::Shadow::from_env()?;
+    // `MGC_STAGE_TRACE` — the OBJECTIVE BOARD microscope, wired on
+    // the PAIR path too. In the free run it shows where the port's
+    // own board history parts; here the importer has just restored
+    // retail's board, so it shows which handler failed to move it
+    // during the one tick that ran. (Print-only, default-OFF.)
+    let mut stagetrace = crate::alloc_trace::StageTrace::from_env();
     // The PER-ENTITY tear census (see the loop body): pairs touched,
     // total slot-exclusions, distinct slots, and the (class, model)
     // breakdown — a family concentration is the tell that an
@@ -161,7 +231,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         };
         let st = decode_retail_mc2(state)?;
         let obs: ObsMc2 = match &tick.obs {
-            Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?,
+            Some(v) => serde_json::from_str(v.get()).map_err(|e| format!("obs: {e}"))?,
             None => return Err(format!("t={}: no obs channel", tick.t)),
         };
         let (held, latch) = raw_input_mc2(tick.input.as_ref());
@@ -182,6 +252,11 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             aligned.fire_left = fl;
             aligned.fire_right = fr;
         }
+        // THE THIRD CAST ARM rides the SAME consumed byte
+        // (`recover::mc2_ring_cast`) — see `ring_cast_mc2` below.
+        if let Some(p) = st.players.get(st.local_player as usize) {
+            aligned.mc2_ring_cast = ring_cast_mc2(p);
+        }
         let press = press_pos_mc2(tick.input.as_ref());
         // The respawn key rides the pair's END record like the aligned
         // cast bits — see [`respawn_key_mc2`] for the two witnesses
@@ -200,14 +275,15 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         prev_press = press.or(prev_press);
         if !ring_bit_off
             && let Some(p) = st.players.get(st.local_player as usize)
-            && let Some(spell) = ring_cast_mc2(p, latch)
+            && let Some(spell) = ring_cast_mc2(p)
         {
             ring_casts += 1;
-            eprintln!(
-                "  t={}: CYCLE-RING CAST (0x40) spell {spell} — the port has no \
-                 such lane (verify_mc2::ring_cast_mc2)",
-                tick.t
-            );
+            if std::env::var_os("MGC_RING_CAST_TRACE").is_some() {
+                eprintln!("  t={}: CYCLE-RING CAST (0x40) spell {spell}", tick.t);
+            }
+        }
+        if ring_bit_off {
+            aligned.mc2_ring_cast = None;
         }
         prev_latch = latch;
         let sample = if ring_mode {
@@ -292,9 +368,20 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     );
                 }
                 stats.pairs += 1;
+                // DIG5 PROBE: stamp the pair tick for the sim-side
+                // probes (MGC_CARPET_PROBE / MGC_WRITE_TRACE / …).
+                // `verify.rs:318` does this on the MC1 column; the MC2
+                // column never did, so every DEBUG_TICK-gated
+                // instrument silently no-ops here.
+                mgc_sim::DEBUG_TICK.store(pt, std::sync::atomic::Ordering::Relaxed);
                 if !capture_clean_mc2(&pst, &st) {
                     stats.torn += 1;
                 } else {
+                    // W2-6: arm the pose channel's MID-WALK ground
+                    // snapshot — the port's height plane as its walk
+                    // crosses the carpet's own slot, which is
+                    // `sub_5D530`'s `getTerrainAlt` probe phase.
+                    world.arm_midtick_ground_snapshot();
                     let (pd, port, report) = exec_pair_mc2(
                         &mut world,
                         &pristine,
@@ -305,7 +392,13 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         &obs,
                         pair_cmd,
                         pair_prev,
-                        pin_n1,
+                        if mc2_pose_pair() {
+                            crate::verify::PairPose::Pair
+                        } else if pin_n1 {
+                            crate::verify::PairPose::PinN1
+                        } else {
+                            crate::verify::PairPose::PinN
+                        },
                     )
                     .map_err(|e| format!("t={pt}: {e}"))?;
                     let human_slot = report.human_slot;
@@ -337,12 +430,21 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     if let Some(sh) = shadow.as_mut() {
                         sh.compare_ents_mc2(&world, &st, human_slot, &torn, pt);
                         sh.compare_wiz_mc2(&world, &st, pt);
+                        // THE OBJECTIVE BOARD — recorded since the
+                        // capture was written, ungraded until round
+                        // 98. Here the importer restored it from
+                        // retail@t before the tick, so a row is a
+                        // one-tick WRITE bug.
+                        sh.compare_board_mc2(&world, &st, pt);
                         // A fallback pair started from a SCANNED free
                         // list, not retail's, so it has nothing to say
                         // about the allocator.
                         if report.stack_fallback.is_none() {
                             sh.compare_free_mc2(&world, &st, human_slot, pt);
                         }
+                    }
+                    if let Some(sg) = stagetrace.as_mut() {
+                        sg.emit(&world, &st, pt);
                     }
                     // ARM terrain@N before the pose lane advances the
                     // shared image: a re-exec runs below iff the pair
@@ -362,6 +464,22 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     // arm; the pending-block re-apply at the loop top
                     // is idempotent — deltas carry absolute values).
                     if !args.no_pose_lane {
+                        // W2-6: the ORACLE's two port-side witnesses —
+                        // the height plane as the walk crossed the
+                        // carpet's slot, and the port's settled
+                        // post-tick plane — plus measured@N, all
+                        // cloned BEFORE the measured@N+1 re-install
+                        // below. Same three inputs the MC1 arm feeds
+                        // `midwalk_ground`.
+                        let on = mc2_jitter_ground();
+                        let snap = world.take_midtick_ground_snapshot().filter(|_| on);
+                        let h_post: Option<Vec<u8>> =
+                            snap.is_some().then(|| world.planes().height.clone());
+                        let h_start: Option<Vec<u8>> = on
+                            .then(|| {
+                                crate::verify::measured_planes(&timg).map(|(h, _, _, _)| h.to_vec())
+                            })
+                            .flatten();
                         if let (Some(img), Some(block)) = (timg.as_mut(), pending_terrain.as_ref())
                         {
                             img.apply(block)
@@ -372,9 +490,68 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                 .install_measured_terrain(h, ty, ceil, an)
                                 .map_err(|e| format!("t={pt}: pose terrain: {e}"))?;
                         }
+                        // ⭐ THE (10,71) FISSURE VIBRATES THE FLOOR BY
+                        // ±1 HEIGHT UNIT EVERY TICK (`sub_3A2D0`,
+                        // EF:29529-37 / 29560-69: `sign = life & 1`,
+                        // added to `mapHeightmap_11B4E0` over a
+                        // radius-`v6` disc, `life--` at the tail), so
+                        // the recorded endpoints ALTERNATE under the
+                        // carpet while retail's mover reads whichever
+                        // phase stood at its own walk slot. One height
+                        // unit is 32 engine units (`32*p1` in
+                        // `sub_B5C60_getTerrainAlt2`) and the carpet
+                        // floor-clamps to `locAlt + 256`, which is the
+                        // whole ±32 pose.z family on mc2l6-rsg. Same
+                        // per-cell phase oracle the MC1 arm has used
+                        // since the t=567/t=1210 families: a cell
+                        // keeps measured@N exactly when the port
+                        // DEMONSTRABLY wrote it after the carpet
+                        // (untouched at the snapshot, changed by tick
+                        // end); every other cell takes measured@N+1.
+                        //
+                        // ⚠ THE PORT-WITNESSED ORACLE IS NOT ENOUGH
+                        // HERE, and that is itself a measurement: the
+                        // port's fissure token sits ABOVE the carpet
+                        // on every pair, so the oracle picks
+                        // measured@N uniformly and merely SWAPS which
+                        // parity fails (26 → 24 rows on t=24874+130,
+                        // 42 → 41 on t=26120+130). Retail's carpet
+                        // demonstrably reads the RAISED phase on BOTH
+                        // parities across those windows — @N when the
+                        // tick lowers, @N+1 when it raises — which no
+                        // single-endpoint rule can express. So the
+                        // DEFAULT here reconstructs that phase
+                        // directly: a cell the tick moved by exactly
+                        // ±1 (the fissure's signature; a real
+                        // terraform moves more) takes the HIGHER
+                        // endpoint. `MGC_MC2_MIDWALK_GROUND=1` selects
+                        // the MC1 oracle instead, for A/B.
+                        let ground_mid: Option<Vec<u8>> = if mc2_midwalk_ground() {
+                            match (snap, h_start, h_post, crate::verify::measured_planes(&timg)) {
+                                (Some(snap), Some(h0), Some(post), Some((h1, _, _, _))) => {
+                                    Some(crate::verify::midwalk_ground(snap, &h0, &post, h1))
+                                }
+                                (snap, ..) => snap,
+                            }
+                        } else {
+                            match (h_start, crate::verify::measured_planes(&timg)) {
+                                (Some(h0), Some((h1, _, _, _))) if h0.len() == h1.len() => Some(
+                                    h0.iter()
+                                        .zip(h1)
+                                        .map(
+                                            |(&a, &b)| {
+                                                if a.abs_diff(b) == 1 { a.max(b) } else { b }
+                                            },
+                                        )
+                                        .collect(),
+                                ),
+                                _ => None,
+                            }
+                        };
                         pose_chan
                             .run_pair_mc2(
                                 &world,
+                                ground_mid.as_deref(),
                                 &pst,
                                 &st,
                                 human_slot,
@@ -450,7 +627,15 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                             &obs,
                             pair_cmd,
                             pair_prev,
-                            !pin_n1,
+                            // The phase ORACLE stays SINGLE-pinned even
+                            // under the pair — the tag's meaning is
+                            // defined against the opposite-endpoint
+                            // probe (`crate::verify`'s MC1 twin).
+                            if pin_n1 {
+                                crate::verify::PairPose::PinN
+                            } else {
+                                crate::verify::PairPose::PinN1
+                            },
                         )
                         .map_err(|e| format!("t={pt}: pose-alt: {e}"))?;
                         crate::verify::pose_reclassify(tg, &pd, &alt);
@@ -474,7 +659,13 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                             &obs,
                             pair_cmd,
                             pair_prev,
-                            pin_n1,
+                            if mc2_pose_pair() {
+                                crate::verify::PairPose::Pair
+                            } else if pin_n1 {
+                                crate::verify::PairPose::PinN1
+                            } else {
+                                crate::verify::PairPose::PinN
+                            },
                         )
                         .map_err(|e| format!("t={pt}: {e}"))?;
                         print!("{}", pd.render(pt, usize::MAX));
@@ -717,25 +908,30 @@ pub(crate) fn press_edge_mc2(
 /// cast reads the cursor the click just selected — the shortcut that
 /// casts a ring spell without equipping it.
 ///
-/// CORPUS: unreachable. Both press latches are NEVER up in the same
-/// record in any MC2 take — mc2l0 0/8,626, mc2l4 0/17,711,
-/// mc2l24 0/69,220, mc2l30 0/9,337 (both buttons are not even HELD
-/// together except 10 mc2l24 records, all outside the pane). The ring
-/// pane IS visited (201/277/93 records with the cursor moving), so the
-/// gate is live code that this corpus simply never trips. This detector
-/// exists so the day a take DOES trip it, the run says so instead of
-/// silently dropping a cast. `MGC_NO_HAND_BIT=1` disables it.
-pub(crate) fn ring_cast_mc2(
-    p: &mgc_formats::mgcr::RetailPlayerMc2,
-    latch: (bool, bool),
-) -> Option<u8> {
-    if !(latch.0 && latch.1) || !matches!(p.menu_state, 5 | 8) || p.hand_pending != 0 {
-        return None;
-    }
+/// ⚠⚠⚠ **THE "CORPUS: UNREACHABLE" VERDICT ABOVE WAS AN ARTEFACT OF
+/// RE-DERIVING THE BIT FROM THE INPUT LATCHES.** Those PI conditions
+/// are how the SENDER raises 0x40; the recording carries the RESULT.
+/// `move_bits` IS `str_164->entityIndex_0x0`, the consumed command
+/// word the two hand bits are already read off (`recover::mc1_fire`,
+/// the "fire rides the consumed byte" law) — so the third bit needs no
+/// reconstruction either, and the latch fold was answering a question
+/// retail never asks at the cast site (`sub_5F380`'s tail is a bare
+/// `testb $0x40`).
+///
+/// CORPUS, MEASURED OFF THE WORD: **one record in ten MC2 takes.**
+/// mc2l22 t=63318 records `move_bits = 64` (0x10 and 0x20 both clear),
+/// `menu_state = 5`, `hand_pending = 0`, `ring_cursor = 20` — and
+/// retail arms the `(15,20)` token that tick (`f2e 0 -> 27`, `f30 =
+/// 27`) while both hands hold spells 9 and 1, firing the `(9,22)` at
+/// slot 816 on the next. That is mc2l22's LAST divergence head.
+/// The pane/pending legs are kept as a sanity bound on the cursor;
+/// they are corroboration, not the trigger. `MGC_NO_HAND_BIT=1`
+/// disables the detector, `MGC_NO_MC2_RING_CAST_BIT=1` the sim lane.
+pub(crate) fn ring_cast_mc2(p: &mgc_formats::mgcr::RetailPlayerMc2) -> Option<u8> {
     // `spellIndex_D94FF` (GameUI.cpp:59) is the identity over 0..25;
     // the three tail cells (26..28 → 0, 3, 0) are pane-layout padding
     // the cursor never lands on.
-    (p.ring_cursor <= 25).then_some(p.ring_cursor)
+    mgc_formats::recover::mc2_ring_cast(p.move_bits, p.ring_cursor)
 }
 
 // The MC2 capture-grade law (module doc: step-1 dominance of the
@@ -763,7 +959,7 @@ pub(crate) fn exec_pair_mc2(
     obs: &ObsMc2,
     cmd: PlayerCommand,
     prev_cmd: PlayerCommand,
-    pin_n1: bool,
+    phase: crate::verify::PairPose,
 ) -> Result<
     (
         PairDiff,
@@ -783,13 +979,24 @@ pub(crate) fn exec_pair_mc2(
         .retail_import_mc2(pst)
         .map_err(|e| format!("import: {e}"))?;
     world.set_prev_fire(prev_cmd.fire_left, prev_cmd.fire_right);
-    let pose_src = if pin_n1 {
-        &st.ents[report.human_slot as usize]
+    // The POSE PAIR ([`mc2_pose_pair`]): feed the walk BOTH recorded
+    // endpoints and let `mc2_carpet_dispatch` swap them at the
+    // carpet's own walk slot, retail's `sub_5D530` phase. The
+    // PROJECTION pin stays on N+1 either way (the recorded
+    // observation IS the settled pose) — `crate::verify::exec_pair`'s
+    // law verbatim.
+    let pre = carpet_pose_mc2(&pst.ents[report.human_slot as usize]);
+    let post = carpet_pose_mc2(&st.ents[report.human_slot as usize]);
+    let pose = if matches!(phase, crate::verify::PairPose::PinN) {
+        pre
     } else {
-        &pst.ents[report.human_slot as usize]
+        post
     };
-    let pose = carpet_pose_mc2(pose_src);
-    world.tick(pose, cmd);
+    if matches!(phase, crate::verify::PairPose::Pair) {
+        world.tick_pose_pair(pre, post, cmd);
+    } else {
+        world.tick(pose, cmd);
+    }
     let mut castles = [0i16; 8];
     for (i, p) in pst.players.iter().take(8).enumerate() {
         castles[i] = p.castle;
@@ -841,6 +1048,84 @@ pub(crate) fn append_sprite_diffs_mc2(
     }
 }
 
+/// ⭐ A HELD PHASE BYTE IS NOT A CAPTURE TEAR — IT IS THE SIGNATURE OF
+/// A NULL-DISPATCH ACTION. `UpdateEntities_57730` bumps
+/// `byte_0x3E_62` only INSIDE the arm that actually ran a handler
+/// (EF:40172, guarded by `str_D4C48ar[class].dword_10[action].word_4
+/// == action` and `.dword_10 != 0`), so an entity parked in an action
+/// whose dispatch row is disabled never ticks and its phase byte rests
+/// at the spawn stamp (`NewEvent_4A050`, Events.cpp:577 — the byte is
+/// seeded to the slot index) for the entity's whole life.
+///
+/// This is the complete no-bump set, read off the SHIPPED action
+/// tables `x_DWORD_D4C52ar_str<class>0` (EventsFunctions.cpp:1146-2030;
+/// row = `{dword_0, word_4, address_6, dword_10}`, EventsFunctions.h:223):
+/// a row is no-bump iff `word_4 != action || dword_10 == 0`. Every
+/// other class's only such row is its array TERMINATOR, which no
+/// entity ever holds, so only classes 5 and 10 appear here.
+///   class 5:  0x28-0x47, 0x58-0x5F (real addresses, `dword_10 == 0`),
+///             0xEA — the m27 TIER-2 SEGMENT (EF:1477; the 9-per-branch
+///             spline bodies, moved only by the head's `sub_2AA90`).
+///   class 10: 0x27/0x2F/0x31/0x32 (`word_4 == 0`), 0x2E, 0x3F
+///             (`word_4 == 0x29`), 0x52, 0x54 — 0x54 (EF:1686) is the
+///             (10,77) FIRE-SPHERE SATELLITE, 0x52 (EF:1684) its
+///             (10,75) sibling; both are moved only by their hub.
+///
+/// ⚠ class-5 0xE9 (the m27 BRANCH) is a null row too and is
+/// deliberately NOT listed: the body's `sub_29A90` bumps it out of
+/// band on every tick (EF:19804), and the recording agrees — 191,695
+/// of 191,695 `(5,27)` action-233 pairs on mc2l22 advance by exactly
+/// 1. It stays under the +1 test.
+///
+/// ⚠⚠⚠ **DEFAULT OFF — SESSION 96 LEFT THIS UNMEASURED.** The dig that
+/// wrote the citation above was stopped at session close before it
+/// reported an ON/OFF pair, so nobody has ever measured what this
+/// un-exclusion grades. It is an INSTRUMENT change that deliberately
+/// WIDENS grading (it un-excludes ~1.7M slot-exclusions on mc2l22
+/// alone), and the campaign's standing rule is that a tool change ships
+/// only with its proof — ⭐⭐⭐ **A GRADING ORACLE TUNED TO ITS OWN
+/// SCORE CAN HIDE A PORT BUG.** Set `MGC_TEAR_PHASE_LAW=1` to arm it.
+/// NEXT SESSION: arm it, re-cut both focus censuses, and check whether
+/// the newly-graded rows are CLEAN (the citation is right and the guard
+/// was over-firing) or DIRTY (a wall was hiding behind the exclusion —
+/// which would mean the "dirty ticks remaining" figure is a floor).
+fn mc2_no_bump_action(class: u8, action: u8) -> bool {
+    static ARMED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ARMED.get_or_init(|| std::env::var_os("MGC_TEAR_PHASE_LAW").is_some()) {
+        return false;
+    }
+    match class {
+        5 => matches!(action, 0x28..=0x47 | 0x58..=0x5F | 0xEA),
+        // ⚠ OPT-IN. The class-10 rows are just as well cited, but
+        // un-excluding them UNCOVERS A WALL rather than confirming
+        // conformance: on mc2l22 the (10,77) FIRE-SPHERE SATELLITES
+        // (action 0x54) alone take the census from 673 to 1935 dirty
+        // pairs and 5,219 to 306,813 unexplained field rows —
+        // x/y/z/pitch on 387 satellite slots over 1,287 ticks, the
+        // constellation tumble (`sub_33B20`, mc2/tail.rs) drifting
+        // out of phase. That is a REAL port debt this guard has been
+        // hiding, not noise, but it is a lane-sized dig of its own:
+        // grade it deliberately with `MGC_TEAR_NO_BUMP_C10=1` once
+        // the tumble law lands, so the headline census does not jump
+        // 300k rows in the middle of another grind. The arm itself is
+        // sound: the same flag on mc2l6-rival-spells-galore drops the
+        // 4,004 `(10,75)` sibling-satellite exclusions and the census
+        // comes back BYTE-IDENTICAL, so only mc2l22's `(10,77)` is
+        // carrying debt.
+        10 if no_bump_class10() => {
+            matches!(action, 0x27 | 0x2E | 0x2F | 0x31 | 0x32 | 0x3F | 0x52 | 0x54)
+        }
+        _ => false,
+    }
+}
+
+/// Opt-in for the class-10 half of the no-bump set — see
+/// `mc2_no_bump_action`.
+fn no_bump_class10() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("MGC_TEAR_NO_BUMP_C10").is_some())
+}
+
 /// Slots live at both ends whose phase byte did NOT advance exactly
 /// once — per-entity capture tear inside an accepted pair.
 pub(crate) fn torn_slots(pst: &RetailMc2, st: &RetailMc2) -> std::collections::BTreeSet<u16> {
@@ -851,6 +1136,20 @@ pub(crate) fn torn_slots(pst: &RetailMc2, st: &RetailMc2) -> std::collections::B
             continue;
         }
         if b.phase3e.wrapping_sub(a.phase3e) != 1 {
+            // A HELD phase byte under an action that retail never
+            // dispatches is the entity's normal cadence, not a
+            // capture tear — see `mc2_no_bump_action`. Excluding it
+            // blinded the census to whole families for whole takes
+            // (mc2l22: 45 m27 tier-2 segments, 1,725,255 of the
+            // take's 2,298,158 slot-exclusions, ungraded for 38,340
+            // consecutive pairs). Set `MGC_TEAR_PHASE_STRICT` to
+            // restore the bare `!= 1` test.
+            if a.phase3e == b.phase3e
+                && a.action45 == b.action45
+                && mc2_no_bump_action(a.class3f, a.action45)
+            {
+                continue;
+            }
             torn.insert(slot as u16);
         }
     }
@@ -937,6 +1236,7 @@ pub(crate) fn build_world_mc2(
         Some(mgc_formats::MapType::Night) | Some(mgc_formats::MapType::Cave)
     ));
     w.set_mc2_doom_level(header.is_some_and(|h| h.gfx_type & 2 != 0));
+    w.set_mc2_castle_purge_level(header.is_some_and(|h| h.gfx_type & 4 != 0));
     w.set_mc2_level_replayed(replayed);
     if let Some(stages) = pkg.stages.as_ref() {
         let rows: Vec<(i8, i16, i16, i16)> = stages
@@ -1351,8 +1651,14 @@ mod tests {
         assert!(both.fire_left && both.fire_right);
     }
 
-    fn ring_player(menu: u8, pending: u8, cursor: u8) -> mgc_formats::mgcr::RetailPlayerMc2 {
+    fn ring_player(
+        mb: u32,
+        menu: u8,
+        pending: u8,
+        cursor: u8,
+    ) -> mgc_formats::mgcr::RetailPlayerMc2 {
         mgc_formats::mgcr::RetailPlayerMc2 {
+            move_bits: mb,
             menu_state: menu,
             hand_pending: pending,
             ring_cursor: cursor,
@@ -1360,26 +1666,24 @@ mod tests {
         }
     }
 
-    /// The 0x40 gate, per PI:806/836/880-84: the ring pane open, no
-    /// equip pending, and BOTH press latches up. Every neutered
-    /// coordinate must refuse — the whole point is that the lane is
-    /// narrow enough for the corpus to never reach it.
+    /// ROUND 104 — the 0x40 lane reads the RECORDED command word, not
+    /// the press latches. PI:806/836/880-84 are how the input layer
+    /// RAISES the bit; the recording carries the result on the same
+    /// `move_bits` the two hand bits ride, so reconstructing it was
+    /// asking a question `sub_5F380`'s bare `testb $0x40` never asks —
+    /// and it is why the lane read "corpus-unreachable" while mc2l22
+    /// t=63318 was tripping it.
     #[test]
-    fn mc2_ring_cast_bit_needs_the_pane_and_both_latches() {
-        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 9), (true, true)), Some(9));
-        // MenuState 8 is the pane's second face.
-        assert_eq!(ring_cast_mc2(&ring_player(8, 0, 0), (true, true)), Some(0));
-        // Flying (0) / map (6): the pane is closed, PI:880 is not even
-        // in the executed branch.
-        assert_eq!(ring_cast_mc2(&ring_player(0, 0, 9), (true, true)), None);
-        assert_eq!(ring_cast_mc2(&ring_player(6, 0, 9), (true, true)), None);
-        // A pending equip takes the OTHER branch (PI:816-42).
-        assert_eq!(ring_cast_mc2(&ring_player(5, 1, 9), (true, true)), None);
-        // One latch alone selects a category / equips a hand instead.
-        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 9), (true, false)), None);
-        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 9), (false, true)), None);
-        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 9), (false, false)), None);
+    fn mc2_ring_cast_bit_rides_the_recorded_command_word() {
+        // The pane coordinates the sender uses, with the bit set.
+        assert_eq!(ring_cast_mc2(&ring_player(0x40, 5, 0, 9)), Some(9));
+        assert_eq!(ring_cast_mc2(&ring_player(0x40, 8, 0, 0)), Some(0));
+        // mc2l22 t=63318 verbatim: the bit ALONE, both hand bits clear.
+        assert_eq!(ring_cast_mc2(&ring_player(64, 5, 0, 20)), Some(20));
+        // No bit, no cast — however inviting the pane state looks.
+        assert_eq!(ring_cast_mc2(&ring_player(0, 5, 0, 9)), None);
+        assert_eq!(ring_cast_mc2(&ring_player(0x30, 5, 0, 9)), None);
         // The cursor's three padding cells are not spells.
-        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 27), (true, true)), None);
+        assert_eq!(ring_cast_mc2(&ring_player(0x40, 5, 0, 27)), None);
     }
 }

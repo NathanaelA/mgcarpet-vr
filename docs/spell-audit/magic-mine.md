@@ -140,8 +140,8 @@ impact 78.
 | Impact effect | **(10,78)** persistent proximity mine | **(10,0)** fireball | Critical |
 | Persistent mine entity | (10,78)/`sub_50840` + tick `sub_3A8B0` (arm + proximity + detonate) | **Does not exist** | Critical |
 | Proximity trigger | Arm 16–65 ticks, scan every 16, radius 14 tiles, model≤1 class-3 | None (contact-detonate) | Critical |
-| Damage timing | Delayed, on enemy approach, via `sub_6DCA0` relaunch, `byte_0x43` 1/2/4 | Immediate fireball area damage on impact | High |
-| Tier scaling | Lifespan 1000/5000/10000 + blast 1/2/4 | Only carries `f44` damage | Medium |
+| Damage timing | Delayed, on enemy approach, as a `sub_6DCA0` relaunch of the SWALLOWED spell at the tripper | Immediate fireball area damage on impact | High |
+| Tier scaling | Lifespan 1000/5000/10000 + `byte_0x43_67` = 1/2/4/8 BURSTS (not an intensity) | Only carries `f44` damage | Medium |
 | Sound | Cast sound 15 | Sound 15 | OK |
 
 Net: the port delivers **immediate contact damage** where retail delivers a
@@ -174,9 +174,18 @@ Creator (`sub_50840`): `max_life = 1000`, `action = 0x55`, sprite **66**,
    `r = 9377*r + 9439`, per `docs/traces/mc2-class10-*` RNG note).
 3. **Proximity scan** every 16 ticks: class-3 list, `model ≤ 1`, distance `< 3584`
    (14 tiles), exclude owner. On hit → detonate.
-4. **Detonate**: relaunch the blast at the mine position (port equivalent of
-   `sub_6DCA0` for spell 23 at intensity `byte_0x43`) and award XP
-   `sub_6D8B0(owner, 0x17, 1)` (the port's `mc2_cast_xp` push, spell 23).
+4. **Detonate**: ⚠ **THIS STEP WAS WRONG AND `byte_0x43` IS NOT AN INTENSITY.**
+   `sub_3A8B0` case 5 (EF:29974-30005) relaunches the **SWALLOWED** spell —
+   `sub_6DCA0(owner, &mine.position, mine.word_0x36_54,
+   &SPELLS[that].subspell[mine.word_0x34_52], 0, 1)` — owned by the mine's owner
+   (`bolt.id_0x1A_26 = mine.word_0x32_50`) and aimed at the tripper
+   (`bolt.word_0x96_150 = mine.word_0x96_150`, `sub_655C0`). There is no spell-23
+   blast and no `area_write` anywhere in the case. `byte_0x43_67` is the number of
+   BURSTS the mine will fire (1/2/4/8 by tier), `fontTypeIndex_0x3D_61` the number
+   of shots per burst (6 or 1, from the swallowed tier's `fontType_0x1B & 1`), and
+   a mine that has spent a burst RE-ARMS through case 2 rather than dying. The XP
+   award is real: `sub_6D8B0(owner->id, 0x17, 1)` (EF:29979), the port's
+   `mc2_cast_xp` push.
 5. Self-expire when lifespan runs out with no trigger.
 
 **C. Impact routing.** Add `(10, 78) => <spawn persistent mine>` to
@@ -184,8 +193,10 @@ Creator (`sub_50840`): `max_life = 1000`, `action = 0x55`, sprite **66**,
 of falling through the misfit `_ =>` branch (which currently degrades it to a bare
 area-damage write).
 
-**Sounds.** Cast: 15 (already correct). Detonation: whatever `sub_6DCA0` plays for
-spell 23 — trace when porting the blast (OPEN).
+**Sounds.** Cast: 15 (already correct). Detonation: ✅ RESOLVED — `sub_6DCA0`'s
+own tail (EF:44232-33), which plays the SWALLOWED spell's cast sound at the
+OWNER's slot: 9 for fireball, 9/23 for charged/uncharged lightning, 15 otherwise.
+There was never a spell-23 sound to trace.
 
 ---
 
@@ -197,21 +208,63 @@ impact (10,78), sound 15). The (9,29)→(10,78)→`sub_3A8B0` chain is decompile
 end to end; the player report independently corroborates the port defect.
 
 **Open questions:**
-1. **`word_0x36_54` / `word_0x34_52` provenance on the mine.** Phase 1 waits on
-   `word_0x36_54 != 0xffff` and phase 5's `sub_6DCA0` uses these as the blast's
-   spell/subspell. `sub_50840` leaves `word_0x36_54 = -1`; the writer that sets it
-   to spell 23 / the tier subspell (likely in `sub_6CAC0`'s `dword_0x10_16`
-   propagation or the carrier) was not pinned in this pass. Trace before porting
-   the exact detonation blast.
-2. **Exact detonation blast of `sub_6DCA0` for spell index 23.** `sub_6DCA0`'s
-   documented a3-map (`mc2-class9-flyers.md` §3.4) doesn't list 23; confirm which
-   projectile family / damage it emits (and its sound) so the port's detonation
-   matches, rather than assuming a fireball.
+1. ✅ **RESOLVED (session 97) — `word_0x36_54` / `word_0x34_52` provenance, and
+   it is nothing like the guess.** The writer is **`sub_68AC0`** (EF:55430-47),
+   and it is not a propagation from the cast at all: **detonating one of your own
+   spells ON the mine is what charges it.** When a projectile detonates on a
+   `(10,78)` whose `word_0x32_50 == projectile.id_0x1A_26` and whose
+   `word_0x36_54 == -1`, it runs `a2x->word_0x36_54 = v5x->model_0x40_64` (the
+   SPELL INDEX of whatever you fed it) and `a2x->word_0x34_52 =
+   v5x->byte_0x46_70` (that spell's TIER), stamps `v5x->word_0x2E_46 = 1` on the
+   projectile, and suppresses the impact tail — the mine SWALLOWS the spell.
+   ⇒ **A mine is not armed with Magic Mine's own row; it is armed with whatever
+   spell you shoot into it, at that spell's tier.** That also answers Q2's
+   premise: `sub_6DCA0` was never going to list 23, because the blast is the
+   SWALLOWED spell's, not the mine's.
+   ⭐ And the mine BENDS your own qualifying bolts into itself to make that easy:
+   `sub_68940` (EF:55315) is a ±0xAA guide cone — 2.4x the generic 0x71 autoaim —
+   that runs BEFORE `sub_67CB0` at EF:62907 / 63093 / 63450 / 63589.
+   ⚠⚠ **THIS REFUTED §6's old premise that the player could never trigger a mine
+   in retail**, on which three "better than retail" port choices had been ruled.
+   ✅ **THE RE-RULING CAME (session 97): *"let's revert to retail behaviour and
+   get rid of the deviation."*** All three are retired, the
+   `gameplay.patches.mc2_magic_mine` option is gone, and the port runs
+   `sub_3A8B0` cases 3/4/5 unconditionally — see `docs/DEVIATIONS.md`,
+   "mgc-sim — MC2 roster + tail".
+   Landed and measured session 97: mc2l6-rsg free-run 13,544 → 13,569, pinned by
+   `conformance/fixtures/mc2l6/the-magic-mine-bends-and-swallows-its-owner-s-sp.mgcr`.
+   Kill switches `MGC_NO_MINE_BEACON`, `MGC_NO_MINE_SWALLOW`,
+   `MGC_NO_MINE_TOKEN_REARM`.
+2. ✅ **RESOLVED (session 97) — THE QUESTION WAS MALFORMED, AND ITS OWN
+   PREMISE SAID SO.** There is no "detonation blast of `sub_6DCA0` for spell
+   index 23" and there never could be: `sub_3A8B0` case 5 passes
+   **`a1x->word_0x36_54`** — the SWALLOWED spell — as `a3`, never 23. That is why
+   the a3-map (`mc2-class9-flyers.md` §3.4) has no row for 23, and Q1's answer had
+   already said it in as many words. The relaunch is one `sub_6DCA0` call per
+   shot with `a5 = 0` (no caster speed boost, the [384, 0x2000] clamp only) and
+   `a6 = 1` (the cast sound, at the OWNER's slot); `word_0x36_54 == 7 &&
+   life_0x1A == 2` — Lightning III — fires **two** bolts fanned ±113, the same
+   twin the cast site builds. Ported as `Gen::mc2_mine_detonate`; kill switch
+   `MGC_NO_MINE_RELAUNCH`.
+   ⭐ Two more inventions fell out of the same read, both pinned by
+   `conformance/fixtures/mc2l6/the-magic-mine-is-born-at-the-carrier-s-position.mgcr`
+   and `…the-magic-mine-s-sink-steps-by-the-pre-increment.mgcr`: `sub_50840`
+   spawns the mine at the CARRIER's position, not on the ground (EF:36968/36981 —
+   rsg's free-run wall on its own), and `sub_67960`'s tail is an enumerated
+   THREE-write block that touches neither `id_0x1A_26` nor `word_0x96_150` nor
+   `mana_0x90_144` (EF:59356-59). Free run: mc2l6-rsg 13,831 → 14,996.
 3. **Carrier count per cast.** `sub_6CAC0` fires on the `word_0x2E_46 ==
    word_0x30_48` tick — believed to be exactly one mine per cast; verify it does
    not re-lay while the spell-holder lives.
-4. **Model-78 vs -78 homing** (`sub_67960` first-tick branch) — low priority; only
-   matters if opposing mines coexist.
+4. ✅ **RESOLVED (session 97) — and it was not "low priority", it was load-bearing.**
+   `sub_67960`'s impact block writes `resultx->word_0x32_50 = a2x->id_0x1A_26`
+   (EF:59356) — the OWNER seat the beacon scan matches on — and the port never
+   wrote it, so every mine carried `f52 == 0`. Compounding it: a mine's own
+   `@0x1A` is its **own slot** (retail slot 178 reads `f1a` 178) precisely because
+   the owner lives in `@0x32` instead, so `sub_10780`'s self-exclusion
+   (`a1x->id != v5x->id`, EF:3769) PASSES for the caster's own bolt in retail,
+   where the port's fused `id24` held the caster and skipped. `(10,78)` is now in
+   the `probe_self_id` unfuse list beside `(15,_)`, `(10,42)` and `(10,57)`.
 
 **Suggested test.** On an MC2 level, cast Magic Mine at open ground with no enemy
 in front: retail lays a stationary sprite-66 mine ~16 tiles ahead that persists and

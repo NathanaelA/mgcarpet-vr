@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Landing-side twin of tools/conform: runs the binary out of
+# `target/land` so a main-session rebuild never swaps the binary
+# under the parallel agents, who share `target/release` through
+# `tools/conform` (SESSION 92's build lesson).
+#
+# Build with: cargo build --release --target-dir target/land -p mgc-conform
+set -u
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--env)
+		[ $# -ge 2 ] || { echo "tools/landconform: --env needs K=V" >&2; exit 2; }
+		case "$2" in
+		*=*) export "${2?}" ;;
+		*) echo "tools/landconform: --env wants K=V, got '$2'" >&2; exit 2 ;;
+		esac
+		shift 2
+		;;
+	--env=*)
+		case "${1#--env=}" in
+		*=*) export "${1#--env=}" ;;
+		*) echo "tools/landconform: --env wants K=V, got '${1#--env=}'" >&2; exit 2 ;;
+		esac
+		shift
+		;;
+	*) break ;;
+	esac
+done
+ulimit -v "${MGC_CONFORM_VMAX:-8000000}"
+exec target/land/release/mgc-conform "$@"

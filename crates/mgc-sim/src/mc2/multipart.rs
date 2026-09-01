@@ -44,8 +44,14 @@
 //!   (the out-of-pool human sentinel must read as "gone").
 //! - `word_0x96_150` → f146 (m22 head grow timer / segment head-ref
 //!   · m27 branch target). `playerEntityIndex_0x94_148` (the m22
-//!   target player) → dest_x — creatures never carry a portal
-//!   destination.
+//!   target player) → f144, the uniform @0x94 home the importer
+//!   restores per pair and the graded `player_ent_idx` obs lane
+//!   reads. (It used to ride dest_x, which the importer fills from
+//!   the dead @0x9A — every replayed pair forgot the target: the
+//!   0xB1 sweep recolored with the neutral base 52 instead of the
+//!   owner's 105 (mc2l22 t=16-24 f5a 109/56) and ended in 0xB0
+//!   instead of 0xB2 (t=27 action 178/177), after which the stale
+//!   segment tags re-fired the relay.)
 //! - `byte_0x3B_59` (m27 branch index 0..4 / the BODY's live-branch
 //!   gauge) → f50 — free on this family (MC1's damage-response
 //!   countdown never runs on MC2 creatures).
@@ -77,9 +83,9 @@
 //!   MC2 map-only house pose and the cave balloon), and the burrow
 //!   ops carry the bit-3 targetable toggle (flags 0x08) — the
 //!   billboard-suppress bit live_poses already honors.
-//! - `byte_0x5D_93` (palette-shade byte of `sub_49D50`) is
-//!   renderer-side and unmodeled; the particle-row recolor lands in
-//!   type86 + the f78 spin only.
+//! - `byte_0x5D_93` (the sprite's ANIMATION FRAME COUNT — NOT a
+//!   palette shade; `sub_585A0` reads it in the sim) is stamped by
+//!   `sub_49D50` alongside type86 and the f78 spin, since round 98.
 //! - m27 `sub_2A7F0`'s low-power path perturbs the branch LCG by
 //!   the global `setting_30` counter — the post-increment turn
 //!   (incremented beside `Turn++` in PlayerEvents, EF:37557;
@@ -112,6 +118,33 @@ pub(crate) const CHILD_STATE: u8 = 232; // 0xE8
 /// m27 branch / tier-2 segment (body-driven, no self-dispatch).
 pub(crate) const BRANCH_STATE: u8 = 233; // 0xE9
 pub(crate) const TIER2_STATE: u8 = 234; // 0xEA
+
+/// `sub_29A90`'s `v34` on entry (retail `[ebp-0x10]`). See
+/// `m27_v34_carry_law`. Only `!= 0`, `> 4` and `& 1` are ever tested,
+/// so ANY even value above 4 is behaviourally identical; this one keeps
+/// remc2's magnitude and fixes only its parity.
+///
+/// ⚠⚠⚠ THIS IS AN APPROXIMATION OF AN UNINITIALISED READ, AND ITS LOW
+/// BIT IS NOT MODELLABLE — DO NOT RE-SWEEP IT (dig 99-17). The
+/// prologue at NETHERW.EXE 0x4E290 is `53 56 57 55 89 e5 83 ec 10`
+/// (`sub esp,0x10`) and the ONLY store into the 16-byte local block
+/// before the chain loop is `30 d2 / 88 55 fc` (`xor dl,dl; mov
+/// [ebp-0x4],dl` = `v37 = 0`, 0x4E2CA), so `[ebp-0x10]` genuinely
+/// enters as stack residue; its one writer is 0x4E351 and its readers
+/// 0x4E401/0x4E452. mc2l22 witnesses both parities on the SAME slots
+/// within four ticks — retail SKIPS the wander draw (odd) at t=53,912/
+/// 53,922/53,944/53,954/53,976/54,038/54,910/54,912/54,914/54,946/
+/// 54,974/54,978/55,006/55,010/55,038/55,042/55,070/55,074/55,089 and
+/// TAKES it (even) at t=53,168/53,848/53,857/53,858/53,880/53,889/
+/// 54,882/54,942, each confirmed as an exact ±1 step of the
+/// 9377/9439 LCG on the branch's own `rand`. The `!= 0` and `> 4`
+/// bits ARE stable (retail's `byte_0x46_70` is 4 at every one of
+/// those sites, both parities), which is why the magnitude here is
+/// right and only the parity is a coin toss. Even loses ~18 mc2l22
+/// segment heads, odd ~20; that ~18-head floor is a REGISTERED
+/// DEVIATION (see `conformance/known-deviations.json`
+/// `mc2l24-hydra-residual`), not a dig.
+const V34_ENTRY: u32 = 0x1000_002A;
 
 /// `str_D404C[5]` — the m27 per-branch spline parameters
 /// (engine/Type_D404C.cpp, a static array compiled into the binary;
@@ -210,13 +243,25 @@ impl Gen {
         }
     }
 
-    /// `sub_49D50` (EF:32847): the "color index" is a
-    /// `particlesParameters_D951C` row — sprite row + spin (the
-    /// palette-shade byte_0x5D_93 is renderer-side, unmodeled).
+    /// `sub_49D50` (EF:32847, shipped `NETHERW.EXE` file 0x6E550):
+    /// the "color index" is a `particlesParameters_D951C` row —
+    /// sprite row (@0x5A), the FRAME COUNT (@0x5D) and the yaw spin
+    /// (@0x52). ⚠ Unlike `SetEntityIndex_49C90` it does NOT clear
+    /// `animationFrame_0x5C_92` (verified in the disassembly: it
+    /// writes 0x5a, 0x5d and 0x52 and nothing else).
+    ///
+    /// ⚠⚠ THE OLD COMMENT HERE ("the palette-shade byte_0x5D_93 is
+    /// renderer-side, unmodeled") WAS WRONG on both counts —
+    /// `byte_0x5D_93` is the sprite's ANIMATION FRAME COUNT and
+    /// `sub_585A0` reads it in the SIM ([`Gen::mc2_anim_step`]).
     fn mc2_particle_row(&mut self, i: usize, row: u16) {
         let r = row as usize % SPRITE_PARAMS.len();
+        let frames = crate::mc2::mobs::mc2_sprite_frames(r);
         let e = &mut self.ent[i];
         e.type86 = r as u16;
+        if !crate::mc2::mobs::no_mc2_frames89() {
+            e.frames89 = frames;
+        }
         e.f78 = SPRITE_PARAMS[r].rot_speed_8 / 2;
     }
 
@@ -611,7 +656,7 @@ impl Gen {
             e.row156 = 90;
             e.f63 = ord;
             e.f66 = 3;
-            e.dest_x = 0; // playerEntityIndex_0x94_148
+            e.f144 = 0; // playerEntityIndex_0x94_148
             e.f78 = 0; // array.yaw
             e.frame88 = 0;
             e.f44 = 11; // word_0x2C_44 — spin rate
@@ -671,7 +716,7 @@ impl Gen {
         self.ent[seg].f71 = off as u8; // SIGNED ring offset
         self.ent[seg].tick70 = M22_BASE + 4; // 0xB4
         self.ent[seg].f44 = 0;
-        self.ent[seg].dest_x = 0;
+        self.ent[seg].f144 = 0;
         self.ent[seg].f140 = 0;
         self.ent[seg].f146 = head as u16; // word_0x96_150 = the worm head
         let (hx, hy, hz) = {
@@ -693,7 +738,7 @@ impl Gen {
     /// `sub_27590` (EF:17867): recolor head + chain to the owner's
     /// mana-sphere palette.
     fn mc2_m22_colorize(&mut self, head: usize) {
-        let base = self.mc2_ball_color(self.ent[head].dest_x);
+        let base = self.mc2_ball_color(self.ent[head].f144);
         let len = self.ent[head].f71;
         let hr = Self::m22_color_idx(base, len, 0);
         self.mc2_particle_row(head, hr);
@@ -708,7 +753,7 @@ impl Gen {
     /// `sub_27610` (EF:17893): per-link spacing/coil radius =
     /// 550 * the colorize row's rotSpeed / 1000.
     fn mc2_m22_shift_rot(&mut self, head: usize) {
-        let base = self.mc2_ball_color(self.ent[head].dest_x);
+        let base = self.mc2_ball_color(self.ent[head].f144);
         let len = self.ent[head].f71;
         let hrow = Self::m22_color_idx(base, len, 0) as usize % SPRITE_PARAMS.len();
         let v = 550 * SPRITE_PARAMS[hrow].rot_speed_8 as u32;
@@ -837,8 +882,8 @@ impl Gen {
         }
         let tag = self.ent[i].mail[1].1;
         if tag != 0 {
-            if tag != self.ent[head].dest_x {
-                self.ent[head].dest_x = tag;
+            if tag != self.ent[head].f144 {
+                self.ent[head].f144 = tag;
                 self.ent[head].tick70 = M22_BASE + 1; // 177
                 self.ent[head].f26 = ((self.ent[i].f71 as i8 as i16) << 8) as i16;
                 if tag == PLAYER_TARGET {
@@ -869,33 +914,124 @@ impl Gen {
         self.ent[i].flags |= 0x400;
     }
 
+    /// A/B toggle for the m22 CASTLE-ACQUIRE TARGET GATES (dig
+    /// 98-Q27): set `MGC_NO_M22_TARGET_GATES` to restore the
+    /// pre-2026-09-04 body, which resolved the possessed wizard's
+    /// castle without first asking whether that wizard was still a
+    /// live, unreaped class-3 record.
+    /// `NETHERW.EXE` 0x4B305-0x4B32D (`sub_26AA0`, EF:17337-42).
+    pub(crate) fn m22_target_gates_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M22_TARGET_GATES").is_none())
+    }
+
+    /// A/B toggle for the ANTI-STACK SPAN law (dig C2, session 96):
+    /// set `MGC_NO_M22_ANTISTACK_SPAN` to restore the pre-2026-09-03
+    /// WRAPPING 16-bit separation test.
+    fn m22_antistack_span_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M22_ANTISTACK_SPAN").is_none())
+    }
+
+    /// A/B toggle for the M27 PERTURB-TURN law (dig C2, session 96):
+    /// set `MGC_NO_M27_PERTURB_TURN` to restore the pre-2026-09-03
+    /// PRE-increment `setting_30` addend on the m27 branch bolt.
+    fn m27_perturb_turn(turn: u32) -> u32 {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *V.get_or_init(|| std::env::var_os("MGC_NO_M27_PERTURB_TURN").is_none()) {
+            turn.wrapping_add(1)
+        } else {
+            turn
+        }
+    }
+
+    /// A/B toggle for the ANTI-STACK ROSTER law (dig C2, session 96):
+    /// set `MGC_NO_M22_ANTISTACK_ROSTER` to restore the pre-2026-09-03
+    /// LIVE-POOL walk with its hand-rolled class/model/state/`0x400`
+    /// filter.
+    fn m22_antistack_roster_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M22_ANTISTACK_ROSTER").is_none())
+    }
+
     /// `sub_27120` (EF:17655): anti-stack z-push vs OTHER worms
     /// (id-keyed; own segments share the head's id and are skipped;
     /// the bucket holds heads only — 0xB4 is list-excluded).
+    ///
+    /// ⭐⭐⭐ THE SEPARATION TEST DOES NOT WRAP. `NETHERW.EXE`
+    /// +0x27168-9F (file offset 0x4B968) is three copies of
+    ///   `movsx eax,word[ebx+0x4c] ; movsx edx,word[ecx+0x4c]
+    ///    sub eax,edx ; cdq/xor/sub (abs) ; cmp eax,esi ; jnl`
+    /// — each coordinate is SIGN-EXTENDED to 32 bits FIRST and the
+    /// subtraction is 32-bit, so two worms straddling the ±32768
+    /// coordinate seam are 60,000+ apart, never adjacent. The port
+    /// subtracted in 16 bits and re-read the result as `i16`, which
+    /// silently wraps the seam into a short distance and fires the
+    /// +64 hop on a worm half a map away.
+    ///
+    /// mc2l22 t=1093→1094 is the witness: head 375 (x=35939, i16
+    /// −29597) vs head 360 (x≈32261, i16 +32261) — retail's span is
+    /// 61,858 ≥ hwin 7680 so retail HOLDS z (`explain 1094 375` shows
+    /// no `z` row and `f24 62 -> 61`, the ceiling-hold branch), while
+    /// the port's wrap gave 3,678 < 7680 and lifted the whole chain
+    /// +64 (15 rows, head 375 + segments 376..389).
     fn m22_antistack(&mut self, i: usize) {
-        let (ex, ey, ez, id, vwin, hwin) = {
+        let (ex, ey, ez, id, model, vwin, hwin) = {
             let e = &self.ent[i];
             (
                 e.x,
                 e.y,
                 e.z,
                 e.id24,
-                2 * e.f84 as i32 + 32,
-                2 * e.f80 as i32,
+                e.model65,
+                2 * e.f84 as i16 as i32 + 32,
+                2 * e.f80 as i16 as i32,
             )
         };
-        for j in 1..self.ent.len() {
+        // ⭐⭐ THE WALK IS THE TICK-TOP PER-MODEL ROSTER, NOT THE LIVE
+        // POOL. EXE +0x27141-4E loads `bytearray_38403x[model]` (the
+        // `movsx eax,byte[ebx+0x40]` model index into the `+0x9603`
+        // table) and chases `next_0` with `mov ecx,[ecx]`; the ONLY
+        // per-candidate test in the loop body is `id != self.id`
+        // (+0x2715E-66) plus the three box tests. Class, model, state
+        // and life were ALL settled when the roster was built at the
+        // top of the frame (EF:39987-40008), so re-asking them at the
+        // walk is wrong in both directions — and the port's
+        // `flags & 0x400` skip is an INVENTED guard retail has no
+        // trace of.
+        let roster: Vec<u16> = if Self::m22_antistack_roster_law() {
+            self.mob_chains.visible(model as usize).to_vec()
+        } else {
+            (1..self.ent.len())
+                .filter(|&j| {
+                    let c = &self.ent[j];
+                    c.class64 == 5
+                        && c.model65 == 22
+                        && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+                        && c.flags & 0x400 == 0
+                })
+                .map(|j| j as u16)
+                .collect()
+        };
+        for &sj in &roster {
+            let j = sj as usize;
             let c = &self.ent[j];
-            if c.class64 != 5
-                || c.model65 != 22
-                || c.id24 == id
-                || matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
-                || c.flags & 0x400 != 0
-            {
+            if c.id24 == id {
                 continue;
             }
-            let dx = ((ex.wrapping_sub(c.x)) as i16 as i32).abs();
-            let dy = ((ey.wrapping_sub(c.y)) as i16 as i32).abs();
+            let (dx, dy) = if Self::m22_antistack_span_law() {
+                // The EXE's `movsx` pair: widen each coordinate to 32
+                // bits BEFORE subtracting, so the span never wraps.
+                (
+                    ((ex as i16 as i32) - (c.x as i16 as i32)).abs(),
+                    ((ey as i16 as i32) - (c.y as i16 as i32)).abs(),
+                )
+            } else {
+                (
+                    ((ex.wrapping_sub(c.x)) as i16 as i32).abs(),
+                    ((ey.wrapping_sub(c.y)) as i16 as i32).abs(),
+                )
+            };
             let dz = ((ez as i32) - (c.z as i32)).abs();
             if dx < hwin && dy < hwin && dz < vwin && ez >= c.z {
                 let (x, y) = (self.ent[i].x, self.ent[i].y);
@@ -1035,8 +1171,8 @@ impl Gen {
             }
             let tag = self.ent[i].mail[1].1;
             if tag != 0 {
-                if tag != self.ent[i].dest_x {
-                    self.ent[i].dest_x = tag;
+                if tag != self.ent[i].f144 {
+                    self.ent[i].f144 = tag;
                     self.ent[i].tick70 = M22_BASE + 1;
                     self.ent[i].f26 = 0;
                     if tag == PLAYER_TARGET {
@@ -1136,7 +1272,7 @@ impl Gen {
         self.ent[seg].f71 = off as u8;
         self.ent[seg].tick70 = M22_BASE + 4;
         self.ent[seg].f44 = 0;
-        self.ent[seg].dest_x = 0;
+        self.ent[seg].f144 = 0;
         self.ent[seg].f140 = 0;
         self.ent[seg].f146 = head as u16;
         let (hx, hy, hz) = {
@@ -1185,7 +1321,7 @@ impl Gen {
                 self.m22_anim(i);
                 let center = (self.ent[i].f26 >> 8) as i16;
                 let radius = (self.ent[i].f26 & 0xFF) as i16;
-                let base = self.mc2_ball_color(self.ent[i].dest_x);
+                let base = self.mc2_ball_color(self.ent[i].f144);
                 let len = self.ent[i].f71;
                 let mut found = false;
                 let passes = if radius != 0 { 2 } else { 1 };
@@ -1201,7 +1337,7 @@ impl Gen {
                 }
                 if found {
                     self.ent[i].f26 = (radius + 1) | (center << 8);
-                } else if self.ent[i].dest_x != 0 {
+                } else if self.ent[i].f144 != 0 {
                     self.ent[i].tick70 = M22_BASE + 2; // → castle acquire
                 } else {
                     self.ent[i].tick70 = M22_BASE; // → idle
@@ -1216,12 +1352,66 @@ impl Gen {
                 if self.ent[i].f63 & 0x1F != 0 {
                     return;
                 }
-                let target = self.ent[i].dest_x;
+                let target = self.ent[i].f144;
                 let mut revert = false;
                 if target == 0 {
                     revert = true;
                 } else if self.ent[i].f126 <= self.ent[i].f130 {
                     // (still accelerated → hold in 0xB2 without any check)
+                    //
+                    // ⭐⭐⭐ THE THREE TARGET GATES — AN ABSENCE IN AN
+                    // ENUMERATED LIST. Before retail resolves the
+                    // castle it interrogates the POSSESSED WIZARD
+                    // ITSELF, and each answer reverts (LABEL_17):
+                    //   `NETHERW.EXE` 0x4B305-0x4B32D (linear
+                    //   0x26B05.., `sub_26AA0`, EF:17337-42):
+                    //     mov  0x1a3e4(,%eax,4),%eax   ; Entities[t]
+                    //     cmpb $0x3,0x3f(%eax)  ; jne LABEL_17
+                    //     cmpl $0x0,0x8(%eax)   ; jl  LABEL_17
+                    //     testb $0x4,0xd(%eax)  ; jne LABEL_17
+                    // i.e. the target must still be CLASS 3, must have
+                    // life >= 0 (a 32-bit `cmpl`, so the whole signed
+                    // life), and must not carry `struct_byte_0xc`
+                    // byte[1] bit 2 = dword bit 10 = the port's
+                    // `flags & 0x400` reap mark. Only then is
+                    // `dword_0xA4_164->CastleEntityIndex_0x3A_58`
+                    // read. The port asked NONE of the three: it went
+                    // straight to the castle lookup, so a worm that
+                    // had latched onto a wizard kept draining toward
+                    // that wizard's castle after the wizard died.
+                    // rsg t=25,532 is the witness: head slot 3 holds
+                    // `player_ent = 343`, and 343 (the human carpet)
+                    // is at `life = -1270`; retail reverts
+                    // (`scratch10 779 -> 0`, `player_ent 343 -> 0`,
+                    // `action 178 -> 177`) while the port found the
+                    // human's castle 63 nearly 10,000 units away,
+                    // failed the 0x100 range test and simply held in
+                    // 0xB2 forever.
+                    //
+                    // ⚠ THE HUMAN IS OUT-OF-POOL. `self.ent[343]` is a
+                    // RESERVED HOLE in the port (all zeroes — see
+                    // `dump-state --port`'s own banner), and the port
+                    // names the human carpet with the `PLAYER_TARGET`
+                    // sentinel wherever retail carries a pool index.
+                    // Its mirror of `life_0x8 < 0` is `ctx.pdead`, the
+                    // mid-walk republished `player.life < 0` echo that
+                    // exists for exactly this reason (world.rs:3047 —
+                    // "retail's followers read `life_0x8 < 0` off the
+                    // pool record live"); it is always class 3 and is
+                    // never reap-flagged.
+                    let t = target as usize;
+                    let dead_target = Self::m22_target_gates_law()
+                        && if target == PLAYER_TARGET {
+                            ctx.pdead
+                        } else {
+                            t < self.ent.len()
+                                && (self.ent[t].class64 != 3
+                                    || self.ent[t].act_life < 0
+                                    || self.ent[t].flags & 0x400 != 0)
+                        };
+                    if dead_target {
+                        revert = true;
+                    } else {
                     match self.m22_target_castle(target) {
                         None => revert = true,
                         Some(c) => {
@@ -1233,14 +1423,26 @@ impl Gen {
                                 let e = &self.ent[i];
                                 (e.x, e.y)
                             };
-                            // Retail SNAPS the live heading
-                            // (`roll_0x20_32 = tan2`, EF:17337) —
-                            // f34 rides along so the move core's
-                            // commit turn doesn't pull it back off
-                            // the castle between aligned frames.
+                            // ⭐ RETAIL RE-AIMS THE TARGET, NOT THE
+                            // LIVE HEADING. EF:17348 is one write —
+                            // `a1x->roll_0x20_32 = v5` — and the
+                            // move core (`sub_26FF0` → `sub_1B8C0`,
+                            // EF:17324, already run above) is what
+                            // walks the live yaw toward it, capped
+                            // at row 90's v_2 = 256/tick and one
+                            // frame LATE (the roll posted here is
+                            // first consumed on the NEXT tick).
+                            // mc2l22 t=12183 slot 360 (explain
+                            // t=12182→12183): retail yaw 1467 →
+                            // 1382 — it arrives at the STALE roll
+                            // 1382 — while roll goes 1382 → 1775;
+                            // the snap wrote 1775 into the heading
+                            // a whole slew early. Same law as m4's
+                            // militia (CONFORMANCE-FINDINGS "The
+                            // militiaman turns, never snaps", mc1l0
+                            // t=5051).
                             let aim = Self::angle_between(ex, ey, cx, cy);
                             self.ent[i].f34 = aim;
-                            self.ent[i].f30 = aim;
                             // `EuclideanDistXYZ_58490` is 2-D despite
                             // the name (Maths:738-42 never reads z —
                             // the morph::dist2d law). A 3-D check here
@@ -1260,10 +1462,11 @@ impl Gen {
                             }
                         }
                     }
+                    }
                 }
                 if revert {
                     self.ent[i].f26 = 0;
-                    self.ent[i].dest_x = 0;
+                    self.ent[i].f144 = 0;
                     self.ent[i].tick70 = M22_BASE + 1; // → chase/sweep
                 }
             }
@@ -1279,7 +1482,7 @@ impl Gen {
                     if len > 1 {
                         self.m22_resize(i, len - 2);
                     } else {
-                        if let Some(c) = self.m22_target_castle(self.ent[i].dest_x) {
+                        if let Some(c) = self.m22_target_castle(self.ent[i].f144) {
                             let total = self.ent[i].f140 + self.ent[c].f140;
                             self.ent[c].f140 = total.min(self.ent[c].f136);
                         }
@@ -1429,11 +1632,38 @@ impl Gen {
         }
     }
 
+    /// A/B toggle for the M27 BRANCH SCAN ROSTER law (round 104,
+    /// dig W2-F): `MGC_NO_M27_SCAN_ROSTER` restores the pool sweep
+    /// with the invented `model65 <= 1` filter the port carried
+    /// before.
+    fn m27_scan_roster_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_SCAN_ROSTER").is_none())
+    }
+
     /// `sub_2A6F0` (EF:20452-83) — the m27 branch's OWN wizard scan:
     /// walks the wizard list with STRICT `<` on both dist² and the
     /// nearest compare and NO invisibility/hidden filter — unlike
     /// the shared `mc2_wizard_scan` (a different retail sub), which
     /// must keep its filters for its other callers.
+    ///
+    /// ⭐⭐⭐ AND THE LIST IT WALKS IS `dword_38519`, THE TICK-TOP
+    /// CLASS-3 ROSTER (EF:20466 `v3x = x_D41A0_BYTEARRAY_4_struct.
+    /// dword_38519`, walked to `Entities_EA3E4[0]` through `next_0`)
+    /// — the same roster [`Gen::mc2_wizard_scan`] walks, with the
+    /// same consequence: **THE WALK RE-ASKS NOTHING.** Class, life
+    /// and the reap flag were settled when the case-3 arm of the
+    /// tick-top sweep built the list (EF:39972-85, `class == 3 &&
+    /// life >= 0`), and **THERE IS NO MODEL TEST ANYWHERE** — so a
+    /// (3,2) castle or a (3,3) can win this nearest-in-cone scan and
+    /// keep a farther wizard from winning it. The port swept the
+    /// LIVE pool with an invented `model65 <= 1`, exactly the filter
+    /// [`Gen::mc2_wizard_scan`] was already corrected for; mc2l22
+    /// t=21616 is the witness — retail's branch at slot 256 locks
+    /// the (3,3) at slot 268 (`byte_0x46_70` 1→2, `word_0x96_150`
+    /// 0→268) and enters the mode-2 whip, whose decel takes
+    /// `actSpeed` 192→176 at t=21617; the filtered port found
+    /// nothing and stayed in mode 0 with `actSpeed` pinned at 192.
     fn m27_wizard_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
@@ -1455,9 +1685,17 @@ impl Gen {
             }
         };
         consider(ctx.px, ctx.py, PLAYER_TARGET);
-        for (j, c) in self.ent.iter().enumerate().skip(1) {
-            if c.class64 == 3 && c.model65 <= 1 && c.act_life >= 0 && c.flags & 0x400 == 0 {
-                consider(c.x, c.y, j as u16);
+        if Self::m27_scan_roster_law() {
+            for c in 0..self.wiz_chain.visible_len() {
+                let j = self.wiz_chain.list[c] as usize;
+                let w = &self.ent[j];
+                consider(w.x, w.y, j as u16);
+            }
+        } else {
+            for (j, c) in self.ent.iter().enumerate().skip(1) {
+                if c.class64 == 3 && c.model65 <= 1 && c.act_life >= 0 && c.flags & 0x400 == 0 {
+                    consider(c.x, c.y, j as u16);
+                }
             }
         }
         best.map(|(s, _)| s)
@@ -1717,7 +1955,24 @@ impl Gen {
         if low {
             let d = self.mc2_rand(br);
             // The `+= setting_30` perturb after the roll (EF:20521).
-            self.mc2_rand_perturb(br, ctx.mc2_turn);
+            //
+            // ⭐⭐⭐ A LAW LANDED ON ONE CALL PATH IS NOT LANDED.
+            // `setting_30` is bumped by PlayerEvents (EF:37557,
+            // beside `Turn_2BE0++`) BEFORE the entity walk reads it,
+            // so inside a tick the global reads (recorded turn@t)+1.
+            // The port already established exactly that for the cave
+            // drip — `World::tick_inner`'s "POST-increment counter"
+            // note bumps `mc2_turn` before the `& 7` cadence test —
+            // but `MobCtx::mc2_turn` is captured at the tick TOP, one
+            // short, and this perturb spent the pre-increment value.
+            //
+            // mc2l22 dates it: 126 of the take's 161 dirty (5,27)
+            // `rand` rows are off by EXACTLY −1 (121 distinct ticks,
+            // 5 slots, t=16824..55120), and `mana_regen` — the `d %
+            // 12 > 7` consumer of the SAME draw — is clean on every
+            // one of them, so the LCG step is right and only the
+            // addend is short.
+            self.mc2_rand_perturb(br, Self::m27_perturb_turn(ctx.mc2_turn));
             self.ent[br].f136 = ((d % 12 > 7) as i32) + 1;
         }
         let regen = self.ent[br].f136;
@@ -1770,18 +2025,69 @@ impl Gen {
     /// own; the world loop skips their f63).
     pub(crate) fn m27_drive(&mut self, body: usize, ctx: &MobCtx) {
         let mut br = self.ent[body].f54 as usize;
+        // ⭐ `v34` = retail's `[ebp-0x10]`, a FUNCTION-scope local of
+        // `sub_29A90` with exactly ONE writer (NETHERW.EXE 0x4E351,
+        // inside the draw-B arm) and TWO readers (0x4E401, 0x4E452),
+        // and NO initialiser anywhere in the body. It therefore
+        // CARRIES from one branch of the f54 chain to the next.
+        let mut v34: u32 = Self::m27_v34_seed();
         while br != 0 {
             let next = self.ent[br].f54 as usize;
             if self.ent[br].tick70 == BRANCH_STATE {
-                self.m27_drive_branch(body, br, ctx);
+                self.m27_drive_branch(body, br, ctx, &mut v34);
             }
             br = next;
         }
     }
 
-    fn m27_drive_branch(&mut self, body: usize, br: usize, ctx: &MobCtx) {
+    /// A/B toggle for the wander draw's behaviour-row read (dig
+    /// 99-17): `MGC_NO_M27_WANDER_OWN_ROW` restores the hardcoded
+    /// `BEHAVIOR[103]` the port carried before. Provably neutral on
+    /// the corpus (every (5,27) branch, native or imported, carries
+    /// row 103), so this is an invented-constant removal, not a
+    /// behaviour change.
+    fn m27_wander_own_row_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_WANDER_OWN_ROW").is_none())
+    }
+
+    fn m27_wander_row(&self, br: usize) -> i16 {
+        if Self::m27_wander_own_row_law() {
+            BEHAVIOR[self.ent[br].row156 as usize].v_30
+        } else {
+            BEHAVIOR[103].v_30
+        }
+    }
+
+    /// A/B toggle for the M27 BRANCH `v34` CARRY law (dig 99-11):
+    /// set `MGC_NO_M27_V34_CARRY` to restore the pre-2026-09-04 body,
+    /// which re-seeded `v34` to remc2's invented `0x1000002B` for
+    /// EVERY branch instead of carrying it down the chain.
+    fn m27_v34_carry_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_V34_CARRY").is_none())
+    }
+
+    fn m27_v34_seed() -> u32 {
+        if !Self::m27_v34_carry_law() {
+            return 0x1000_002B;
+        }
+        static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+        *V.get_or_init(|| {
+            std::env::var("MGC_M27_V34_SEED")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(V34_ENTRY)
+        })
+    }
+
+    fn m27_drive_branch(&mut self, body: usize, br: usize, ctx: &MobCtx, v34c: &mut u32) {
         let mut v37 = 0u8; // projectile-this-tick flag
-        let mut v34: u32 = 0x1000_002B; // the leftover-nonzero seed (EF:19783)
+        let mut v34: u32 = if Self::m27_v34_carry_law() {
+            *v34c
+        } else {
+            0x1000_002B // the leftover-nonzero seed (EF:19783)
+        };
         let v5 = self.ent[br].f71;
         self.ent[br].f63 = self.ent[br].f63.wrapping_add(1);
 
@@ -1795,6 +2101,7 @@ impl Gen {
                 let d = self.mc2_rand(br); // DRAW #B
                 let v6 = d & 7;
                 v34 = v6;
+                *v34c = v6;
                 let v7 = self.ent[br].f40;
                 if v7 != 0 {
                     if v6 < 4 {
@@ -1839,14 +2146,38 @@ impl Gen {
                     }
                     if self.ent[br].f63 & 7 == 0 && v34 & 1 == 0 {
                         let d = self.mc2_rand(br); // DRAW #C — wander yaw
-                        let fov = BEHAVIOR[103].v_30.max(1) as u32;
+                        // ⭐ THE BRANCH'S OWN BEHAVIOUR ROW, NOT A
+                        // HARDCODED 103 (dig 99-17). NETHERW.EXE
+                        // 0x4E462 `8b 8b a0 00 00 00  mov ecx,
+                        // DWORD PTR [ebx+0xa0]` loads the BRANCH
+                        // record's `dword_0xA0_160` (ebx = ix, the
+                        // branch — NOT the body in [ebp+0x14]) and
+                        // 0x4E475 `0f bf 79 1e  movsx edi,WORD PTR
+                        // [ecx+0x1e]` sign-extends that row's `v_30`
+                        // (EF:19877-79 `ix->dword_0xA0_160x->
+                        // word_160_0x1e_30`). The baked-in 103 is
+                        // correct only because `sub_2AD40` stamps
+                        // `&str_D7BD6[103]` on every branch
+                        // (EF:20787) and the importer resolves
+                        // `ptr_a0` back to the same row — an
+                        // invented constant that happens to hold.
+                        // ⚠ 0x4E47D is a BARE `f7 f7  div edi` on
+                        // the SIGN-EXTENDED word, so a NEGATIVE row
+                        // divides as a huge unsigned (remainder =
+                        // the whole draw, which `as i32 as u32`
+                        // reproduces) and a ZERO row would `#DE`;
+                        // `.max(1)` survives only as the crash guard
+                        // for that unreachable zero. Whole-take
+                        // mc2l22 census BYTE-IDENTICAL on and off.
+                        let v30 = self.m27_wander_row(br);
+                        let fov = (v30 as i32 as u32).max(1);
                         let w12 = D404C[(self.ent[br].f50 as usize).min(4)][D404C_W12];
                         // EF:19878 stores the wander sum UNMASKED —
                         // the yaw lane legitimately carries >0x7FF
                         // (mc2l24 t=2's (5,27) heading family; the
                         // one masking site in the machine is the
                         // body turn, EF:20967).
-                        let base = (self.ent[body].f30 as i32 + w12 as i32 - fov as i32) as u16;
+                        let base = (self.ent[body].f30 as i32 + w12 as i32 - v30 as i32) as u16;
                         self.ent[br].f30 = base.wrapping_add((d % fov) as u16);
                     }
                 }
@@ -2184,10 +2515,63 @@ impl Gen {
         }
     }
 
+    /// A/B toggle for the M27 MOVER FLAG-WORD law (round 104, dig
+    /// W2-F): `MGC_NO_M27_MOVE_FLAGS` restores the pre-2026-09-05
+    /// `m27_move`, which touched the flag word nowhere at all.
+    fn m27_move_flags_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_MOVE_FLAGS").is_none())
+    }
+
+    /// `sub_2AF10`'s blocked-status stamp (retail byte[2] bit 2).
+    fn m27_set_blocked(&mut self, body: usize, on: bool) {
+        if !Self::m27_move_flags_law() {
+            return;
+        }
+        if on {
+            self.ent[body].flags |= super::mobs::F_BLOCKED;
+        } else {
+            self.ent[body].flags &= !super::mobs::F_BLOCKED;
+        }
+    }
+
     /// The m27 ground mover (`sub_2AF10` EF:20869) — returns
     /// 1 same-tile / 2 moved / 3 turned / 4 fully blocked (which
     /// arms the 0xD8 teleport in place). `commit` = the a2 flag.
     pub(crate) fn m27_move(&mut self, body: usize, commit: bool) -> u8 {
+        if Self::m27_move_flags_law() {
+            // ⭐⭐⭐ THE MOVER'S OWN GRAB RELEASE (EF:20885-89 —
+            // NETHERW.EXE 0x4F71E `f6 c6 10  test dh,0x10` /
+            // 0x4F72C `80 63 0c fe  and BYTE PTR [ebx+0xc],0xfe` /
+            // 0x4F734 `80 e5 ef  and ch,0xef`): retail's m27 body
+            // mover clears the quake GRAB latch (byte[2] bit 4) on
+            // every call, and when that latch is already clear it
+            // clears the TOSSED latch (byte[0] bit 0) instead. The
+            // port had neither, so an imported or freshly shoved
+            // hydra body kept `F_TOSSED` forever and
+            // [`Gen::flood_shovable`]'s class-5 `!held` arm refused
+            // to shove it EVER AGAIN — mc2l22 t=22070 slot 98 is the
+            // witness (retail's body is shoved +57/+68 to ground
+            // z=92, the port's walks its own 30-unit step to z=360),
+            // and the shove roll the port never spends is slot 691's
+            // (10,67) `rand` at 22076/22079.
+            if self.ent[body].flags & super::mobs::F_NO_CORPSE != 0 {
+                self.ent[body].flags &= !super::mobs::F_NO_CORPSE;
+            } else {
+                self.ent[body].flags &= !(super::flood::F_TOSSED | 1);
+            }
+            // The forced-stop consume (EF:20890-94 — 0x4F73A
+            // `8a 43 0d / a8 08  test al,8`, 0x4F9A5 `24 f7  and
+            // al,0xf7` then code 4). Retail SKIPS the terminal
+            // ground snap on this arm, so the early return is the
+            // faithful shape.
+            if self.ent[body].flags & super::mobs::F_STOP != 0 {
+                self.ent[body].flags &= !super::mobs::F_STOP;
+                self.ent[body].tick70 = M27_BASE; // 216
+                self.ent[body].f26 = 0;
+                return 4;
+            }
+        }
         let (x, y, z, yaw, roll, spd) = {
             let e = &self.ent[body];
             (e.x, e.y, e.z, e.f30, e.f34, e.f126)
@@ -2204,10 +2588,17 @@ impl Gen {
             moved = true;
             turned = true;
             code = 1;
+            // 0x4F7C4 `80 e5 fb  and ch,0xfb` (EF:20903).
+            self.m27_set_blocked(body, false);
         } else if self.mc2_path_blocked(body, pred)
             || self.m27_slope_blocked(body, pred)
-            || self.roughness(pred.0, pred.1) >= 32
+            || self.roughness_wide(pred.0, pred.1) >= 32
         {
+            // BOTH blocked arms stamp the flag — 0x4F848
+            // `80 4b 0e 04  or BYTE PTR [ebx+0xe],0x4` (yaw == roll,
+            // EF:20915) and 0x4F834 `0c 04  or al,0x4` (yaw != roll,
+            // EF:20951).
+            self.m27_set_blocked(body, true);
             if yaw == roll {
                 // Scan ±91-step yaws for a free heading.
                 let mut v7: i32 = 91;
@@ -2220,7 +2611,7 @@ impl Gen {
                     p2.2 = self.ground_z(p2.0, p2.1) as i16;
                     if !self.mc2_path_blocked(body, p2)
                         && !self.m27_slope_blocked(body, p2)
-                        && self.roughness(p2.0, p2.1) < 32
+                        && self.roughness_wide(p2.0, p2.1) < 32
                     {
                         found = Some(cand);
                         break;
@@ -2245,6 +2636,8 @@ impl Gen {
             moved = true;
             turned = true;
             code = 2;
+            // 0x4F819 `80 e6 fb  and dh,0xfb` (EF:20958).
+            self.m27_set_blocked(body, false);
         }
         if commit && moved {
             self.move_relink(body, pred.0, pred.1, pred.2);
@@ -2320,7 +2713,7 @@ impl Gen {
                             pred.2 = self.ground_z(pred.0, pred.1) as i16;
                             if !self.mc2_path_blocked(i, pred)
                                 && !self.m27_slope_blocked(i, pred)
-                                && self.roughness(pred.0, pred.1) < 32
+                                && self.roughness_wide(pred.0, pred.1) < 32
                             {
                                 break;
                             }
@@ -2464,5 +2857,229 @@ impl Gen {
                 self.m27_drive(i, ctx);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BRANCH_STATE, M22_BASE};
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::mc1::mobs::MobCtx;
+    use crate::patches::WorldPatches;
+    use crate::verbs::VerbSet;
+
+    fn flat_gen() -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    fn ctx() -> MobCtx {
+        MobCtx {
+            px: 0,
+            py: 0,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// A worm head parked in 0xB2 (castle acquire) on a phase where
+    /// both `& 0x1F` and `& 3` are open, latched onto `target`, with
+    /// that wizard's castle far out of the 0x100 deposit range — so
+    /// the ONLY thing that can move it off 178 is a LABEL_17 revert.
+    /// Returns `(head, wizard, castle)`.
+    fn worm_on_wizard(g: &mut Gen, wizard_life: i32) -> (usize, usize, usize) {
+        let wiz = g.new_event().expect("wizard slot");
+        {
+            let e = &mut g.ent[wiz];
+            e.class64 = 3;
+            e.model65 = 0;
+            e.id24 = 7;
+            e.max_life = 10_000;
+            e.act_life = wizard_life;
+            e.x = 0x1000;
+            e.y = 0x1000;
+        }
+        let castle = g.new_event().expect("castle slot");
+        {
+            let e = &mut g.ent[castle];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = 7;
+            e.max_life = 160_000;
+            e.act_life = 160_000;
+            e.x = 0x1000;
+            e.y = 0x1000;
+            e.f136 = 300_000_000; // maxMana @0x8C — always room
+            e.f140 = 0; // mana @0x90
+        }
+        let head = g.new_event().expect("worm slot");
+        {
+            let e = &mut g.ent[head];
+            e.class64 = 5;
+            e.model65 = 22;
+            e.tick70 = M22_BASE + 2; // 178 = the castle-acquire state
+            e.max_life = 2000;
+            e.act_life = 2000;
+            e.x = 0xF000; // ~50,000 units from the castle: the
+            e.y = 0x8000; // deposit range test can never pass
+            e.z = 447;
+            e.f63 = 0; // phase: & 0x1F == 0 AND & 3 == 0
+            e.f71 = 1; // one-segment chain (no tail to walk)
+            e.f126 = 0; // actSpeed @0x82 <= maxSpeed @0x86
+            e.f130 = 0;
+            e.f146 = 64; // grow timer: not due this tick
+            e.f26 = 779; // the live `dword_0x10_16` the revert zeroes
+            e.f144 = wiz as u16; // playerEntityIndex @0x94
+        }
+        (head, wiz, castle)
+    }
+
+    /// ⭐⭐⭐ `sub_2A6F0` WALKS `dword_38519` AND HAS NO MODEL TEST.
+    /// The m27 branch's target scan (EF:20452-83, NETHERW.EXE
+    /// 0x4F1F0 region) is `v3x = x_D41A0_BYTEARRAY_4_struct.
+    /// dword_38519; while (v3x > Entities_EA3E4[0]) { ... }` — the
+    /// tick-top CLASS-3 roster, built by the case-3 arm of
+    /// `UpdateEntities_57730` on `class == 3 && life >= 0` alone
+    /// (EF:39972-85). Class, life and the reap flag are settled by
+    /// MEMBERSHIP, and no model test exists anywhere on the path, so
+    /// a (3,2) castle or a (3,3) can win this nearest-in-cone scan
+    /// and keep a wizard from winning it. The port filtered
+    /// `model65 <= 1` on a LIVE pool sweep — the same invented
+    /// filter [`Gen::mc2_wizard_scan`] was already corrected for.
+    ///
+    /// The free-run witness is `mc2l22` t=21616, where retail's
+    /// branch at slot 256 locks the (3,3) at slot 268
+    /// (`byte_0x46_70` 1→2, `word_0x96_150` 0→268) and the whip's
+    /// mode-2 decel takes `actSpeed` 192→176 the next tick; that
+    /// head is pair-CLEAN (both lanes are ungraded), so it is
+    /// covered here rather than by a fixture.
+    #[test]
+    fn the_m27_branch_scan_has_no_model_filter() {
+        let mut g = flat_gen();
+        // A (3,3) — not a wizard by the port's old filter — sitting
+        // exactly on the branch, so range and cone are both trivial.
+        let other = g.new_event().expect("class-3 slot");
+        {
+            let e = &mut g.ent[other];
+            e.class64 = 3;
+            e.model65 = 3;
+            e.max_life = 10_000;
+            e.act_life = 10_000;
+            e.x = 1000;
+            e.y = 1000;
+        }
+        // A real wizard at the same spot, LATER in slot order: the
+        // scan is strict `<` on the nearest compare, so the first
+        // member of the roster keeps the lock.
+        let wiz = g.new_event().expect("wizard slot");
+        {
+            let e = &mut g.ent[wiz];
+            e.class64 = 3;
+            e.model65 = 0;
+            e.max_life = 10_000;
+            e.act_life = 10_000;
+            e.x = 1000;
+            e.y = 1000;
+        }
+        let br = g.new_event().expect("branch slot");
+        {
+            let e = &mut g.ent[br];
+            e.class64 = 5;
+            e.model65 = 27;
+            e.tick70 = BRANCH_STATE;
+            e.row156 = 103; // every (5,27) branch carries row 103
+            e.max_life = 5980;
+            e.act_life = 5980;
+            e.x = 1000;
+            e.y = 1000;
+            e.f30 = 0;
+        }
+        g.rebuild_wiz_chain();
+        let mut c = ctx();
+        c.px = 20_000; // the human is well outside row 103's 5120
+        c.py = 20_000;
+        assert_eq!(
+            g.m27_wizard_scan(br, &c),
+            Some(other as u16),
+            "the (3,3) is a roster member and wins the tie"
+        );
+    }
+
+    /// ⭐⭐⭐ `sub_26AA0` INTERROGATES THE POSSESSED WIZARD BEFORE IT
+    /// TOUCHES THE CASTLE. `NETHERW.EXE` 0x4B305-0x4B32D:
+    /// `mov 0x1a3e4(,%eax,4),%eax` / `cmpb $0x3,0x3f(%eax) ; jne` /
+    /// `cmpl $0x0,0x8(%eax) ; jl` / `testb $0x4,0xd(%eax) ; jne` —
+    /// all three land on LABEL_17, which zeroes `dword_0x10_16` and
+    /// `playerEntityIndex_0x94_148` and drops the head to 177.
+    /// The port asked none of them.
+    ///
+    /// The free-run witness is `mc2l6-rival-spells-galore` t=25,532,
+    /// where the possessed wizard is the HUMAN and the port takes the
+    /// `PLAYER_TARGET`/`ctx.pdead` arm. This test covers the POOL arm
+    /// (a rival wizard), which the recording corpus does not exercise.
+    #[test]
+    fn a_worm_drops_its_castle_target_when_the_wizard_dies() {
+        // Live wizard: no revert, the head stays in 0xB2.
+        let mut g = flat_gen();
+        let (head, _, _) = worm_on_wizard(&mut g, 10_000);
+        g.m22_tick(head, &ctx());
+        assert_eq!(g.ent[head].tick70, M22_BASE + 2, "a live target holds 0xB2");
+        assert_ne!(g.ent[head].f144, 0, "and keeps its playerEntityIndex");
+
+        // Dead wizard: `cmpl $0x0,0x8(%eax) ; jl LABEL_17`.
+        let mut g = flat_gen();
+        let (head, _, _) = worm_on_wizard(&mut g, -1270);
+        g.m22_tick(head, &ctx());
+        assert_eq!(
+            g.ent[head].tick70,
+            M22_BASE + 1,
+            "a dead target reverts the head to 177 (LABEL_17)"
+        );
+        assert_eq!(g.ent[head].f144, 0, "playerEntityIndex_0x94_148 = 0");
+        assert_eq!(g.ent[head].f26, 0, "dword_0x10_16 = 0");
+
+        // Reap-flagged wizard: `testb $0x4,0xd(%eax) ; jne LABEL_17`.
+        let mut g = flat_gen();
+        let (head, wiz, _) = worm_on_wizard(&mut g, 10_000);
+        g.ent[wiz].flags |= 0x400;
+        g.m22_tick(head, &ctx());
+        assert_eq!(
+            g.ent[head].tick70,
+            M22_BASE + 1,
+            "a reap-flagged target reverts too"
+        );
+
+        // Not a wizard any more: `cmpb $0x3,0x3f(%eax) ; jne LABEL_17`.
+        let mut g = flat_gen();
+        let (head, wiz, _) = worm_on_wizard(&mut g, 10_000);
+        g.ent[wiz].class64 = 5;
+        g.m22_tick(head, &ctx());
+        assert_eq!(
+            g.ent[head].tick70,
+            M22_BASE + 1,
+            "a target that is no longer class 3 reverts too"
+        );
     }
 }

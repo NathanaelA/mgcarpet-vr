@@ -554,6 +554,22 @@ rows against MC2's 157). **For MC2 fixtures: use `mc2_flat_world()` +
 
 ### Magic Mine — mostly CLOSED 2026-07-21 (low priority remainder)
 
+> ⚠⚠⚠ **SUPERSEDED IN PART, 2026-09-04 (session 97).** Two of the
+> "LANDED 2026-07-21 (round 2)" bullets below — *"A TRIGGERED mine now
+> tears down instead of vanishing"* and *"THE BLAST NOW REACHES
+> ANYONE"* — were **deliberate deviations adopted on the ruling that
+> retail ships the mine's trigger dead. That premise is refuted and the
+> player has re-ruled for fidelity, so both are RETIRED**, along with
+> the `gameplay.patches.mc2_magic_mine` option that gated them and the
+> regression test `mc2_magic_mine_blast_reaches_a_neighbouring_wizard`
+> that asserted them. `sub_3A8B0` case 5 is a **relaunch of the spell
+> the mine SWALLOWED** (`sub_68AC0`) at the tripper — no area write, no
+> `(9,0)` stand-in, and no `f71 = 6` hand-off (a spent mine re-arms
+> until `byte_0x43_67` runs out). The HOVER bullet stands; it was
+> retail's all along. See `docs/DEVIATIONS.md` and
+> `docs/spell-audit/magic-mine.md` §6 Q2.
+
+
 Set spell 23 straight end to end. Two fixes have landed; the pacing
 question is unresolved and is the reason this needs its own session.
 

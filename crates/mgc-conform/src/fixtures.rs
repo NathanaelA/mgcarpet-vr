@@ -242,9 +242,7 @@ fn for_each_pair(
             let wanted = select.is_none_or(|s| s.contains(&pt));
             if tick.t == pt + 1 && wanted {
                 let obs: ObsMc1 = match &tick.obs {
-                    Some(v) => {
-                        serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?
-                    }
+                    Some(v) => serde_json::from_str(v.get()).map_err(|e| format!("obs: {e}"))?,
                     None => return Err(format!("t={}: no obs channel", tick.t)),
                 };
                 if verify::capture_clean(&pst, &obs) {
@@ -349,6 +347,12 @@ fn for_each_pair_mc2(
             cmd.fire_left = fl;
             cmd.fire_right = fr;
         }
+        // THE THIRD CAST ARM (`recover::mc2_ring_cast`) rides the same
+        // consumed byte — the suite must reconstruct it exactly like
+        // `verify-deltas` or a fixture on a ring-cast pair drifts.
+        if let Some(p) = st.players.get(st.local_player as usize) {
+            cmd.mc2_ring_cast = mgc_formats::recover::mc2_ring_cast(p.move_bits, p.ring_cursor);
+        }
         // The cursor-AT-PRESS A/B (`verify_mc2::press_edge_mc2`) must be
         // reconstructed here too or a suite run under the toggle would
         // disagree with the triage run it is meant to pin.
@@ -363,9 +367,7 @@ fn for_each_pair_mc2(
             let wanted = select.is_none_or(|s| s.contains(&pt));
             if tick.t == pt + 1 && wanted && crate::verify_mc2::capture_clean_mc2(&pst, &st) {
                 let obs: ObsMc2 = match &tick.obs {
-                    Some(v) => {
-                        serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?
-                    }
+                    Some(v) => serde_json::from_str(v.get()).map_err(|e| format!("obs: {e}"))?,
                     None => return Err(format!("t={}: no obs channel", tick.t)),
                 };
                 // The pair IS frame pt+1's transition, so it takes THIS
@@ -404,7 +406,16 @@ fn for_each_pair_mc2(
                     &obs,
                     pair_cmd,
                     pcmd,
-                    pin_n1,
+                    // The MC2 twin of the MC1 arm above: the frozen-law
+                    // suite follows the pose pair, which is now the
+                    // default walk (`MGC_NO_MC2_POSE_PAIR=1` for A/B).
+                    if crate::verify_mc2::mc2_pose_pair() {
+                        verify::PairPose::Pair
+                    } else if pin_n1 {
+                        verify::PairPose::PinN1
+                    } else {
+                        verify::PairPose::PinN
+                    },
                 )
                 .map_err(|e| format!("t={pt}: {e}"))?;
                 f(pt, pd, &crate::verify_mc2::class_map_mc2(&obs))?;
