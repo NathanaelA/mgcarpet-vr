@@ -157,6 +157,18 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                 .map(mgc_formats::mgcr::TerrainImage::new)
         })
         .flatten();
+    // `--start <t>`: skip to t minus a warm-up window WITHOUT decoding
+    // the records passed over (their terrain deltas still fold). The
+    // window keeps every one-record carry the pair lane reads — the
+    // pairing chain, the input latch/press/mouse predecessors, the
+    // legacy cast ring — identical to a whole-stream walk; only the
+    // whole-stream input counters now start here, and say so.
+    crate::slice_banner(&rec);
+    let skip_from = args.start.map(|s| s.saturating_sub(START_WARMUP));
+    if let Some(s) = skip_from {
+        crate::late_tick_hint(&rec, path, s);
+        rec.skip_to(s, timg.as_mut())?;
+    }
     let mut pending_terrain: Option<mgc_formats::mgcr::TerrainBlock> = None;
     // Terrain@N held across the pose lane's in-place advance to N+1 —
     // see [`PlanesAtN`]. The pose-alt probe re-executes the PAIR and
@@ -937,6 +949,11 @@ pub(crate) fn append_sprite_diffs(
 /// mid-stream start without the base yields None — relative-only
 /// planes must never be installed as absolute terrain).
 pub(crate) type MeasuredPlanes<'a> = (&'a [u8], &'a [u8], Option<&'a [u8]>, Option<&'a [u8]>);
+
+/// Records read before a `--start` window opens — enough to warm every
+/// one-record carry (and the legacy `MGC_CAST_RING` ring at any sane
+/// `--input-delay`) exactly as a walk from record 0 would.
+pub(crate) const START_WARMUP: u64 = 16;
 
 pub(crate) fn measured_planes(
     timg: &Option<mgc_formats::mgcr::TerrainImage>,

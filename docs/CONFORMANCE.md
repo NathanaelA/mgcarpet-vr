@@ -1032,3 +1032,103 @@ faithful movers verbatim (`FlightInput::mc1_move_byte`) — the float
 axes cannot express retail's both-bits-held states — and its
 faithful tier hands `World::tick` the INTEGER carpet pose (the
 quantization-risk fix; the enhanced tier keeps the float flyer).
+
+## Recording slices — the dig instrument for late ticks (2026-09-05)
+
+**THE RULE: no dig instrument reads a FULL take past t≈2000. Digs run on a
+slice.** The full take is for two things only: the neutrality proof (the
+`replay --segmented --brief` sweep + the fixture suite) and the horizon
+query (`replay --stop-at-divergence`). Everything a dig does — `dump-state`,
+`explain`, `verify-deltas --dump`, `replay --start`, `--segmented
+--classify`, `extract` — runs on the slice, where every read is seconds.
+
+### Why
+
+Every record is ~450 KB of JSON (a base64 master-struct image plus the obs
+projection); mc2l22 is 65,558 records = 29 GB inflated. Any read of tick t
+used to inflate, parse and base64-decode every record before t. Measured on
+mc2l22 (docs/PERF-CONFORM.md):
+
+| read                                   | before | after |
+|----------------------------------------|-------:|------:|
+| `dump-state mc2l22.mgcr 54000 0`       |   70 s |  37 s (skip path; the ~19 s zstd floor is what remains) |
+| the same on a 2,200-tick slice          |      — |  ~1 s |
+| cutting a 2,200-tick slice of mc2l24    |      — |   9 s |
+
+The skip path (`Recording::skip_to`) is a constant-factor win. **The slice
+is the structural one: it removes the work that grows with the horizon, and
+the horizon is exactly what the campaign keeps pushing out.**
+
+### The command
+
+```
+./tools/conform slice recordings/<take>.mgcr --from <t0> --to <t1> --out $TMPDIR/<take>-<t0>-<t1>.mgcr
+```
+
+A slice is a self-contained recording: the header verbatim plus
+`capture.slice` provenance (source file, range, the command that cut it);
+the measured terrain channel RE-BASED at the first record (the planes at
+the cut are the sum of every delta before it — the cutter folds them while
+skipping and writes them as that record's `base_b64`); every other record
+byte for byte. **ORIGINAL tick numbers are kept** — a head at t in the slice
+IS the head at t in the take, so nothing in the ledger ever needs
+translating. Every seeding instrument (`replay`, `verify-deltas`) prints a
+`⚠ SLICE of <take> t=a..b` banner so a report can never pass as a full-take
+result. Level 3 zstd: a slice is read a few times and thrown away.
+
+### How the main session uses it
+
+1. Take the free-run horizon H from `replay --segmented --classify` on the
+   full take (or the sweep's BRIEF line).
+2. Cut ONE slice, `--from H-200 --to H+2000`, into `$TMPDIR`. ~2,200
+   records ≈ 15 MB compressed.
+3. Every dig — serial in the main session, or a subagent's brief — names
+   that slice, states that it IS a slice and where it came from, and carries
+   the exact command to cut a wider one.
+4. A dig that needs ticks before or after the slice re-cuts first (seconds
+   from a small slice, ~20 s of zstd floor from a full take). **The slice's
+   content never goes stale** — records are retail truth and no landed law
+   changes them; only its START becomes suboptimal as H advances, so re-cut
+   when H moves, not when a law lands.
+
+A deep targeted read on a full take (`dump-state`/`explain`/`--start` past
+t=2000) prints a stderr hint with the slice command; a slice is silent.
+
+### ⚠ The caveat that shapes the margin
+
+A slice is a `--start`-shaped view: the run seeds from its first record's
+closure, so **a divergence born before the slice is invisible in it** (the
+INHERITED-head class; PERF-CONFORM.md lists causes 26, 243 and 5,223 ticks
+upstream of their heads). Cutting from the free-run horizon is the natural
+margin: before H the free run is bit-exact, so no instrument can see a cause
+there anyway. The known `--port --start ≠ --port --segmented` difference
+(unseated port-side registers in a reused `World`) applies to a slice
+exactly as it applies to `--start`.
+
+### The equivalence proof (mc2l24, slice 7381..9581, 2026-09-05)
+
+- `replay` and `replay --segmented --classify` on the slice: **byte-identical**
+  to the same window of the full take under `--start 7381 --limit 2200`.
+- `verify-deltas` on the slice: identical to the full take's window except
+  the per-pair `pair N` announcements `--start` prints by design.
+- `replay --stop-at-divergence`: slice and full `--start 7381` agree on the
+  first divergence (t=7913) and every count.
+- `check-decode` on the slice: 2,201/2,201 records ok, terrain base present,
+  190 delta records folded.
+
+### The skip path — SELECT, never EXTRACT
+
+`Recording::skip_to(t, terrain)` reads the tick off the recorder's `{"t":N,`
+line prefix and hands a line to serde only when it must: any line that is
+not that exact shape is parsed in full, and a skipped line is parsed (for its
+terrain channel alone) whenever it contains the substring `terrain` — a
+superset test whose false hit costs one parse and whose miss is impossible
+for a key the recorder writes verbatim. No value is ever read by pattern.
+Modes on the skip path: `dump-state`, `explain`, `trace`, `ground-audit`,
+`replay --start`, and `verify-deltas --start` (which skips to 16 records
+before the window so every one-record carry — pairing chain, latch/press/
+mouse predecessors, the legacy cast ring — is warmed exactly as a walk from
+record 0 would; its whole-stream input counters now count from that point
+and the label says `from t=…`). The corpus sweep and the fixture suite never
+skip, so the neutrality proof for this change is a byte-identical sweep +
+suite against the committed baseline.

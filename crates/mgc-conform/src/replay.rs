@@ -1331,6 +1331,16 @@ fn run_mc1(
                 .map(mgc_formats::mgcr::TerrainImage::new)
         })
         .flatten();
+    // `--start <t>`: every record before t is skipped WITHOUT decoding
+    // — only its terrain delta is folded, which is exactly what the
+    // loop below did with them (docs/PERF-CONFORM.md).
+    if !args.brief {
+        crate::slice_banner(&rec);
+    }
+    if let Some(s) = args.start {
+        crate::late_tick_hint(&rec, path, s);
+        rec.skip_to(s, timg.as_mut())?;
+    }
 
     let mut stats = RStats::default();
     let mut st_prev: Option<(u64, RetailMc1)> = None;
@@ -2226,6 +2236,16 @@ fn run_mc2(
                 .map(mgc_formats::mgcr::TerrainImage::new)
         })
         .flatten();
+    // `--start <t>`: every record before t is skipped WITHOUT decoding
+    // — only its terrain delta is folded, which is exactly what the
+    // loop below did with them (docs/PERF-CONFORM.md).
+    if !args.brief {
+        crate::slice_banner(&rec);
+    }
+    if let Some(s) = args.start {
+        crate::late_tick_hint(&rec, path, s);
+        rec.skip_to(s, timg.as_mut())?;
+    }
 
     let mut stats = RStats::default();
     let mut celltrace = CellTrace::from_env();

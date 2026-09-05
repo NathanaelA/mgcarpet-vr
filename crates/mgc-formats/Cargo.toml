@@ -8,6 +8,9 @@ authors.workspace = true
 
 [dependencies]
 base64 = "0.22"
+# `memmem` for the reader's skip path (`Recording::skip_to`): a SIMD
+# substring SELECT over lines the parser is not going to see.
+memchr = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # `deflate` is for saves only (`mgcs.rs`): `.mgcl` members stay Stored

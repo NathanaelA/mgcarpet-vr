@@ -1,5 +1,31 @@
 # mgc-conform PERFORMANCE — measured in round 105, TO REVISIT AFTER mc2l22
 
+## ✅ STATUS 2026-09-05 — LANDED (the session after 105)
+- **`mgc-conform slice <take> --from t0 [--to t1] --out <slice.mgcr>`** — the
+  player's slice idea, built as specified below: header + `capture.slice`
+  provenance, terrain re-based at the first record, ORIGINAL tick numbers,
+  every other record byte for byte, a `⚠ SLICE` banner on every seeding
+  instrument. Cutting 2,200 ticks of mc2l24 at t=7381: 9 s, 15 MB.
+- **`Recording::skip_to`** — option 1 (byte-scan to SELECT, serde to parse)
+  under `dump-state`, `explain`, `trace`, `ground-audit`, `replay --start`,
+  `verify-deltas --start`. `dump-state mc2l22 54000`: 70 s → 37 s; the
+  ~19 s zstd inflate is the floor, so option 2 (an offset index) is moot
+  once slices exist — a slice IS the index. Option 3 (binary sidecar) stays
+  deferred until the full-take sweep is the bottleneck.
+- **Doctrine** — docs/CONFORMANCE.md "Recording slices": NO dig reads a
+  full take past t≈2000; the main session keeps one `H-200..H+2000` slice
+  in `$TMPDIR`; re-cut when the horizon moves (a slice's content never goes
+  stale). The full take is for the sweep, the suite and the horizon query.
+- **Proof** — slice vs full-take window byte-identical on `replay` and
+  `--segmented --classify`; `verify-deltas` identical modulo `--start`'s
+  own `pair N` announcements; sweep + suite byte-identical vs the committed
+  baseline (see the session note).
+- ⚠ Measured while validating: **a `target/release` binary is NOT HEAD** —
+  the one preserved as "before" predated the day's commit by 5 h and
+  differed from HEAD in MC2 laws (one pool-slot-0 byte at the anchor).
+  The true BEFORE is `git archive HEAD | tar -x` + build.
+
+
 ## THE MEASUREMENT (not a guess)
 `perf record` on `replay recordings/mc2l22.mgcr --stop-at-divergence`:
 ```

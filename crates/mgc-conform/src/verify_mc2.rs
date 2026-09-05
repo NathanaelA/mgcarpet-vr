@@ -32,7 +32,7 @@
 //! the legacy ring for A/B).
 
 use crate::Args;
-use crate::verify::{FieldDiff, PairDiff, Stats};
+use crate::verify::{FieldDiff, PairDiff, START_WARMUP, Stats};
 /// The campaign REPLAY gate's capture witness — shared with the app's
 /// own retail driver, which needs the identical derivation
 /// ([`mgc_formats::mgcr::mc2_take_replayed`]).
@@ -211,6 +211,18 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                 .map(mgc_formats::mgcr::TerrainImage::new)
         })
         .flatten();
+    // `--start <t>`: skip to t minus a warm-up window WITHOUT decoding
+    // the records passed over (their terrain deltas still fold). The
+    // window keeps every one-record carry the pair lane reads — the
+    // pairing chain, the input latch/press/mouse predecessors, the
+    // legacy cast ring — identical to a whole-stream walk; only the
+    // whole-stream input counters now start here, and say so.
+    crate::slice_banner(&rec);
+    let skip_from = args.start.map(|s| s.saturating_sub(START_WARMUP));
+    if let Some(s) = skip_from {
+        crate::late_tick_hint(&rec, path, s);
+        rec.skip_to(s, timg.as_mut())?;
+    }
     let mut pending_terrain: Option<mgc_formats::mgcr::TerrainBlock> = None;
     // Terrain@N held across the pose lane's in-place advance to N+1 —
     // see [`crate::verify::PlanesAtN`]. Both re-execs below (pose-alt,
@@ -738,11 +750,17 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         // report keeps the map's own (class, model, lane) order.
         print!("{}", sh.render(false));
     }
-    // Both counters cover the whole STREAM, not just `--start`'s
-    // window: the input chain is fed from t=0 regardless, and the ring
-    // lane is a "did this take ever trip it" question.
+    // Both counters cover the whole STREAM READ, not just `--start`'s
+    // window: the input chain is fed from the first record read
+    // regardless, and the ring lane is a "did this take ever trip it"
+    // question. With `--start` the read begins at the warm-up point,
+    // and the label says so instead of claiming the whole take.
+    let counted = match skip_from {
+        Some(s) => format!("from t={s}"),
+        None => "whole stream".to_string(),
+    };
     println!(
-        "   cast input (whole stream): {press_moves} press-position move(s) [fold {}], \
+        "   cast input ({counted}): {press_moves} press-position move(s) [fold {}], \
          {ring_casts} cycle-ring (0x40) cast(s) [{}]",
         if press_edge_mode { "ON" } else { "off" },
         if ring_bit_off {

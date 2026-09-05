@@ -20,6 +20,7 @@ mod pose_lane;
 mod replay;
 mod roster;
 mod shadow;
+mod slice;
 mod verify;
 mod verify_mc2;
 
@@ -52,6 +53,13 @@ fn usage() -> ! {
                              tick INTO t reaches slot n, before n\n\
                              dispatches (\"what did slot A hold when\n\
                              slot B ran\")\n\
+           slice <file.mgcr> --from <t0> [--to <t1>] --out <slice.mgcr>\n\
+                                          cut ticks t0..=t1 into a self-\n\
+                                          contained take: header + provenance\n\
+                                          (capture.slice), measured terrain\n\
+                                          re-based at t0, ORIGINAL tick\n\
+                                          numbers kept. The dig instrument for\n\
+                                          late ticks (docs/PERF-CONFORM.md)\n\
            explain <file.mgcr> <t> [<slot>…]   retail's OWN t-1 → t\n\
                                           changelog — what CHANGED, not\n\
                                           what differs: records born/\n\
@@ -161,7 +169,9 @@ fn usage() -> ! {
            --no-roster       replay/verify-deltas: skip the roster\n\
                              entirely (raw, unclassified)\n\
            --start <t>       anchor the replay at tick t instead of the\n\
-                             first record"
+                             first record (records before t are skipped\n\
+                             without decoding; verify-deltas warms its\n\
+                             input chain over the 16 records before t)"
     );
     std::process::exit(2);
 }
@@ -190,6 +200,10 @@ pub struct Args {
     /// executed pairs are announced on stderr so an aborting pair
     /// self-incriminates).
     pub start: Option<u64>,
+    /// slice: the tick range to cut, inclusive (`--to` absent = to the
+    /// end of the take).
+    pub from: Option<u64>,
+    pub to: Option<u64>,
     /// Skip the known-deviation roster (raw, unclassified report).
     pub no_roster: bool,
     pub no_pose_alt: bool,
@@ -274,6 +288,8 @@ fn parse_args() -> Args {
         stop_at_div: false,
         input_delay: 0,
         start: None,
+        from: None,
+        to: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -332,6 +348,20 @@ fn parse_args() -> Args {
                         .unwrap_or_else(|| usage()),
                 )
             }
+            "--from" => {
+                a.from = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or_else(|| usage()),
+                )
+            }
+            "--to" => {
+                a.to = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or_else(|| usage()),
+                )
+            }
             "--input-delay" => {
                 a.input_delay = it
                     .next()
@@ -356,6 +386,39 @@ fn parse_args() -> Args {
     a
 }
 
+/// A targeted read deeper than this into a FULL take should be run on
+/// a slice instead (docs/PERF-CONFORM.md): every tick before the target
+/// is inflated on every call, and the campaign's digs make dozens.
+pub(crate) const LATE_TICK: u64 = 2000;
+
+/// The stderr hint for a deep targeted read on a full take — silent on
+/// a slice (`capture.slice`) and below [`LATE_TICK`].
+pub(crate) fn late_tick_hint(rec: &Recording, path: &std::path::Path, t: u64) {
+    if t <= LATE_TICK || rec.slice_provenance().is_some() {
+        return;
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("take");
+    let from = t.saturating_sub(200);
+    eprintln!(
+        "hint: t={t} is deep into a full take; for a dig, cut a slice from the free-run \
+         horizon and read that instead: mgc-conform slice {} --from {from} --to {} \
+         --out $TMPDIR/{stem}-{from}-{}.mgcr  (docs/PERF-CONFORM.md)",
+        path.display(),
+        from + LATE_TICK,
+        from + LATE_TICK,
+    );
+}
+
+/// The stdout banner every SEEDING instrument prints for a slice.
+pub(crate) fn slice_banner(rec: &Recording) {
+    if let Some(p) = rec.slice_provenance() {
+        println!(
+            "   ⚠ {p} — seeded at its first record; a divergence born before it is \
+             invisible here. Wider context = cut a wider slice."
+        );
+    }
+}
+
 fn main() {
     let args = parse_args();
     // `--out` belongs to terrain-diff (plane dumps) and extract (the
@@ -363,9 +426,9 @@ fn main() {
     // silently accepting it reads as "the tool stopped writing my
     // file" — the classic slip is `verify-deltas --out x.tsv` for
     // what is spelled `--csv x.tsv`.
-    if args.out.is_some() && !matches!(args.mode.as_str(), "terrain-diff" | "extract") {
+    if args.out.is_some() && !matches!(args.mode.as_str(), "terrain-diff" | "extract" | "slice") {
         eprintln!(
-            "error: --out is not a {} flag (terrain-diff/extract only); \
+            "error: --out is not a {} flag (terrain-diff/extract/slice only); \
              the verify-deltas per-pair TSV is written with --csv <path>",
             args.mode
         );
@@ -391,6 +454,7 @@ fn main() {
             .max()
             .unwrap_or(0),
         "dump-state" => dump_state(&args),
+        "slice" => slice::slice(&args),
         "explain" => explain::explain(&args),
         "ground-audit" => ground_audit(&args),
         "trace" => trace(&args),
@@ -449,6 +513,13 @@ fn dump_state(args: &Args) -> i32 {
         }
     };
     let mc2 = rec.header.family() == Ok(mgc_formats::mgcr::Family::Mc2);
+    // Nothing before `t` is read here, so skip to it without decoding
+    // (the reader's byte-select path; the loop below is unchanged).
+    late_tick_hint(&rec, path, t);
+    if let Err(e) = rec.skip_to(t, None) {
+        eprintln!("{}: {e}", path.display());
+        return 2;
+    }
     while let Some(r) = rec.next_tick() {
         let tick = match r {
             Ok(t) => t,
@@ -716,6 +787,10 @@ fn ground_audit(args: &Args) -> i32 {
             return 2;
         }
     };
+    if let Err(e) = rec.skip_to(t, None) {
+        eprintln!("{}: {e}", path.display());
+        return 2;
+    }
     while let Some(r) = rec.next_tick() {
         let tick = match r {
             Ok(x) => x,
@@ -806,6 +881,9 @@ fn trace(args: &Args) -> i32 {
     };
     let mc2 = rec.header.family() == Ok(mgc_formats::mgcr::Family::Mc2);
     let mut prev_mana: Option<i32> = None;
+    if rec.skip_to(t0, None).is_err() {
+        return 2;
+    }
     while let Some(r) = rec.next_tick() {
         let Ok(tick) = r else { return 2 };
         if tick.t < t0 {

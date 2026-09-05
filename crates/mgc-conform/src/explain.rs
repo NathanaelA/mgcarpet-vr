@@ -46,6 +46,12 @@ fn run(args: &Args) -> Result<(), String> {
     let mc2 = rec.header.family().map_err(|e| e.to_string())? == mgc_formats::mgcr::Family::Mc2;
     let mut prev_mc1: Option<(u64, RetailMc1)> = None;
     let mut prev_mc2: Option<(u64, RetailMc2)> = None;
+    // The changelog is t-1 → t, so nothing earlier than the record
+    // before `t` is read; skip there without decoding. A few records
+    // of slack keep the predecessor across a small capture gap.
+    crate::late_tick_hint(&rec, path, t);
+    rec.skip_to(t.saturating_sub(8), None)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     while let Some(r) = rec.next_tick() {
         let tick = r.map_err(|e| e.to_string())?;
         let Some(state) = &tick.state else {

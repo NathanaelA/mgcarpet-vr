@@ -1125,6 +1125,7 @@ name = "mgc-formats"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "memchr",
  "serde",
  "serde_json",
  "zip",

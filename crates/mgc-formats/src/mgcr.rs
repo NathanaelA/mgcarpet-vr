@@ -408,12 +408,42 @@ impl TickRecord {
 /// Compression is sniffed from the zstd magic, not the extension.
 pub struct Recording {
     pub header: Header,
+    /// The header record VERBATIM as JSON — every provenance field the
+    /// typed [`Header`] leaves untyped, for a writer that derives a new
+    /// recording from this one (`mgc-conform slice`).
+    pub header_json: serde_json::Value,
     reader: Box<dyn BufRead>,
     /// The current line, reused across rows. A tick line is ~0.5 MB of
     /// JSON, so `BufRead::lines()`'s fresh `String` per row was a
     /// half-megabyte allocate/copy/free on every tick of every scan.
     line: String,
+    /// `line` holds a row [`Self::skip_to`] read but did not consume:
+    /// the next `next_line` hands it out instead of reading.
+    pending: bool,
     pub line_no: u64,
+}
+
+/// The tick number off the recorder's line PREFIX — `{"t":N,` (or
+/// `{"t":N}`), the shape every recorder writes `t` first in and the
+/// shape `recordings/cut_mgcr.py` already relies on. `None` for any
+/// other shape, and the caller then parses the line in full: the
+/// prefix read only ever SELECTS a line, it never stands in for the
+/// parser (docs/PERF-CONFORM.md "SELECT, not EXTRACT").
+fn line_tick(line: &str) -> Option<u64> {
+    let rest = line.strip_prefix("{\"t\":")?;
+    let end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if end == 0 || !matches!(rest.as_bytes()[end], b',' | b'}') {
+        return None;
+    }
+    rest[..end].parse().ok()
+}
+
+/// The terrain channel alone, for a line the skip path must fold but
+/// will not otherwise decode.
+#[derive(Deserialize)]
+struct RawTerrainRow<'a> {
+    #[serde(borrow, default)]
+    terrain: Option<RawTerrain<'a>>,
 }
 
 impl Recording {
@@ -446,10 +476,14 @@ impl Recording {
         if !(1..=2).contains(&header.format) {
             return Err(format!("unsupported .mgcr format {}", header.format));
         }
+        let header_json: serde_json::Value =
+            serde_json::from_str(&first).map_err(|e| format!("header parse: {e}"))?;
         Ok(Recording {
             header,
+            header_json,
             reader,
             line: String::new(),
+            pending: false,
             line_no: 1,
         })
     }
@@ -457,6 +491,10 @@ impl Recording {
     /// Read the next non-empty line into the reusable buffer. `None`
     /// at end of stream; the line is left in `self.line`.
     fn next_line(&mut self) -> Option<Result<(), String>> {
+        if self.pending {
+            self.pending = false;
+            return Some(Ok(()));
+        }
         loop {
             self.line.clear();
             match self.reader.read_line(&mut self.line) {
@@ -528,6 +566,110 @@ impl Recording {
             return Some(Err(e));
         }
         Some(TickRecord::from_line(&self.line, self.line_no))
+    }
+
+    /// Advance the stream to the first record with tick >= `t` WITHOUT
+    /// decoding the records passed over. The next `next_tick` /
+    /// `next_raw` returns that record; `Ok(false)` = the stream ended
+    /// first.
+    ///
+    /// THE COST THIS REMOVES (docs/PERF-CONFORM.md): a targeted read —
+    /// `dump-state <t>`, `replay --start <t>`, the slice cutter — used
+    /// to parse and base64-decode every one of the ~450 KB rows before
+    /// `t` only to look at its tick number; on mc2l22 that is 50 of the
+    /// 70 seconds `dump-state 54000` took. Here each skipped row costs
+    /// the zstd inflate plus one prefix read.
+    ///
+    /// SELECT, NEVER EXTRACT. Two decisions are made off the raw bytes
+    /// and both only decide whether serde sees the line: the tick comes
+    /// off the recorder's `{"t":N,` prefix ([`line_tick`]), and a line
+    /// that fails that shape is parsed in full instead; the terrain
+    /// channel — which MUST keep folding through skipped rows, because
+    /// the measured planes at `t` are the sum of every delta before it
+    /// — is detected with a substring search for `terrain` (a superset:
+    /// a false hit costs one parse, a miss is impossible for a key the
+    /// recorder writes verbatim) and then decoded by the same serde
+    /// path every other reader uses. No value is ever read by pattern.
+    pub fn skip_to(&mut self, t: u64, mut timg: Option<&mut TerrainImage>) -> Result<bool, String> {
+        let finder = memchr::memmem::Finder::new(b"terrain");
+        loop {
+            match self.next_line() {
+                None => return Ok(false),
+                Some(Err(e)) => return Err(e),
+                Some(Ok(())) => {}
+            }
+            let Some(lt) = line_tick(&self.line) else {
+                // Not the recorder's prefix shape: the full parser is
+                // the authority on what this line is.
+                let rec = TickRecord::from_line(&self.line, self.line_no)?;
+                if rec.t >= t {
+                    self.pending = true;
+                    return Ok(true);
+                }
+                if let (Some(img), Some(block)) = (timg.as_deref_mut(), rec.terrain.as_ref()) {
+                    img.dump_delta(block, rec.t);
+                    img.apply(block)
+                        .map_err(|e| format!("t={}: terrain: {e}", rec.t))?;
+                }
+                continue;
+            };
+            if lt >= t {
+                self.pending = true;
+                return Ok(true);
+            }
+            let Some(img) = timg.as_deref_mut() else {
+                continue;
+            };
+            if finder.find(self.line.as_bytes()).is_none() {
+                continue;
+            }
+            let row: RawTerrainRow = serde_json::from_str(&self.line)
+                .map_err(|e| format!("line {}: {e}", self.line_no))?;
+            if let Some(tv) = row.terrain {
+                let block = TerrainBlock {
+                    base: b64_str("base_b64", tv.base_b64)?,
+                    delta: b64_str("delta_b64", tv.delta_b64)?,
+                };
+                img.dump_delta(&block, lt);
+                img.apply(&block)
+                    .map_err(|e| format!("t={lt}: terrain: {e}"))?;
+            }
+        }
+    }
+
+    /// Next tick line RAW: its tick (off the prefix, or the full parse
+    /// when the prefix is not the recorder's) and the line text without
+    /// its newline. The slice writer's path — records are copied byte
+    /// for byte, never re-serialised.
+    pub fn next_raw(&mut self) -> Option<Result<(u64, &str), String>> {
+        if let Err(e) = self.next_line()? {
+            return Some(Err(e));
+        }
+        let line = self.line.trim_end_matches(['\n', '\r']);
+        let t = match line_tick(line) {
+            Some(t) => t,
+            None => match TickRecord::from_line(line, self.line_no) {
+                Ok(r) => r.t,
+                Err(e) => return Some(Err(e)),
+            },
+        };
+        Some(Ok((t, line)))
+    }
+
+    /// `"SLICE of <file> t=<from>..<to>"` when this recording was cut
+    /// by `mgc-conform slice` (header `capture.slice`), else `None`.
+    /// Every instrument that SEEDS from the first record prints it: a
+    /// slice cannot show a divergence born before its first tick.
+    pub fn slice_provenance(&self) -> Option<String> {
+        let s = self.header_json.get("capture")?.get("slice")?;
+        let file = s.get("file").and_then(|f| f.as_str()).unwrap_or("?");
+        let from = s.get("from").and_then(|f| f.as_u64());
+        let to = s.get("to").and_then(|f| f.as_u64());
+        Some(format!(
+            "SLICE of {file} t={}..{}",
+            from.map(|f| f.to_string()).unwrap_or_else(|| "?".into()),
+            to.map(|t| t.to_string()).unwrap_or_else(|| "END".into()),
+        ))
     }
 }
 
@@ -2834,6 +2976,19 @@ impl TerrainImage {
     pub fn decl(&self) -> &TerrainDecl {
         &self.decl
     }
+
+    /// The running plane set as ONE blob in declaration order — the
+    /// exact layout of a record's `base_b64`, so a stream can be
+    /// re-based mid-take (`mgc-conform slice` materialises the planes
+    /// at the cut into the slice's first record). `None` until a base
+    /// has been seen: relative-only planes must never be written as
+    /// a base.
+    pub fn base_blob(&self) -> Option<Vec<u8>> {
+        if !self.based {
+            return None;
+        }
+        Some(self.planes.concat())
+    }
 }
 
 // ------------------------------------------------------ port recordings
@@ -2950,12 +3105,24 @@ enum WriterOut {
 
 impl RecordingWriter {
     pub fn create(path: &std::path::Path, header: &serde_json::Value) -> Result<Self, String> {
+        Self::create_with_level(path, header, 9)
+    }
+
+    /// [`Self::create`] at an explicit zstd level. The recorders keep 9
+    /// (a take is written once and read hundreds of times); a temporary
+    /// slice wants a fast level — it is read a few times and thrown
+    /// away, and level 9 on a 1 GB inflated window is most of the cut.
+    pub fn create_with_level(
+        path: &std::path::Path,
+        header: &serde_json::Value,
+        level: i32,
+    ) -> Result<Self, String> {
         let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let plain = path.extension().and_then(|e| e.to_str()) == Some("jsonl");
         let out = if plain {
             WriterOut::Plain(std::io::BufWriter::new(file))
         } else {
-            let enc = zstd::stream::write::Encoder::new(file, 9)
+            let enc = zstd::stream::write::Encoder::new(file, level)
                 .map_err(|e| format!("{}: zstd: {e}", path.display()))?;
             WriterOut::Zstd(enc)
         };
@@ -2970,6 +3137,10 @@ impl RecordingWriter {
 
     fn write_line(&mut self, v: &serde_json::Value) -> Result<(), String> {
         let line = serde_json::to_string(v).map_err(|e| e.to_string())?;
+        self.write_text(&line)
+    }
+
+    fn write_text(&mut self, line: &str) -> Result<(), String> {
         let go = |w: &mut dyn std::io::Write| -> std::io::Result<()> {
             w.write_all(line.as_bytes())?;
             w.write_all(b"\n")
@@ -2983,8 +3154,19 @@ impl RecordingWriter {
 
     /// Append one tick record; flushes every 32.
     pub fn write_record(&mut self, v: &serde_json::Value) -> Result<(), String> {
-        use std::io::Write as _;
         self.write_line(v)?;
+        self.count_record()
+    }
+
+    /// Append one tick record given as its JSON line (no newline) —
+    /// the slice writer's byte-for-byte copy of a source row.
+    pub fn write_raw(&mut self, line: &str) -> Result<(), String> {
+        self.write_text(line)?;
+        self.count_record()
+    }
+
+    fn count_record(&mut self) -> Result<(), String> {
+        use std::io::Write as _;
         self.records += 1;
         self.pending += 1;
         if self.pending >= 32 {
