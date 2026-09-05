@@ -153,6 +153,12 @@
    "note": "THE MC2 DEATH PAYOUT RUNS A TICK LATE: retail's class-3 action machine is a `switch` with `break` (Events.cpp:2878-84) and class 3 is dispatched only from UpdateEntities_57730's single ascending pass, never from ApplyEvents_498A0's `while (runagain)` re-entry loop -- so exactly one arm runs per tick. The `life < 0` test that flips actionIndex 0 -> 2 is the LAST statement of the action-0 body AddPlayer03_00_5E010 (EF:60035-41; the function ends at EF:60042), so a wizard who dies this tick finishes action 0 and its fall only starts on the NEXT pass. The port's post-walk mortality dispatch matched on the LIVE player.state, which apply_player_damage had already flipped earlier in the same tick. mc2l0 t=11190: retail's whole tick is `action45 0 -> 2` plus the mover's z step, while the port ran the entire payout a tick early -- the (10,1) puff into slot 156, the (10,40) grave into slot 6, each class-15 token's action45+1, and the owned (10,39) player_ent 152 -> 6 re-point, all of which retail does at t=11191 INTO THE VERY SAME SLOTS (the port's post-payout free stack at 11191 is bit-identical to retail's at 11192, next-pop and all). Corroborated on a second take: mc2l24 pair 2677, where the entire pool diff is one extra (10,1) in the port. MC1 already carried this entry-state rule (world.rs:4227-30 / :5129-30); MC2 was the laggard."
   },
   {
+   "t": 12378,
+   "file": "the-whirlwind-lift-has-no-reap-skip-sub-33340-s.mgcr",
+   "source": "mc2l0-spells-galore",
+   "note": "THE WHIRLWIND LIFT HAS NO REAP SKIP: sub_33340's victim loop is `if (sub_33810(a1x, ix))` and NOTHING ELSE (EF:24286) \u2014 no byte[1]&4, no life test \u2014 and sub_33810 itself (EF:24452-515) tests only class, model, action and the same-owner id. A record the tick-top reap has not yet unlinked is still on the tile chain and retail still spins, drifts and lifts it. mc2l0-spells-galore t=12379 (the take's free-run horizon): slot 101, a (5,1) goat GRABBED by the funnel, reaches KillEntity_1C930's phase (f63&7==0) in its OWN dispatch at slot 101 and raises 0x400; all three whirlwind heads sit at higher slots, so the port's invented skip froze the corpse in mid-air for its last tick where retail spun it 3x204 and drifted it 3x(128 out, +114 up)."
+  },
+  {
    "t": 12777,
    "file": "the-mc2-castle-ball-copies-the-token-s-mana-it-d.mgcr",
    "source": "mc2l0",
@@ -175,6 +181,42 @@
    "file": "mc2-heal-is-sub-6a300-per-tick-heal-and-full-cos.mgcr",
    "source": "mc2l0-spells-galore",
    "note": "MC2 HEAL IS `sub_6A300` (EF:56430) AND THE PORT HAD NO BODY FOR IT AT ALL: `mc2_spell_fire` set `player.heal_active`, the expiry cleared it, and nothing in the crate ever read it \u2014 casting heal in MC2 restored nothing. Retail's effect state heals `maxLife * subSpellIndex_0x2A_42 / 100` and stamps the FULL cost on the regen delta on EVERY healing tick (:56453-61), admits on `sub_68D50` AND a per-tick `mana >= maxMana_0x8C_140` leg (:56445), and never calls `sub_68DE0` so it pins no mid-burst regen. mc2l0-spells-galore t=22776-86: life +105/tick (heal 100 = 1% of the 10000 ceiling, plus the +5 passive regen) and mana \u2212500/tick against the token's own 500 cost; the port healed 0 and debited once. Ledger SESSION 74 law C."
+  },
+  {
+   "t": 23945,
+   "file": "the-alliance-executor-is-a-pool-record-not-an-in.mgcr",
+   "source": "mc2l0-spells-galore",
+   "note": "THE ALLIANCE EXECUTOR IS A POOL RECORD, NOT AN INLINE CALL: the (10,74) impact mints `sub_50800` (EF:36945) \u2014 four writes, action 0x51, class 10, byte[0]=(&0xF6)|1, model 0x4A, and NO maxLife/life-copy/map-register/rot, so it is born UNPOSITIONED with `NewEvent_4A050`'s seeds \u2014 and its own class-10 action-0x51 tick `sub_3A650` (EF:29637) does the converting ONE TICK LATER off `word_0x96_150`/`byte_0x46_70`/`subSpellIndex`, then self-disables. The port converted inline at the impact: no allocation (so every later free-stack pop shifted) and the whole charm a tick early on every victim lane at once. mc2l0-spells-galore t=23946: retail pops slot 70 for the executor (x/y/z 0, f2a 610, b46 16, target96 559, f1a 152) and its three (5,4) archers 559/621/627 hold `sv2` 0 / `action` 34 / `speed` 0 for one more tick. The (10,25) steal burst already had this exact shape. `MGC_NO_MC2_ALLIANCE_RECORD` restores the inline arm."
+  },
+  {
+   "t": 23947,
+   "file": "the-alliance-charm-s-parent-has-an-import-seat-a.mgcr",
+   "source": "mc2l0-spells-galore",
+   "note": "THE ALLIANCE CHARM'S PARENT HAS AN IMPORT SEAT AND AN OWNER LANE: `sub_3A650` writes `v6x->parentId_0x28_40 = a1x->id_0x1A_26` (EF:29680) on a PRE-EXISTING creature and leaves its `@0x1A` alone \u2014 mc2l0-spells-galore archer 559 reads `f1a` 559 beside `owner28` 152 for the whole charm \u2014 so this is the one `@0x28` the port cannot fuse into `id24` the way it does for sv2 12/13. The parent rides the `mc2_allied` side map, which the pair importer CLEARED and never re-seeded, so `mc2_alliance_clock` read parent 0, called it a dead parent and ended every imported charm on its first ticked pair (`sv2` 14 -> 10). Three changes, one law: seed `mc2_allied` from `r.owner28` on a class-5 sv2==14, carve that record out of the importer's `@0x28`->`id24` fusion, and publish the map on the `owner` obs lane (`port_ent_lanes_mc2` too). t=23948, archers 559/621/627: retail `sv2` 14 / `owner` 152 with `f2e` counting 608. `MGC_NO_MC2_ALLIANCE_PARENT_SEAT` restores the pre-dig behaviour."
+  },
+  {
+   "t": 24000,
+   "file": "the-alliance-slot-runs-the-shared-sub-1e700-core.mgcr",
+   "source": "mc2l0-spells-galore",
+   "note": "THE ALLIANCE SLOT RUNS THE SHARED `sub_1E700` CORE \u2014 AN ALLY WITH NO ENEMY FOLLOWS ITS CASTER: `sub_1E9C0` (EF:10971-73) is `v8 = word_0x96_150; word_0x96_150 = parentId_0x28_40; sub_1E700(a1x, a2);` \u2014 the SAME controlled-summon core the StageVar2-13 summon slot already ran, with its 8-tick aim throttle, 64-tick wander jink, blocked-tick aim gate and same-model crowd steer. The port had a hand-rolled paraphrase that returned WITHOUT MOVING whenever the lock was 0, which on this take is every tick of the charm. Retail then adopts the parent's fight (EF:10974-77: the parent's own lock, else its attacker `word_0x26_38`), drops a lock naming a fellow ally of the same parent / a corpse / a reaped record (EF:10983-87), and hands to `8m+2` on `sub_583F0`'s 3-D distance against the row's `word_0x1c_28` \u2014 not the port's hardcoded 2-D 1536. mc2l0-spells-galore t=23948 onward: archers 559/621/627 walk `y` -30 per tick at their row speed while the port left all three standing; closing it carried the take's free-run horizon 23,948 -> 24,556. `MGC_NO_MC2_ALLIANCE_CORE` restores the paraphrase."
+  },
+  {
+   "t": 24556,
+   "file": "stagevar2-10-is-a-one-tick-transit-sub-12500-cas.mgcr",
+   "source": "mc2l0-spells-galore",
+   "note": "STAGEVAR2 10 IS A ONE-TICK TRANSIT, NOT A RESTING STATE \u2014 `sub_12500` CASE 0xA: ten retail sites park a creature at StageVar2 10 (every kind handler's aggro break EF:10237/:10314/:10431/:10551, the kind-3/4 guardian hand-offs :10057/:10089, the m27 head :19714 and THE ALLIANCE CHARM'S OWN EXPIRY :11005) and the tick-top arm at EF:5046-49 is what gets it out again: unless the creature is mid-attack (`&7==2`) or fleeing (`&7==6`) it re-arms onto its StageVar1 slot, or \u2014 with no StageVar1 \u2014 falls through `sub_12330`'s `!a2` leg (EF:4977-79) to the `sub_12470` leaf: StageVar2 0, StageVar1 0, `word_0x4A_74` 0, action `8*model+1`. The port had landed the 0xD/0xE/0x10/0x11 arm of that same switch (DIG 98-Q22) and stopped there, so a creature that reached kind 10 stayed there for the rest of the level. mc2l0-spells-galore archer 559: the charm lapses at t=24556 (`f2e` 1->0, `sv2` 14->10, `owner28` 152->0, all three already right) and at t=24557 retail reads `sv2` 0 / `action` 33 = 8*4+1 where the port sat at 10/34. `MGC_NO_SV_KIND10_RESUME` restores the pre-dig behaviour."
+  },
+  {
+   "t": 25449,
+   "file": "case-0x19-s-creature-filter-is-sub-3a7f0-itself.mgcr",
+   "source": "mc2l0-spells-galore",
+   "note": "`case 0x19`'S CREATURE FILTER IS `sub_3A7F0` ITSELF, NOT AN ON-GROUND TEST: the (9,25) ALLIANCE CARRIER's auto-target acquisition screens candidates with `id_0x1A != caster && byte_0x39_57 && sub_3A7F0(cand)` (EF:54988-91) \u2014 the very charm-eligibility predicate `sub_3A650` asks before converting (class 5; model bar 12-15/22/23/26/27 and 25 with `byte_0x46_70`; StageVar2 in {13,14,16,17}; action 232). The port screened by \"z within one step of the terrain\", cited as an approximation of a cave-in filter; it is nothing of the kind, and it let the carrier lock onto creatures its own payload could never charm \u2014 above all ones ALREADY CHARMED BY THIS CASTER. mc2l0-spells-galore t=25450: the human's tier-3 recast mints the carrier at slot 661 (the freed slot of the previous cast's (10,74) executor) and the port locked slot 627, one of the three archers it had just charmed, bending the launch to yaw 167 / pitch 46 where retail finds NO eligible candidate, returns 0 and fires straight down the caster's own post-tick pose (209 / 81). `MGC_NO_MC2_AIM_CHARM_FILTER` restores the pre-dig test."
+  },
+  {
+   "t": 25983,
+   "file": "the-controlled-seam-runs-the-model-wrapper-s-tai.mgcr",
+   "source": "mc2l0-spells-galore",
+   "note": "THE CONTROLLED SEAM RUNS THE MODEL WRAPPER'S TAIL \u2014 A THIRD CALL PATH FOR A LAW ALREADY LANDED TWICE: `sub_1D5D0` is called FROM the per-model phase-7 wrapper, so whatever the StageVar2 case just did, the wrapper's last statement still executes. The archer's is `AddScroll05_04_20140` (EF:11960-66): `dword_0x10_16 = 0; sub_1D5D0(entity, 32); if (actionIndex == 34) sub_20060(entity);` \u2014 the aim test reads the action the case JUST wrote. The port had landed it on the STAGE-HELD seam (`mc2_held_tick`, kinds 1..=10 \u2014 the t=3945 fixture) and on `archer_tick`'s own role-7 arm, then returned early from the CONTROLLED seam (StageVar2 12/13/14/16/17), so an archer promoted to `8m+2` by the alliance/summon/pyramid handler never took its aim. mc2l0-spells-galore t=25984, the charmed archer at slot 621: `sub_1E9C0`'s engage hands it to 34 and retail fires the aim \u2014 `f5a` 0 -> 1, `speed` 30 -> 0, one entity-rand draw 48984 -> 56119 \u2014 where the port walked on at patrol speed with no draw. OWED: the held seam runs four more wrapper tails here (the m17/m19/m20/m28 sub-state reset, the goat bleat draw, the FLEE speed tail) with no corpus witness yet. `MGC_NO_MC2_CONTROLLED_WRAPPER_TAIL` reverts."
   }
  ]
 }

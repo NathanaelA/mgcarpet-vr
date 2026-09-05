@@ -79,6 +79,17 @@ fn no_mc2_ww_walk() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_WALK").is_some())
 }
 
+/// A/B toggle for the lift pass's REAP SKIP: set
+/// `MGC_MC2_WW_REAP_SKIP` to restore the pre-dig invented guard,
+/// which dropped a victim whose `0x400` had already gone up this
+/// tick. `sub_33340`'s victim loop is `if (sub_33810(a1x, ix))` and
+/// nothing else (EF:24286), and `sub_33810` (EF:24452-515) never
+/// reads the flag word — see `mc2_whirlwind_lift`.
+fn mc2_ww_reap_skip() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_MC2_WW_REAP_SKIP").is_some())
+}
+
 impl Gen {
     // ---- ctors ---------------------------------------------------------------
 
@@ -104,6 +115,33 @@ impl Gen {
         self.link(i, x, y, z);
         self.refill_life(i);
         self.mc2_set_sprite(i, 205);
+        Some(i)
+    }
+
+    /// `sub_50800` (EF:36945) — the (10,74) ALLIANCE EXECUTOR ctor.
+    /// FOUR WRITES AND NOTHING ELSE: action 0x51, class 10, byte[0] =
+    /// (&0xF6)|1, model 0x4A. No `maxLife`, no `CopyMaxLifeToLife_49A20`,
+    /// no `AddEventToMap_57D70`, no `SetEntityIndexAndRot_49CD0` — so
+    /// the record keeps `NewEvent_4A050`'s seeds (maxLife 300, life 0,
+    /// `byte_0x3E_62` = its own slot, `byte_0x43/0x44` = 0xFF, speed 16)
+    /// and it is born UNPOSITIONED and OFF the tile map: retail's
+    /// mc2l0-spells-galore slot 70 at t=23946 records x/y/z = 0 and
+    /// extents 0.
+    ///
+    /// ⭐ THE ALLIANCE IS A RECORD, NOT AN INLINE CALL. The impact does
+    /// not convert anybody — it mints this, and the conversion is this
+    /// record's own class-10 action-0x51 tick ONE TICK LATER
+    /// ([`Gen::mc2_alliance_exec_tick`]). The same shape the (10,25)
+    /// steal burst already carries; the port had the (10,74) arm poke
+    /// the victims inline, which cost an allocation (every later free-
+    /// stack pop shifted) and a tick of delay on every converted lane.
+    pub(crate) fn mc2_spawn_alliance_exec(&mut self) -> Option<usize> {
+        let i = self.new_event()?;
+        let e = &mut self.ent[i];
+        e.tick70 = 0x51;
+        e.class64 = 10;
+        e.flags = (e.flags & !0x9) | 1;
+        e.model65 = 74;
         Some(i)
     }
 
@@ -1378,9 +1416,24 @@ impl Gen {
                     10 => matches!(c.model65, 13 | 14 | 39 | 57),
                     _ => false,
                 };
-                // The 0x400 reap-skip is a guard not in the retail
-                // gate (deliberate: avoids acting on reaped slots).
-                if !victim || c.flags & 0x400 != 0 {
+                // ⭐ NO REAP SKIP. `sub_33340`'s victim loop is
+                // `if (sub_33810(a1x, ix))` and NOTHING ELSE
+                // (EF:24286) — no `byte[1] & 4`, no life test — and
+                // `sub_33810` itself (EF:24452-515) tests only class,
+                // model, action and the same-owner id. A record the
+                // tick-top reap has not yet unlinked is still on the
+                // tile chain and retail still lifts, spins and drifts
+                // it. The old skip here was an INVENTED GUARD, and it
+                // was false exactly when it mattered: mc2l0-spells-
+                // galore t=12379, slot 101 — a (5,1) goat GRABBED by
+                // the funnel reaches `KillEntity_1C930`'s phase (120,
+                // `f63 & 7 == 0`), which raises 0x400 in the goat's
+                // OWN dispatch at slot 101; all three whirlwind heads
+                // sit at higher slots, so every one of them skipped it
+                // and the corpse froze in mid-air for its last tick
+                // while retail spun it 3x204 and drifted it 3x(128
+                // out, +114 up). It was the take's free-run horizon.
+                if !victim || (mc2_ww_reap_skip() && c.flags & 0x400 != 0) {
                     j = next;
                     continue;
                 }

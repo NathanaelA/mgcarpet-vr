@@ -228,6 +228,17 @@ pub(crate) const MC2_NULL_VICTIM_GHOST: u16 = 44546;
 /// where the action-29 firestorm hub inherited the flyer's stale
 /// homing lock even when the flyer struck NOTHING. See the read site
 /// in [`Gen::mc2_proj_impact`] for the citations.
+/// A/B toggle for `sub_67CB0` `case 0x19`'s `sub_3A7F0` FILTER: set
+/// `MGC_NO_MC2_AIM_CHARM_FILTER` to restore the pre-dig behaviour,
+/// where the (9,25) alliance carrier's acquisition screened creatures
+/// by an invented "on the ground" test instead of the charm-
+/// eligibility predicate retail actually calls (EF:54991) — so it
+/// could lock onto a creature the caster had already charmed.
+fn no_mc2_aim_charm_filter() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AIM_CHARM_FILTER").is_some())
+}
+
 fn no_fireball_lock_clear() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_FIREBALL_LOCK_CLEAR").is_some())
@@ -1507,10 +1518,31 @@ impl Gen {
             // neither the flyer path nor the handler hurts anything.
             // A victimless detonation (terrain hit) fizzles, like
             // retail's executor with no `word_0x96_150`.
+            //
+            // ⭐⭐⭐ AND THE EXECUTOR IS A REAL POOL RECORD, EXACTLY LIKE
+            // THE (10,25) BURST ABOVE. `sub_50800` (EF:36945) mints it
+            // and `sub_3A650` (EF:29637) — its class-10 action 0x51 —
+            // does the converting ONE TICK LATER, off the record's own
+            // `word_0x96_150` / `byte_0x46_70` / `subSpellIndex`. The
+            // port converted inline here, which cost an allocation (so
+            // every later free-stack pop shifted) and put the whole
+            // charm a tick early on every victim lane at once.
+            // mc2l0-spells-galore t=23946 (the take's free-run horizon
+            // after the whirlwind law): retail pops slot 70 for the
+            // executor and its three (5,4) archers 559/621/627 keep
+            // `sv2` 0 / `action` 34 / `speed` 0 / `owner28` 0 for one
+            // more tick, taking the charm at t=23947 — the port had
+            // already flipped all four lanes at 23946 and minted
+            // nothing, so the pair read as a perfectly symmetric
+            // one-tick-stale swap in both directions.
             (10, 74) => {
-                let radius = self.ent[i].f71 as i32;
-                self.mc2_alliance_convert(victim, id, radius, dmg as i32);
-                None
+                if crate::mc2::mobs::no_mc2_alliance_record() {
+                    let radius = self.ent[i].f71 as i32;
+                    self.mc2_alliance_convert(victim, id, radius, dmg as i32);
+                    None
+                } else {
+                    self.mc2_spawn_alliance_exec()
+                }
             }
             (10, 23) => self.mc2_spawn_blast23(x, y, z),
             // Lightning L1/L2 storm burst (`sub_66FD0`'s hard-coded
@@ -3321,7 +3353,7 @@ impl Gen {
 
     /// The model-keyed candidate lists + cones (trace §1/§8):
     /// (wizards, creatures, worms_always, spheres, buildings,
-    /// yaw cone, pitch cone, wizard alarm, grounded-only). None =
+    /// yaw cone, pitch cone, wizard alarm, `sub_3A7F0`-only). None =
     /// a model with no acquisition switch arm.
     #[allow(clippy::type_complexity)]
     fn mc2_aim_lists(model: u8) -> Option<(bool, bool, bool, bool, bool, u16, u16, bool, bool)> {
@@ -3378,7 +3410,7 @@ impl Gen {
         probe: &AimProbe,
         human: Option<(u16, u16, i16)>,
     ) -> Option<u16> {
-        let (wizards, creatures, worms_always, spheres, buildings, yc, pc, _alarm, grounded) =
+        let (wizards, creatures, worms_always, spheres, buildings, yc, pc, _alarm, charm_eligible) =
             Self::mc2_aim_lists(probe.model)?;
         let own = probe.own;
         let range = probe.range;
@@ -3475,7 +3507,31 @@ impl Gen {
                     if (e.f58 & 0xFF) == 0 || e.id24 == own {
                         continue;
                     }
-                    if grounded {
+                    // ⭐⭐⭐ `case 0x19`'s THIRD FILTER IS `sub_3A7F0`
+                    // ITSELF (EF:54991) — the very charm-eligibility
+                    // predicate `sub_3A650` asks before converting, not
+                    // an on-ground test. The port had it as "z within
+                    // one step of the terrain", cited as an
+                    // approximation of a *"cave-in"* filter; it is
+                    // nothing of the kind. The alliance carrier
+                    // therefore locked onto creatures its own payload
+                    // could never charm — above all creatures ALREADY
+                    // CHARMED BY THIS CASTER (StageVar2 14), which the
+                    // predicate bars outright. mc2l0-spells-galore
+                    // t=25450: the human's tier-3 recast mints the
+                    // (9,25) at slot 661 and the port locked slot 627,
+                    // one of the three archers IT HAD JUST CHARMED,
+                    // bending the launch to yaw 167 / pitch 46 where
+                    // retail — finding no eligible candidate at all —
+                    // returns 0 and fires straight down the caster's
+                    // own post-tick pose (209 / 81).
+                    if charm_eligible
+                        && !no_mc2_aim_charm_filter()
+                        && !self.mc2_charm_eligible(v)
+                    {
+                        continue;
+                    }
+                    if charm_eligible && no_mc2_aim_charm_filter() {
                         let g = self.ground_z(e.x, e.y) as i16;
                         if (e.z - g).unsigned_abs() > 256 {
                             continue;

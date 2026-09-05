@@ -292,6 +292,15 @@ impl World {
     /// cadence, and either HOLD it (phase-7 wait) or, when the cadence
     /// mode says "skip this cycle", release it straight to active.
     fn mc2_stagevar_arm(&mut self, ent: usize, slot: u8) {
+        // `if (!a2) v3 = 0;` (EF:4977-79) — slot 0 is NOT a stage slot
+        // and retail never reads its cadence: it falls straight to the
+        // `sub_12470` leaf. Every pre-existing caller passes a matched
+        // slot, so this only serves `mc2_kind10_resume_snap`, whose
+        // creatures may carry no StageVar1 at all.
+        if slot == 0 {
+            self.mc2_stagevar_release(ent, 0, true);
+            return;
+        }
         let (mode, ctr) = {
             let v = &mut self.mc2_stagevars[slot as usize];
             let c = v.cadence & 3;
@@ -384,6 +393,60 @@ impl World {
             // the phase write was the invention.
         }
         self.mc2_sv_held.retain(|h| h.ent as usize != ent);
+    }
+
+    /// `sub_12500`'s **`case 0xA`** (EF:5046-49) — the arm the port's
+    /// controlled-slot snap did not have.
+    ///
+    /// ⭐⭐⭐ StageVar2 10 IS NOT A RESTING STATE, IT IS A ONE-TICK
+    /// TRANSIT. Ten retail sites park a creature there — every kind
+    /// handler's aggro break (EF:10237/:10314/:10431/:10551), the
+    /// kind-3/4 guardian hand-offs (:10057/:10089), the m27 head
+    /// (:19714) and **the ALLIANCE charm's own expiry (:11005)** — and
+    /// this tick-top arm is what gets it OUT again: unless the
+    /// creature is mid-attack (`& 7 == 2`) or fleeing (`& 7 == 6`), it
+    /// re-arms onto its StageVar1 stage slot, or, with no StageVar1,
+    /// drops through `sub_12330`'s `!a2` leg to the `sub_12470` leaf —
+    /// StageVar2 = 0, StageVar1 = 0, `word_0x4A_74` = 0, action =
+    /// `8*model+1`. The port ran the 0xD/0xE/0x10/0x11 arm of the same
+    /// switch (DIG 98-Q22) and stopped there, so a creature that
+    /// reached kind 10 STAYED at kind 10 for the rest of the level:
+    /// `mc2_creature_tick`'s controlled seam has no 10, and the held
+    /// seam's `mc2_aggro_raise` only ever re-raises the action.
+    ///
+    /// mc2l0-spells-galore, archer 559: the alliance lapses at
+    /// t=24556 (`f2e` 1 → 0, `sv2` 14 → 10, `owner28` 152 → 0 — the
+    /// port had all three), and at t=24557 retail reads `sv2` **0**
+    /// and `action` **33** = `8*4+1` where the port sat at 10/34. It
+    /// was the take's free-run horizon. `MGC_NO_SV_KIND10_RESUME`
+    /// restores the pre-dig behaviour.
+    ///
+    /// The outer gate is shared with the 0xD/0xE arm (`(action & 7)`
+    /// outside 4..=5, EF:5045) and the inner one is this case's own.
+    pub(crate) fn mc2_kind10_resume_snap(&mut self) {
+        if std::env::var_os("MGC_NO_SV_KIND10_RESUME").is_some() {
+            return;
+        }
+        for m in 0..self.g.mob_chains.list.len() {
+            let members: Vec<u16> = self.g.mob_chains.visible(m).to_vec();
+            for s in members {
+                let i = s as usize;
+                if i == 0 || i >= self.g.ent.len() || self.g.ent[i].site_z != 10 {
+                    continue;
+                }
+                // Outer gate (phases 4/5 never react) + this case's
+                // own inner gate (attack 2 and flee 6 hold).
+                if matches!(self.g.ent[i].tick70 & 7, 2 | 4 | 5 | 6) {
+                    continue;
+                }
+                let slot = self
+                    .mc2_sv_held
+                    .iter()
+                    .find(|h| h.ent == s)
+                    .map_or(0, |h| h.slot);
+                self.mc2_stagevar_arm(i, slot);
+            }
+        }
     }
 
     /// `sub_122A0` (EF:4953-58) — arm a DEFERRED m9 hold: called when

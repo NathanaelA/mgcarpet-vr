@@ -115,6 +115,49 @@ pub(crate) fn no_summon_lease_split() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_SUMMON_LEASE_SPLIT").is_some())
 }
 
+/// A/B toggle for the CONTROLLED seam's MODEL-WRAPPER TAIL: set
+/// `MGC_NO_MC2_CONTROLLED_WRAPPER_TAIL` to restore the pre-dig
+/// behaviour, where `mc2_creature_tick`'s StageVar2 12/13/14/16/17 arm
+/// returned before the per-model phase-7 wrapper's own last statement
+/// — so an archer the controlled handler promoted to `8m+2` skipped
+/// `sub_20060`'s aim (EF:11960-66).
+fn no_mc2_controlled_wrapper_tail() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CONTROLLED_WRAPPER_TAIL").is_some())
+}
+
+/// A/B toggle for the ALLIANCE EXECUTOR RECORD: set
+/// `MGC_NO_MC2_ALLIANCE_RECORD` to restore the pre-dig behaviour,
+/// where the (10,74) impact arm converted the victims INLINE instead
+/// of minting `sub_50800`'s record and letting its own class-10
+/// action-0x51 tick (`sub_3A650`) do it one tick later.
+pub(crate) fn no_mc2_alliance_record() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALLIANCE_RECORD").is_some())
+}
+
+/// A/B toggle for the ALLIANCE CHARM'S PARENT SEAT: set
+/// `MGC_NO_MC2_ALLIANCE_PARENT_SEAT` to restore the pre-dig behaviour,
+/// where the pair importer cleared `mc2_allied` and never re-seeded it
+/// from the victim's `parentId_0x28_40` (so every imported charm ended
+/// on its first ticked pair), fused that `@0x28` into `id24` (losing
+/// the victim's own `@0x1A`), and projected the `owner` obs lane as 0.
+pub(crate) fn no_mc2_alliance_parent_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALLIANCE_PARENT_SEAT").is_some())
+}
+
+/// A/B toggle for the ALLIANCE slot's `sub_1E700` CORE: set
+/// `MGC_NO_MC2_ALLIANCE_CORE` to restore the pre-dig paraphrase, which
+/// ran its own target scan and stood the ally STILL whenever it found
+/// nobody, where `sub_1E9C0` (EF:10971-73) parks the lock on the
+/// parent and runs the shared controlled-summon core — so a charmed
+/// creature with no enemy follows its caster.
+fn no_mc2_alliance_core() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALLIANCE_CORE").is_some())
+}
+
 /// A/B toggle for THE VILLAGE HOUSE'S PERIODIC POPULATION SPAWN —
 /// `GetRandManaSphere_38270`'s **SECOND** CALL SITE. Set
 /// `MGC_NO_MC2_HOUSE_POP=1` to restore the pre-dig behaviour, where
@@ -3452,6 +3495,37 @@ impl Gen {
                 17 => self.mc2_doom_summon_spinup_tick(i, ctx),
                 _ => {}
             }
+            // ⭐⭐⭐ …AND THE MODEL WRAPPER'S TAIL STILL RUNS. `sub_1D5D0`
+            // is called FROM the per-model phase-7 wrapper, so whatever
+            // the StageVar2 case just did, the wrapper's own last
+            // statement executes on the way out. The archer's is
+            // `AddScroll05_04_20140` (EF:11960-66): `dword_0x10_16 = 0;
+            // sub_1D5D0(entity, 32); if (actionIndex == 34)
+            // sub_20060(entity);` — the aim test reads the action the
+            // case JUST WROTE. The port had landed this on the STAGE-
+            // HELD seam (`World::mc2_held_tick`, kinds 1..=10 — the
+            // mc2l0 t=3945 fixture) and on `archer_tick`'s own role-7
+            // arm, and stopped there: the CONTROLLED seam right above
+            // `return`s, so an archer promoted to `8m+2` by the
+            // alliance/summon/pyramid handler never took its aim.
+            // A THIRD CALL PATH FOR A LAW ALREADY LANDED TWICE.
+            // mc2l0-spells-galore t=25984, the charmed archer at slot
+            // 621: `sub_1E9C0`'s engage hands it to 34 and retail then
+            // fires the aim — `f5a` 0 -> 1, `speed` 30 -> 0 and one
+            // entity-rand draw (48984 -> 56119) — where the port
+            // walked on at patrol speed with no draw.
+            // ⚠ OWED: the held seam runs FOUR more wrapper tails here
+            // (the m17/m19/m20/m28 `byte_0x46_70 = 0` sub-state reset,
+            // the goat bleat draw, the FLEE speed tail). They are owed
+            // to this seam by the same argument and are NOT landed —
+            // no corpus witness yet, and each is its own A/B.
+            // `MGC_NO_MC2_CONTROLLED_WRAPPER_TAIL` reverts.
+            if !no_mc2_controlled_wrapper_tail() {
+                let e = &self.ent[i];
+                if e.model65 == 4 && e.tick70 == e.model65.wrapping_mul(8).wrapping_add(2) {
+                    self.archer_aim(i);
+                }
+            }
             return;
         }
         match action {
@@ -4143,6 +4217,34 @@ impl Gen {
         }
     }
 
+    /// `sub_3A7F0` (EF:29701) — THE CHARM-ELIGIBILITY PREDICATE, and
+    /// it is a shared one: `sub_3A650`'s conversion sweep asks it, and
+    /// so does `sub_67CB0`'s **`case 0x19`** — the (9,25) alliance
+    /// carrier's own auto-target acquisition (EF:54991).
+    ///
+    /// Class 5 only; the model bar is 12-15, 22, 23, 26 and 27, plus
+    /// 25 when `byte_0x46_70` is set (model 24 falls THROUGH the
+    /// ladder and is eligible); then StageVar2 in {13, 14, 16, 17} —
+    /// already summoned, allied, or on the pyramid release chain —
+    /// and finally the child-follow action 232. **No life test and no
+    /// reap test anywhere in it.**
+    pub(crate) fn mc2_charm_eligible(&self, j: usize) -> bool {
+        let Some(e) = self.ent.get(j) else {
+            return false;
+        };
+        if e.class64 != 5 {
+            return false;
+        }
+        let m = e.model65;
+        if matches!(m, 12..=15 | 22 | 23 | 26 | 27) || (m == 25 && e.f71 != 0) {
+            return false;
+        }
+        if matches!(e.site_z, 13 | 14 | 16 | 17) {
+            return false;
+        }
+        e.tick70 != 232
+    }
+
     /// `sub_3A650` (EF:29637; the (10,74) executor's class-10 action
     /// 0x51) — the ALLIANCE conversion: a SAME-SPECIES area charm.
     /// Sweep a square of tile-radius `radius` (the tier's 16/26/32)
@@ -4214,6 +4316,24 @@ impl Gen {
         }
     }
 
+    /// `sub_3A650` (EF:29637) — the (10,74) executor's ONLY tick, and
+    /// the reason the alliance is a POOL RECORD rather than an inline
+    /// call at the impact ([`Gen::mc2_spawn_alliance_exec`]). Run the
+    /// same-species area charm around `word_0x96_150` (the struck
+    /// victim, `f146`) with `byte_0x46_70` as the tile radius (`f71`)
+    /// and `subSpellIndex_0x2A_42` as the duration (`f140`), then
+    /// `DisableEntityDrawing04_57F10(a1x)` — the disable sits AFTER
+    /// the whole `if (word_0x96_150)` block and is UNCONDITIONAL
+    /// (EF:29694), so a victimless executor still burns its one tick.
+    pub(crate) fn mc2_alliance_exec_tick(&mut self, i: usize) {
+        let (victim, parent, radius, dur) = {
+            let e = &self.ent[i];
+            (e.f146, e.id24, e.f71 as i32, e.f140)
+        };
+        self.mc2_alliance_convert(victim, parent, radius, dur);
+        self.ent[i].flags |= 0x400;
+    }
+
     /// The per-tick half of the alliance law (`sub_1E9C0` head
     /// EF:10873 + expiry EF:11003-10), run from the class-5 dispatch
     /// head in EVERY state: count the charm down, revert on expiry /
@@ -4265,16 +4385,130 @@ impl Gen {
     }
 
     /// `sub_1E9C0` (EF:10873), StageVar2 == 14 — the ALLIANCE-charmed
-    /// creature's controlled slot: fight the caster's fight. Retail
-    /// adopts the parent wizard's target/attacker words; the port's
-    /// out-of-pool human keeps neither, so the observable equivalent
-    /// serves: the nearest pool entity currently TARGETING the parent
-    /// (its attacker), else the nearest enemy wizard. Never a fellow
-    /// ally of the same parent (EF:10984). Engage hands to the
-    /// model's `8m+2` attack KEEPING StageVar2 = 14 (the clock keeps
-    /// counting and re-arms the slot after combat) and awards the
-    /// caster Alliance XP (`sub_6D8B0(parentId, 0x18, 1)`, EF:10998).
-    fn mc2_alliance_creature_tick(&mut self, i: usize, _ctx: &MobCtx) {
+    /// creature's controlled slot.
+    ///
+    /// ⭐⭐⭐ **IT IS THE SAME `sub_1E700` CORE THE SUMMON SLOT RUNS**,
+    /// and the port had a hand-rolled paraphrase instead. EF:10971-73
+    /// is three statements — `v8 = word_0x96_150;
+    /// word_0x96_150 = parentId_0x28_40; sub_1E700(a1x, a2);` — so an
+    /// ally with no enemy does not "stand by": it **FOLLOWS ITS
+    /// CASTER**, through the very core ([`Gen::mc2_summon_core`]) that
+    /// already carries the 8-tick aim throttle, the 64-tick wander
+    /// jink, the blocked-tick aim gate and the same-model crowd steer.
+    /// The old body returned without moving whenever `word_0x96_150`
+    /// was 0, which on mc2l0-spells-galore is every tick from the
+    /// charm onward: t=23948, archers 559/621/627 walk `y` −30 at
+    /// their row speed while the port left all three standing. That
+    /// was the take's free-run horizon.
+    ///
+    /// Retail then ADOPTS the parent's fight (EF:10974-77): `v9` is
+    /// the parent's own lock `word_0x96_150`, or its attacker
+    /// `word_0x26_38` when the lock is empty, and it displaces the
+    /// ally's own lock. The lock is dropped again (EF:10983-87) if it
+    /// names a FELLOW ALLY OF THE SAME PARENT (`parentId` equal AND
+    /// `StageVar2 == 14` — both halves), a corpse, or a reaped record.
+    /// Only then does the reach test hand to the model's `8m+2` with
+    /// `sub_583F0`'s 3-D distance against the row's `word_0x1c_28`
+    /// (NOT the hardcoded 2-D 1536 the port used), keeping StageVar2
+    /// = 14 so the clock keeps counting, and awards the caster
+    /// Alliance XP (`sub_6D8B0(parentId, 0x18, 1)`, EF:10998).
+    ///
+    /// APPROX, cited: retail's `v9` reads the parent's two words off
+    /// its POOL RECORD. A pool wizard parent gives both here; the
+    /// HUMAN is out of pool and the ctx carries no lock, so the
+    /// `word_0x26_38` half alone is served by its observable
+    /// equivalent — the nearest pool record currently targeting the
+    /// parent — on the same 8-tick throttle the aim uses. The old
+    /// body's "else the nearest enemy wizard" fallback is GONE: retail
+    /// reads two words and neither of them is a scan.
+    /// A/B: `MGC_NO_MC2_ALLIANCE_CORE` restores the old paraphrase.
+    fn mc2_alliance_creature_tick(&mut self, i: usize, ctx: &MobCtx) {
+        if no_mc2_alliance_core() {
+            self.mc2_alliance_creature_tick_legacy(i);
+            return;
+        }
+        let parent = self.mc2_allied.0.get(&(i as u16)).copied().unwrap_or(0);
+        // EF:10971-73 — the lock is parked on the parent for the core.
+        let v8_in = self.ent[i].f146;
+        self.ent[i].f146 = parent;
+        self.mc2_summon_core(i, ctx);
+        // EF:10974-77 — `v9` = the parent's lock, else its attacker.
+        let v9 = match self.ent.get(parent as usize) {
+            Some(p) if parent != PLAYER_TARGET && parent != 0 => {
+                if p.f146 != 0 { p.f146 } else { p.f40 }
+            }
+            _ => self.mc2_alliance_parent_attacker(i, parent),
+        };
+        let mut v8 = v8_in;
+        if v9 != 0 && v8 != v9 {
+            v8 = v9;
+        }
+        self.ent[i].f146 = v8;
+        if v8 == 0 {
+            return;
+        }
+        // EF:10983-87 — drop a lock on a fellow ally, a corpse or a
+        // reaped record. `PLAYER_TARGET` is the out-of-pool human and
+        // has no record to test: retail's `Entities[v8]` would be the
+        // carpet, which is neither charmed nor dead here.
+        if v8 != PLAYER_TARGET {
+            let Some(t) = self.ent.get(v8 as usize) else {
+                self.ent[i].f146 = 0;
+                return;
+            };
+            let ally = t.site_z == 14 && self.mc2_allied.0.get(&v8).copied() == Some(parent);
+            if ally || t.act_life <= 0 || t.flags & 0x400 != 0 {
+                self.ent[i].f146 = 0;
+                return;
+            }
+        }
+        // EF:10990-97 — the 3-D reach hand-off, row `word_0x1c_28`.
+        let Some(tp) = self.mc2_summon_lock_pos(v8, ctx) else {
+            return;
+        };
+        let me = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let reach = BEHAVIOR[self.ent[i].row156 as usize].v_28.max(0) as u32;
+        if Self::mc2_dist3(me, tp) < reach {
+            self.ent[i].f146 = v8;
+            self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(2);
+            self.mc2_cast_xp.0.push((parent, 24, 1));
+        }
+    }
+
+    /// The `word_0x26_38` half of `sub_1E9C0`'s `v9` for an
+    /// OUT-OF-POOL parent (the human): the nearest live pool record
+    /// currently locked onto the parent. Retail reads the word off the
+    /// parent's record; the human has none, and the ctx carries no
+    /// lock. Throttled to the core's own 8-tick aim cadence so it
+    /// cannot out-resolve the aim it feeds.
+    fn mc2_alliance_parent_attacker(&self, i: usize, parent: u16) -> u16 {
+        if parent == 0 || self.ent[i].f63 & 7 != 0 {
+            return 0;
+        }
+        let (mx, my) = (self.ent[i].x, self.ent[i].y);
+        let mut best = i32::MAX;
+        let mut found = 0u16;
+        for j in 1..self.ent.len() {
+            let e = &self.ent[j];
+            if j == i || e.flags & 0x400 != 0 || e.act_life < 0 || e.f146 != parent {
+                continue;
+            }
+            if !matches!(e.class64, 3 | 5) {
+                continue;
+            }
+            let d = Self::dist2_sq(mx, my, e.x, e.y);
+            if d < best {
+                best = d;
+                found = j as u16;
+            }
+        }
+        found
+    }
+
+    /// The pre-`sub_1E700` paraphrase of the alliance slot, kept for
+    /// A/B under `MGC_NO_MC2_ALLIANCE_CORE`: a standalone target scan
+    /// that idled the ally whenever it found nobody.
+    fn mc2_alliance_creature_tick_legacy(&mut self, i: usize) {
         let parent = self.mc2_allied.0.get(&(i as u16)).copied().unwrap_or(0);
         let (mx, my) = (self.ent[i].x, self.ent[i].y);
         let mut target = self.ent[i].f146;
@@ -4313,7 +4547,7 @@ impl Gen {
             self.ent[i].f146 = target;
         }
         if target == 0 {
-            return; // no fight to join — stand by (retail idles too)
+            return; // no fight to join — stand by
         }
         let (tx, ty) = (self.ent[target as usize].x, self.ent[target as usize].y);
         let yaw = Self::angle_between(mx, my, tx, ty);

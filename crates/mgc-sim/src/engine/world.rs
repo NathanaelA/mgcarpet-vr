@@ -5458,8 +5458,12 @@ impl World {
         // Cited + disassembled on `Gen::mc2_controlled_slot_snap`
         // (`crates/mgc-sim/src/mc2/mobs.rs`). Kill switch
         // `MGC_NO_SV_CONTROLLED_SLOT_SNAP`.
+        // …and its `case 0xA`, the THIRD arm of the same switch: the
+        // kind-10 RESUME. See `World::mc2_kind10_resume_snap`
+        // (mc2::stagevars) — `MGC_NO_SV_KIND10_RESUME`.
         if matches!(self.game, GameId::Mc2) {
             self.g.mc2_controlled_slot_snap();
+            self.mc2_kind10_resume_snap();
         }
 
         // The awake pre-pass runs before dispatch — the AwakeVerb
@@ -5959,6 +5963,12 @@ impl World {
                     if self.g.mc2_load_beam_tick(i, &ctx) {
                         self.terrain_dirty = true;
                     }
+                }
+                // The (10,74) ALLIANCE EXECUTOR (`sub_3A650`,
+                // EF:29637): the same-species area charm, one tick
+                // after its impact minted it, then self-disable.
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 0x51 => {
+                    self.g.mc2_alliance_exec_tick(i)
                 }
                 // The MC2 (10,26) duel tether — the grip pass
                 // (shadowed from MC1's homing tether action).
@@ -42507,6 +42517,120 @@ mod tests {
             e.f26, 8,
             "dword_0x10_16 — the combat scratch retail never touches here"
         );
+    }
+
+    /// ⭐⭐⭐ THE ALLIANCE EXECUTOR IS A POOL RECORD. `sub_50800`
+    /// (EF:36945) is four writes and nothing else — action 0x51, class
+    /// 10, `byte[0] = (&0xF6)|1`, model 0x4A — with no `maxLife`, no
+    /// `CopyMaxLifeToLife_49A20`, no `AddEventToMap_57D70` and no
+    /// `SetEntityIndexAndRot_49CD0`, so the record keeps
+    /// `NewEvent_4A050`'s seeds and is born UNPOSITIONED and OFF the
+    /// tile map. Retail's mc2l0-spells-galore slot 70 at t=23946
+    /// records exactly that: x/y/z 0, extents 0, maxLife 300, life 0.
+    ///
+    /// The conversion is then the record's OWN class-10 action-0x51
+    /// tick (`sub_3A650`), which converts and self-disables — so it
+    /// lands a tick after the impact, and the executor never lives a
+    /// second tick. The port used to convert inline at the impact.
+    #[test]
+    fn the_alliance_executor_is_an_unpositioned_one_tick_record() {
+        let mut w = mc2_flat_world();
+        let exec = w.g.mc2_spawn_alliance_exec().expect("slot");
+        {
+            let e = &w.g.ent[exec];
+            assert_eq!(e.class64, 10, "class 10");
+            assert_eq!(e.model65, 74, "model 0x4A");
+            assert_eq!(e.tick70, 0x51, "action 0x51 — sub_3A650's case");
+            assert_eq!(e.flags & 0xFF, 1, "byte[0] = (&0xF6)|1");
+            assert_eq!(e.flags & 4, 0, "never AddEventToMap'd — no link bit");
+            assert_eq!(e.max_life, 300, "NewEvent_4A050's seed, untouched");
+            assert_eq!(e.act_life, 0, "no CopyMaxLifeToLife");
+            assert_eq!((e.x, e.y, e.z), (0, 0, 0), "born unpositioned");
+        }
+
+        // A victim of a chargeable species inside the radius.
+        let (vx, vy) = (0x2000u16, 0x2000u16);
+        let victim = w.g.new_event().expect("slot");
+        let gz = w.g.ground_z(vx, vy) as i16;
+        {
+            let e = &mut w.g.ent[victim];
+            e.class64 = 5;
+            e.model65 = 16; // not on sub_3A7F0's model bar
+            e.act_life = 60_000;
+            e.max_life = 60_000;
+            e.site_z = 0;
+            e.tick70 = 16u8.wrapping_mul(8).wrapping_add(1);
+        }
+        w.g.link(victim, vx, vy, gz);
+        {
+            let e = &mut w.g.ent[exec];
+            e.f146 = victim as u16; // word_0x96_150 — the struck victim
+            e.f71 = 16; // byte_0x46_70 — the tile radius
+            e.f140 = 610; // subSpellIndex — the duration
+            e.id24 = PLAYER_TARGET; // the caster
+        }
+        w.g.mc2_alliance_exec_tick(exec);
+        assert_eq!(
+            w.g.ent[victim].site_z, 14,
+            "the executor's OWN tick is what charms — not the impact"
+        );
+        assert_eq!(w.g.ent[victim].lease(), 610, "duration off the record's @0x2A");
+        assert_eq!(
+            w.g.mc2_allied.0.get(&(victim as u16)).copied(),
+            Some(PLAYER_TARGET),
+            "parentId_0x28_40 = the executor's id_0x1A_26"
+        );
+        assert_ne!(
+            w.g.ent[exec].flags & 0x400,
+            0,
+            "DisableEntityDrawing04_57F10 is UNCONDITIONAL (EF:29694)"
+        );
+    }
+
+    /// ⭐⭐⭐ StageVar2 10 IS A ONE-TICK TRANSIT. `sub_12500`'s
+    /// `case 0xA` (EF:5046-49) re-arms a kind-10 creature onto its
+    /// StageVar1 slot every tick top, and with NO StageVar1 it falls
+    /// through `sub_12330`'s `!a2` leg (EF:4977-79) to the
+    /// `sub_12470` leaf: StageVar2 0, StageVar1 0, action `8*model+1`.
+    /// The gate is this case's own: mid-attack (`&7 == 2`) and fleeing
+    /// (`&7 == 6`) hold, and the switch's outer gate excludes 4/5.
+    ///
+    /// The port had landed the 0xD/0xE/0x10/0x11 arm of the same
+    /// switch and stopped there, so every creature that reached kind
+    /// 10 — including every lapsed ALLIANCE charm (EF:11005) — stayed
+    /// there for the rest of the level.
+    #[test]
+    fn the_kind_10_transit_resumes_at_the_tick_top_but_not_mid_combat() {
+        for (phase, resumes) in [(1u8, true), (0, true), (7, true), (2, false), (6, false)] {
+            let mut w = mc2_flat_world();
+            let (x, y) = (0x2000u16, 0x2000u16);
+            let i = w.g.new_event().expect("slot");
+            let gz = w.g.ground_z(x, y) as i16;
+            {
+                let e = &mut w.g.ent[i];
+                e.class64 = 5;
+                e.model65 = 16;
+                e.act_life = 60_000;
+                e.max_life = 60_000;
+                e.site_z = 10; // the transit
+                e.tick70 = 16u8.wrapping_mul(8).wrapping_add(phase);
+            }
+            w.g.link(i, x, y, gz);
+            w.g.rebuild_mob_chains();
+            w.mc2_kind10_resume_snap();
+            let e = &w.g.ent[i];
+            if resumes {
+                assert_eq!(e.site_z, 0, "phase {phase}: sub_12470 clears StageVar2");
+                assert_eq!(e.tick70, 129, "phase {phase}: released to 8*model+1");
+            } else {
+                assert_eq!(e.site_z, 10, "phase {phase}: combat holds the transit");
+                assert_eq!(
+                    e.tick70,
+                    16u8.wrapping_mul(8).wrapping_add(phase),
+                    "phase {phase}: the action is untouched"
+                );
+            }
+        }
     }
 
     /// The same split on the SUMMON-ARMY side. `sub_3A5B0` (EF:29590-616)

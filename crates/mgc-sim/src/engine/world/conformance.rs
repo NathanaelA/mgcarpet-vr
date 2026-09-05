@@ -1812,6 +1812,15 @@ impl World {
                 "owner28",
                 some(if pyramid {
                     e.f36 as i64
+                } else if c == 5
+                    && e.site_z == 14
+                    && !crate::mc2::mobs::no_mc2_alliance_parent_seat()
+                {
+                    // The ALLIANCE charm's parent — the one @0x28 the
+                    // port cannot fuse into id24 (the victim keeps its
+                    // own @0x1A). Same source as `obs_project_mc2`'s
+                    // arm: the `mc2_allied` side map.
+                    untr(self.g.mc2_allied.0.get(&slot).copied().unwrap_or(0))
                 } else if owner_fused {
                     untr(e.id24)
                 } else {
@@ -2887,7 +2896,30 @@ impl World {
         // (`mc2_wanted`, hash-quiet while empty); MC1's per-player
         // `rival_wanted` array stays zero.
         self.g.mc2_wanted.0.clear();
+        // ⭐⭐⭐ THE ALLIANCE CHARM'S PARENT HAD NO IMPORT SEAT. Retail
+        // keeps it in the victim's own `parentId_0x28_40` (`sub_3A650`
+        // EF:29680) — a RECORD FIELD the importer already carries as
+        // `r.owner28` — while the port keeps it in the `mc2_allied`
+        // side map, which this `clear()` then emptied on every single
+        // pair. `mc2_alliance_clock` reads that map: parent 0 ⇒
+        // `parent_dead` ⇒ the charm ENDS. So every imported charmed
+        // creature dropped `sv2` 14 → 10 on its first ticked pair, no
+        // matter how long retail's lease still had to run
+        // (mc2l0-spells-galore t=23948, the three (5,4) archers 559/
+        // 621/627: retail `sv2` 14 with `f2e` counting 608, the port
+        // 10). ⚠ NOT an id24 fusion like sv2 12/13: those two are born
+        // owned, and the charm's victim is a PRE-EXISTING creature
+        // whose `@0x1A` retail leaves alone (559 stays 559 across the
+        // whole charm), so fusing would corrupt the `f1a` lane.
         self.g.mc2_allied.0.clear();
+        if !crate::mc2::mobs::no_mc2_alliance_parent_seat() {
+            for slot in 1..n {
+                let r = &st.ents[slot];
+                if r.class3f == 5 && r.sv2 == 14 && r.owner28 != 0 && !ghost(r) {
+                    self.g.mc2_allied.0.insert(slot as u16, tr(r.owner28));
+                }
+            }
+        }
         self.g.mc2_aura_claim.0.clear();
         self.g.mc2_debuffs = Default::default();
         for i in 0..8 {
@@ -2993,8 +3025,22 @@ impl World {
         // The human column. MC2 hands are DIRECT spell indices
         // (SpellIndexLeft/Right; −1 = empty) — no acquisition-list
         // indirection like MC1.
+        // ⭐⭐⭐ …AND THE BOUND IS **MC2's 26**, NOT MC1's `SPELL_COUNT`.
+        // `mc1::spells::SPELL_COUNT` is 24, so this closure silently
+        // dropped MC2's spells **24 (Alliance) and 25** — the only two
+        // outside MC1's book — and seated an EMPTY hand for them. The
+        // `book_hand` twin eight lines down already uses `0..26` (so
+        // does `mc2_select_spell`'s unbind gate), which is what made
+        // the break invisible: `mc2_book.left` imported 24 correctly
+        // while the `Player` mirror the obs lane is projected from
+        // imported `None`, and the two are supposed to be one register
+        // (see `Gen::mc2_set_hand`). FREE RUN never sees it — the port
+        // carries its own hand across ticks — so it is a PAIR-ONLY
+        // divergence: mc2l0-spells-galore t=23983..24560, EVERY pair
+        // dirty on `player0.hand_left` (retail Some(24), port None)
+        // for as long as the human holds Alliance in the left hand.
         let hand = |raw: i16| {
-            (0..SPELL_COUNT as i16)
+            (0..crate::mc2::cast::MC2_SPELL_COUNT as i16)
                 .contains(&raw)
                 .then_some(SpellId(raw as u8))
         };
@@ -3369,15 +3415,6 @@ impl World {
                         // itself (EF:29609). Like sv2 == 12 its parent
                         // is a class-3 carpet, so the live-pyramid
                         // gate below can never admit it.
-                        // ⚠ sv2 == 14 (the ALLIANCE charm) is the
-                        // fourth kind retail stamps (EF:29680,
-                        // `parentId = the (10,74) executor's @0x1A`)
-                        // and it is NOT here: `mc2_alliance_convert`
-                        // (mobs.rs:3193) deliberately keeps the parent
-                        // in the `mc2_allied` side map and never
-                        // touches id24, so publishing it would emit
-                        // the victim's own authored id. Landing that
-                        // one needs the id24 write first.
                         || (e.class64 == 5 && e.site_z == 13 && e.id24 != slot)
                         || (e.class64 == 5
                             && matches!(e.model65, 0 | 19 | 21 | 25)
@@ -3386,7 +3423,28 @@ impl World {
                                 .ent
                                 .get(untr(e.id24) as usize)
                                 .is_some_and(|p| p.class64 == 5 && p.model65 == 10));
-                    if translated { untr(e.id24) } else { 0 }
+                    // ⭐⭐⭐ THE ALLIANCE CHARM IS THE FOURTH KIND RETAIL
+                    // STAMPS, AND IT IS THE ONE THAT CANNOT RIDE id24.
+                    // `sub_3A650` writes `v6x->parentId_0x28_40 =
+                    // a1x->id_0x1A_26` (EF:29680) on a PRE-EXISTING
+                    // creature and leaves its `@0x1A` untouched —
+                    // mc2l0-spells-galore's archer 559 reads `f1a` 559
+                    // and `owner28` 152 side by side for the whole
+                    // charm — so the fusion every arm above uses would
+                    // publish the victim's own authored id. The parent
+                    // lives in the `mc2_allied` side map instead (now
+                    // seeded by the pair importer off this very lane),
+                    // and this is where it surfaces.
+                    if e.class64 == 5
+                        && e.site_z == 14
+                        && !crate::mc2::mobs::no_mc2_alliance_parent_seat()
+                    {
+                        untr(self.g.mc2_allied.0.get(&slot).copied().unwrap_or(0))
+                    } else if translated {
+                        untr(e.id24)
+                    } else {
+                        0
+                    }
                 },
                 action: e.tick70,
                 sv1: held.get(&slot).map_or(0, |h| h.slot),
@@ -3833,6 +3891,16 @@ pub(crate) fn mc2_piece_target96_lane() -> bool {
 ///   airborne victim `sub_11900(a1x, ix, 0, a1x->subSpellIndex_0x2A_42)`
 ///   (EF:24429) and `mc2_whirlwind_lift` reads `e.f140 as u32`.
 ///
+/// - **(10,74) ALLIANCE EXECUTOR.** `sub_3A650` writes the charm's
+///   duration onto every victim out of `a1x->subSpellIndex_0x2A_42`
+///   (EF:29683-84) and [`Gen::mc2_alliance_exec_tick`] reads `e.f140`
+///   — the same seat the generic impact tail writes (`e.f140 =
+///   payload`, `sub_65820` EF:62993). It joined when the executor
+///   stopped being an inline call and became a record: outside this
+///   list its `mana` lane would have published the duration against
+///   retail's dead `@0x90` 0 and its `f2a` lane a 0 against retail's
+///   subSpell — the exact ≠ pair the note above calls the tell.
+///
 /// (10,1)/(10,15)/(10,25) join for list completeness: no port reader
 /// spends their amount, so the seat is home-alignment only — but an
 /// absence in an enumerated list is what hid the other three.
@@ -3840,7 +3908,7 @@ pub(crate) fn mc2_piece_target96_lane() -> bool {
 /// the TIER INDEX and its port home is `f44` (`sub_3A8B0` case 0,
 /// NETHERW.EXE 0x5F2B4).
 pub(crate) fn c10_2a_in_f140(model: u8) -> bool {
-    matches!(model, 0 | 6 | 9 | 11 | 17 | 18 | 19 | 65 | 66 | 71 | 76 | 77)
+    matches!(model, 0 | 6 | 9 | 11 | 17 | 18 | 19 | 65 | 66 | 71 | 74 | 76 | 77)
         || c10_amount_at_2a(model)
         || (matches!(model, 1 | 15 | 22 | 25 | 67 | 75) && c10_field_home())
 }
@@ -4449,7 +4517,24 @@ pub(crate) fn import_ent_mc2(
         // read the spin angle instead of the pyramid id. Take @0x1A (the
         // pyramid's own id) for it, matching the retail summon which
         // stamps the child's parentId = the pyramid entity index.
-        id24: if r.owner28 != 0 && !(r.class3f == 5 && r.model40 == 10) {
+        // ⚠ THE ALLIANCE CHARM'S `@0x28` IS THE ONE THIS FUSION MUST
+        // NOT EAT. Every other family fused here is born owned, so
+        // retail's `@0x1A` and `@0x28` agree and one word serves both;
+        // the charm's victim is a PRE-EXISTING creature whose `@0x1A`
+        // `sub_3A650` never touches (mc2l0-spells-galore archer 559
+        // reads `f1a` 559 beside `owner28` 152 for the whole charm).
+        // Fusing overwrote the archer's own id with the caster's, so
+        // the pair-import view published `f1a` 152 against retail's
+        // 559 on every charmed creature — invisible to grading,
+        // because `EntObsMc2` has no `f1a` lane. The parent now rides
+        // the `mc2_allied` seat beside this loop, which is where
+        // `obs_project_mc2` reads it back from.
+        id24: if r.owner28 != 0
+            && !(r.class3f == 5 && r.model40 == 10)
+            && !(r.class3f == 5
+                && r.sv2 == 14
+                && !crate::mc2::mobs::no_mc2_alliance_parent_seat())
+        {
             tr(r.owner28)
         } else if r.f1a != 0 {
             tr(r.f1a)

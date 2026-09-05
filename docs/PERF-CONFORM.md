@@ -1,4 +1,4 @@
-# mgc-conform PERFORMANCE — measured in round 105, TO REVISIT AFTER mc2l22
+# mgc-conform PERFORMANCE — measured in round 105, SLICES LANDED + TRIALLED (round 106)
 
 ## ✅ STATUS 2026-09-05 — LANDED (the session after 105)
 - **`mgc-conform slice <take> --from t0 [--to t1] --out <slice.mgcr>`** — the
@@ -24,6 +24,48 @@
   the one preserved as "before" predated the day's commit by 5 h and
   differed from HEAD in MC2 laws (one pool-slot-0 byte at the anchor).
   The true BEFORE is `git archive HEAD | tar -x` + build.
+
+
+## ✅✅ THE TRIAL, ROUND 106 — THE DOCTRINE HELD, AND THE TAKE CERTIFIED
+The player's brief: *"prepare a HEAD slice which should respond much faster on every level for
+every instrument… one session fully synchronous, take the horizons one by one."* Run exactly
+so on `mc2l0-spells-galore` (137 MB, 37,748 ticks): **ONE** full-take
+`replay --segmented --classify` for the horizon and the head classification, then an
+`H-200..H+2000` slice in `$TMPDIR`, then EVERY instrument on the slice, digs serial in the main
+session. Seven heads, eight laws, and the take went `horizon=12,378` → **`horizon=END`,
+`devs=0`** — CERTIFIED, 15 → 16 of 24 takes.
+
+| instrument | full take (137 MB) | slice (6.4 MB, 2,201 ticks) | ratio |
+|---|---|---|---|
+| `replay --segmented --classify` | 101.8 s | 5.4-10.1 s | **10-19×** |
+| `dump-state <t> <slot>` | ~40 s (est.) | **0.079 s** | ~500× |
+| `explain <t> <slot>` | — | **0.19 s** | — |
+| `dump-state --port --start` | — | 2.4-3.9 s | — |
+| `conformance/cut_fixture_files.py` | 111.9 s | 6.6 s | **17×** |
+| `slice` itself | — | 8.4-14.5 s | — |
+
+**What that changes about how a session runs.** `dump-state` and `explain` stop being
+instruments you budget for and become ones you spam: this round traced single slots across
+6-11 consecutive ticks, repeatedly, at ~0.1 s a call — which is what exposed the goat's
+`k × (128 out, +114 up)` launch, the archer's 610-tick charm lease landing exactly on 23,947 +
+610 = 24,557, and the kind-10 → 0 transit. That tick-by-tick sweep is simply not affordable on
+a full take, and **every one of the eight laws was found by reading consecutive ticks, not by
+reading one.**
+
+⭐ **A FIXTURE CUT FROM A SLICE IS BYTE-IDENTICAL TO ONE CUT FROM THE FULL TAKE.** Proven by
+`cmp` on all three tick records, materialised terrain base included; the only difference is the
+header (`capture.slice` provenance, and `capture.fixture.source` naming the slice file).
+Committed fixtures were re-cut from the full take so `source` names the real recording —
+**a `--source-name` override on the cutter would remove the last reason to**, and turn a 112 s
+step into a 7 s one.
+
+⚠ **THE INHERITED CLASS WAS NEVER EXERCISED.** All seven heads this round were LOCAL and every
+cause sat within a handful of ticks of its head, so the 200-tick lead margin was never tested.
+Round 105's causes sat 26, 243 and **5,223** ticks back. The margin remains the open risk.
+
+⚠ Re-confirmed the hard way: the 6-wide `xargs` sweep **silently lost mc2l22's line** (the
+532 MB take) under memory pressure while a `cargo build` ran alongside — exit 0, no error, 28
+lines instead of 29. Run the big take on its own after the others, and **count the lines**.
 
 
 ## THE MEASUREMENT (not a guess)

@@ -595,6 +595,13 @@ const NOTIFY_RED: [u8; 3] = [255, 0, 0];
 /// not landed.
 pub(crate) const NO_MID_BURST_REGEN_PIN: [usize; 7] = [2, 17, 18, 21, 22, 23, 25];
 
+/// MC2's spellbook size. **NOT `mc1::spells::SPELL_COUNT`** (24):
+/// MC2 adds spells 24 (Alliance) and 25, and every MC2 hand/book
+/// bound in this module is the literal `26` this names. Introduced
+/// after the pair importer's hand closure was found clamping the
+/// human's hands with MC1's constant and dropping exactly those two.
+pub(crate) const MC2_SPELL_COUNT: usize = 26;
+
 /// The 26-spell `str_611` subset for one wizard (spell-XP trace §0).
 /// All arrays are keyed by spell index 0..25 (`spell_t`).
 #[derive(Clone, Copy)]

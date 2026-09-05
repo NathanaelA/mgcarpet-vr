@@ -30675,3 +30675,157 @@ and **5,223** ticks before their graded heads. Full design + caveats:
   human branch needs a `proll` on `MobCtx`, a lane-census class-(c) gap.
 - Round 101's unit pins ×4, round 102's attack-wizard-pick chain blank, and the archer's
   arrow impact/mint chain are STILL owed.
+
+# ROUND 106 (2026-09-05) — **THE SLICE TRIAL**: serial digs on a HEAD SLICE, 8 laws, mc2l0-spells-galore 2,075 excess resets → 0
+
+**Player:** *"prepare a HEAD slice which should respond much faster on every level for every
+instrument… one session fully synchronous, take the horizons one by one."* Done exactly so:
+ONE full-take `replay --segmented --classify`, then an `H-200..H+2000` slice in `$TMPDIR`, and
+EVERY instrument on the slice. No subagents. Measured numbers in `docs/PERF-CONFORM.md`.
+
+```
+mc2l0-spells-galore  segments=2076 devs=2075 clean=35673 horizon=12378 sig=(5,1)slot101:x,y,z,heading
+                  -> segments=   1 devs=   0 clean=37748 horizon=END   first=- sig=-
+    ** CERTIFIED ** — 37,748 of 37,748 boundaries bit-exact, end to end, and NOT ONE
+    roster-excused row: `roster=` never appears on its line. CERTIFIED TAKES 15 -> 16 of 24.
+    Seven heads, taken one at a time, SERIALLY, in the main session. No subagents.
+    mc2l15 IMPROVED 11,344 -> 9,361 segments (clean 31,844 -> 33,827) and mc2l24
+    7,537 -> 7,536; the other 26 takes BYTE-IDENTICAL, zero regressions.
+    Fixtures 441 -> 448.  Lib tests 646 -> 648.  Binary md5 111e2bfaf873d9e77c194adc6426ee27.
+```
+
+## HEAD 1, t=12379 — ⭐⭐ THE WHIRLWIND LIFT'S REAP SKIP WAS AN INVENTED GUARD
+`sub_33340`'s victim loop is `if (sub_33810(a1x, ix))` and **nothing else** (EF:24286): no
+`byte[1] & 4`, no life test, and `sub_33810` (EF:24452-515) reads only class/model/action and
+the same-owner id. The port carried an extra `c.flags & 0x400 != 0` skip **whose own comment
+admitted it** — *"a guard not in the retail gate (deliberate)"*. It was false exactly when it
+mattered: a (5,1) goat GRABBED by the funnel reaches `KillEntity_1C930`'s phase (`f63 & 7 == 0`)
+and raises 0x400 **in its own dispatch at slot 101**; all three whirlwind heads sit at higher
+slots, so every one skipped it and the corpse froze in mid-air for its last tick where retail
+spun it 3×204 and drifted it 3×(128 out, +114 up). ONE LINE, and it carried the horizon
+12,378 → 23,945. Switch `MGC_MC2_WW_REAP_SKIP`.
+⚠ `mc2_whirlwind_contact`'s `0x400` skip is the SIBLING and is **not** cleared: `sub_33710`
+walks the LIVE LISTS (`dword_38527` / `dword_38519`), not the tile map, so it is a different
+question — left open deliberately, with its window and call path recorded.
+
+## HEADS 2-5, t=23946..24557 — THE ALLIANCE CHAIN, FOUR LAWS IN ONE CLUSTER
+1. ⭐⭐⭐ **THE EXECUTOR IS A POOL RECORD, NOT AN INLINE CALL.** `sub_50800` (EF:36945) mints a
+   (10,74) — four writes, action 0x51, no maxLife/life-copy/map-register/rot, so it is born
+   UNPOSITIONED with `NewEvent_4A050`'s seeds — and `sub_3A650` (EF:29637), its own class-10
+   action-0x51 tick, converts ONE TICK LATER and self-disables. The port converted inline at
+   the impact: no allocation (every later free-stack pop shifted) and the charm a tick early on
+   every victim lane at once. **The (10,25) steal burst three arms above already had this exact
+   shape and said so in its own comment** — the same "one call path" law, on a sibling.
+2. ⭐⭐ **THE CHARM'S PARENT HAD NO IMPORT SEAT** — the round-98 class again, and the lane
+   census's class (a): retail keeps it in the victim's own `parentId_0x28_40`, a RECORD FIELD
+   the importer already carries as `r.owner28`; the port keeps it in the `mc2_allied` side map,
+   which the pair importer `clear()`ed and never re-seeded, so `mc2_alliance_clock` read parent
+   0, called it a dead parent, and **ended every imported charm on its first ticked pair.**
+   ⚠ It is the ONE `@0x28` that cannot ride the importer's `id24` fusion: the other fused
+   families are born owned, and the charm's victim is a PRE-EXISTING creature whose `@0x1A`
+   `sub_3A650` never touches (archer 559 reads `f1a` 559 beside `owner28` 152 all charm long).
+   Fusing published `f1a` 152 against retail's 559 on every charmed creature — **invisible,
+   because `EntObsMc2` has no `f1a` lane.** Three edits, one law: seed the map, carve the
+   fusion, publish the `owner` lane (obs + `port_ent_lanes_mc2`).
+   ⭐ The tree's own comment named this gap and said *"landing that one needs the id24 write
+   first"* — it was the OPPOSITE: it needed the id24 write REMOVED.
+3. ⭐⭐⭐ **THE ALLIANCE SLOT RUNS THE SHARED `sub_1E700` CORE.** EF:10971-73 is
+   `v8 = word_0x96_150; word_0x96_150 = parentId; sub_1E700(a1x, a2);` — the SAME
+   controlled-summon core the StageVar2-13 slot already ran in this port, with its 8-tick aim
+   throttle, 64-tick wander jink, blocked-tick aim gate and crowd steer. **An ally with no
+   enemy does not stand by — it FOLLOWS ITS CASTER.** The port had a hand-rolled paraphrase
+   that `return`ed without moving whenever the lock was 0, which here is every tick of the
+   charm. Retail then adopts the parent's fight (EF:10974-77), drops a lock naming a fellow
+   ally of the same parent / a corpse / a reaped record (EF:10983-87), and hands to `8m+2` on
+   `sub_583F0`'s **3-D** distance against the row's `word_0x1c_28` — not a hardcoded 2-D 1536.
+   Alone worth 23,948 → 24,556. Switch `MGC_NO_MC2_ALLIANCE_CORE`.
+4. ⭐⭐⭐ **StageVar2 10 IS A ONE-TICK TRANSIT, NOT A RESTING STATE** — `sub_12500` **case 0xA**
+   (EF:5046-49). TEN retail sites park a creature at kind 10 (every kind handler's aggro break
+   EF:10237/:10314/:10431/:10551, the guardian hand-offs :10057/:10089, the m27 head :19714 and
+   the alliance expiry :11005) and this tick-top arm is what gets it OUT: unless mid-attack
+   (`&7==2`) or fleeing (`&7==6`) it re-arms onto its StageVar1 slot, or — with none — falls
+   through `sub_12330`'s `!a2` leg (EF:4977-79) to the `sub_12470` leaf (StageVar2 0,
+   StageVar1 0, action `8m+1`). **DIG 98-Q22 landed the 0xD/0xE/0x10/0x11 arm of that very
+   switch and stopped there**, so a creature that reached kind 10 stayed there for the level.
+   ⇒ **AN `if` WITH ONE ARM PORTED IS THE SAME BUG AS A FUNCTION WITH ONE CALL PATH PORTED.**
+   Switch `MGC_NO_SV_KIND10_RESUME`.
+
+## ⭐⭐ THE BLOCKER THE FIXTURES FOUND: MC1's `SPELL_COUNT` CLAMPING MC2's HANDS
+All four new alliance fixtures failed on ONE shared row — `player0.hand_left: retail Some(24)
+port None` — and the free run was bit-exact through the same window, so nothing else could see
+it. `import_mc2`'s hand closure bounds the human's hands with `mc1::spells::SPELL_COUNT` = **24**,
+which drops exactly MC2's two extra spells, **24 (Alliance) and 25**. Its `book_hand` twin eight
+lines away uses `0..26` (so does `mc2_select_spell`), so `mc2_book.left` imported 24 correctly
+while the `Player` mirror the obs lane projects from imported `None` — and those two are
+supposed to be ONE register (`Gen::mc2_set_hand` exists to keep them so). **PAIR-ONLY: every
+pair of t≈23,983..24,560 was dirty and the horizon never saw it.** Now `MC2_SPELL_COUNT`.
+⇒ **A CROSS-GAME CONSTANT IS AN IMPORT-SEAT BUG WEARING A DIFFERENT HAT**, and the tell was
+that a twin closure in the same function used a different bound.
+
+## 🚀 THE SLICE TRIAL — THE MEASUREMENT (the session's actual subject)
+| instrument | full take (137 MB) | slice (6.4 MB, 2,201 ticks) | ratio |
+|---|---|---|---|
+| `replay --segmented --classify` | 101.8 s | 5.4-10.1 s | **10-19×** |
+| `dump-state <t> <slot>` | (est. ~40 s) | **0.08 s** | ~500× |
+| `explain <t> <slot>` | — | **0.19 s** | — |
+| `dump-state --port --start` | — | 2.4-3.9 s | — |
+| `cut_fixture_files.py` | 111.9 s | 6.6 s | **17×** |
+| `slice` itself | — | 8.4-14.5 s | — |
+⭐ **A FIXTURE CUT FROM A SLICE IS BYTE-IDENTICAL TO ONE CUT FROM THE FULL TAKE** — proven by
+`cmp` on the three tick records including the materialised terrain base; only the header's
+`capture.slice` provenance and `capture.fixture.source` differ. **Committed artifacts were
+re-cut from the full take** so `source` names the real recording; a `--source-name` flag on
+`slice`/the cutter would remove the last reason to.
+⚠ Every one of this session's five causes was LOCAL, so a 200-tick lead margin sufficed. The
+INHERITED class (round 105's causes sat 26/243/5,223 ticks back) was never exercised.
+
+## HEAD 6, t=25450 — ⭐⭐ `case 0x19`'s CREATURE FILTER IS `sub_3A7F0` ITSELF
+The (9,25) ALLIANCE CARRIER's own acquisition screens candidates with
+`id_0x1A != caster && byte_0x39_57 && sub_3A7F0(cand)` (EF:54988-91) — **the very
+charm-eligibility predicate `sub_3A650` asks before converting.** The port screened by *"z
+within one step of the terrain"*, carried in `mc2_aim_lists` as a `grounded` flag and cited as
+an approximation of a *"cave-in `sub_3A7F0` on-ground filter"*; `sub_3A7F0` has no position
+term at all. So the carrier locked onto creatures its own payload could never charm — above
+all ones **ALREADY CHARMED BY THIS CASTER** (StageVar2 14, which the predicate bars). t=25450:
+the tier-3 recast mints the carrier at slot 661 — *the freed slot of the previous cast's
+(10,74) executor, which the round's first law is what put there* — and the port locked slot
+627, one of the three archers it had just charmed, bending the launch to yaw 167 / pitch 46
+where retail finds NO eligible candidate, returns 0, and fires straight down the caster's own
+post-tick pose (209/81). `sub_3A7F0` is now ONE predicate (`Gen::mc2_charm_eligible`) read by
+both sites. Switch `MGC_NO_MC2_AIM_CHARM_FILTER`.
+⇒ **AN APPROXIMATION'S OWN CITATION CAN NAME THE EXACT FUNCTION IT IS NOT.** The comment said
+`sub_3A7F0` and then described something else; nobody had opened it.
+
+## HEAD 7, t=25984 — ⭐⭐⭐ THE CONTROLLED SEAM RUNS THE MODEL WRAPPER'S TAIL (THIRD CALL PATH)
+`sub_1D5D0` is called FROM the per-model phase-7 wrapper, so whatever the StageVar2 case did,
+the wrapper's last statement still executes. The archer's is `AddScroll05_04_20140`
+(EF:11960-66) — `dword_0x10_16 = 0; sub_1D5D0(entity, 32); if (actionIndex == 34)
+sub_20060(entity);` — the aim test reading the action the case JUST wrote. The port had landed
+this **twice**: on `archer_tick`'s own role-7 arm, and on the STAGE-HELD seam
+(`World::mc2_held_tick`, kinds 1..=10, the mc2l0 t=3945 fixture, whose comment describes the
+wrapper in full). The CONTROLLED seam (StageVar2 12/13/14/16/17) `return`ed before it. So an
+archer promoted to `8m+2` by the alliance / summon / pyramid handler never took its aim:
+t=25984, charmed archer 621 — `sub_1E9C0`'s engage hands it to 34, retail fires the aim
+(`f5a` 0→1, `speed` 30→0, one entity-rand draw 48984→56119), the port walked on.
+⇒ **TWICE IS NOT EVERYWHERE**, and the second landing's own comment was the map to the third.
+Switch `MGC_NO_MC2_CONTROLLED_WRAPPER_TAIL`.
+
+## OWED INTO ROUND 107
+- **The four OTHER wrapper tails the held seam runs and the controlled seam still does not**:
+  the m17/m19/m20/m28 `byte_0x46_70 = 0` sub-state reset, the goat bleat draw, the FLEE speed
+  tail (`mc2::stagevars`, all cited there). Owed by head 7's own argument; no corpus witness
+  yet, and each is its own A/B.
+- **`sub_3A7F0` vs `mc2_alliance_convert`'s filter.** The shared predicate is now verbatim, but
+  the CONVERSION sweep still adds `act_life >= 0` and `flags & 0x400 == 0` (retail's has
+  neither — the invented-guard class again) and still narrows StageVar2 to {0, 10} where retail
+  bars only {13, 14, 16, 17}, so the port skips stage-HELD creatures retail charms. Both are
+  pre-existing and both are separate A/Bs.
+- `mc2_whirlwind_contact`'s live-list `0x400` skip (and its `act_life >= 0` castle test, which
+  `sub_33710` also does not have) — a separate A/B.
+- Retail decrements the charm lease **inside `sub_1E9C0`**, i.e. only in the `8m+7` controlled
+  slot; the port's `mc2_alliance_clock` spends it in EVERY state from the dispatch head. They
+  differ for a charmed creature in combat (`8m+2`), which the snap does not pull back. BANKED.
+- The `v9` half of `sub_1E9C0` for an OUT-OF-POOL parent still uses an observable equivalent
+  (the nearest record locked onto the parent) because `MobCtx` carries no player target lock —
+  the same `proll` shaped gap round 105 banked. A `MobCtx` lock field closes both.
+- Everything owed into round 106 is still owed (round 105's list below).
