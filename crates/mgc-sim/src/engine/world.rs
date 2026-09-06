@@ -17668,9 +17668,12 @@ impl World {
             player,
             rivals,
             mc2_rivals,
-            // Not saved: no in-engine reader; a restored world's
-            // meter re-ramps to the 200 cap within 200 ticks.
-            wiz_charge: _,
+            // Saved since v19 (wire position: after
+            // `mc2_recast_surcharge`). The old "no in-engine reader"
+            // exclusion went stale: the cast sites bank-and-zero it,
+            // the fool's-mana decoy seeds its retaliation from it,
+            // and the MC2 rival brain banks it per wizard.
+            wiz_charge,
             kill_tally,
             human_pose,
             // Re-stamped at the first tick top after a restore —
@@ -17715,7 +17718,14 @@ impl World {
             mc1_carpet_slot: _,
             hand_bits: _,
             mc1_cast_pose: _,
-            mc1_acq: _,
+            // Saved since v19 (wire position: after `wiz_charge`).
+            // NOT a transient: retail's wizext+532 acquisition list
+            // is persistent state, and `mc1_owned_rebuild` re-derives
+            // `player.owned` from it EVERY tick — a restore that
+            // left it holding the fresh level-entry grants wiped
+            // every in-play-acquired spell one tick after the resume
+            // (the player-reported accelerate/lightning loss).
+            mc1_acq,
             // Conformance instrument (pose-channel ground snapshot),
             // armed/consumed around a single pair tick — never live
             // in a playable world.
@@ -17793,6 +17803,9 @@ impl World {
         w.put(mc2_endseq);
         w.put(mc2_end_pending);
         w.put(mc2_recast_surcharge);
+        // v19 joiners — see the SNAPSHOT_VERSION history.
+        w.put(wiz_charge);
+        w.put(mc1_acq);
     }
 
     /// Overwrite this world's state from the stream, keeping the
@@ -17852,6 +17865,8 @@ impl World {
         self.mc2_endseq = r.get()?;
         self.mc2_end_pending = r.get()?;
         self.mc2_recast_surcharge = r.get()?;
+        self.wiz_charge = r.get()?;
+        self.mc1_acq = r.get()?;
         // THE BOUND-CASTLE REGISTER IS RE-DERIVED, NOT STORED. The
         // wire format does not carry `Gen::castle_reg` (see the field
         // doc on `World::Snapshot`), and a bump would invalidate every
@@ -18043,6 +18058,62 @@ mod tests {
             before_hash,
             "and touches no other lane — 0 records changed across all three spans"
         );
+    }
+
+    /// SNAPSHOT v19: the three save lanes that are hash-silent or
+    /// hash-excluded — the acceptance round-trip compares state
+    /// hashes, which cannot see any of them, so each gets a direct
+    /// witness. `mc1_acq` is the spell-loss root (`mc1_owned_rebuild`
+    /// re-derives `player.owned` from it EVERY tick, so a resume that
+    /// dropped it wiped every in-play-acquired spell); `wiz_charge`
+    /// is the cast-charge meter; `lease2e` the class-5 charm/summon
+    /// lease. Written to `lease2e.0` directly so the assertion holds
+    /// regardless of the `MGC_NO_SUMMON_LEASE_FIELD` A/B toggle.
+    #[test]
+    fn v19_save_lanes_survive_a_snapshot_round_trip() {
+        let mut a = crate::Simulation::with_world(flat_world());
+        {
+            let w = a.world.as_mut().unwrap();
+            w.mc1_acq[0] = 7; // a live acquisition entry (pool slot form)
+            w.mc1_acq[1] = -1; // a dead-form empty must survive too
+            w.wiz_charge = [9, 8, 7, 6, 5, 4, 3, 2];
+            w.g.ent[2].lease2e.0 = 123;
+        }
+        let bytes = a.snapshot();
+        let mut b = crate::Simulation::with_world(flat_world());
+        b.restore(&bytes).expect("identical world, same build");
+        let w = b.world.as_ref().unwrap();
+        assert_eq!(w.mc1_acq[0], 7, "mc1_acq must ride the stream");
+        assert_eq!(w.mc1_acq[1], -1, "in both of its phase-tagged forms");
+        assert_eq!(w.wiz_charge, [9, 8, 7, 6, 5, 4, 3, 2], "wiz_charge too");
+        assert_eq!(w.g.ent[2].lease2e.0, 123, "and the per-entity lease");
+    }
+
+    /// The PORT-ONLY win-level cheat (sub-code 11; retail's tester
+    /// key `'c'` / SHIFT+`'c'` — see `cheats.rs`): one press forces
+    /// the completion latch on both game columns. MC1's Space
+    /// consumption and MC2's class-11 model-4 level-end switch then
+    /// run their normal, already-pinned paths off it.
+    #[test]
+    fn win_level_cheat_forces_the_completion_latch() {
+        use mgc_formats::recover::Cheat;
+        let mut w = flat_world();
+        assert!(w.cheat_supported(Cheat::WinLevel), "MC1 supports it");
+        assert!(!w.completed, "a fresh level is not complete");
+        assert!(w.apply_cheat(Cheat::WinLevel));
+        assert!(w.completed, "MC1: the press-space latch is up");
+
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut w = World::new_for_game(planes, &micro_things(), 1, assets(), GameId::Mc2);
+        assert!(w.cheat_supported(Cheat::WinLevel), "MC2 supports it");
+        assert!(w.apply_cheat(Cheat::WinLevel));
+        assert!(w.completed, "MC2: IsLevelEnd_0 is up");
     }
 
     /// Non-vacuity guard for the widened creature target scan

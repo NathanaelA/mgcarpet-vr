@@ -7073,15 +7073,11 @@ impl Snap for Ent {
             mail,
             f144,
             f26,
-            // ⚠ NOT SNAPSHOTTED (dig 98-Q20). Adding retail's
-            // `word_0x2E_46` to the wire would need a
-            // `SNAPSHOT_VERSION` bump, which is not this dig's to
-            // spend mid-wave; the cost is that a mid-level SAVE taken
-            // while a summon/charm is running resumes with a zero
-            // lease. One-line fix when the version is next bumped:
-            // `w.put(&lease2e.0)` here and `Lease2e(r.get()?)` in
-            // `get`.
-            lease2e: _,
+            // Saved since v19 (wire position: after `f26`) — a
+            // mid-level save taken while a summon/charm is running
+            // used to resume with a zero lease (dig 98-Q20 parked
+            // the bump; the v19 wave spent it).
+            lease2e,
             f28,
             f30,
             f32,
@@ -7138,6 +7134,7 @@ impl Snap for Ent {
         w.put(mail);
         w.put(f144);
         w.put(f26);
+        w.put(&lease2e.0);
         w.put(f28);
         w.put(f30);
         w.put(f32);
@@ -7182,10 +7179,11 @@ impl Snap for Ent {
         // A full literal, NOT `..Default::default()` — struct-update
         // syntax would make a forgotten field compile silently, which
         // is the entire failure mode this codec is shaped to prevent.
+        // Field order in the literal IS evaluation order, so the
+        // `r.get()` calls below run in `put`'s write order — which is
+        // why `lease2e` sits after `f26` rather than at its
+        // declaration position.
         Ok(Ent {
-            // dig 98-Q20: not on the wire (see `put`); a resumed
-            // save starts every charm/summon lease at zero.
-            lease2e: Lease2e::default(),
             rand: r.get()?,
             max_life: r.get()?,
             act_life: r.get()?,
@@ -7202,6 +7200,7 @@ impl Snap for Ent {
             mail: r.get()?,
             f144: r.get()?,
             f26: r.get()?,
+            lease2e: Lease2e(r.get()?),
             f28: r.get()?,
             f30: r.get()?,
             f32: r.get()?,

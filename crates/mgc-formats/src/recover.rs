@@ -73,6 +73,14 @@ pub enum Cheat {
     FreeSpell,
     /// 10 (MC2) — toggle invincibility.
     Invincible,
+    /// 11 (PORT-ONLY code; never emitted by the toast detector) —
+    /// force the level-complete latch, goals met or not. Retail has
+    /// this in BOTH games, as TESTER KEYS rather than opcode-30
+    /// sub-codes: MC1 `'c'` sets `var_u16_13325 |= 2` (the
+    /// press-space completion latch; remc1 :20281-84, gate
+    /// `var_u8_1 < 0`), MC2 SHIFT+`'c'` sets `IsLevelEnd_0 = 1`
+    /// (PlayerInput.cpp:251-59, gate `setting_byte2_23 < 0`).
+    WinLevel,
 }
 
 impl Cheat {
@@ -89,6 +97,7 @@ impl Cheat {
             Cheat::SpellXp => 8,
             Cheat::FreeSpell => 9,
             Cheat::Invincible => 10,
+            Cheat::WinLevel => 11,
         }
     }
 
@@ -105,6 +114,7 @@ impl Cheat {
             8 => Cheat::SpellXp,
             9 => Cheat::FreeSpell,
             10 => Cheat::Invincible,
+            11 => Cheat::WinLevel,
             _ => return None,
         })
     }
@@ -122,6 +132,7 @@ impl Cheat {
             Cheat::SpellXp => "spell-xp",
             Cheat::FreeSpell => "free-spell",
             Cheat::Invincible => "invincible",
+            Cheat::WinLevel => "win-level",
         }
     }
 }
@@ -1039,6 +1050,10 @@ mod cheat_tests {
             assert_eq!(cheat_fired_mc2(&a, &notify(text, 99)), Some(want), "{text}");
             assert_eq!(Cheat::from_code(want.code()), Some(want), "{text}");
         }
+        // The port-only win-level code has no retail toast, but its
+        // sub-code must round-trip like the rest (the `.mgcr`
+        // port-input lane carries it).
+        assert_eq!(Cheat::from_code(Cheat::WinLevel.code()), Some(Cheat::WinLevel));
     }
 }
 

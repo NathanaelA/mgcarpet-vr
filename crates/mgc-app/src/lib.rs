@@ -1695,6 +1695,10 @@ struct App {
     pending_demolish: bool,
     /// Shift+K pressed since the last sim tick (retail suicide).
     pending_suicide: bool,
+    /// Shift+C pressed since the last sim tick — the win-level cheat
+    /// (retail's tester key in both games; `Cheat::WinLevel`). Rides
+    /// the recorded cheat lane, so a torture-test take replays it.
+    pending_cheat: Option<mgc_formats::recover::Cheat>,
     /// Which spell-selection surfaces are live (config
     /// `spell_selector` resolved against the running game): the MC1
     /// map-screen spellbook and/or the MC2 CTRL-hold pane.
@@ -2017,6 +2021,7 @@ impl App {
             pending_respawn: false,
             pending_demolish: false,
             pending_suicide: false,
+            pending_cheat: None,
             selector,
             ctrl_held: false,
             ctrl_grab_restore: false,
@@ -3851,6 +3856,7 @@ impl App {
             respawn: std::mem::take(&mut self.pending_respawn),
             demolish: std::mem::take(&mut self.pending_demolish),
             suicide: std::mem::take(&mut self.pending_suicide),
+            cheat: self.pending_cheat.take(),
             barrel_roll,
             raw_dx: std::mem::take(&mut self.roll_dx)
                 .round()
@@ -7642,6 +7648,19 @@ impl ApplicationHandler for App {
                 if down && self.shift_held && event.physical_key == PhysicalKey::Code(KeyCode::KeyK)
                 {
                     self.pending_suicide = true;
+                    return;
+                }
+                // The win-level cheat (Shift+C — retail's tester key
+                // in BOTH games: MC1 'c' sets the press-space
+                // completion latch :20281-84, MC2 SHIFT+'c' sets
+                // IsLevelEnd_0, PlayerInput.cpp:251-59; both behind
+                // retail's tester gate, ungated here like the other
+                // dev keys). Same shift-over-option-key placement as
+                // Shift+K: bare C is the crosshair toggle.
+                if down && self.shift_held && event.physical_key == PhysicalKey::Code(KeyCode::KeyC)
+                {
+                    self.pending_cheat = Some(mgc_formats::recover::Cheat::WinLevel);
+                    self.mini_toast(".. CHEAT: win level");
                     return;
                 }
                 // The runtime option keys (F1/F2/F3/F5/F6, T/V/G/H/B/C)

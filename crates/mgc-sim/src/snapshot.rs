@@ -102,7 +102,21 @@ const MAGIC: u32 = 0x5343_474D;
 ///     and 062 (`sub_605E0`'s level-0 rival arm purges the owner's
 ///     spell-2 book slot only there), so a reloaded save must come
 ///     back on the same arm it was taken on.
-pub const SNAPSHOT_VERSION: u32 = 18;
+/// 19: the mid-level-save MISSING LANES (the player-reported spell
+///     loss). `World::mc1_acq` — retail wizext+532, the acquisition
+///     list `player.owned` is RE-DERIVED from every tick
+///     (`mc1_owned_rebuild`): a resume that dropped it re-granted the
+///     level-entry book over the restored one a tick in, wiping every
+///     in-play-acquired spell. `World::wiz_charge` — the cast-charge
+///     meter (MC1 u8_326 :55377, MC2 wizext byte_0x154 EF:5424), read
+///     by the cast sites and the fool's-mana decoy; a reload
+///     re-ramped it from 0. Both join the World stream after
+///     `mc2_recast_surcharge`. `Ent::lease2e` — the class-5
+///     charm/summon lease (retail `word_0x2E_46`, dig 98-Q20), which
+///     a mid-summon save resumed at zero; joins the Ent stream after
+///     `f26`. All three are retail-persistent state their exclusion
+///     comments had misfiled as transient or unread.
+pub const SNAPSHOT_VERSION: u32 = 19;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]

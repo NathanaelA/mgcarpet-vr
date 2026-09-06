@@ -81,7 +81,7 @@ impl World {
     pub fn cheat_supported(&self, cheat: Cheat) -> bool {
         let mc2 = matches!(self.game(), GameId::Mc2);
         match cheat {
-            Cheat::AllSpells | Cheat::MoreMana | Cheat::Heal => true,
+            Cheat::AllSpells | Cheat::MoreMana | Cheat::Heal | Cheat::WinLevel => true,
             Cheat::SpellXp | Cheat::FreeSpell => mc2,
             _ => false,
         }
@@ -107,6 +107,19 @@ impl World {
             // :48993 — `actLife = <full>`.
             Cheat::Heal => {
                 self.player.life = PLAYER_LIFE_MAX;
+                true
+            }
+            // PORT-ONLY sub-code 11 — retail's TESTER KEY `'c'`
+            // (:20281-84, gate `var_u8_1 < 0`): `var_u16_13325 |= 2`,
+            // the press-space completion latch, goals and mana met or
+            // not. Our `completed` IS that bit — the Space press
+            // consumes it into `won` exactly like a banked win, and a
+            // chained state-4 win trigger (level 010's genie) consumes
+            // it into its next stage, both as retail's readers do.
+            // (Retail's sibling `'f'` — `|= 4`, won outright with no
+            // Space — is deliberately not bound.)
+            Cheat::WinLevel => {
+                self.completed = true;
                 true
             }
             _ => false,
@@ -151,6 +164,20 @@ impl World {
             // re-stamp what is already built.
             Cheat::FreeSpell => {
                 self.mc2_free_spells = !self.mc2_free_spells;
+                true
+            }
+            // PORT-ONLY sub-code 11 — retail's TESTER KEY SHIFT+`'c'`
+            // (PlayerInput.cpp:251-59, gate `setting_byte2_23 < 0`):
+            // `IsLevelEnd_0 = 1`, which is our `completed`; the
+            // class-11 MODEL-4 level-end switch fires its disposition
+            // on it, releasing the authored offramp/victory cluster,
+            // and normal exit routing follows the marker touch.
+            // Retail's second half — opcode 27's instant-exit state
+            // (`word[1] = 10`) — is deliberately unmodeled: the port
+            // ends a level through the endseq marker, so the cheat
+            // reveals the exit rather than teleporting through it.
+            Cheat::WinLevel => {
+                self.completed = true;
                 true
             }
             _ => false,

@@ -204,8 +204,11 @@ pub struct FlightInput {
     /// never carry it; live input only.
     pub suicide: bool,
     /// A retail CHEAT (control opcode 30 — ALT+F-key in both games),
-    /// recovered from a recording's own cheat toast. Replay-only: the
-    /// port binds no cheat keys, so live input never sets this.
+    /// recovered from a recording's own cheat toast — or, since the
+    /// win-level cheat landed, set LIVE by the app's Shift+C
+    /// ([`mgc_formats::recover::Cheat::WinLevel`]); either way it
+    /// rides the recorded port-input lane, so a live-cheated take
+    /// replays its own cheats.
     pub cheat: Option<mgc_formats::recover::Cheat>,
     /// MC2's barrel roll trigger — both strafe keys pressed the same
     /// tick from neutral (the app's edge detect mirrors retail's
