@@ -31905,3 +31905,177 @@ Four laws, three of them ONE line of decompile order each. Pins: castle.rs
 - The MC2 native in-loop free (112-4) — the sweep-law timing for native worlds.
 - The (10,51) load-beam slot (111's owed item, still unwitnessed).
 - 🎬 The terrain oracle corpus (player recording; do not ask).
+
+# ROUND 113 — 2026-09-06 — THE RIVAL'S FIRST CASTLE
+
+```
+terrain-check: 22 → 24 of 28 IDENTICAL — EVERY MC2 ROW IDENTICAL. mc2l4 height 9 → IDENTICAL
+(113-1/113-2), mc2l3 ceiling 1 → IDENTICAL (113-3); every other row byte-identical to round
+112. Three laws; the first two in `sub_5C950`'s tail (EF:43825-52), neither with a replay
+witness (the pair importer seats the purse and the cooldowns), the third a read-order law in
+`sub_34C40`. Pins: tests/mc2_rivals.rs
+`mc2_fresh_rival_purse_is_full_and_first_castle_is_colour_staggered`, mc2::cave::tests
+`dome_ceiling_lerp_reads_the_ceiling_sampled_before_the_floor_write`. Kill switches:
+`MGC_NO_MC2_RIVAL_START_PURSE`, `MGC_NO_MC2_CASTLE_COLOUR_COOLDOWN`,
+`MGC_NO_MC2_DOME_STALE_CEILING`. Remaining DIFFERENT: the MC1 first-tick runtime family
+(mc1l42/l49/hwl2) — the terrain oracle corpus.
+```
+
+## 113-0 THE "RING CENTRE" WAS A CASTLE (mc2l4)
+- 112-4 read the 9 height cells as the generate-time (10,11) ring's innermost rings. Level 4
+  authors FIVE such rings, each under a start marker, and only the (64,0) one differed — so it
+  was never the ring. `dump-state mc2l4 0 297 298 303 304 305` (the retail pool under the cells):
+  slot 304 is a (3,2) castle AT tile (64,0), z 960 = height 30 = the port's final centre height,
+  slot 305 its (10,42) painter, `player 2 castle=304 ai_state=3`. `MGC_POOL_CENSUS=1
+  terrain-diff --settle 8` showed the port with NO castle there; `--settle 11` had one at 304.
+  The 3×3 at +2 was the castle's own row stamp, and the port's rival was three ticks late.
+- ⭐⭐⭐ **f63 IS A CLOCK.** `NewEvent_4A050` seeds `byte_0x3E_62 = slot` (Events.cpp:577) and
+  every dispatch adds 1. At record 0 (recorder phase 8): castle 297's painter 303 reads 55 =
+  47 + 8 (popped tick 1), castle 304 reads 49 = 48 + 1 and its painter 305 50 = 49 + 1 — ONE
+  dispatch each ⇒ the cast landed on tick 8 exactly, and the castle ran the same tick (ascending
+  walk, 304 > 298). Retail's rival 2 sat in Build (state 3, site = its quadrant corner (64,0) —
+  `sub_13B00`'s scout is `(x >> 14) << 14` with the signed round-toward-zero on y = −144 → 0,
+  EF:6069-90) for seven ticks over a full purse.
+
+## 113-1 THE PURSE STARTS FULL, ON THE ENTITY
+- `sub_5C950`'s tail: `life_0x8 = maxLife; mana_0x90_144 = maxMana_0x8C_140` (EF:43825-28,
+  `maxMana = 1000` EF:43722) for every wizard the level starts. The port's fresh arm
+  (`mc2_spawn_rival`) stopped at the life line; the (3,1) record kept the ctor's memset 0 in
+  `f140`, and because `Mc2Rival::mana` is a MIRROR re-seeded from `f140` every tick
+  (`mc2_rival_alive`, the purse-is-entity law), the ctor's `mana: 1000` was gone on tick 1. A
+  one-shot Build-arm probe: mana 0, 100, 200 … 1000 at tick 11 = the cast tick. The respawn
+  arm already wrote `f136 = f140 = 1000`; the fresh arm now does too.
+
+## 113-2 THE CASTLE RECAST COUNTER IS COLOUR-STAGGERED AT SPAWN
+- With the purse full the port would cast on tick 2, so a second gate had to hold retail until
+  tick 8. The model-1 arm of the same tail (EF:43847-52): reset the brain state, pin the eight
+  hate ledgers to 24607, then `SpellEnabled[2] = 4 * playerColorIndex_0x38_56`. `sub_12A70`
+  decrements every `SpellEnabled[s] > 0` once per tick at the top of the wizard body
+  (EF:5335-38) and `sub_15170`'s case 2 reads `!SpellEnabled[a2]` on both arms (EF:7032/7043).
+  Colour 2 → 8, castable on its 8th tick; colour 1 → 4; the human (colour 0) never held. Fresh
+  spawn AND respawn (`sub_5C950` runs on PlayerAction 1 and 3, EF:37602/37617).
+- The port's `cooldown[2] = 4 * slot` on both arms; the probe then read cd 6,5,…,0 and
+  `ready=true` at f63 = 49 = tick 8, castle at 304, terrain-check mc2l4 IDENTICAL.
+
+## 113-4 RESIDUALS (named)
+- **The native scout's site z**: `sub_13B00` copies scratch slot 0's WHOLE position into
+  `axis_0x9A_154x`. At mc2l4 record 0 slot 0's z is 2624 (= castle 297's painter 303's z) and
+  rival 298's `dest_z` = 2624, so retail's Build hover aims UP at 3136 and the altitude
+  ceiling clamp pins the rival at 1176 for all eight ticks; the port's slot-0 z is not 2624 and
+  its rival descends 8/tick (1176 → 1128). Native-only — the replay imports `dest_z` per pair.
+  Open: which retail path leaves the painter's z in slot 0 (`sub_36FC0` / the (10,42) mint).
+
+## 113-3 THE DOME SAMPLES THE CEILING BEFORE ITS FLOOR WRITE (mc2l3 — the last MC2 row)
+- (251,88): retail ceiling 92 under floor 93, port 91. Both retail recomputes carry the cave
+  seal pin (`AddBuildingToTerrain_46570` EF:31190-93 as well as `sub_462A0` Terrain.cpp:
+  2034-38), the (10,83) dome `sub_34C40` (EF:25419) raises each disc cell through
+  `sub_570F0(…, 0, inner, 1)` = the unprotected recompute, then lerps the ceiling. A one-shot
+  per-cell trace (`MGC_TMP_CELL`, inverse-edited out) over the radius-12 dome at (248,83): the
+  floor climbs only on the last four ticks (integer `(lift − floor) / life`), each write's own
+  3×3 window pins the ceiling to `floor − 1` (88 → 89 → 90 → 91 → 92), and on life 1 the
+  port's lerp then re-read the fresh 92, saw its target 91 below it and wrote 91.
+- Retail reads `v22 = height[i]` and `v25 = ceiling[i]` TOGETHER at the top of the cell
+  (EF:25499-25500), BEFORE `sub_570F0`, and the lerp is `if (v10 < v25) ceiling = v25 − (v25 −
+  v10) / life` (EF:25517-21) — off the STALE v25 = 91: `91 < 91` is false, no write, the pin
+  stands at 92. The port's `mc2_cave_dome_tick` now samples `cur` before `cave_write_floor`.
+  The sibling pit/hill arm (`sub_34EE0` EF:25683-25710) reads fresh after its write on both
+  sides — dome-specific. Verified: terrain-check mc2l3 IDENTICAL (5 planes).
+  `MGC_NO_MC2_DOME_STALE_CEILING`; pin `mc2::cave::tests::
+  dome_ceiling_lerp_reads_the_ceiling_sampled_before_the_floor_write`.
+
+## NEUTRALITY
+- **terrain-check: 24 of 28 IDENTICAL** (22 in 112): mc2l4 (113-1/2) and mc2l3 (113-3) new;
+  every other row byte-identical on the final binary (`conformance/terrain-check-baseline.txt`
+  regenerated). EVERY MC2 ROW IS IDENTICAL; the four DIFFERENT rows are the MC1 first-tick
+  runtime family (mc1l42/l49/hwl2) plus the terrainless take.
+- **Corpus `replay --segmented --brief`: 28 of 28 BYTE-IDENTICAL** to `conformance/brief-
+  baseline.txt` on the 113-1/113-2 binary; the three cave takes (mc2l3/mc2l15/mc2l30 — the only
+  possible replay surface of 113-3) re-swept BYTE-IDENTICAL on the final binary. Expected: the
+  pair importer seats the purse, the cooldowns and the terrain every pair.
+- **Pins attributed**: each pin FAILS under its own kill switch — the dome pin under
+  `MGC_NO_MC2_DOME_STALE_CEILING`, the rival pin under `MGC_NO_MC2_CASTLE_COLOUR_COOLDOWN` (a
+  castle already on tick 2 — the full purse alone) and under `MGC_NO_MC2_RIVAL_START_PURSE`
+  (`f136` 0 at spawn).
+- **Four `engine::world::tests` fixtures moved, every one ATTRIBUTED** (each passes again
+  under the kill switch alone): `mc2_rival_mid_burst_pins_the_regen_to_zero` under
+  `MGC_NO_MC2_RIVAL_START_PURSE` — it wrote the brain's purse mirror (100) which the entity's
+  new full purse re-seeded to 1000 every tick; the fixture now writes `f140` too (the purse
+  lives on the entity, the port's own law). `mc2_rivals_castle_less_first_castle_is_free`,
+  `mc2_rival_ready_probe_quad_stamps_a_rising_castle_before_the_mana_gate` and
+  `the_rival_castle_upgrade_arms_and_the_token_mints_the_ball` under
+  `MGC_NO_MC2_CASTLE_COLOUR_COOLDOWN` — they call the executor directly on a fresh colour-1
+  spawn, which now holds `cooldown[2] = 4`; each fixture zeroes the elapsed counter first. No
+  assertion changed.
+- **Tests: the whole workspace green on the final tree (`cargo test --release --workspace
+  --no-fail-fast`: 50 result blocks, 1,022 passed, 0 failed)** — the two new pins included.
+- Instruments this round (all one-shot, inverse-edited out): a Build-arm line per tick (mana /
+  price / `cooldown[2]` / `cast_ready` / castle slot) and a per-cell trace on (251,88) (every
+  floor write in its 3×3, every seal-fixup on it, the dome's lerp with `life`).
+
+## OWED INTO ROUND 114
+- The native scout's slot-0 z (113-4): the rival's Build hover lane in a NATIVE world.
+- The MC2 native in-loop free (112-4) and the (10,51) load-beam slot — still unwitnessed.
+- 🎬 The terrain oracle corpus (player recording; do not ask) — the four MC1 rows.
+- The certification campaign resumes at 17 of 24 (`replay --segmented --classify`).
+
+# ROUND 114 — 2026-09-06 — THE SCRATCH SLOT'S AUTHORED SITE (the native scout's z)
+
+## 114-0 THE OWED ITEM
+- 113-4 named it: at mc2l4 record 0 retail's pool slot 0 reads `(x 16384, y 0, z 2624)`, `id 298`,
+  and rival 298's `dest_z` is 2624 (= castle 297's `dest_z`, the colour-1 rival's authored
+  castle); the port's native slot 0 held z 0, so the first scout of every native level took
+  `site_z = 0`, the whiffed Build hover aimed at 512 and the rival left tick 8 at 1128 where
+  retail records 1176. Native-only: the pair importer re-seeds slot 0 and `dest_z` every pair,
+  so no replay row ever carried it (⭐ the same PAIR-BLIND shape as ledger 95's downgrade
+  scratch write).
+
+## 114-1 THE AUTHORED CASTLE'S ROW STAMPS RUN ON THE SCRATCH SLOT
+- `sub_5C950`'s AI-player arm (EF:43779-43802) does not pass `sub_36FC0` the castle: for every
+  authored row `j` it BUILDS THE OPERAND IN `Entities_EA3E4[0]` — `position = castle->
+  axis_0x9A_154x` (x, y AND z, EF:43792-94), `model = 0`, `dword_0x10 = 0`, `id = castle id`,
+  `byte_0x46 = j` — and calls `sub_36FC0(Entities[0])`. Nothing clears the slot afterwards.
+  Port: `mc2_spawn_authored_castle`'s j-loop now stages `ent[0]` (x/y/z/model65/f26/f71) before
+  each `mc2_stamp_build_row_instant` — the position is what `sub_13B00` reads back, the level
+  byte what the stage walker reads; `id_0x1A_26` is NOT written (fused into `id24`, no reader on
+  the sentinel — the downgrade write's convention, ledger 95).
+- Only the AI arm stamps this way; `Events.cpp:2645`'s dispatch runs `sub_36FC0` on the castle
+  itself. The human never gets an authored castle on MC2.
+
+## 114-2 THE SCOUT BUILDS ITS CANDIDATE IN THE SAME SLOT
+- `sub_13B00` (EF:6069-90): `v1x = Entities[0]`; `v1x->id = a1x->id`; per candidate corner
+  `v1x->position.x/y = corner` (EF:6084-85), both metrics run on `v1x`, and the winner is copied
+  WHOLE onto the wizard (`axis_0x9A_154x = v1x->position`, EF:6090) — z is whatever the slot held.
+  Port: `mc2_rival_scout_site` writes `ent[0].x/y` per candidate (the residue = the last corner
+  tested = the winner: record 0's `(16384, 0)`); the wizard's `site_z` read of `ent[0].z` was
+  already there (ledger 95), it just never had a native writer.
+
+## 114-3 THE ORDER OF THE TICK, RE-READ (a 113-4 sentence withdrawn)
+- 113-4 said "the ceiling clamp pins the rival at 1176 for all eight ticks". Wrong inference from
+  one sample: `sub_12910` (EF:5250) runs `sub_12A70` FIRST — `sub_146F0`'s servo (−4 above the
+  terrain, then the `alt + v_12` floor clamp) and the `alt + v_10` / `alt + v_12` band clamp at
+  its tail (EF:5480-87) — and the state dispatch AFTER, so the whiffed Build cast's hover
+  (`sub_13100` EF:5643-48, `z += sign(z − (site_z + 512)) × v_14`, v_14 = −4) is the tick's LAST
+  z write: 1180 at the end of every whiff tick. Tick 8 is the cast tick — no whiff, no hover —
+  and the servo's 1176 stands = record 0. Records 1..5 (1176, 1188, 1252, 1316, 1380) are the
+  new castle's pad rising under the rival with the floor clamp lifting it; the port's native
+  series matches all six witnessed values. From record 6 (state 6, the Possess arm) the idle-
+  human test reads 1444 where the take has 1440 — the take's human is not reproduced there and
+  the replay grades mc2l4 clean to t=64 with imports; not chased.
+- Pin `tests/mc2_rivals.rs::mc2_authored_castle_rows_stage_the_scratch_slot_and_the_scout_
+  inherits_its_z` (slot 0 = the authored axis before tick 1, the 13-tick z series, slot 0 =
+  `(16384, 0, 2624)` at record 0). Kill switch `MGC_NO_MC2_AUTHORED_SCRATCH_SITE` (the pin fails
+  under it at its first assertion: slot 0 `(0, 0, 0)`).
+
+## NEUTRALITY
+- **terrain-check: 28 rows BYTE-IDENTICAL** to `conformance/terrain-check-baseline.txt` (24 of
+  28 IDENTICAL; the pool sentinel is not terrain).
+- **Corpus `replay --segmented --brief`: 28 of 28 BYTE-IDENTICAL** to `conformance/brief-
+  baseline.txt` on the final binary (the importer re-seeds slot 0 and `dest_z` per pair).
+- **Tests: `cargo test --release --workspace --no-fail-fast` — 50 result blocks, 1,023 passed,
+  0 failed** (the new pin included); clippy adds nothing on the touched files.
+
+## OWED INTO ROUND 115
+- The MC2 native in-loop free (112-4) and the (10,51) load-beam slot — still unwitnessed; no
+  corpus level shows either, do not dig blind.
+- 🎬 The terrain oracle corpus (player recording; do not ask) — the four MC1 rows.
+- The certification campaign resumes at 17 of 24 (`replay --segmented --classify`).

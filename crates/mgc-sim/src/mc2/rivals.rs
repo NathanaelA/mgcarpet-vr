@@ -91,6 +91,36 @@ fn no_mc2_rival_castle_any_site() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_CASTLE_ANY_SITE").is_some())
 }
 
+/// A/B toggle for the FRESH-SPAWN PURSE (round 113): set
+/// `MGC_NO_MC2_RIVAL_START_PURSE` to restore the pre-dig behaviour — the
+/// rival's (3,1) record left at `mana_0x90_144 = 0` from the ctor's
+/// memset, so the purse mirror read 0 and the first castle waited on
+/// 100/tick regen (mc2l4: cast tick 11 instead of retail's 8).
+fn no_mc2_rival_start_purse() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_START_PURSE").is_some())
+}
+
+/// A/B toggle for the SCRATCH SLOT'S AUTHORED SITE (round 114): set
+/// `MGC_NO_MC2_AUTHORED_SCRATCH_SITE` to restore the pre-dig behaviour —
+/// the authored castle's row stamps and the build-site scout ran on a
+/// function argument and never staged pool slot 0, so a native world's
+/// slot 0 kept z = 0 and every rival's first `site_z` was 0 (mc2l4:
+/// retail's rival 298 holds `dest_z` 2624 = castle 297's site z through
+/// record 0 and its Build hover pins at 1176; the port's descended 8/tick).
+fn no_mc2_authored_scratch_site() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AUTHORED_SCRATCH_SITE").is_some())
+}
+
+/// A/B toggle for the COLOUR-STAGGERED CASTLE COOLDOWN (round 113): set
+/// `MGC_NO_MC2_CASTLE_COLOUR_COOLDOWN` to restore the pre-dig behaviour
+/// (every wizard's Create-Castle recast counter 0 at spawn).
+fn no_mc2_castle_colour_cooldown() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_COLOUR_COOLDOWN").is_some())
+}
+
 /// A/B toggle for the LIFE-SCALAR IMPORT SEAT: set
 /// `MGC_NO_MC2_LIFE_SCALE_IMPORT` to restore the pre-dig behaviour,
 /// where `reanchor_mc2_rival_ai` seeded `Mc2Rival::life_scale` but left
@@ -1596,6 +1626,42 @@ impl World {
         // Life scalar: wizard maxLife *= Life/256 (EF:43768-72).
         self.g.ent[i].max_life = ((10000u64 * r.life_scale as u64) >> 8).max(1) as u32;
         self.g.refill_life(i);
+        // ⭐⭐ THE PURSE STARTS FULL, ON THE ENTITY. `sub_5C950`'s
+        // tail (EF:43825-28) is `life = maxLife; mana = maxMana`
+        // (`maxMana_0x8C_140 = 1000`, EF:43722) for EVERY wizard the
+        // level starts, human and AI alike — the same two statements
+        // the respawn arm already carries. The port's fresh arm
+        // stopped at the life line: the (3,1) record kept the ctor's
+        // memset 0 in `f140`, and since `Mc2Rival::mana` is only a
+        // MIRROR of `f140` (re-seeded every tick by
+        // `mc2_rival_alive`), the ctor's own `mana: 1000` was
+        // overwritten on the first tick and the rival climbed 0 → 1000
+        // at 100/tick — its first castle came at tick 11 on mc2l4
+        // where retail's rival 2 (record 0: castle 304 + painter 305
+        // both ONE dispatch old, f63 = slot + 1) cast on tick 8.
+        if !no_mc2_rival_start_purse() {
+            let e = &mut self.g.ent[i];
+            e.f136 = 1000; // maxMana_0x8C_140 (EF:43722)
+            e.f140 = 1000; // `mana_0x90_144 = maxMana` (EF:43826-28)
+        }
+        // ⭐⭐ AND THE CASTLE RECAST COUNTER IS COLOUR-STAGGERED AT
+        // SPAWN. The model-1 arm of the same tail (EF:43847-52) resets
+        // the brain state, pins every hate ledger to neutral, and then
+        // writes `SpellEnabled[2] = 4 * playerColorIndex` — the
+        // per-spell recast counter `sub_12A70` decrements once per
+        // tick (EF:5335-38) and `sub_15170`'s case 2 reads as
+        // `!SpellEnabled[2]` (EF:7032/7043). So colour 2 cannot cast
+        // Create Castle before its 8th tick, colour 1 before its 4th,
+        // and the human (colour 0) is never held. That is the whole
+        // reason retail's mc2l4 rival 2 sits in Build with a full
+        // purse for seven ticks and founds castle 304 on tick 8 — the
+        // castle's 3×3 stamp lands on the (10,11) island at (64,0)
+        // BEFORE record 0, and terrain-check's port world had no
+        // castle there at all (the 9-cell height residual of round
+        // 112-4).
+        if !no_mc2_castle_colour_cooldown() {
+            r.cooldown[2] = 4 * slot as u16;
+        }
         // The ladder reads the owner's Life scalar per slot.
         self.g.mc2_life_scale.0[slot as usize] = r.life_scale;
         // The book: `InitialiseSpells_54A50` (EF:38650) — AI grant =
@@ -1810,6 +1876,30 @@ impl World {
         // terrain for 100+ rounds (certification imports terrain).
         let id = self.g.ent[c].id24;
         for j in 0..castle_level {
+            // Round 114: retail runs each row stamp ON THE SCRATCH SLOT
+            // 0 (EF:43792-43802: `Entities[0]->position = castle->axis
+            // _0x9A_154x` — x, y AND z —, `model = 0`, `dword_0x10 =
+            // 0`, `id = castle id`, `byte_0x46 = j`, then
+            // `sub_36FC0(Entities[0])`), and the residue is read: the
+            // build-site scout `sub_13B00` (EF:6090) copies slot 0's
+            // WHOLE position onto the scouting wizard, z included, so
+            // a level's first rival scout inherits the LAST AUTHORED
+            // CASTLE'S SITE Z (mc2l4 record 0: slot 0 z 2624 = castle
+            // 297's `dest_z`, rival 298's `dest_z` 2624). The port
+            // passed the row as an argument and left slot 0's z at 0;
+            // the same shape as the castle-downgrade scratch write
+            // (`mc2_castle_tick`, ledger 95). `id_0x1A_26` is NOT
+            // written — the port fuses it with `parentId_0x28_40` in
+            // `id24` and nothing reads the sentinel's id.
+            if !no_mc2_authored_scratch_site() {
+                let s = &mut self.g.ent[0];
+                s.x = sx;
+                s.y = sy;
+                s.z = z;
+                s.model65 = 0;
+                s.f26 = 0;
+                s.f71 = j;
+            }
             self.g.mc2_stamp_build_row_instant((sx, sy, z), j, id);
         }
         // The ctor's state (`sub_4AA40` EF:33377: actionIndex 5 = the
@@ -4789,6 +4879,15 @@ impl World {
             for col in 0..4u16 {
                 let tx = (sx.wrapping_add(col) & 3) << 14;
                 let ty = (sy.wrapping_add(row) & 3) << 14;
+                // EF:6084-85: the candidate corner is built IN the
+                // scratch slot 0 (`v1x->position.x/y = corner`) and
+                // both metrics run on `v1x`; the last candidate tested
+                // is slot 0's residue (mc2l4 record 0: x 16384, y 0 =
+                // rival 298's winning corner, z untouched). Round 114.
+                if !no_mc2_authored_scratch_site() && self.g.ent.len() > 1 {
+                    self.g.ent[0].x = tx;
+                    self.g.ent[0].y = ty;
+                }
                 // The 16-bit axis deltas both metrics run on.
                 let d16 = |a: u16, b: u16| a.wrapping_sub(b) as i16 as i32;
                 // `sub_14B10(v1x, 2)`: elect the Euclidean-nearest
@@ -8606,6 +8705,12 @@ impl World {
         }
         self.mc2_rivals[ri].life_scale = 256; // word_0x24A_586 (EF:43703)
         let slot = self.mc2_rivals[ri].slot;
+        // The same tail's model-1 arm (EF:43847-52) runs on the reuse
+        // path too: `SpellEnabled[2] = 4 * playerColorIndex` — see
+        // the fresh arm in `mc2_spawn_rival`.
+        if !no_mc2_castle_colour_cooldown() {
+            self.mc2_rivals[ri].cooldown[2] = 4 * slot as u16;
+        }
         self.g.mc2_life_scale.0[slot as usize] = 256;
         self.g.move_relink(i, cx, cy, z);
         self.g.refill_life(i);

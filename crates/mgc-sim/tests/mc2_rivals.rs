@@ -1604,3 +1604,128 @@ fn a_rival_bolt_carries_its_token_slot_not_a_spell_index() {
          (slot, model, id24, @0x26) = {bad:?}"
     );
 }
+
+/// ROUND 113 — the rival's FIRST castle is colour-staggered and paid
+/// from a purse that starts FULL. `sub_5C950`'s tail (EF:43825-28)
+/// writes `life = maxLife; mana = maxMana` onto the (3,1) record for
+/// every wizard the level starts, and its model-1 arm (EF:43847-52)
+/// arms the Create-Castle recast counter `SpellEnabled[2] = 4 ×
+/// playerColorIndex`, which `sub_12A70` decrements once per tick and
+/// `sub_15170`'s case 2 reads as `!SpellEnabled[2]`. mc2l4's colour-2
+/// rival therefore sits in Build over its quadrant corner (64,0) with
+/// 1000 mana for seven ticks and founds castle 304 on tick 8 — retail's
+/// record 0 (the recorder's phase-8 snapshot) holds that castle and its
+/// (10,42) painter each exactly ONE dispatch old (f63 = slot + 1). The
+/// port used to start the purse at 0 (100/tick regen → tick 11) and the
+/// counter at 0, and terrain-check's mc2l4 row carried the castle's own
+/// 3×3 stamp as a 9-cell "ring" residual.
+#[test]
+fn mc2_fresh_rival_purse_is_full_and_first_castle_is_colour_staggered() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    // Colour 2's start marker is (3,6) at (64,255); its carpet spawns
+    // there with the purse already on the entity.
+    let carpets: Vec<_> = w
+        .debug_pool()
+        .1
+        .into_iter()
+        .filter(|e| e.class == 3 && e.model == 1 && e.tx == 64 && e.ty == 255)
+        .collect();
+    assert_eq!(carpets.len(), 1, "one rival carpet on colour 2's marker");
+    assert_eq!(carpets[0].cap, 1000, "maxMana_0x8C_140 = 1000 (EF:43722)");
+    assert_eq!(
+        carpets[0].cargo, 1000,
+        "mana_0x90_144 = maxMana at the init tail (EF:43826-28), on the ENTITY"
+    );
+    let castles_at_corner = |w: &World| {
+        w.debug_pool()
+            .1
+            .into_iter()
+            .filter(|e| e.class == 3 && e.model == 2 && e.tx == 64 && e.ty == 0 && e.life >= 0)
+            .count()
+    };
+    assert_eq!(castles_at_corner(&w), 0);
+    let idle = PlayerCommand::default();
+    let pose = PlayerPose::from_tiles(8.0, 20.0, 8.0, 0.0, 0.0, 0.0);
+    for t in 1..=7 {
+        w.tick(pose, idle);
+        assert_eq!(
+            castles_at_corner(&w),
+            0,
+            "tick {t}: the colour-2 counter (4 × 2 = 8) is still live — no castle yet"
+        );
+    }
+    w.tick(pose, idle);
+    assert_eq!(
+        castles_at_corner(&w),
+        1,
+        "tick 8: the counter reached 0 and the rival founded its castle at its \
+         quadrant corner (64,0) — retail mc2l4 record 0 slot 304"
+    );
+}
+
+/// Round 114 — THE SCRATCH SLOT'S AUTHORED SITE. Retail stamps every
+/// authored castle row ON pool slot 0 (EF:43792-43802: the castle's
+/// `axis_0x9A_154x` — x, y and z — copied into `Entities[0]->position`
+/// before each `sub_36FC0`), and the build-site scout `sub_13B00`
+/// builds its candidate corner in the same slot (x/y only, EF:6084-85)
+/// and copies the WHOLE position onto the wizard (EF:6090). So on
+/// mc2l4 slot 0 reads (16384, 0, 2624) at record 0 — rival 298's
+/// winning corner over castle 297's site z — and rival 298's `dest_z`
+/// is 2624: its Build hover aims at 2624 + 512 and the altitude clamp
+/// pins it at 1176 for all eight ticks. The port never staged slot 0
+/// natively (z stayed 0, the hover aimed at 512 and descended 8/tick).
+/// Native-only: the pair importer re-seeds slot 0 and `dest_z`.
+/// Kill switch: `MGC_NO_MC2_AUTHORED_SCRATCH_SITE`.
+#[test]
+fn mc2_authored_castle_rows_stage_the_scratch_slot_and_the_scout_inherits_its_z() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let rival = w
+        .debug_pool()
+        .1
+        .into_iter()
+        .find(|e| e.class == 3 && e.model == 1 && e.tx == 64 && e.ty == 255)
+        .expect("colour 2's carpet on its (64,255) marker")
+        .slot;
+    // Before any tick: the last authored row stamp (castle 297 at
+    // (129,193), the colour-1 rival's) left its site in slot 0.
+    let (x0, y0, z0, ..) = w.debug_ent_pose(0).unwrap();
+    assert_eq!(
+        (x0, y0, z0),
+        (33024, 49408, 2624),
+        "slot 0 = the authored castle's axis_0x9A_154x after the j-loop (EF:43792-43802)"
+    );
+    let idle = PlayerCommand::default();
+    let pose = PlayerPose::from_tiles(8.0, 20.0, 8.0, 0.0, 0.0, 0.0);
+    let mut zs = Vec::new();
+    for _ in 1..=13 {
+        w.tick(pose, idle);
+        zs.push(w.debug_ent_pose(rival).unwrap().2);
+    }
+    // Ticks 1..7: the housekeeping servo (−4, then the ground + v_12
+    // floor clamp) runs FIRST (sub_12A70 from sub_12910 EF:5250), the
+    // whiffed Build cast's hover toward 2624 + 512 adds +4 LAST
+    // (sub_13100 EF:5643-48) — 1180 at the tick's end. Tick 8: the cast
+    // lands, no hover, the servo's 1176 stands = retail record 0. Ticks
+    // 9..13 = records 1..5: the new castle's pad rises under the rival
+    // and the floor clamp lifts it (1176, 1188, 1252, 1316, 1380 —
+    // retail's own series). With site_z 0 the hover aimed at 512 and
+    // the rival left tick 8 at 1128.
+    assert_eq!(
+        zs,
+        vec![1180, 1180, 1180, 1180, 1180, 1180, 1180, 1176, 1176, 1188, 1252, 1316, 1380],
+        "rival 298's z: hover +4 over the servo floor on the whiff ticks, 1176 on the cast tick \
+         (retail mc2l4 record 0), then the pad lift (records 1..5)"
+    );
+    let (x0, y0, z0, ..) = w.debug_ent_pose(0).unwrap();
+    assert_eq!(
+        (x0, y0, z0),
+        (16384, 0, 2624),
+        "slot 0 at record 0: the scout's corner over the untouched authored z (retail slot 0)"
+    );
+}

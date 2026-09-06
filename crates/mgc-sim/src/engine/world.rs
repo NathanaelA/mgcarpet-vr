@@ -36157,7 +36157,12 @@ mod tests {
             w.tick(away(), PlayerCommand::default());
         }
         // Drain the purse so regen is visible (afield rate = 100).
+        // The purse LIVES on the entity (round 113-1: the fresh
+        // spawn's `mana = maxMana` lands in `f140`, and the brain's
+        // word is a mirror re-seeded from it every tick) — hold the
+        // fixture there too.
         w.mc2_rivals[0].mana = 100;
+        w.g.ent[w.mc2_rivals[0].ent as usize].f140 = 100;
         // Arm a 6-tick window exactly as a landed cast does.
         w.g.ent[m].f28 = 6;
         w.g.ent[m].f26 = 6;
@@ -36619,6 +36624,10 @@ mod tests {
         w.mc2_rivals[0].mana = crate::mc2::castle::MC2_CASTLE_COST[0] as u32;
         w.mc2_rivals[0].mana_delta = 0;
         w.mc2_rivals[0].site = (w.g.ent[i].x, w.g.ent[i].y);
+        // The spawn arms `SpellEnabled[2] = 4 × colour` (round 113-2,
+        // EF:43851); this test exercises the executor once that
+        // counter has elapsed.
+        w.mc2_rivals[0].cooldown[2] = 0;
         assert!(
             w.rival_castle(w.mc2_rivals[0].ent).is_none(),
             "the rival starts castle-less"
@@ -36844,6 +36853,9 @@ mod tests {
         w.g.link(c, 100 << 8, 100 << 8, gz);
         w.mc2_rivals[0].mana = 0; // broke: MC2_CASTLE_COST[0] = 1000
         w.mc2_rivals[0].mana_max = 30000;
+        // The spawn's colour-staggered counter (round 113-2) has
+        // elapsed — the probe under test sits behind `!cooling`.
+        w.mc2_rivals[0].cooldown[2] = 0;
         let i = w.mc2_rivals[0].ent as usize;
         assert!(
             !w.mc2_rival_cast(0, i, 2),
@@ -36934,6 +36946,9 @@ mod tests {
         w.mc2_rivals[0].mana_delta = 0;
         let slot = w.mc2_rivals[0].slot as usize;
         w.wiz_charge[slot] = 84;
+        // The spawn's colour-staggered counter (round 113-2) has
+        // elapsed.
+        w.mc2_rivals[0].cooldown[2] = 0;
 
         // ---- the CAST: the arm, and nothing else ----
         assert!(w.mc2_rival_cast(0, i, 2), "the upgrade cast is admitted");

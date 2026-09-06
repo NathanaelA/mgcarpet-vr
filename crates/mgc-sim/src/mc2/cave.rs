@@ -26,6 +26,14 @@ use crate::engine::features::{Gen, lcg32, tile};
 use super::morph::isqrt;
 use super::sin_lut::SIN_DB750;
 
+/// A/B toggle for the DOME'S STALE CEILING SAMPLE (round 113): set
+/// `MGC_NO_MC2_DOME_STALE_CEILING` to restore the pre-dig behaviour (the
+/// ceiling lerp reading the ceiling AFTER the floor write's seal pin).
+fn no_mc2_dome_stale_ceiling() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DOME_STALE_CEILING").is_some())
+}
+
 impl Gen {
     /// The level is a cave iff the package carried a ceiling plane
     /// (retail `isCaveLevel_D41B6`; non-cave worlds keep the field
@@ -815,12 +823,33 @@ impl Gen {
                             let hprof = ((range * ((0x10000 + s) >> 1)) >> 16) as i32;
                             let lift = (base + hprof).min(254);
                             let floor = self.t.height[t] as i32;
+                            // ⭐⭐ THE CEILING IS SAMPLED **BEFORE** THE FLOOR
+                            // WRITE. `sub_34C40` reads `v22 = height[i]` and
+                            // `v25 = ceiling[i]` together at the top of the
+                            // cell (EF:25499-25500), raises the floor through
+                            // `sub_570F0` — whose recompute window pins THIS
+                            // cell's ceiling to `height − 1` when the raise
+                            // inverts it — and only then lerps `if (v10 < v25)
+                            // ceiling = v25 − (v25 − v10) / life` off the STALE
+                            // v25 (EF:25517-21). The port re-read the ceiling
+                            // after the write, saw the fresh pin and lerped it
+                            // one below the floor again. mc2l3 (251,88), the
+                            // radius-12 dome at (248,83), life 1: floor 92 →
+                            // 93 pins the ceiling 91 → 92; retail's lerp reads
+                            // v25 = 91 against v10 = 91 and does nothing; the
+                            // port read 92 and wrote 91 — round 113's last
+                            // ceiling cell. `MGC_NO_MC2_DOME_STALE_CEILING`.
+                            let cur = if no_mc2_dome_stale_ceiling() {
+                                None
+                            } else {
+                                Some(self.t.ceiling[t] as i32)
+                            };
                             if lift > floor {
                                 let step = floor + (lift - floor) / life as i32;
                                 self.cave_write_floor(x, y, step, d <= inner, true);
                             }
                             let lower = (peak - hprof).max(0);
-                            let cur = self.t.ceiling[t] as i32;
+                            let cur = cur.unwrap_or(self.t.ceiling[t] as i32);
                             if lower < cur {
                                 self.t.ceiling[t] = (cur - (cur - lower) / life as i32) as u8;
                             }
@@ -1363,6 +1392,56 @@ mod tests {
         assert_eq!(g.t.height[t], 140, "no floor write on this cell");
         assert_eq!(g.t.ceiling[t], 90, "sync-only: no floor-1 pin");
         assert_ne!(g.t.angle[t] & 8, 0, "sealed cell flagged");
+    }
+
+    /// ROUND 113 — `sub_34C40` samples `v25 = ceiling[i]` BEFORE the
+    /// floor write (EF:25499-25500) and lerps off that stale value
+    /// (EF:25517-21), so a seal pin the floor write just landed on
+    /// this very cell survives the lerp. mc2l3 (251,88): the radius-12
+    /// dome's last tick raised 92 → 93, the pin put the ceiling at 92,
+    /// and retail's lerp compared its target 91 against the STALE 91
+    /// and did nothing; the port re-read 92 and wrote 91.
+    #[test]
+    fn dome_ceiling_lerp_reads_the_ceiling_sampled_before_the_floor_write() {
+        let mut g = cave_gen();
+        let i = g.new_event().expect("dome slot");
+        {
+            let e = &mut g.ent[i];
+            e.x = 50 << 8;
+            e.y = 50 << 8;
+            e.dest_x = 3; // radius, tiles
+            e.f71 = 1; // phase: animate
+            e.z = 100; // sampled box MIN floor
+            e.site_z = 105; // sampled box MAX ceiling → range 5
+            e.act_life = 2; // → life 1 on this tick: the lift lands in full
+        }
+        // Only the centre is below its lift: every other disc cell
+        // already stands at 140, so no later cell's write window can
+        // re-pin the centre after the dome's own lerp — the mc2l3
+        // shape, where (252,88) onward read `lift <= floor`.
+        for gy in 47..=53u8 {
+            for gx in 47..=53u8 {
+                g.t.height[tile(gx, gy)] = 140;
+            }
+        }
+        let t = tile(50, 50);
+        g.t.height[t] = 100;
+        g.t.ceiling[t] = 95; // already sealed under the 100 floor
+        g.mc2_cave_dome_tick(i);
+        // Centre of the profile: lift = 100 + hprof (4 or 5 depending
+        // on the table's peak), written in one step; the write's own
+        // seal window pins the ceiling to floor − 1. lower = peak −
+        // hprof sits BELOW that pin. Retail: `lower < v25 (95)` is
+        // false — no lerp, the pin stands. The old port read the fresh
+        // pin and wrote `lower` (two to four below the floor).
+        let h = g.t.height[t];
+        assert!(h > 100, "floor raised to the lift (got {h})");
+        assert_eq!(
+            g.t.ceiling[t],
+            h - 1,
+            "the pin survives: the lerp read the STALE pre-write sample"
+        );
+        assert_ne!(g.t.angle[t] & 8, 0, "still sealed");
     }
 
     /// The tube's wall ring is `sub_34B00(ox-1, oy-1, side+1,
