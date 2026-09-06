@@ -31650,3 +31650,124 @@ TERRAIN mc2l6-rival-spells-galore.mgcr: DIFFERENT — shading 8 · angle 320, po
 - `terrain-diff` (default settle 0) should probably default to the phase too — kept at 0 this round
   so every banked A/B number in 107-109 still reproduces.
 - Everything owed into 110 that is not listed above (7 uncertified takes; the wrapper tails).
+
+# ROUND 111 — 2026-09-06 — THE LOAD-TIME POOL RECORDS: A SLOT IS A LAW SURFACE AT GENERATE TIME
+
+```
+terrain-check, the three biggest 110-4 families:  mc2l22 height 2,941 / shading 3,432 / angle 1,295
+→ 11 / 0 / 151 · mc2l4 height 1,357 / shading 582 / angle 927 → 9 / 0 / 2 · mc2l6 angle 320 → 119.
+Two records the port never minted; every other row of the 27-take table byte-identical.
+```
+
+## 111-1 ⭐⭐⭐ THE CHAIN PAINTERS MINT RECORDS, AND THE NEXT PASS POPS THEIR SLOTS LIFO (sim)
+The dig started on mc2l22's "wall-chain lerp ±1" and the first three measurements retired the
+name: the 2,941 height cells are NOT moving between settle 8 and 10 (16 of them do), the port never
+touches them after the load settle (`--settle 0` = `--settle 9` on 2,931 of them), and 2,933 of
+them lie inside the geometry of the pad-edge smoothing rings (`sub_48A20`, thickness 2 then 5)
+the 126 authored (10,45) buildings run on their completion tick. A `MGC_RING_TRACE` probe
+(inverse-edited out) then showed the port's ring WRITING those cells — with a different 3×3
+average than retail's. Every line of the ring, the smoother (`SetHeightmapByBuilding_48B90`),
+the lerp and the pass split (`bldgprm.byte_2 & 0x10`, all 126 rows pass G) matched the
+decompile, and all 126 buildings complete on the same sweep. What differed was the ORDER: at
+(4,0) retail's average is exactly the port's with the x=5 column already smoothed — a
+neighbour's ring had run FIRST.
+- **Retail record 0 has the 126 walls at slots 184 → 59 in REVERSE THING order** (`dump-state
+  mc2l22.mgcr 0 1..653`); the port had them at 1 → 126. Slot order is the load settle's sweep
+  order, so every overlapping halo averaged different neighbours — settle-independent, ±1.
+- The stack: `sub_49F30` seeds the pool canonically before GenerateEvents (pops ascend), and
+  `sub_49F90` re-canonicalises after it (the disposition-0 spawns took 1..12 and 13..58; the free
+  stack at t=0 continues 654, 655, …). Between the two, the (10,28) ROAD PAINTER `sub_48400`
+  (EV:5365) mints **two (10,27) segment-walker records per Bresenham step** (creator `sub_4F7A0`
+  EF:36151; actions 27/28/29 = `sub_34110`/`sub_34000`/`sub_34210`), each a ONE-SHOT strip that
+  dies on the first settle sweep and is freed IN-SWEEP in ascending slot order — and the next
+  pass pops them LIFO. mc2l22's 21 road legs predict **exactly 184 walkers**, 184 = the top slot.
+  The port's `mc2_stamp_road_leg` stamped the strips with no record.
+- The same law on the (10,29) WATERPATH painter `sub_48690` (EV:5493): **two (10,30) path
+  points per leg** (`AddPointToPath_4F9A0` EF:36256, action 0x20 = `ApplyPointToPath_343F0`,
+  one-shot). mc2l4's three chains (four legs = eight records) precede its five load-time (10,11)
+  scorch rings in pass 1, and **the ring's radius cadence is `f63 % 3` on the SLOT-SEEDED
+  continuity byte** — eight slots up, the rings dug one disc-tick too many (−3 ×4) / two too few
+  (+6 ×2): the 1,357-cell family, and the `mc2-archer-ground-z` rule's "constant −192" (33 (5,4)
+  stand on the (127,62) ring; −3 × 64). mc2l4's three (10,45) then land at 13/12/11 = retail.
+- ⇒ `Gen::mc2_spawn_road_walker` (terrain_paint.rs, two per step in retail's order and with
+  retail's fields) and `World::mc2_spawn_path_point` (world.rs, two per leg); the settle's
+  `27..=29` and `0x20` arms reap them on their first sweep. The strips stay synchronous (nothing
+  else in the pass reads them). Pin: `tests/mc2_load_pool_records.rs` — level-022's walls at
+  184 → 59 (first THING → 184, last → 59, first row-50 piece → 173), level-004's at 13/12/11.
+- ⭐⭐⭐ **THE SLOT IS A LAW SURFACE EVEN FOR A RECORD THAT DOES NOTHING.** A synchronous stamp
+  that skips the record is byte-identical on its own plane and wrong on every plane the pool
+  order touches: sweep order, `f63 % n` cadences, per-entity RNG seeds (`rand = slot + global`).
+  The remaining chain painters to audit for the same omission: the (10,51) load beams (ticked to
+  completion synchronously at spawn, flagged 0x400 — is the slot FREED in-sweep like retail's?),
+  and MC1's chains (mc1l49 carries (10,50) THINGs).
+- ⭐⭐ **THE ORDER TEST: does retail's value equal the port's average with a neighbour column at
+  its FINAL value?** One cell ((4,0): 675 → 698 = 77) named "a neighbour ran first" before any
+  decompile line was reread. ⭐⭐ Count the predicted allocations from the geometry and match the
+  slot arithmetic (184 = 184) BEFORE porting anything.
+
+## 111-2 THE RESIDUAL FAMILIES AFTER 111-1 (named)
+- **mc2l22 — castle stamps:** 19 type cells (26↔27 pairs around the level-5/6 castles at
+  (193,43)/(193,99)), 151 orientation-only angle cells in x=48..65 × y=22..63 (the level-7
+  castle's west pads, odd columns), 11 height + 1 type at the (3,6) level-1 castle (207,157).
+  **mc2l4 — 12 cells:** a 3×3 at the (64,0) ring's centre (−1/−2) and 2 angle + 1 type where the
+  (128,192) ring meets the (3,5) castle at (128,193). **mc2l6 — 119 orientation-only cells** in
+  one 13×13 disc at (115,221) + 8 shading cells (−2) on the (3,7) keep. **mc2l0 — 34 cells** on
+  the human's start pad (74..81, 216..223). **mc2l3 — one ceiling cell.**
+- **THE MC2 ORIENTATION FAMILY, TRACED TO ITS LAST STEP (mc2l6's disc; the same signature on
+  mc2l22's 151 and mc2l4's 2):** the disc is the DISPOSITION-0 (10,45) row-71 building at
+  (115,221) (retail slot 107, life 22 at phase 8), 19×19 with a 13×13 interior of `00/00` cells
+  (paint code 0, pad 0). The MC2 retile draws the orientation of every type<8 result from the
+  global `rand2_17B4E0` LCG (Terrain.cpp:1996-1999 = the port's `pseudo`), and the two engines
+  produce the SAME stream: per interior row the port's orientations are retail's shifted by
+  exactly one cell (`port(x) = retail(x+1)`, rows 216-225) — the port draws ONE MORE value per
+  footprint row. Mechanism (an `MGC_RETILE_TRACE` probe, inverse-edited out): the life-25 paint
+  writes nibble 0 for code 0 (`angle = code | angle & 0xF0`, both engines), its retile then sees
+  a zero corner and lands on textures 36-39 (no draw); the NEXT tick's lerp retouches every
+  nibble-0 pad cell in raster order (`|= 1` + retile), and each retouch's 2×2 block visits its
+  NW neighbour (the previous row's ring cell, idx 400 → type 1) for a draw while the E/S
+  neighbours are still nibble 0 (idx 343/393/392 → 37/39/36, no draw). Retail ends one draw
+  short per row — the open question is WHICH visit retail skips (its NW-neighbour draw, or a
+  first-touch retile the port makes at tick 1 that retail does not). `sub_44580`'s eight
+  dihedral insertions, the empty-bucket `(1,0)` default, `unk_D47E0` rows 0-8/35-40, pass 1's
+  lock gate and the code<8 arm of `sub_45DC0` were all reread against the port and match.
+  Visual weight: texture rotation only (bits 4-6); type/height/shading exact.
+- **mc1l42 / mc1l49 — the MC1 FIRST-TICK RUNTIME family (not generate):** mc1l42's two blobs are
+  the (5,11) genie's own 12-puff sparkle rings (spawn at (25,61), then the blink to (2,68) — the
+  port blinks to the SAME place; the ring positions `x + 40*(k%3), y + 40*(k/3)` match :24361-84
+  line for line). The burn comes from the puffs' (10,0) fire children at `pos − 96 + 192·cell ±
+  rand%129−64` (`AddQuickfair0A_01_30F60`), i.e. from the puffs' per-entity RNG — seeded from
+  their SLOT + the global stream at spawn. Retail's 12 puffs died at slots 345..356 (the t=0
+  free-stack tail of mc1l42.mgcr, pushed ascending). mc1l49's ten crater discs differ in
+  ORIENTATION ONLY because the MC1 retile draws its orientation from the global `pseudo` LCG for
+  every type<8 cell (`retile_and_shade`, 16·(pseudo % 7)): the genie ring / (5,3) / (5,7) burns
+  in the unwitnessed first 18 ticks land on different cells and shift the stream for every
+  crater retile after them. The instrument for this axis is a take at phase ≤ 2 (the terrain
+  oracle corpus), not the generate settle.
+- **mc1hwl2 — the tick-13 demolish** of the (10,45) row-7 building at (82,250): untouched.
+
+## NEUTRALITY
+- **Corpus: 28 of 28 takes BYTE-IDENTICAL** to `conformance/brief-baseline.txt` (`replay
+  --segmented --brief`, the road + waterpath binary), and mc2l0/mc2l15/mc2l30 re-swept
+  byte-identical with the final binary (the settle-run chain beam in). Expected: `replay`
+  imports the pool every pair, so the records have no import witness — the generated world is
+  the only surface they change.
+- **Tests: 1,018 of 1,018, 2 ignored, 50 suites** (the whole workspace in release): 1,016 of
+  round 110 + the two `mc2_load_pool_records` pins. ⚠ **ONE DELIBERATE RE-PIN:** `mc2_slice`'s
+  six GOLDEN and six OBSERVABLE hashes (level-000 has one waterpath leg → two (10,30) records →
+  the whole disposition-0 population two slots higher, exactly retail's mc2l0 record 0; slots
+  seed `rand`/`f63`, so every per-entity stream re-phases — real behaviour toward retail, not
+  layout). A/B-attributed on one binary: the two `mc2_spawn_path_point` calls alone; the road
+  walkers and the settle-run beam each leave the previous pin standing (level-000 has neither).
+- **terrain-check: 27 rows, three improved, 24 byte-identical** (`conformance/terrain-check-
+  baseline.txt` regenerated; MC1 rows untouched by construction — the records are MC2 chain
+  painters). The final binary reproduces the banked MC2 rows exactly.
+
+## OWED INTO ROUND 112
+- The (10,51) load-beam slot: retail frees the beam in-sweep (`sub_57F20` after its arm); the port
+  ticks it to completion at spawn and leaves the flagged record for the settle loop, which
+  `continue`s on `flags & 0x400` — check whether the slot is pushed at all, and in which sweep.
+  mc2l15/mc2l30 (rivers + beams) are IDENTICAL, so any error there is on a level without a take.
+- The castle-stamp residue (111-2, mc2l22/l4/l6), mc2l0's start pad, mc2l3's ceiling cell.
+- `mc2-archer-ground-z`: the generate-axis cause is FIXED (mc2l4's ring pads); the rule's rows
+  are the replay's — re-triage against the regenerated brief baseline.
+- 🎬 The terrain oracle corpus (player recording; do not ask) — the MC1 first-tick family needs it.

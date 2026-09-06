@@ -12935,6 +12935,22 @@ impl World {
                         15 => {
                             self.g.mc2_fire_trail_tick(i);
                         }
+                        // The (10,27) road segment-walkers (actions
+                        // 27/28/29 = `sub_34110`/`sub_34000`/`sub_34210`,
+                        // EF:24897/24863/24929): one-shot strips that
+                        // end in `DisableEntityDrawing04_57F10`. The
+                        // strip itself was stamped at spawn by
+                        // `mc2_stamp_road_leg`; the record dies here
+                        // ON ITS FIRST SWEEP like retail's, so the
+                        // in-sweep free below hands its slot to the
+                        // next pass LIFO (`Gen::mc2_spawn_road_walker`).
+                        27..=29 => self.g.ent[i].flags |= 0x400,
+                        // The (10,30) waterpath point (action 0x20 =
+                        // `ApplyPointToPath_343F0` EF:25027): the run
+                        // was stamped at spawn by `mc2_stamp_path_leg`;
+                        // the record dies on its first sweep like
+                        // retail's (`mc2_spawn_path_point`).
+                        0x20 => self.g.ent[i].flags |= 0x400,
                         // The one-tick stage/chain markers.
                         0x1E | 0x1F | 0x21 | 0x36 => self.g.ent[i].flags |= 0x400,
                         // The (10,32) river head — the traveling
@@ -13141,16 +13157,26 @@ impl World {
         }
     }
 
-    /// `sub_48880` (EV:5586) + the ApplyEvents settle run: spawn one
-    /// (10,51) beam at the FROM node's tile corner (verbatim: x<<8,
-    /// no center offset) snapped to terrain, aimed at the TO node,
-    /// `life = dist/actSpeed(1024)`, then tick it to completion.
+    /// `sub_48880` (EV:5586): spawn one (10,51) beam at the FROM
+    /// node's tile corner (verbatim: x<<8, no center offset) snapped
+    /// to terrain, aimed at the TO node, `life = dist/actSpeed(1024)`.
     /// Distance is 2D (retail's EuclideanDistXYZ reads an
     /// uninitialized dest z — a decompile-visible quirk; the 2D form
-    /// is the plausible intent, noted). The settle MobCtx stands at
-    /// the slot-0 start marker — retail's player entity is at its
-    /// start during ApplyEvents; only the load-time player damage
-    /// probe sees it (edge case, same observable).
+    /// is the plausible intent, noted).
+    ///
+    /// The beam is then RUN BY THE PASS'S LOAD SETTLE (`mc2_apply_events`
+    /// arm 0x37 = `mc2_load_beam_tick`, model 0x33 in the settle-tick
+    /// band EV:506-25) exactly like a raw authored (10,51) — in slot
+    /// order beside the pass's other one-shots, and FREED IN-SWEEP the
+    /// tick it expires, so its slot is on the free stack for the next
+    /// pass to pop (round 111's pool law, `mc2_spawn_road_walker`).
+    /// It used to be ticked to completion right here: same terrain,
+    /// but the flagged record then sat in the pool through every later
+    /// generate pass (the live tick-top reaper is the first thing that
+    /// frees a record the settle loop skips), shifting every later
+    /// load-time slot on a level with a (10,50) chain. No corpus take
+    /// carries one (mc2l15's chains are (10,31) rivers, settle-run all
+    /// along), so this is the decompile's order, unwitnessed.
     fn mc2_stamp_fence_leg(&mut self, x1: u16, y1: u16, x2: u16, y2: u16) {
         let (fx, fy) = (x1 << 8, y1 << 8);
         let (tx_, ty_) = (x2 << 8, y2 << 8);
@@ -13163,29 +13189,6 @@ impl World {
         let dist = Gen::isqrt(d2 as u32) as i32;
         self.g.ent[b].f30 = yaw;
         self.g.ent[b].act_life = dist / 1024;
-        let (sx, sy) = self
-            .start_markers
-            .iter()
-            .flatten()
-            .next()
-            .copied()
-            .unwrap_or((0, 0));
-        let ctx = MobCtx {
-            px: (sx << 8) | 128,
-            py: (sy << 8) | 128,
-            pz: 0,
-            pyaw: 0,
-            pmana: 0,
-            pmana_max: 0,
-            pdead: false,
-            pdead_top: false,
-            strict: self.strict_retail,
-            patches: self.patches,
-            mc2_turn: self.mc2_turn,
-        };
-        while self.g.ent[b].flags & 0x400 == 0 {
-            self.g.mc2_load_beam_tick(b, &ctx);
-        }
     }
 
     /// `sub_48690` (EV:5493): one chain leg = the shared diagonal
@@ -13206,10 +13209,46 @@ impl World {
         } else {
             (ay, xdir, 0)
         };
+        self.mc2_spawn_path_point(x1 as u8, y1 as u8, diag, xdir, ydir);
         self.mc2_stamp_path_run(x1 as u8, y1 as u8, xdir, ydir, diag);
         let bx = (x1 as i32 + diag * xdir) as u8;
         let by = (y1 as i32 + diag * ydir) as u8;
+        self.mc2_spawn_path_point(bx, by, diff, s2x, s2y);
         self.mc2_stamp_path_run(bx, by, s2x, s2y, diff);
+    }
+
+    /// The (10,30) PATH-POINT RECORD `sub_48690` mints for each of a
+    /// waterpath leg's two runs (EV:5540-5556) through
+    /// `AddPointToPath_4F9A0` (EF:36256: max_life 0, action 0x20,
+    /// flag bit 3 cleared, map-linked at the run's start), with
+    /// `dword_0x10_16` = the run length and yaw/pitch = the unit step.
+    /// Retail stamps the run on the record's first load-settle sweep
+    /// (`ApplyPointToPath_343F0` EF:25027, ending in
+    /// `DisableEntityDrawing04_57F10`); the port stamps it here,
+    /// synchronously, and the record exists for the POOL's sake — the
+    /// same law as the road walkers (`Gen::mc2_spawn_road_walker`):
+    /// every later spawn of the same pass sits `2 × legs` slots
+    /// higher than it would without them, and a slot is a LAW
+    /// SURFACE — the (10,11) scorch ring's radius cadence is
+    /// `f63 % 3` on a slot-seeded byte, so mc2l4's five load-time
+    /// rings (four waterpath legs ahead of them in pass 1) dug one
+    /// disc-tick too many / two too few (1,357 height cells at the
+    /// recorder's phase, settle-independent; round 111). Reaped by
+    /// the settle's 0x20 arm.
+    fn mc2_spawn_path_point(&mut self, cx: u8, cy: u8, run: i32, xdir: i32, ydir: i32) {
+        let Some(i) = self.g.new_event() else { return };
+        let e = &mut self.g.ent[i];
+        e.class64 = 10;
+        e.model65 = 30;
+        e.tick70 = 0x20;
+        e.max_life = 0;
+        e.flags &= !8;
+        e.x = (cx as u16) << 8;
+        e.y = (cy as u16) << 8;
+        e.f26 = run as i16;
+        e.f28 = xdir as u16;
+        e.f30 = ydir as u16;
+        self.g.refill_life(i);
     }
 
     /// `ApplyPointToPath_343F0` (EF:25027): stamp `len` cells from

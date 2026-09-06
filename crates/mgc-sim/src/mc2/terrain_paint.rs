@@ -669,6 +669,69 @@ impl Gen {
         }
     }
 
+    /// The (10,27) SEGMENT-WALKER RECORD `sub_48400` mints at every
+    /// Bresenham step of a road leg — two per step, the Y strip
+    /// (action 28 for a +Y advance, 27 for −Y; EV:5429-5443) and the
+    /// X run (action 29; EV:5463-5478) — through the (10,27) creator
+    /// `sub_4F7A0` (EF:36151: max_life 2, `subSpellIndex = (z >> 5) +
+    /// 48`, `dword_0x10_16` 10 then overridden to the run length,
+    /// bit 3 of the flag byte cleared) at the `sub_483A0` spawn point
+    /// (EV:5763: the tile corner, z = 32 × the higher of the two
+    /// endpoint heights).
+    ///
+    /// ⭐⭐⭐ THE RECORD IS THE LAW EVEN THOUGH ITS STRIP IS STAMPED
+    /// SYNCHRONOUSLY HERE. In retail the walker does nothing at
+    /// spawn: it runs its one-shot strip on the FIRST sweep of the
+    /// pass's load settle and dies there (`sub_34000`/`sub_34110`/
+    /// `sub_34210` end in `DisableEntityDrawing04_57F10`, freed
+    /// in-sweep by `sub_57F20`) — so a road pass leaves `2 × steps`
+    /// slots on the free stack, PUSHED IN ASCENDING SLOT ORDER, and
+    /// the next generate pass POPS THEM LIFO. mc2l22's 21 road legs
+    /// mint exactly 184 walkers; its 126 authored (10,45) buildings
+    /// (pass G, the next pass) therefore sit at slots 184 → 59 in
+    /// REVERSE THING order in retail's record 0, and the port —
+    /// which stamped the strips without a record — had them at 1 → 126.
+    /// Slot order is the load settle's sweep order, and the pad-edge
+    /// smoothing rings (`sub_48A20`) each building runs on its
+    /// completion tick average whatever its neighbours' rings left
+    /// behind: the reversed order is a different ±1 outcome on every
+    /// overlapping halo — 2,941 height / 3,432 shading cells on
+    /// mc2l22 at the recorder's phase, settle-independent (round 111).
+    /// The walker's work stays the synchronous stamp above (the
+    /// strips do not interact with anything else in the pass); the
+    /// record exists so the pool tells retail's story. Reaped by the
+    /// settle's 27/28/29 arm.
+    fn mc2_spawn_road_walker(
+        &mut self,
+        px: i32,
+        py: i32,
+        to_x: u16,
+        to_y: u16,
+        action: u8,
+        run: i32,
+    ) {
+        let Some(i) = self.new_event() else { return };
+        // `sub_483A0`: `32 * max(hmap[from], hmap[to])` where `from`
+        // is the walker's own cell (EV:5763-5775).
+        let from = tile(px as u8, py as u8);
+        let to = tile(to_x as u8, to_y as u8);
+        let z = 32 * self.t.height[from].max(self.t.height[to]) as i16;
+        let e = &mut self.ent[i];
+        e.class64 = 10;
+        e.model65 = 27;
+        e.max_life = 2;
+        e.f44 = ((z >> 5) as u16).wrapping_add(48); // subSpellIndex_0x2A_42
+        e.flags &= !8;
+        e.x = (px as u16 & 0xFF) << 8;
+        e.y = (py as u16 & 0xFF) << 8;
+        e.z = z;
+        // The `sub_48400` override: action 28 (+Y) / 27 (−Y) with
+        // `dword_0x10_16 = |advance|`, or action 29 with the X run.
+        e.tick70 = action;
+        e.f26 = run.abs() as i16;
+        self.refill_life(i);
+    }
+
     /// `sub_48400` (Events.cpp:5365) — the (10,28) ROAD leg: torus-
     /// shortest deltas (`shortestLenght_48370` EV:5753), endpoints
     /// swapped so the walk goes +X, then a coarse Bresenham of
@@ -708,9 +771,11 @@ impl Gen {
             let step_x = dx / steps;
             let mut rem_x = dx - steps * step_x;
             for _ in 0..steps {
+                self.mc2_spawn_road_walker(px, py, x2, y2, if step_y >= 0 { 28 } else { 27 }, step_y + rem_y);
                 self.mc2_road_strip_y(px as u8, py as u8, step_y, rem_y);
                 py += step_y + rem_y;
                 let adv_x = rem_x + step_x;
+                self.mc2_spawn_road_walker(px, py, x2, y2, 29, adv_x);
                 self.mc2_road_strip_x(px as u8, py as u8, adv_x);
                 px += adv_x;
                 rem_y = 0;
@@ -725,8 +790,10 @@ impl Gen {
             let mut rem_y = dy - steps * step_y;
             for _ in 0..steps {
                 let adv_x = rem_x + step_x;
+                self.mc2_spawn_road_walker(px, py, x2, y2, 29, adv_x);
                 self.mc2_road_strip_x(px as u8, py as u8, adv_x);
                 px += adv_x;
+                self.mc2_spawn_road_walker(px, py, x2, y2, if step_y >= 0 { 28 } else { 27 }, step_y + rem_y);
                 self.mc2_road_strip_y(px as u8, py as u8, step_y, rem_y);
                 py += step_y + rem_y;
                 rem_x = 0;

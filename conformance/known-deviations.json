@@ -157,7 +157,7 @@
   {
    "id": "mc2-archer-ground-z",
    "status": "open",
-   "note": "(5,4) archers ground-snap to a pristine plane that reads a different datum than retail's (l4: constant -192 from t=0). The LOAD-TIME terrain-edit check is the owed verdict (ledger (14,5) entry, l4 face).",
+   "note": "(5,4) archers ground-snap to a pristine plane that reads a different datum than retail's (l4: constant -192 from t=0). The LOAD-TIME terrain-edit check is the owed verdict (ledger (14,5) entry, l4 face). \u26a0 GENERATE-AXIS CAUSE FOUND AND FIXED 2026-09-06 (round 111): the -192 was the (127,62) authored (10,11) scorch ring dug one -3 disc-tick too deep because the port minted no (10,30) waterpath records ahead of the ring in pass 1, so the ring sat 8 slots lower and its slot-seeded f63%3 radius cadence differed; terrain-check mc2l4 height 1,357 -> 9. The replay rows this rule grades are UNCHANGED by construction (replay imports the take's terrain every pair) - the rule survives as their register; a hit-count change now = a replay-side regression.",
    "takes": [
     "mc2l4",
     "mc2l30"

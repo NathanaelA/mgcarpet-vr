@@ -633,16 +633,32 @@ fn mc2_slice_behaviors_and_goldens() {
     // ungraded `b5d` census goes to ZERO on both focus takes
     // (mc2l22 0..1200 fixed 3,061 / introduced 0; rsg 0..2000 fixed
     // 7,819 / 0), with both horizons unchanged.
+    // Re-pinned (ALL SIX) 2026-09-06 (ROUND 111) for THE LOAD-TIME POOL
+    // RECORDS (`World::mc2_spawn_path_point`): retail's (10,29)
+    // waterpath painter `sub_48690` mints two (10,30) path-point
+    // records per leg (`AddPointToPath_4F9A0`, one-shot, freed
+    // in-sweep by the load settle) and level-000 has one leg, so every
+    // record spawned after it — the whole disposition-0 population —
+    // sits two slots higher, exactly as in retail's record 0 of
+    // mc2l0.mgcr. ⚠ A POOL-LAYOUT RE-PIN: slots seed `rand` and `f63`,
+    // so the per-entity streams re-phase from the first tick. A/B-
+    // ATTRIBUTED, one binary: removing the two `mc2_spawn_path_point`
+    // calls alone reproduces the previous pin exactly with the round's
+    // road-walker records and the settle-run chain beam still in
+    // (level-000 has no (10,28) road and no (10,50) beam chain).
+    // Corpus-corroborated: `replay --segmented --brief` 28/28 takes
+    // byte-identical, `terrain-check` mc2l4 height 1,357 → 9 (the
+    // (10,11) rings' slot-seeded `f63 % 3` cadence), mc2l22 2,941 → 11.
     const GOLDEN: [u64; 6] = [
-        0x67b8694a698ecb88, // post-init (GenerateEvents + dis 0)
-        0xa8c9c3fcaa97ea9b, // A: 64 idle ticks afield
-        0x9f0f7b1e89f7a307, // B: the type-5 fly-to latched
+        0xfbe81217292abf92, // post-init (GenerateEvents + dis 0)
+        0xdde4d181953e14c5, // A: 64 idle ticks afield
+        0xd40b44629390bec9, // B: the type-5 fly-to latched
         // C-E re-pinned for the mc2l0 on-ramp batch (2026-08-21f;
         // attribution in mc2_cave.rs): the fireball's terrain-contact
         // move REVERT (sub_65C20 v16x) + the universal token-mana
         // copy + the impact pitch stamp move the combat checkpoints;
         // the D fireball window is the first consumer.
-        0x2dfb44aae2ba61a8, // C: goat awake/flee window
+        0x25194cb65a2d506e, // C: goat awake/flee window
         // D re-pinned for the MC2 CAST-CHARGE BANK (`mc2_launch`;
         // EF:55869-70 — every MC2 cast site copies the wizext
         // `byte_0x154` meter into the projectile's @0x10 and zeroes
@@ -689,7 +705,7 @@ fn mc2_slice_behaviors_and_goldens() {
         // The switch above was added afterwards. EVERY LAW NEEDS ITS
         // SWITCH AT LANDING TIME — this is what it costs when one does
         // not have one.
-        0x1fc30a4fe2e2046f, // D — re-pinned 2026-09-04 (ROUND 98) for THE
+        0x5437ff355d63e1dd, // D — re-pinned 2026-09-04 (ROUND 98) for THE
         // LAUNCH AIM POINT `axis_0x9A_154x` EXTENDED TO THE WHOLE
         // class-15 fire table (`MGC_NO_MC2_LAUNCH_AXIS_BAND=1`
         // reverts). Retail stamps the flyer's @0x9A with the caster's
@@ -797,7 +813,7 @@ fn mc2_slice_behaviors_and_goldens() {
         //     a 0 moves the pin by itself.
         //   * mc2l22 stays CERTIFIED (`segments=27 devs=0 horizon=END`) and
         //     the graded corpus is unmoved.
-        0x83e9fedf92dca869, // E: census + villager/archer provocation
+        0x93bec4681f25605d, // E: census + villager/archer provocation
     ];
     // Checkpoints 4-6 re-pinned for the DISPOSITION-FIRE stack
     // rebuild (see mc2_cave.rs — sub_49F90 at sub_4A1E0's top,
@@ -912,12 +928,20 @@ fn mc2_slice_behaviors_and_goldens() {
     // alone leaves this value standing. ⚠ the earlier attempt read
     // "observable holds" for every mover — the layout assert panics
     // first and the observable one never runs.
+    // Re-pinned (ALL SIX, post-init included) 2026-09-06 (ROUND 111)
+    // for THE LOAD-TIME POOL RECORDS (see the GOLDEN note): the two
+    // (10,30) waterpath records put every disposition-0 record two
+    // slots higher, and a slot seeds the record's `rand` and `f63`, so
+    // every per-entity stream on the level re-phases from the first
+    // tick — REAL behaviour toward retail (mc2l0.mgcr record 0 holds
+    // its population at exactly these slots), not layout. Same A/B as
+    // the GOLDEN note: the two `mc2_spawn_path_point` calls alone.
     const OBSERVABLE: [u64; 6] = [
-        0x5951c95adf7436f9,
-        0x3eaed2073972a99e,
-        0x832f419cb3f9716b,
-        0xad0f895abf178c2b,
-        0x55dc4df57cc26a90,
+        0x44274f3c4dbef3d9,
+        0x3dda1af33226087e,
+        0x98627ca49f675bcb,
+        0x1311f6bc13010a8b,
+        0xe4b21548ba8c0df0,
         // E re-pinned with the ARROW FLIGHT LAWS (see the GOLDEN note)
         // — and the OBSERVABLE moving is the point: an arrow now
         // strikes the body it is LEVEL WITH instead of the one it is
@@ -926,7 +950,7 @@ fn mc2_slice_behaviors_and_goldens() {
         // not layout. E ONLY; post-init..D hold. ⚠ this A/B is only
         // valid with the layout assert above disabled for the run —
         // it panics first otherwise and the observable never runs.
-        0xe6f384e96ad04ee3,
+        0xa7448bd014987c43,
     ];
     assert_eq!(
         obs, OBSERVABLE,
