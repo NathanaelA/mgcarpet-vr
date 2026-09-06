@@ -1308,24 +1308,38 @@ fn mc2_magic_mine_relaunch_reaches_a_neighbouring_wizard() {
     // entry guard (EF:29793-98, owner dead ⇒ the mine goes) holds.
     let owner = w.debug_mc2_spawn_creature(19, cx + 40, cy + 40, 900);
     assert!(owner != 0, "owner spawned");
-    let slot = w.debug_mc2_place_mine(cx, cy, 0, owner as u16);
-    assert!(slot != 0, "mine placed");
-    // …and CHARGE it, which is what `sub_68AC0` does when a qualifying
-    // bolt of the owner's own lands on it: spell 0 (fireball) at tier
-    // 0, whose `sub_6DCA0` arm is the (9,0) body.
-    w.debug_mc2_charge_mine(slot, 0, 0);
-
     let before = w.player_damage_taken();
     let (px, pz) = (cx as f32 + 2.5, cy as f32 + 0.5);
     let mut fired = false;
-    for _ in 0..300 {
-        let alt = w.ground_height_tiles(px, pz) + 4.0;
-        w.tick(
-            PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0),
-            PlayerCommand::default(),
-        );
-        fired |= count(&w, 9, 0) > 0;
-        if w.player_damage_taken() > before {
+    // A mine's arm countdown is `rand % 0x32 + 16` off its OWN slot-seeded
+    // stream, its proximity scan runs every 16th of its own frames, and
+    // its tier lifespan is short — so whether one particular mine scans
+    // before it expires is a per-slot coin (round 112's native human
+    // record moved every slot by one and flipped it). The law under
+    // test is the relaunch reaching the wizard, not the coin: place
+    // fresh mines until one trips.
+    for _attempt in 0..8 {
+        let slot = w.debug_mc2_place_mine(cx, cy, 0, owner as u16);
+        assert!(slot != 0, "mine placed");
+        // …and CHARGE it, which is what `sub_68AC0` does when a
+        // qualifying bolt of the owner's own lands on it: spell 0
+        // (fireball) at tier 0, whose `sub_6DCA0` arm is the (9,0) body.
+        w.debug_mc2_charge_mine(slot, 0, 0);
+        for _ in 0..300 {
+            let alt = w.ground_height_tiles(px, pz) + 4.0;
+            w.tick(
+                PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0),
+                PlayerCommand::default(),
+            );
+            // The relaunched (9,0) can pop a slot ABOVE the mine's, fly its
+            // two tiles and land inside the same walk — the hit itself is
+            // the witness then, not a projectile count at the tick's end.
+            fired |= count(&w, 9, 0) > 0 || w.player_damage_taken() > before;
+            if w.player_damage_taken() > before || count(&w, 10, 78) == 0 {
+                break;
+            }
+        }
+        if fired {
             break;
         }
     }

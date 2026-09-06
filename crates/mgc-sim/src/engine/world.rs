@@ -2407,6 +2407,10 @@ impl World {
         // `SetDefaultSpells_5C0A0` which grants nothing; the scope
         // caveat lives on `mc2_seed_default_spells`.)
         if matches!(w.game, GameId::Mc2) {
+            // `sub_5C950` for player 0: the (3,0) record FIRST
+            // (`AddPlayer_4A920`), then the book's tokens — round 112,
+            // see `mc2::rivals::no_mc2_native_human_record`.
+            w.mc2_spawn_human_record();
             w.mc2_seed_default_spells();
         }
         // NO free starting spells: the retail human grant is
@@ -4828,7 +4832,8 @@ impl World {
     fn mc2_drain_ladder_sync(&mut self) {
             if !self.g.mc2_ladder_sync.0.is_empty() {
                 let mail = std::mem::take(&mut self.g.mc2_ladder_sync.0);
-                for c in mail.iter().copied() {
+                // Bit 15 = pushed by a DOWNGRADE (see `Mc2LadderMail`).
+                for c in mail.iter().map(|&raw| raw & 0x7FFF) {
                     let own = self.g.ent[c as usize].id24;
                     let human = own == crate::mc1::mobs::PLAYER_TARGET;
                     // `SpellsEnabled[2]` off the owner's own book: the
@@ -4875,8 +4880,14 @@ impl World {
                 // zeroes the slot. Riding the ladder mail is what puts it
                 // in that order: the mail carries exactly the castles that
                 // took a level this tick, with `f26` already stepped.
-                for c in mail {
-                    self.mc2_castle_death_token_purge(c as usize);
+                // …and ONLY behind a downgrade's push (`sub_605E0` is
+                // the purge's only home — the ctor's and the upgrade's
+                // ladder rebuilds have no such tail; round 112, see
+                // `castle::no_mc2_purge_on_downgrade_only`).
+                for raw in mail {
+                    if raw & 0x8000 != 0 || crate::mc2::castle::no_mc2_purge_on_downgrade_only() {
+                        self.mc2_castle_death_token_purge((raw & 0x7FFF) as usize);
+                    }
                 }
             }
     }
@@ -17068,6 +17079,23 @@ impl World {
         }
     }
 
+    /// Test hook: re-seat a live entity on a tile centre (unlink +
+    /// link at ground level). The castle-crush coverage holds its
+    /// creatures on the footprint while the create ball flies — their
+    /// wander is the slot-seeded entity RNG's, and any pool-layout law
+    /// (round 112's native human record shifts every later slot by
+    /// one) re-phases it either way.
+    #[doc(hidden)]
+    pub fn debug_mc2_hold_at(&mut self, slot: usize, cx: u16, cy: u16) {
+        if slot == 0 || slot >= self.g.ent.len() || self.g.ent[slot].class64 == 0 {
+            return;
+        }
+        let (x, y) = ((cx << 8) | 0x80, (cy << 8) | 0x80);
+        let z = self.g.ground_z(x, y) as i16;
+        self.g.unlink(slot);
+        self.g.link(slot, x, y, z);
+    }
+
     /// Test hook — lay a `(10,78)` Magic Mine exactly as the (9,29)
     /// carrier's impact tail does (`sub_67960` EF:59352-62): the ctor
     /// at the carrier's position, then the THREE writes that tail
@@ -17180,6 +17208,23 @@ impl World {
         v.sort_by(|a, b| b.2.cmp(&a.2).then((a.0, a.1).cmp(&(b.0, b.1))));
         v.truncate(top);
         v
+    }
+
+    /// Per-slot pool rows `(slot, class, model, action)` for every
+    /// allocated record (0x400-marked ghosts included, slot 0
+    /// excluded) — the NATIVE-world slot-order witness
+    /// (`mgc-conform terrain-diff` under `MGC_POOL_CENSUS=1`), the
+    /// counterpart of `dump-state <take> 0 <slots>` on retail's
+    /// record 0. Read-only.
+    pub fn debug_pool_rows(&self) -> Vec<(usize, u8, u8, u8, i16, i16)> {
+        self.g
+            .ent
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, e)| e.class64 != 0)
+            .map(|(j, e)| (j, e.class64, e.model65, e.tick70, e.f26, e.f59 as i16))
+            .collect()
     }
 
     /// Drill into one `(class, model)` population: totals by action

@@ -650,15 +650,15 @@ fn mc2_slice_behaviors_and_goldens() {
     // byte-identical, `terrain-check` mc2l4 height 1,357 → 9 (the
     // (10,11) rings' slot-seeded `f63 % 3` cadence), mc2l22 2,941 → 11.
     const GOLDEN: [u64; 6] = [
-        0xfbe81217292abf92, // post-init (GenerateEvents + dis 0)
-        0xdde4d181953e14c5, // A: 64 idle ticks afield
-        0xd40b44629390bec9, // B: the type-5 fly-to latched
+        0xc290b979499815fe, // post-init (GenerateEvents + dis 0)
+        0x6a65bff653524322, // A: 64 idle ticks afield
+        0xa26f20f367936b7c, // B: the type-5 fly-to latched
         // C-E re-pinned for the mc2l0 on-ramp batch (2026-08-21f;
         // attribution in mc2_cave.rs): the fireball's terrain-contact
         // move REVERT (sub_65C20 v16x) + the universal token-mana
         // copy + the impact pitch stamp move the combat checkpoints;
         // the D fireball window is the first consumer.
-        0x25194cb65a2d506e, // C: goat awake/flee window
+        0xcdddf3b60dc15639, // C: goat awake/flee window
         // D re-pinned for the MC2 CAST-CHARGE BANK (`mc2_launch`;
         // EF:55869-70 — every MC2 cast site copies the wizext
         // `byte_0x154` meter into the projectile's @0x10 and zeroes
@@ -705,7 +705,7 @@ fn mc2_slice_behaviors_and_goldens() {
         // The switch above was added afterwards. EVERY LAW NEEDS ITS
         // SWITCH AT LANDING TIME — this is what it costs when one does
         // not have one.
-        0x5437ff355d63e1dd, // D — re-pinned 2026-09-04 (ROUND 98) for THE
+        0x2410773a72d4f3d0, // D — re-pinned 2026-09-04 (ROUND 98) for THE
         // LAUNCH AIM POINT `axis_0x9A_154x` EXTENDED TO THE WHOLE
         // class-15 fire table (`MGC_NO_MC2_LAUNCH_AXIS_BAND=1`
         // reverts). Retail stamps the flyer's @0x9A with the caster's
@@ -813,7 +813,7 @@ fn mc2_slice_behaviors_and_goldens() {
         //     a 0 moves the pin by itself.
         //   * mc2l22 stays CERTIFIED (`segments=27 devs=0 horizon=END`) and
         //     the graded corpus is unmoved.
-        0x93bec4681f25605d, // E: census + villager/archer provocation
+        0xa463e62ac91d6c3b, // E: census + villager/archer provocation
     ];
     // Checkpoints 4-6 re-pinned for the DISPOSITION-FIRE stack
     // rebuild (see mc2_cave.rs — sub_49F90 at sub_4A1E0's top,
@@ -936,12 +936,22 @@ fn mc2_slice_behaviors_and_goldens() {
     // tick — REAL behaviour toward retail (mc2l0.mgcr record 0 holds
     // its population at exactly these slots), not layout. Same A/B as
     // the GOLDEN note: the two `mc2_spawn_path_point` calls alone.
+    // Re-pinned 2026-09-06 (ROUND 112, THE NATIVE HUMAN RECORD): the
+    // world pops the human's pool slot BEFORE the book's tokens, like
+    // retail's `sub_5C950` (mc2l0.mgcr record 0: 152 (3,0), 153-154 the
+    // tokens), so every later record sits one slot higher — all six
+    // LAYOUT hashes move, the post-init OBSERVABLE (checkpoint 0) HOLDS
+    // and 1..5 re-phase (slot-seeded `rand`/`f63` streams from the first
+    // tick — real behaviour toward retail, the same class as the round
+    // 111 re-pin above). A/B: `MGC_NO_MC2_NATIVE_HUMAN_RECORD=1`
+    // reproduces the previous pins exactly (GOLDEN 0xfbe81217292abf92 …,
+    // OBSERVABLE 0x44274f3c4dbef3d9 / 0x3ddb6f8df6a06e7e / …).
     const OBSERVABLE: [u64; 6] = [
         0x44274f3c4dbef3d9,
-        0x3dda1af33226087e,
-        0x98627ca49f675bcb,
-        0x1311f6bc13010a8b,
-        0xe4b21548ba8c0df0,
+        0x642f38272512562a,
+        0x8c1623423f03220b,
+        0x8dc4abde633df7e6,
+        0xb69129093a8476d0,
         // E re-pinned with the ARROW FLIGHT LAWS (see the GOLDEN note)
         // — and the OBSERVABLE moving is the point: an arrow now
         // strikes the body it is LEVEL WITH instead of the one it is
@@ -950,7 +960,7 @@ fn mc2_slice_behaviors_and_goldens() {
         // not layout. E ONLY; post-init..D hold. ⚠ this A/B is only
         // valid with the layout assert above disabled for the run —
         // it panics first otherwise and the observable never runs.
-        0xa7448bd014987c43,
+        0xcacbd5246da011ef,
     ];
     assert_eq!(
         obs, OBSERVABLE,

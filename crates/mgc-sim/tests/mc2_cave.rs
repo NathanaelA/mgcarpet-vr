@@ -195,6 +195,21 @@ fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     // per-config coin — see the level-004 ground-truth trace; the
     // port implements the level data.) Pin the census by kind
     // including the standing kind-9 hold.
+    // The held model-18 takes a (10,0) fire hit in the storm's wake —
+    // a FOREIGN attacker breaks its hold (`mc2_held_hit`, StageVar2 =
+    // 10) and retail's re-leash reclaims it the moment it is neither
+    // attacking nor fleeing (`sub_12500` case 0xA). How long that
+    // aggro cycle runs is the creature's own slot-seeded RNG, and
+    // round 112's native human record moved every later slot by one:
+    // the old layout had calmed inside the 64-tick hover, the retail
+    // layout has not. Wait for the re-leash (bounded) before pinning
+    // the census — the law under test is the hold, not the cadence.
+    for _ in 0..512 {
+        if w.debug_mc2_held().iter().any(|&(_, _, k)| k == 9) {
+            break;
+        }
+        hover(&mut w, sx, sy, 1, idle);
+    }
     let held = w.debug_mc2_held();
     assert!(
         held.iter().any(|&(_, _, k)| k == 9),
@@ -800,8 +815,8 @@ fn mc2_cave_behaviors_and_goldens() {
             // both: mc2:15's terrain, phase-aligned at t=120, matches
             // retail on all five planes, 65,536/65,536
             // (`terrain-diff --settle`, ROUND 109).
-            0x921f2692901c8c49_u64,
-            0x548f26fbb5411d18,
+            0xfb6ad33f8d454bf6_u64,
+            0x6dd134b1443f1fd3,
             // ⭐⭐⭐ CHECKPOINTS C AND D RE-PINNED 2026-09-06 (ROUND 108),
             // A/B HOLD — TWO SEPARATE, SEPARATELY ATTRIBUTED CAUSES.
             //
@@ -836,8 +851,8 @@ fn mc2_cave_behaviors_and_goldens() {
             // round as a RED failure on purpose rather than papered
             // over, and is re-pinned only now that its cause is named.
             // (C and D carried forward under ROUND 109's two laws above.)
-            0xaba02729e2083cca,
-            0x5b1a79824eb6d514,
+            0x03410c90208a9e8c,
+            0xc11ac6c4af76bf67,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -984,11 +999,23 @@ fn mc2_cave_behaviors_and_goldens() {
     // four away from both the previous pin (0xca0e5c449cf57b10 /
     // 0xb60c271e559caa80 / 0x478ffb68996ab8ea / 0x9d0d9120f359f775) and
     // HEAD — see the state-pin note above for the arm values.
+    // Re-pinned 2026-09-06 (ROUND 112, THE NATIVE HUMAN RECORD): the
+    // world now pops the human's pool slot before the book's tokens,
+    // like retail's `sub_5C950`, so every later record sits one slot
+    // higher — all four LAYOUT hashes move (slot numbering from load
+    // on), checkpoints A/B/C of the OBSERVABLE projection HOLD
+    // BYTE-FOR-BYTE, and only D (the disposition storm) moves: the
+    // storm's spawns land one slot higher and every per-entity stream
+    // (`rand = slot + global`, `f63`) re-phases — real behaviour toward
+    // retail's layout, the same class as round 111's mc2_slice re-pin.
+    // A/B: `MGC_NO_MC2_NATIVE_HUMAN_RECORD=1` reproduces the previous
+    // pin (0x921f2692901c8c49 / 0x548f26fbb5411d18 / 0xaba02729e2083cca /
+    // 0x5b1a79824eb6d514; OBSERVABLE D 0x7c5397293f30a730) exactly.
     const OBSERVABLE: [u64; 4] = [
         0x536144e2ca06878d,
         0x4cfe444e3d74d9d1,
         0x674d00718d9a0d5b,
-        0x7c5397293f30a730,
+        0x9e18c00f22c0123c,
     ];
     assert_eq!(
         obs, OBSERVABLE,

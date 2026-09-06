@@ -1189,6 +1189,9 @@ impl std::hash::Hash for Mc2XpMail {
 /// 1000/9 while the cast window is still pinned). The ladder is
 /// Gen-side, the book World-side — same-tick mail like
 /// [`Gen::mc2_cast_xp`]. Hash-transparent while empty.
+/// Bit 15 of an entry marks a push made by the DOWNGRADE
+/// (`sub_605E0`): the castle-death token purge drains those alone
+/// (round 112, `castle::no_mc2_purge_on_downgrade_only`).
 #[derive(Default)]
 pub(crate) struct Mc2LadderMail(pub Vec<u16>);
 

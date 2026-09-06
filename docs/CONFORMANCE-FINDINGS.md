@@ -31771,3 +31771,137 @@ neighbour's ring had run FIRST.
 - `mc2-archer-ground-z`: the generate-axis cause is FIXED (mc2l4's ring pads); the rule's rows
   are the replay's — re-triage against the regenerated brief baseline.
 - 🎬 The terrain oracle corpus (player recording; do not ask) — the MC1 first-tick family needs it.
+
+# ROUND 112 — 2026-09-06 — THE PAINT TICK, THE HUMAN'S RECORD, THE DOWNGRADE'S PURGE
+
+```
+terrain-check: 18 → 22 of 28 IDENTICAL. mc2l6-rsg shading 8 / angle 119 → IDENTICAL ·
+mc2l22 type 19 / height 11 / angle 151 → IDENTICAL · mc2l0 + mc2l0-sg height 18 / shading 27+32
+→ IDENTICAL · mc2l4 type 1 / height 9 / angle 2 → height 9. mc2l3 ceiling 1 untouched.
+Four laws, three of them ONE line of decompile order each. Pins: castle.rs
+`painter_paints_before_the_rise_gate_on_the_paint_tick`,
+`authored_castle_spawn_never_purges_the_owner_castle_token`.
+```
+
+## 112-1 THE (10,42) PAINTER PAINTS INSIDE THE ACCUMULATE WALK, BEFORE THE RISE (mc2l6 + mc2l22 + mc2l4)
+- `AddTerrainMod0A_2A_37BC0` calls `sub_45DC0(7, cell, code)` per footprint cell INSIDE the
+  rows-`1..=level` accumulate walk (EF:27830-32: kill, delta, paint — raster order), and only
+  THEN runs the rise loop with its `!height || sub_57450(type)` flat-promotion gate
+  (EF:27849-52). The port collected the paints and applied them AFTER the rise loop.
+- The witness, traced draw by draw (`MGC_RETILE_TRACE` probe, inverse-edited out): mc2l6-rsg's
+  (3,7) keep at (242,162) sits on height-0 ground. Its first-tick level-up painter promotes the
+  nine row-1 pad cells on tick 0 (`height == 0`); from then on cell (243,163) — nibble-1 with
+  zero corners, blend texture 0x25 — is in the flat set and re-promoted EVERY rise tick, each
+  `AddBuildingToTerrain_46570` drawing `rand2_17B4E0` once on its type-1 NW neighbour. On the
+  paint tick (countdown 14 = settle tick 4) retail paints it to a locked band texture FIRST and
+  the gate never fires; the port drew, then painted over. ONE extra LCG draw ⇒ every later
+  type<8 retile on the level one value ahead: the 13×13 (10,45) disc at (115,221) came out
+  `port(x) = retail(x+1)` on 119 cells (all 119 = the port's PREVIOUS draw, zero exceptions),
+  and the keep's 3×3 shading stood one rise step ahead (8 cells, −2). The same signature was
+  mc2l22's 19 type + 151 angle cells and mc2l4's 3.
+- The MC1 twin was already law (`the_castle_painter_paints_before_the_height_step`).
+- Port: `Gen::mc2_castle_painter_tick` paints inline in the accumulate loop;
+  `MGC_NO_MC2_PAINTER_PAINT_FIRST=1` restores the old order.
+
+## 112-2 THE NATIVE WORLD MINTS THE HUMAN'S (3,0) RECORD (mc2l0 + mc2l0-sg, and mc2l22's pool)
+- Retail's `sub_5C950` runs for player 0 like any other: `AddPlayer_4A920` (EF:33326) pops a
+  (3,0) record at the (3,4) start marker (action 0, maxLife 10000, minSpeed 80, byte_0x38 29,
+  id = own slot, sprite 44, map-linked), THEN the book's class-15 tokens, then the rivals. The
+  native port kept the human out of the pool and minted the tokens straight after the THINGs:
+  every later record one slot low (mc2l0: retail 152 (3,0) 153-154 tokens; port 152-153 tokens),
+  and on mc2l22 TWENTY-FIVE low (retail's carried book = 26 tokens after the (3,0); the native
+  ctor's `{0,1}` floor = 2). Every slot-seeded law downstream ran on the wrong slot.
+- mc2l0: the 14 load-time (10,0) fires at retail 164-177 burned the start pad from a shifted
+  `rand = slot + global` stream — the 18 height / 27 shading cells (types and angles IDENTICAL:
+  the same sculptor, the same cells, different depths). mc2l22: castle 502's painter popped a
+  slot BELOW its castle (112-3) — the pool census (`MGC_POOL_CENSUS=1 terrain-diff`, the new
+  `World::debug_pool_rows`) now reads slot-for-slot like retail's record 0: 424 (3,0), 425-450
+  tokens, 451 wizard, 476 castle, … 637; painters 638-643.
+- Port: `World::mc2_spawn_human_record` (rivals.rs), called in the ctor ahead of
+  `mc2_seed_default_spells`; sets `mc2_carpet_slot`/`mc2_pinned`, so the certified IN-WALK
+  carpet arms (round 103) now run natively too. ⭐ THE REPRESENTATION IS THE IMPORT'S: the slot
+  is popped and left CLASS 0 (an empty, pinned record whose `rand` lane is the live per-entity
+  stream), the pose stays the runner's input anchored at the slot — exactly conformance.rs's
+  seat. A first cut stood a live (3,0) record there with a frozen pose, and every class-3 scan
+  chased a carpet parked at the start marker (`mc2_castle`'s crush test: the victims wandered
+  off toward the marker). `terrain-check` seeds the human's book from the take's record 0
+  (`retail_record0_human_book` → `build_world_mc2_with_book` → `World::mc2_grant_start_book`,
+  granted BEFORE the rivals). `MGC_NO_MC2_NATIVE_HUMAN_RECORD=1` for A/B.
+- ⚠ NATIVE PLAY changes: the in-walk cast pass and dispatch run at the pinned slot, the carpet
+  RNG lane exists (`ent[cs].rand`), and EVERY later slot is one higher — every slot-seeded
+  creature RNG re-phases (the crush test's victim used to drift INTO the footprint and now
+  drifted out; the test holds its creatures via the new `debug_mc2_hold_at` hook). The
+  player's playtest is the witness for feel.
+
+## 112-3 THE CASTLE-DEATH TOKEN PURGE RIDES DOWNGRADE MAIL ONLY (mc2l22)
+- Retail's Create-Castle token purge is `sub_605E0`'s OWN tail (EF:61645-58, `if
+  (!dword_0x10_16)` after ITS `sub_60810`) — the ctor's ladder rebuild (EF:43811) and the
+  upgrade's carry no such arm. The port drained the purge off the shared ladder mail
+  (`Mc2LadderMail`, pushed by every `mc2_castle_ladder` caller), gated only on `f26 == 0`. An
+  AUTHORED level-1 castle spawns at level 0 pending its first-tick level-up, so on the purge
+  level (022) it purged its owner's token before it had ever lost a level.
+- Witness (`MGC_WATCH_SLOT=480` probe, inverse-edited out): during castle 476's tick-0 dispatch
+  (the first (3,2) in the walk drains the whole mail) token 480 — rival 477's (15,2) — got
+  `0x400`; the native in-loop free handed the slot to castle 502's level-up painter at slot 480 <
+  502 → one rise tick short → the (207,157) row-1 pad 2 low on 9 cells (+2 smoothing cells).
+  Retail's record 0: token 480 alive, painters at the fresh 638-643.
+- Port: the downgrade marks its push (bit 15 of the mail entry); the drain purges marked
+  entries only. `MGC_NO_MC2_PURGE_ON_DOWNGRADE_ONLY=1` for A/B.
+
+## 112-4 THE RESIDUALS (named)
+- **mc2l4 — 9 height cells**, the 3×3 at the generate-time (10,11) ring's centre (64,0): retail
+  is +2 (one +1) above the port on exactly rings 0..1 of the disc, every other cell of the disc
+  byte-identical. The ring is a GENERATE record (dead before record 0) — the dig count of the
+  innermost rings (`ring_cells`' dropped-last-entry / the `f63 % 3` cadence at r=0..1), not a
+  runtime law. Needs the ring's per-tick dig trace against the settle order.
+- **mc2l3 — 1 ceiling cell (251,88)**: retail 92 = `height − 1` (the cave seal pin) where the
+  port keeps the authored 91 under a 93 floor. Heights untouched on both sides, no dome lifted
+  there (the (10,83) at (248,83) reads `sub_34C40` line for line). Some retail pass's 3×3 shading
+  window crossed the cell in the first 8 ticks; the port's did not. Open.
+- **mc1l42 / mc1l49 / mc1hwl2**: the MC1 first-tick runtime family — waits for the terrain
+  oracle corpus (phase ≤ 2 takes).
+- ⚠ **MC2 native in-loop free** (world.rs `!strict_retail && flags & 0x400 → free_slot` at the
+  dispatch tail) vs retail's tick-top `sub_57F20` sweep: still a native-vs-strict divergence,
+  "owed until the sweep-law port settles its timing". 112-3 removed the one witness the terrain
+  axis had; the next native slot-order residual will be this.
+
+## NEUTRALITY
+- **terrain-check: 22 of 28 IDENTICAL** (18 in 111): mc2l6-rsg, mc2l22, mc2l0, mc2l0-sg new;
+  mc2l4 down to 9 height cells; every other row byte-identical (`conformance/terrain-check-
+  baseline.txt` regenerated).
+- **Corpus `replay --segmented --brief`: 28 of 28 BYTE-IDENTICAL** to `conformance/brief-
+  baseline.txt` — measured after 112-1 AND re-swept on the final binary with 112-2/112-3 in.
+  Expected: the replay imports the pool every pair, so the native human slot and the ladder
+  mail mark have no pair witness; the generated world (terrain-check) is their only surface.
+- **Tests: the whole workspace green on the final tree (32 suites, 0 failed)** — green after
+  112-1 untouched; 112-2 moved FOUR tests, every one ATTRIBUTED with
+  `MGC_NO_MC2_NATIVE_HUMAN_RECORD=1` reproducing the old outcome exactly:
+  ⑴ `mc2_castle::a_rising_castle_executes_what_stands_under_it` — the victims' wander is their
+  slot-seeded RNG; the old layout drifted the victim INTO the footprint, the retail layout out.
+  The test now holds its creatures on the footprint until the castle stands (new
+  `World::debug_mc2_hold_at`); the kill law is untouched. ⑵ `mc2_cave` — ONE DELIBERATE RE-PIN:
+  all four LAYOUT hashes (slot numbering from load on), OBSERVABLE checkpoints A/B/C HOLD
+  BYTE-FOR-BYTE, only D (the disposition storm) moves — the storm's spawns sit one slot higher
+  and their streams re-phase (the same class as 111's mc2_slice re-pin). Its kind-9 census pin
+  was timing-bound: a (10,0) fire hit breaks the model-18's hold (foreign attacker, both
+  layouts) and retail's re-leash reclaims it once the creature stops attacking/fleeing — the
+  old layout had calmed inside the 64-tick hover, the retail one had not; the test now waits
+  (bounded) for the re-leash. ⑶ `mc2_slice` (level 000) — the SAME re-pin class: all six
+  LAYOUT hashes, OBSERVABLE post-init HOLDS and checkpoints 1..5 re-phase (retail's mc2l0
+  record 0 holds the human at 152 and its tokens at 153-154 — the port's population now sits
+  exactly there). ⑷ `mc2_spell_channels::mc2_magic_mine_relaunch_reaches_a_neighbouring_wizard`
+  — the relaunched (9,0) now pops a slot above the mine's, flies its two tiles and lands inside
+  the same walk (the hit lands, 250 damage; the tick-end projectile count never saw it); the
+  test takes the hit as the witness and places fresh mines until one trips (the arm countdown
+  `rand % 0x32 + 16` and the 16-frame scan cadence are the mine's own slot-seeded coin against
+  its tier lifespan). Two new pins in `mc2::castle::tests`.
+- Instruments: `MGC_POOL_CENSUS=1 mgc-conform terrain-diff <take> --settle N` prints the NATIVE
+  pool (slot:(class,model)a<action>/<f26>/<f59>) before and after the settle —
+  `World::debug_pool_rows`. `cargo run --release --example tmp_l6disc -- <level> <row> <x> <y>`
+  dumps a BUILD00 row and the THINGs near a cell (`999 999` = every class-3/15 THING).
+
+## OWED INTO ROUND 113
+- mc2l4's ring centre (9) and mc2l3's ceiling cell (1) — 112-4.
+- The MC2 native in-loop free (112-4) — the sweep-law timing for native worlds.
+- The (10,51) load-beam slot (111's owed item, still unwitnessed).
+- 🎬 The terrain oracle corpus (player recording; do not ask).

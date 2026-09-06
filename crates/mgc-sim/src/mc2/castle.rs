@@ -116,6 +116,37 @@ pub(crate) fn no_mc2_painter_row_verbatim() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PAINTER_ROW_VERBATIM").is_some())
 }
 
+/// ⭐ THE PAINT RUNS INSIDE THE ACCUMULATE LOOP, BEFORE THE RISE.
+/// `AddTerrainMod0A_2A_37BC0` calls `sub_45DC0(7, cell, code)` per
+/// footprint cell INSIDE the rows-`1..=level` accumulate walk
+/// (EF:27830-32: kill, delta, paint — one cell at a time, raster
+/// order), and only THEN runs the rise loop with its
+/// `!height || sub_57450(type)` flat-promotion gate (EF:27849-52).
+/// The port painted AFTER the rise loop, so on a paint tick a cell
+/// whose blend texture sits in the flat set (0x25/0x26 — the
+/// nibble-1 cell with a zero corner) was promoted (`|= 1` +
+/// `AddBuildingToTerrain_46570`, one `rand2_17B4E0` draw on its
+/// type-1 NW neighbour) and THEN painted over; retail paints it to
+/// a locked band texture first and the gate never fires. One extra
+/// LCG draw shifted every later type<8 retile orientation on the
+/// level: mc2l6-rsg's (3,7) keep at (242,162) on height-0 ground,
+/// countdown 14 = settle tick 4 → the 13×13 (10,45) disc at
+/// (115,221) came out `port(x) = retail(x+1)` (119 cells) and the
+/// keep's 3×3 shading was one rise step ahead (8 cells, −2). Round
+/// 112. Set `MGC_NO_MC2_PAINTER_PAINT_FIRST=1` to restore the
+/// paint-after-rise order for A/B.
+/// See the downgrade arm of [`Gen::mc2_castle_downgrade`]: the
+/// castle-death token purge follows a DOWNGRADE's ladder push only.
+pub(crate) fn no_mc2_purge_on_downgrade_only() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PURGE_ON_DOWNGRADE_ONLY").is_some())
+}
+
+pub(crate) fn no_mc2_painter_paint_first() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PAINTER_PAINT_FIRST").is_some())
+}
+
 /// `sub_60810` (EF:61695): capacity by level. Differs from MC1 at
 /// every level >= 1; the level-7 sentinel is 300M (MC1: 30M).
 ///
@@ -677,6 +708,28 @@ impl Gen {
             self.ent[i].f78 = 0xE000;
             self.ent[i].f84 = 0x4000;
             self.mc2_castle_ladder(i);
+            // ⭐ THE PURGE RIDES DOWNGRADE MAIL ONLY (round 112). Retail's
+            // castle-death token purge is `sub_605E0`'s OWN tail
+            // (EF:61645-58: `if (!dword_0x10_16)` after ITS `sub_60810`)
+            // — the ladder rebuilds the ctor (EF:43811) and the upgrade
+            // (`sub_60480`) run carry no such arm. The port drained the
+            // purge off the shared ladder mail, so an AUTHORED level-1
+            // castle — spawned at level 0 pending its first-tick level-up
+            // — purged its owner's Create-Castle token on the purge
+            // level before it had ever taken a level: mc2l22 castle 502
+            // (rival 477) lost token 480 at settle tick 0, the freed
+            // slot was re-popped by the castle's own level-up painter
+            // (below the castle in the walk → one rise tick short, the
+            // (207,157) pad 2 low on 11 cells) while retail's painter
+            // took the fresh slot 638 and token 480 stood at record 0.
+            // The high bit marks the downgrade's push; the drain purges
+            // those alone. `MGC_NO_MC2_PURGE_ON_DOWNGRADE_ONLY=1` for A/B.
+            if !no_mc2_purge_on_downgrade_only()
+                && let Some(last) = self.mc2_ladder_sync.0.last_mut()
+                && *last == i as u16
+            {
+                *last |= 0x8000;
+            }
             self.mc2_castle_stages(i);
         }
         if self.ent[i].f26 <= 0 {
@@ -2098,7 +2151,7 @@ impl Gen {
         // into the frame (retail writes a shared scratch keyed by
         // map cell — same cells).
         let mut delta = vec![0i32; w * h];
-        let mut paint: Vec<(u8, u8, u8)> = Vec::new();
+        let mut paint: Vec<(u8, u8, u8)> = Vec::new(); // A/B arm only
         let do_paint = countdown % 7 == 0 || countdown == 1;
         let kill = self.ent[i].flags & F_BUILD_KILL != 0;
         // The crush spares the OWNER WIZARD's entities — retail
@@ -2150,7 +2203,15 @@ impl Gen {
                             c[1] as i32 + datum - self.t.height[t] as i32;
                     }
                     if do_paint && c[0] != 0xff {
-                        paint.push((gx, gy, c[0]));
+                        if no_mc2_painter_paint_first() {
+                            paint.push((gx, gy, c[0]));
+                        } else {
+                            // EF:27830-32 — `sub_45DC0(7, ...)` HERE,
+                            // per cell, ahead of the rise loop's
+                            // flat-promotion gate. See
+                            // [`no_mc2_painter_paint_first`].
+                            self.mc2_paint_cell(7, gx, gy, c[0]);
+                        }
                     }
                 }
             }
@@ -2200,6 +2261,8 @@ impl Gen {
                 }
             }
         }
+        // ⛔ NOT RETAIL — the A/B arm only (`no_mc2_painter_paint_first`):
+        // the paint belongs inside the accumulate loop above.
         for (gx, gy, code) in paint {
             // sub_45DC0(7, ...) — the groove-castle path's fixed
             // column counter (EF:27832).
@@ -3475,6 +3538,107 @@ mod tests {
         }
     }
 
+    /// Round 112 pin — THE PAINT RUNS BEFORE THE RISE.
+    /// `AddTerrainMod0A_2A_37BC0` paints every footprint cell through
+    /// `sub_45DC0` INSIDE the accumulate walk (EF:27830-32), ahead of
+    /// the rise loop's `!height || sub_57450(type)` flat-promotion gate
+    /// (EF:27849-52). A 3×3 pad on height-0 ground: the first rise
+    /// tick promotes all nine (height 0), and from then on the SE
+    /// corner cell — a nibble-1 cell with zero corners, blend texture
+    /// 0x25/0x26 — sits in the flat set and is re-promoted every tick,
+    /// each `AddBuildingToTerrain_46570` drawing `rand2_17B4E0` once on
+    /// its type-1 NW neighbour. On the paint tick (countdown 14) retail
+    /// paints that cell to a locked band texture FIRST, so the gate
+    /// never fires and the LCG is not drawn; the port used to promote
+    /// (one draw) and then paint over it. mc2l6-rsg's (3,7) keep at
+    /// (242,162): one extra draw at settle tick 4 shifted every later
+    /// type<8 retile on the level (`port(x) = retail(x+1)` over the
+    /// 13×13 (10,45) disc at (115,221), 119 cells) and left the keep's
+    /// 3×3 shading one rise step ahead (8 cells). `MGC_NO_MC2_PAINTER_PAINT_FIRST=1`
+    /// restores the old order and fails this test.
+    #[test]
+    fn painter_paints_before_the_rise_gate_on_the_paint_tick() {
+        let planes = Planes {
+            height: vec![0; 0x10000],
+            tile_type: vec![0; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![0; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // Synthetic BUILD00 row 1: a 3×3 pad 40 high, every cell paint
+        // code 8 (`sub_45DC0` case 8 → terrain type 8, a >= 8 code that
+        // locks the cell and never retiles).
+        let mut build_dat = Vec::new();
+        for _ in 0..9 {
+            build_dat.extend_from_slice(&[8, 40]);
+        }
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: vec![
+                BuildDef {
+                    offset: 0,
+                    w: 0,
+                    h: 0,
+                },
+                BuildDef {
+                    offset: 0,
+                    w: 3,
+                    h: 3,
+                },
+            ],
+            build_dat,
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut g = Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2);
+        g.retile = crate::mc2::terrain_paint::retile_table_mc2();
+        let i = g.new_event().expect("painter slot");
+        {
+            let e = &mut g.ent[i];
+            e.class64 = 10;
+            e.model65 = 42;
+            e.f40 = 0;
+            e.id24 = 0; // no parent castle
+            e.f71 = 1; // BUILD00 row 1
+            e.f59 = 0;
+            e.x = 50 << 8;
+            e.y = 50 << 8;
+            e.z = 0; // datum 0: the pad rises 0 → 40
+            e.flags &= !2;
+        }
+        // Countdown 18, 17, 16, 15: the rise ticks before the paint.
+        let mut draws = Vec::new();
+        for _ in 0..4 {
+            let before = g.pseudo;
+            g.mc2_castle_painter_tick(i);
+            draws.push(g.pseudo != before);
+        }
+        assert_eq!(g.ent[i].f26, 15, "four rise ticks done");
+        assert!(
+            draws[1] && draws[2] && draws[3],
+            "non-vacuous: the SE corner's flat-set blend texture is re-promoted              (one LCG draw) on every rise tick before the paint: {draws:?}"
+        );
+        let se = tile(51, 51);
+        assert!(
+            super::super::morph::auto_flat(g.t.tile_type[se]),
+            "the SE corner sits in the flat set ahead of the paint tick (type {:#x})",
+            g.t.tile_type[se]
+        );
+        // Countdown 14: THE PAINT TICK. Retail paints first, the gate
+        // then sees a locked type-8 cell at height 8 and never fires:
+        // no LCG draw, and the painted type survives the tick.
+        let before = g.pseudo;
+        g.mc2_castle_painter_tick(i);
+        assert_eq!(g.ent[i].f26, 14, "the paint tick");
+        assert_eq!(
+            g.pseudo, before,
+            "no flat-promotion draw on the paint tick: the paint locks the cell first"
+        );
+        assert_eq!(g.t.tile_type[se], 8, "the painted type stands");
+        assert_eq!(g.t.height[se], 10, "the rise still ran: 5 × (40 − h) / countdown");
+    }
+
     /// Decode the verbatim `x_BYTE_DB038` bytes (EF:2594) and prove
     /// [`super::MC2_STAGE_PARTS`] matches: count at [2L], pair-slot
     /// index at [1+2L], pairs base at byte 18.
@@ -3656,6 +3820,101 @@ mod tests {
             "EXE 0x84ea2 mov BYTE PTR [edx+0x40],0x0"
         );
     }
+
+    /// Round 112 pin — THE PURGE RIDES DOWNGRADE MAIL ONLY. The
+    /// castle-death token purge is `sub_605E0`'s own tail
+    /// (EF:61645-58), reached only when a castle takes a level
+    /// DOWN to 0. The ctor's ladder rebuild (EF:43811) and the
+    /// upgrade's have no such arm — yet the port drained the purge
+    /// off the shared ladder mail, so an AUTHORED level-1 castle
+    /// (spawned at level 0 pending its first-tick level-up) purged
+    /// its owner's Create-Castle token on the purge level before it
+    /// had ever lost a level. mc2l22 castle 502 / rival 477 / token
+    /// 480 at settle tick 0: the freed slot was re-popped by the
+    /// castle's own painter, below the castle in the walk, one rise
+    /// tick short — the (207,157) pad 2 low on 11 cells. Retail's
+    /// record 0 holds token 480 and the painter at the fresh 638.
+    /// `MGC_NO_MC2_PURGE_ON_DOWNGRADE_ONLY=1` fails the first half.
+    #[test]
+    fn authored_castle_spawn_never_purges_the_owner_castle_token() {
+        use crate::engine::world::{PlayerCommand, PlayerPose, World};
+        use crate::ids::GameId;
+        use crate::mc2::rivals::{MC2_SPELLS, Mc2RivalConfig};
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // BUILD00 stand-in: row 0 empty, row 1 a 3×3 pad (the castle
+        // site datum reads row 1's frame).
+        let mut build_dat = Vec::new();
+        for _ in 0..9 {
+            build_dat.extend_from_slice(&[0xff, 40]);
+        }
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: vec![
+                BuildDef {
+                    offset: 0,
+                    w: 0,
+                    h: 0,
+                },
+                BuildDef {
+                    offset: 0,
+                    w: 3,
+                    h: 3,
+                },
+            ],
+            build_dat,
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
+        w.set_mc2_castle_purge_level(true);
+        let mut configs: [Option<Mc2RivalConfig>; 8] = Default::default();
+        let mut start = [false; MC2_SPELLS];
+        start[2] = true; // Create Castle known → the authored castle spawns
+        configs[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 0,
+            castle_level: 1,
+            start,
+            start_level: [0; MC2_SPELLS],
+            blocked: [false; MC2_SPELLS],
+        });
+        w.set_mc2_wizards(&configs, 2);
+        let wiz = w.mc2_rivals[0].ent as usize;
+        let tok = w.mc2_rivals[0].book.ent[2] as usize;
+        assert!(tok != 0 && w.g.ent[tok].class64 == 15, "the rival holds its castle token");
+        let castle = (1..w.g.ent.len())
+            .find(|&j| w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 2 && w.g.ent[j].id24 == wiz as u16)
+            .expect("the authored castle");
+        assert_eq!(w.g.ent[castle].f26, 0, "spawned at level 0, pending the first-tick level-up");
+        assert!(
+            !w.g.mc2_ladder_sync.0.is_empty(),
+            "non-vacuous: the ctor's ladder rebuild pushed the castle onto the mail"
+        );
+        let far = PlayerPose::from_tiles(5.0, 10.0, 5.0, 0.0, 0.0, 0.0);
+        w.tick(far, PlayerCommand::default());
+        assert_eq!(w.g.ent[tok].flags & 0x400, 0, "the token stands after the first tick");
+        assert_eq!(w.mc2_rivals[0].book.ent[2], tok as u16, "the book slot stands");
+        assert_eq!(w.g.ent[castle].f26, 1, "the first tick committed the level-up");
+        // The contrast: a real DOWNGRADE to level 0 still purges.
+        w.g.mc2_castle_downgrade(castle, crate::patches::WorldPatches::RETAIL);
+        assert_eq!(w.g.ent[castle].f26, 0);
+        assert!(
+            w.g.mc2_ladder_sync.0.iter().any(|&raw| raw & 0x8000 != 0),
+            "the downgrade's push carries the purge mark"
+        );
+        w.tick(far, PlayerCommand::default());
+        assert_eq!(w.mc2_rivals[0].book.ent[2], 0, "the downgrade to 0 purges the token");
+    }
+
 
     /// ⭐⭐⭐ THE CASTLE-DEATH TOKEN PURGE IS GATED ON THE LEVEL'S
     /// GRAPHICS BYTE, `terrain_2FECE.byte_0x2FED2 & 4`.

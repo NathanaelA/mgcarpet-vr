@@ -1035,6 +1035,30 @@ fn retail_record0_phase(
     }
 }
 
+/// The human's level-start book as retail's record 0 holds it: every
+/// class-15 token whose `parentId` (@0x28) is the local player's carpet
+/// slot, in slot order. `None` when record 0 carries no decodable MC2
+/// state or no carpet.
+fn retail_record0_human_book(first: &mgc_formats::mgcr::TickRecord) -> Option<Vec<u8>> {
+    let state = first.state.as_ref()?;
+    let st = mgc_formats::mgcr::decode_retail_mc2(state).ok()?;
+    let p = st
+        .players
+        .get(st.local_player as usize)
+        .or_else(|| st.players.first())?;
+    let carpet = p.play_index;
+    if carpet == 0 {
+        return None;
+    }
+    Some(
+        st.ents
+            .iter()
+            .filter(|e| e.class3f == 15 && e.owner28 == carpet)
+            .map(|e| e.model40)
+            .collect(),
+    )
+}
+
 /// One take's generated-vs-measured terrain comparison.
 struct TerrainReport {
     game: String,
@@ -1099,10 +1123,21 @@ fn terrain_compare(
         mgc_formats::mgcr::Family::Mc2 =>
         // planes only — no entity dispatch, so the replay gate cannot apply
         {
-            let (w, p, _) = verify_mc2::build_world_mc2(&args.baked, level, false)?;
+            // The human's carried book, read off record 0: the class-15
+            // tokens owned by the (3,0) carpet record, in slot order.
+            // Granted between the ctor and the rival spawn so the
+            // native pool lays out like retail's (round 112).
+            let book = retail_record0_human_book(&first);
+            let (w, p, _) =
+                verify_mc2::build_world_mc2_with_book(&args.baked, level, false, book.as_deref())?;
             (w, p)
         }
     };
+    if std::env::var_os("MGC_POOL_CENSUS").is_some() {
+        let rows = w.debug_pool_rows();
+        let row: Vec<String> = rows.iter().map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}")).collect();
+        eprintln!("POOL CENSUS live={}\n{}", rows.len(), row.join(" "));
+    }
     let planes = if settle > 0 {
         // The app's `--map-settle` driver: real ticks (not
         // `tick_paused`), the carpet idle at the level start.
@@ -1112,6 +1147,11 @@ fn terrain_compare(
             let alt = w.ground_height_tiles(px, pz) + 2.0;
             let pose = mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
             w.tick(pose, idle);
+        }
+        if std::env::var_os("MGC_POOL_CENSUS").is_some() {
+            let rows = w.debug_pool_rows();
+            let row: Vec<String> = rows.iter().map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}")).collect();
+            eprintln!("POOL CENSUS AFTER SETTLE live={}\n{}", rows.len(), row.join(" "));
         }
         w.planes_clone()
     } else {

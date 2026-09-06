@@ -1196,6 +1196,20 @@ pub(crate) fn build_world_mc2(
     level: u32,
     replayed: bool,
 ) -> Result<(World, Planes, ThingTable), String> {
+    build_world_mc2_with_book(baked, level, replayed, None)
+}
+
+/// [`build_world_mc2`] with the human's level-start BOOK (spell ids)
+/// granted between the world ctor and the rival spawn — the slot
+/// position retail's `sub_5C950` gives the carried book, so a native
+/// world's pool lays out like the take's record 0 (`terrain-check`
+/// reads the list off the take). `None` keeps the ctor's `{0, 1}` floor.
+pub(crate) fn build_world_mc2_with_book(
+    baked: &std::path::Path,
+    level: u32,
+    replayed: bool,
+    human_book: Option<&[u8]>,
+) -> Result<(World, Planes, ThingTable), String> {
     let lp = baked.join("mc2").join(format!("level-{level:03}.mgcl"));
     let file = std::fs::File::open(&lp).map_err(|e| format!("{}: {e}", lp.display()))?;
     let pkg: mgc_formats::LevelPackage =
@@ -1278,6 +1292,9 @@ pub(crate) fn build_world_mc2(
         if !vars.is_empty() {
             w.set_mc2_stagevars(&vars);
         }
+    }
+    if let Some(book) = human_book {
+        w.mc2_grant_start_book(book);
     }
     let (wizards, player_count) = mc2_rival_configs(pkg.wizards.as_ref(), header);
     w.set_mc2_wizards(&wizards, player_count);

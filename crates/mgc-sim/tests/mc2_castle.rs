@@ -908,7 +908,18 @@ fn a_rising_castle_executes_what_stands_under_it() {
             ..Default::default()
         },
     );
-    for _ in 0..140 {
+    // Hold the three on the footprint until the castle stands (the
+    // create ball lands at t=10): a roster creature wanders on its own
+    // slot-seeded RNG, and round 112's native human record shifted every
+    // later slot by one — the old drift happened to carry the victim
+    // INTO the footprint, the new one carries it out. The law under
+    // test is the painter's kill, not the wander.
+    for n in 0..140 {
+        if count(&w, 3, 2) == 0 || n < 14 {
+            for s in [victim, immune, friend] {
+                w.debug_mc2_hold_at(s, cx, cy);
+            }
+        }
         w.tick(pose, PlayerCommand::default());
     }
     assert_eq!(count(&w, 3, 2), 1, "the castle rose");

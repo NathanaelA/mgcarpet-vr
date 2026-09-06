@@ -4179,6 +4179,32 @@ impl World {
         self.mc2_rebind_hands_canonical();
     }
 
+    /// The level-start book beyond the `{0, 1}` floor: mint a token for
+    /// every listed spell the book does not hold yet, in canonical
+    /// order, exactly like [`Self::mc2_seed_default_spells`] — and at
+    /// the same point of the load (call it BEFORE `set_mc2_wizards`),
+    /// so the tokens take the slots retail's `sub_5C950` gives the
+    /// human's carried book, ahead of the rivals. The conformance
+    /// instruments (`terrain-check`) read the list off a take's record
+    /// 0; the app's campaign carry keeps `mc2_grant_plausible`.
+    pub fn mc2_grant_start_book(&mut self, spells: &[u8]) {
+        if !matches!(self.game(), crate::ids::GameId::Mc2) {
+            return;
+        }
+        for &sp in spells {
+            let s = sp as usize;
+            if s >= 26 || self.mc2_book.ent[s] != 0 {
+                continue;
+            }
+            let (px, py, pz) = self.human_pose;
+            if let Some(m) = self.mc2_new_spell_token(s as u8, px, py, pz) {
+                self.mc2_adopt_manifestation(m, s);
+                self.g.mc2_spell_tokens.0 |= 1 << s;
+            }
+        }
+        self.mc2_rebind_hands_canonical();
+    }
+
     /// The MC2 level-init hand assignment (`InitialiseSpells_54A50`,
     /// EF:38664-38762): clear both hands, then walk the spell indices
     /// in canonical order — `spellIndex_D94FF` (GameUI.cpp:59) is the

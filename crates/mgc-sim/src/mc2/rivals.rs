@@ -1481,7 +1481,62 @@ impl Mc2Rival {
     }
 }
 
+/// ⭐ THE NATIVE WORLD MINTS THE HUMAN'S POOL RECORD (round 112).
+/// Retail's `sub_5C950` runs for player 0 like any other: `AddPlayer_4A920`
+/// (EF:33326) pops a (3,0) record at the (3,4) start marker — action 0,
+/// maxLife 10000, minSpeed 80, `byte_0x38_56 = 29`, id = its own slot,
+/// sprite 44, map-linked — and only THEN mints the book's class-15
+/// tokens; the rivals follow. The native port kept the human out of the
+/// pool (slot 0) and minted the tokens straight after the THINGs, so
+/// every later record sat one slot low (26 on a full book), and every
+/// slot-seeded law downstream — `rand = slot + global`, `f63 % n`
+/// cadences, which free slot a painter pops relative to its castle's
+/// walk position — ran on the wrong slot. `terrain-check`: mc2l0's 14
+/// load-time (10,0) fires burned the start pad with a shifted stream
+/// (18 height / 27 shading cells); mc2l22's (207,157) castle painter
+/// popped a slot BELOW its castle, missed tick 0 and stood one rise
+/// step short (11 cells). With the record in place the certified
+/// in-walk carpet arms (`mc2_carpet_slot != 0`, round 103) now run
+/// natively too. Set `MGC_NO_MC2_NATIVE_HUMAN_RECORD=1` for A/B.
+pub(crate) fn no_mc2_native_human_record() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_NATIVE_HUMAN_RECORD").is_some())
+}
+
 impl World {
+    /// `AddPlayer_4A920` (EF:33326) inside `sub_5C950` for player 0:
+    /// the human's own pool record, popped at the point retail pops
+    /// it — after the THINGs, BEFORE the book's tokens and the rivals
+    /// — so every later slot lays out like retail's. See
+    /// [`no_mc2_native_human_record`].
+    ///
+    /// THE REPRESENTATION IS THE IMPORT'S (conformance.rs): the slot
+    /// stays CLASS 0 — an empty, pinned record whose `rand` lane is
+    /// the live per-entity stream (the death scatter spends it) — and
+    /// the pose stays the runner's input, anchored at the slot by the
+    /// walk. A live (3,0) record with a frozen pose is WORSE than none:
+    /// every class-3 scan (creature targeting, the wizard lists) chases
+    /// a carpet parked at the start marker (`mc2_castle` test
+    /// `a_rising_castle_executes_what_stands_under_it`: the victims
+    /// wandered off toward the marker and the castle rose on nobody).
+    /// A world with no marker (a bare test world) keeps slot 0.
+    pub(crate) fn mc2_spawn_human_record(&mut self) {
+        if no_mc2_native_human_record() || self.mc2_carpet_slot != 0 {
+            return;
+        }
+        if self.start_markers[0].is_none() {
+            return;
+        }
+        let Some(i) = self.g.new_event() else { return };
+        // `new_event` seeded `rand` from the slot like `NewEvent_4A050`;
+        // everything else stays the import's `Ent::default()`, class 0.
+        let rand = self.g.ent[i].rand;
+        self.g.ent[i] = crate::engine::features::Ent::default();
+        self.g.ent[i].rand = rand;
+        self.mc2_carpet_slot = i as u16;
+        self.g.mc2_pinned = crate::engine::features::Mc2Pinned(i as u16);
+    }
+
     /// Wire the MC2 level's wizards: colors `1..player_count` spawn
     /// as AI rivals at their (3,4+color) start markers (the
     /// `sub_53160` activation walk under the NumberOfPlayers pump
