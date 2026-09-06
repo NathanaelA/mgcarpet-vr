@@ -99,13 +99,14 @@ struct WorldInit {
 
 impl WorldInit {
     fn build(&self) -> mgc_sim::engine::world::World {
-        let mut w = mgc_sim::engine::world::World::new_full(
+        let mut w = mgc_sim::engine::world::World::new_full_env(
             self.planes.clone(),
             &self.things,
             self.seed,
             self.assets.clone(),
             self.chassis.clone(),
             self.game,
+            self.night_shade,
         );
         if matches!(self.game, mgc_sim::ids::GameId::Mc2) {
             w.set_placeholders(self.placeholders);

@@ -2217,6 +2217,28 @@ impl World {
         Self::new_full(planes, things, seed, assets, game.chassis(), game)
     }
 
+    /// [`World::new_for_game`] under a declared MC2 environment —
+    /// `mc2_night` = the level header's MapType is not Day. It must
+    /// be known at CONSTRUCTION: retail sets MapType long before
+    /// GenerateEvents, so every load-settle repaint (authored (10,45)
+    /// pads, (10,28)/(10,29) chain roads) already carries the non-Day
+    /// shading inversion (Terrain.cpp:2030-2033). The post-hoc
+    /// [`World::set_mc2_night_shade`] setter only reaches RUNTIME
+    /// repaints — the night-level pads on mc2l0/mc2l6 baked Day
+    /// shading for 100+ rounds (docs/CONFORMANCE-FINDINGS.md round
+    /// 110). Ignored on MC1; the cave half is still derived from the
+    /// ceiling plane.
+    pub fn new_for_game_env(
+        planes: Planes,
+        things: &[Thing],
+        seed: u32,
+        assets: FeatureAssets,
+        game: GameId,
+        mc2_night: bool,
+    ) -> Self {
+        Self::new_full_env(planes, things, seed, assets, game.chassis(), game, mc2_night)
+    }
+
     /// The full-control constructor: an explicit chassis under an
     /// explicit game profile — for callers that must combine a
     /// deviating chassis (limit-removing overrides; G-class) with a
@@ -2229,6 +2251,20 @@ impl World {
         assets: FeatureAssets,
         chassis: ChassisParams,
         game: GameId,
+    ) -> Self {
+        Self::new_full_env(planes, things, seed, assets, chassis, game, false)
+    }
+
+    /// [`World::new_full`] with the MC2 environment declared up front
+    /// (see [`World::new_for_game_env`] for why it cannot be a setter).
+    pub fn new_full_env(
+        planes: Planes,
+        things: &[Thing],
+        seed: u32,
+        assets: FeatureAssets,
+        chassis: ChassisParams,
+        game: GameId,
+        mc2_night: bool,
     ) -> Self {
         let mut start_markers: [Option<(u16, u16)>; 8] = Default::default();
         for t in things {
@@ -2352,11 +2388,14 @@ impl World {
             // The relief-shade inversion keys on the LEVEL's MapType
             // (`MapType != Day`, Terrain.cpp:2030-2033), which retail
             // has long before GenerateEvents — so every repaint the
-            // load settle fires already inverts. Our night flag is a
-            // post-construction setter, so derive its CAVE half here
-            // (a ceiling plane IS the cave signal, `Gen::is_cave`) or
-            // the whole cave carve bakes Day shading into the plane.
-            if !w.g.t.ceiling.is_empty() {
+            // load settle fires already inverts. The NIGHT half is the
+            // constructor's `mc2_night` (the header's MapType, round
+            // 110: the post-construction setter came too late for every
+            // authored pad and chain road on mc2l0/mc2l6); the CAVE
+            // half is derived here (a ceiling plane IS the cave signal,
+            // `Gen::is_cave`) or the whole cave carve bakes Day shading
+            // into the plane.
+            if mc2_night || !w.g.t.ceiling.is_empty() {
                 w.g.mc2_night_shade = features::NightShade(true);
             }
             w.mc2_generate_events();

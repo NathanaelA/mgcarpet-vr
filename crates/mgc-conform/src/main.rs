@@ -40,9 +40,10 @@ fn usage() -> ! {
                                           take — is the port's GENERATED terrain\n\
                                           bit-identical to what retail had at\n\
                                           record 0? The port is settled by the\n\
-                                          recorder's phase (MC2: 6 ticks into the\n\
-                                          building settle; MC1: 0) unless --settle\n\
-                                          is given. Exit 1 = some plane differs\n\
+                                          recorder's phase, READ FROM RECORD 0\n\
+                                          (MC2: 100 - the human's invuln countdown;\n\
+                                          MC1: continuity byte +63 - slot), unless\n\
+                                          --settle is given. Exit 1 = a plane differs\n\
            verify-deltas <file.mgcr>      import state@N, tick, diff obs@N+1\n\
            replay <file.mgcr>             PURE INPUT REPLAY: seed once from the\n\
                                           first closure, free-run on the recovered\n\
@@ -989,16 +990,48 @@ fn trace(args: &Args) -> i32 {
 }
 
 /// The recorder's record-0 PHASE: how many gameplay ticks retail had
-/// already run when the take's first terrain base was captured. MC2's
-/// (10,45) building settle is a 30-tick height lerp and a unique fit of
-/// it on mc2l15 (docs/CONFORMANCE-FINDINGS.md round 107) reads record 0
-/// as 6 ticks in; settled exactly 6 ticks the port's mc2:15 planes are
-/// bit-identical to record 0 on all five planes (round 109). MC1's
-/// load-time pass is synchronous, so its record 0 is the settled level.
-fn retail_record0_settle(family: mgc_formats::mgcr::Family) -> u32 {
+/// already run when the take's first terrain base was captured — READ
+/// FROM THE TAKE (round 110). It is per-take, not per-game: the
+/// recorder attaches some ticks after LoadLevel, and round 109's
+/// constant "MC2 = 6 ticks" was only mc2l15's fit (mc2l3/mc2l30 are 8
+/// in, mc2l22 9; MC1 takes sit 8..24 ticks in — its villager craters
+/// and the rival's starting castle were "missing" for exactly that
+/// reason).
+/// - MC2: the human's spawn-invulnerability countdown
+///   (`word_0x159_345`, `RetailPlayerMc2::invuln`) starts at 100
+///   (`Rival::grace`) and steps −1 per tick, so phase = 100 − invuln
+///   (mc2l15: 94 → 6, the round-109 unique fit; mc2l30: 92 → 8 =
+///   IDENTICAL on all five planes).
+/// - MC1: the per-entity continuity byte `+63` is seeded with the
+///   slot index at spawn (`Gen::spawn`, `e.f63 = idx`) and steps +1
+///   per dispatched tick, so phase = f63 − slot over the first live
+///   slots; the MAX wins because a slot the dispatcher skipped only
+///   reads LOWER (mc1l49: slots 1..3 = 18/18/21 → 18, the settle at
+///   which its ten craters match).
+/// `None` when the record has no decodable state (older takes).
+fn retail_record0_phase(
+    first: &mgc_formats::mgcr::TickRecord,
+    family: mgc_formats::mgcr::Family,
+) -> Option<u32> {
+    let state = first.state.as_ref()?;
     match family {
-        mgc_formats::mgcr::Family::Mc1 => 0,
-        mgc_formats::mgcr::Family::Mc2 => 6,
+        mgc_formats::mgcr::Family::Mc1 => {
+            let st = mgc_formats::mgcr::decode_retail_mc1(state).ok()?;
+            (1..=8usize)
+                .filter_map(|s| {
+                    let e = st.ents.get(s)?;
+                    (e.class64 != 0).then(|| e.f63.wrapping_sub(s as u8) as u32)
+                })
+                .max()
+        }
+        mgc_formats::mgcr::Family::Mc2 => {
+            let st = mgc_formats::mgcr::decode_retail_mc2(state).ok()?;
+            let p = st
+                .players
+                .get(st.local_player as usize)
+                .or_else(|| st.players.first())?;
+            Some((100 - p.invuln as i32).clamp(0, 255) as u32)
+        }
     }
 }
 
@@ -1026,7 +1059,7 @@ impl TerrainReport {
 fn terrain_compare(
     path: &std::path::Path,
     args: &Args,
-    settle: u32,
+    settle: Option<u32>,
 ) -> Result<TerrainReport, String> {
     let mut rec = Recording::open(path)?;
     let decl = rec
@@ -1047,6 +1080,13 @@ fn terrain_compare(
         .as_ref()
         .and_then(|b| b.base.clone())
         .ok_or("first record carries no terrain base")?;
+    // `None` = settle by the recorder's own phase, read from record 0
+    // (`retail_record0_phase`); `Some(n)` = the caller's explicit count.
+    let settle = match settle {
+        Some(n) => n,
+        None => retail_record0_phase(&first, family)
+            .ok_or("record 0 carries no decodable state to read the phase from — pass --settle <n>")?,
+    };
     let mut img = mgc_formats::mgcr::TerrainImage::new(&decl);
     img.apply(&mgc_formats::mgcr::TerrainBlock {
         base: Some(base),
@@ -1170,7 +1210,7 @@ fn mc2_player_start(
 /// generator chain; disagreement prints cell-level examples to dig
 /// at. Exit 0 = every compared plane matched.
 fn terrain_diff(path: &std::path::Path, args: &Args) -> i32 {
-    match terrain_compare(path, args, args.settle.unwrap_or(0)) {
+    match terrain_compare(path, args, Some(args.settle.unwrap_or(0))) {
         Ok(r) => {
             println!(
                 "== terrain-diff {} (game {}, level {}, base @t={}, port settle {})",
@@ -1208,7 +1248,7 @@ fn terrain_diff(path: &std::path::Path, args: &Args) -> i32 {
 /// `terrain-check <rec.mgcr>…` — THE NAKED TRUTH, one line per take:
 /// is the port's GENERATED level terrain bit-identical to what retail
 /// had when the take began? The port is settled by the recorder's
-/// record-0 phase ([`retail_record0_settle`]) unless `--settle` says
+/// record-0 phase ([`retail_record0_phase`]) unless `--settle` says
 /// otherwise, then every declared plane must match on every cell.
 /// This is the GENERATE-axis witness — `replay` imports the measured
 /// terrain every pair and can never see a generator deviation
@@ -1219,22 +1259,14 @@ fn terrain_check(path: &std::path::Path, args: &Args) -> i32 {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
-    let family = match Recording::open(path).and_then(|r| r.header.family()) {
-        Ok(f) => f,
-        Err(e) => {
-            println!("TERRAIN {name}: ERROR — {e}");
-            return 2;
-        }
-    };
-    let settle = args.settle.unwrap_or_else(|| retail_record0_settle(family));
-    match terrain_compare(path, args, settle) {
+    match terrain_compare(path, args, args.settle) {
         Ok(r) if r.identical() => {
             println!(
                 "TERRAIN {name}: IDENTICAL — {} plane(s) × {} cells, port settled {} tick(s){}",
                 r.planes.len(),
                 r.planes.first().map_or(0, |p| p.1),
                 r.settle,
-                if args.settle.is_none() { " (retail record-0 phase)" } else { "" }
+                if args.settle.is_none() { " (recorder phase, read from record 0)" } else { "" }
             );
             0
         }
@@ -1247,10 +1279,11 @@ fn terrain_check(path: &std::path::Path, args: &Args) -> i32 {
                 .map(|p| format!("{} {}", p.0, p.2))
                 .collect();
             println!(
-                "TERRAIN {name}: DIFFERENT — {} of {cells} cells, port settled {} tick(s) (level {}, \
+                "TERRAIN {name}: DIFFERENT — {} of {cells} cells, port settled {} tick(s){} (level {}, \
                  base @t={})",
                 detail.join(" · "),
                 r.settle,
+                if args.settle.is_none() { " = recorder phase" } else { "" },
                 r.level,
                 r.base_t
             );

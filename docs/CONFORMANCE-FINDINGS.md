@@ -31461,3 +31461,192 @@ cells (shading only — a repaint-phase question, not geometry), and the MC1 fam
 - The trace doc's §3.4 carries the correction; its §5 pass table still names "(10,31) river" as
   pass 2 correctly. The port's pass list comment in `mc2_generate_events` is updated.
 - Everything owed into 108 and 109 that is not listed above.
+
+# ROUND 110 — 2026-09-06 — THE TERRAIN TAKES: EVERY RECORDING STARTS MID-SETTLE
+
+```
+mgc-conform terrain-check over the corpus, port settled by the RECORDER'S PHASE READ FROM RECORD 0:
+   before (round 109's constant MC2=6 / MC1=0):   12 of 27 gradable takes IDENTICAL
+   phase read from the take                   :   18 of 27
+   + night shading at construction            :   (mc2l0 shading 3,656 → 27; mc2l6 1,363 → 24)
+   + authored rival castles stamped as retail :   mc2l22 type 2,454 → 19; mc2l6 type 16 → 0; mc2l4 28 → 1
+   final table: see the FINAL TABLE below / conformance/terrain-check-baseline.txt
+THREE laws (two sim, one instrument), plus five named residual families. Certification unchanged
+(replay imports terrain): the whole-corpus `replay --brief` sweep is byte-identical after each law.
+```
+
+Player-set at the close of 109: *"a clean session dedicated to certifying the terrain takes."*
+Also player, mid-round: *"so mc1 levels also have silent pre-gameplay settle period. I had no idea."*
+
+## 110-1 ⭐⭐⭐ THE RECORDER'S PHASE IS PER TAKE, AND THE TAKE SAYS WHAT IT IS (instrument)
+Round 109's `terrain-check` settled the port by a CONSTANT (MC2 = 6 ticks, MC1 = 0) — mc2l15's
+unique fit, read as a game law. A settle sweep 0..40 over every DIFFERENT take put mc2l30 at ZERO
+and mc2l3 at ONE cell at settle **8**, mc2l22's minimum at **9**, mc2l6-rsg's at 8; the MC1 takes
+converged too — mc1l2 to zero at settle 12, mc1l3/mc1l48/mc1l5 to zero at 22/18/17. The recorder
+attaches some ticks after LoadLevel, and the count is whatever the human's reaction was that day.
+**Both games carry a clock in record 0:**
+- **MC2:** the human's spawn-invulnerability countdown (`word_0x159_345`, `RetailPlayerMc2::
+  invuln`) starts at 100 (`Rival::grace`) and steps −1/tick: invuln 94 on mc2l15/mc2l24 (= 6),
+  92 on mc2l0/l1/l3/l4/l6/l30 (= 8), 91 on mc2l22 (= 9). **phase = 100 − invuln.**
+- **MC1:** the per-entity continuity byte `+63` (`RetailEntMc1::f63`) is seeded with the SLOT
+  INDEX at spawn (`Gen::spawn`, `e.f63 = idx`) and steps +1 per dispatched tick: mc1l2 slots
+  1/2/3 read 13/14/15 → 12; mc1l49 reads 18/18/21 → **the MAX of (f63 − slot) over the first live
+  slots**, because a slot the dispatcher skipped only reads lower (18 = the settle at which its
+  ten craters match). Corpus: hwl0 8 … mc1l42 24.
+`terrain_compare` now takes `Option<u32>`; `terrain-check` reads the phase (`retail_record0_phase`)
+unless `--settle` overrides; `terrain-diff` keeps its default 0. The verdict line names it
+("port settled 18 tick(s) = recorder phase").
+⭐⭐⭐ **THE LESSON: A UNIQUE FIT ON ONE TAKE IS THAT TAKE'S NUMBER, NOT THE GAME'S.** And its
+corollary for MC1: *the load-time pass is synchronous* was true and irrelevant — the villager
+burrows (`(5,12)` craters on mc1l2/l3), the rival's starting castle (mc1hwl2/l48/l5, ~2,700 cells
+each) and the `(10,11)` dis-0 craters (mc1l49) all happen in the first 12-22 RUNTIME ticks, which
+retail had already run when record 0 was cut. Aligned, **mc1l2, mc1l3, mc1l5, mc1l48, mc2l30 go
+IDENTICAL and mc2l3 to one ceiling cell** with no port change at all.
+
+## 110-2 ⭐⭐⭐ NIGHT LEVELS BAKED THEIR LOAD REPAINTS WITH DAY SHADING (sim, both app and harness)
+mc2l0 (night) had 3,656 SHADING-only cells: every (10,45) building pad and the (10,60)/(10,1)
+cluster at the human's start, values mirrored around 32 (retail 36/20/24/28 where the port had
+28/44/40/36) — retail's `MapType != Day` inversion (`Terrain.cpp:2030-2033`, `32 − s + 32`) of
+exactly the value the port computed. mc2l6 (night) the same on its (10,29) chain road (a 950-cell
+strip x33..76 the length of the map) and three pads. A probe inside pass 3 of `mc2_blend_shade_
+passes` printed `night=false` for ALL 26,438 reshade calls of the mc2l0 build and `true` at every
+tick entry: **every one of those calls runs at CONSTRUCTION, inside `mc2_generate_events`, before
+`World::set_mc2_night_shade` is reachable** — the world.rs comment already said so for the CAVE
+half ("our night flag is a post-construction setter, so derive its CAVE half here") and derived
+it from the ceiling plane; the NIGHT half was never derived, in the harness AND the app.
+**Law:** `World::new_for_game_env` / `new_full_env(…, mc2_night)` take the header's MapType at
+construction (`new_for_game`/`new_full` delegate with `false`); the flag is
+`mc2_night || !ceiling.is_empty()` before GenerateEvents. The harness (`build_world_mc2`) and the
+app (`WorldInit::build`) pass it; the setter keeps the SPELLS rows-4/19 patch and runtime repaints.
+mc2l0: shading 3,656 → 27; mc2l6-rsg: 1,363 → 24. Cave levels were never affected (mc2l15/l30
+IDENTICAL before and after). Non-vacuity: the probe counts above.
+
+## 110-3 ⭐⭐⭐ THE AUTHORED RIVAL CASTLES: ROW 0 IS EMPTY, THE FIRST TICK PAINTS THE TOP (sim)
+mc2l22 carried four 30×30 castle-shaped blobs (26/22 → 3, dh −7/−14/−9, 523 cells ×3 + 957) —
+centred EXACTLY on the (3,7)/(3,8)/(3,9)/(3,11) rival starts; mc2l6-rsg a 5×5 stump at (3,7)
+(241,162); mc2l4 the same at (3,5) (128,193). A census of castle tiles (types 22/24/26/27 in a
+33×33 box) against the header's `players[]` castle levels:
+```
+level 1 (mc2l22 (3,6), mc2l6 (3,7), mc2l4 (3,5)):  retail 16   port 0
+level 2 (mc2l22 (3,5)):                            retail 16   port 16
+level 5 (mc2l22 (3,7)/(3,8)/(3,9)):                retail 820  port 332
+level 6 (mc2l22 (3,10)):                           retail 820  port 820
+level 7 (mc2l22 (3,11)):                           retail 838  port 820
+```
+Retail (EF:43779-43819): the mint calls the (3,2) ctor `sub_4AA40` (EF:33362 — **actionIndex 5 =
+the build machine, level 0, NO painter**), then loads the scratch slot 0 with the castle's site
+axis and id and runs **`sub_36FC0` once per `j in 0..castle_level`** (the INSTANT build-row stamp,
+EF:27031 — no painter record), sets the level to `castle_level − 1`, extents, capacity, full mana.
+**BUILD00.TAB row 0 is genuinely empty** (`{0,0,0}`; rows 1 = 8×8, 2/3 = 21×21, 4/5 = 35×35,
+6/7 = 48×48), so a level-1 castle's whole 4×4 keep and a level-5 castle's outer walls come from
+the castle's FIRST TICK: `mc2_castle_build` case 0 = the colour one-shot + the level-up commit to
+`castle_level`, whose repaint painter paints row `castle_level`. The port had (a) settled the
+(10,42) REPAINT painter at row `level − 1` synchronously (nothing at level 1, 332 cells at level 5),
+(b) forced the castle to STANDING (`tick70 = 4`) so the first tick never ran, (c) pre-coloured the
+sprite and pre-latched the colour bit to compensate.
+**Law:** `Gen::mc2_stamp_build_row_instant` = `sub_36FC0` (owner clear, pad height written outright,
+angle-nibble seed + retile on a cleared cell, cave bubble at once, `sub_45DC0` with column 0 —
+:27153 `char v14 = 0`, the lerp passes `dx`); `mc2_spawn_authored_castle` stamps rows
+`0..castle_level` with it, leaves the castle in the ctor's state (action 5, sub-state 0, sprite 177
+flat, no latch) and lets tick 1 level it up. All seven castle counts now equal retail's
+(16/16/820/820/820/820/838). mc2l22 type 2,454 → 19, angle 3,619 → 1,295; mc2l6 type 16 → 0;
+mc2l4 type 28 → 1. Pin: `tests/mc2_authored_castles.rs` (mc2:22 seven counts, mc2:6 level-1 stump).
+🏦 `MGC_SCULPT_TRACE=1` prints a `castle-row-stamp` line per row (row/w/h/pads/codes/site).
+
+## 110-4 THE RESIDUAL FAMILIES (named, with their witnesses — the next digs)
+- **mc2l4 — the authored `(10,11)` start pads (height 1,357, settle-INDEPENDENT 0..40):** one
+  `(10,11)` per wizard with `dis = 0xFFFF, parent = 2` at (0,63)/(64,0)/(192,0)/(128,192) and two
+  at (127,62) (dis 11 + 0xFFFF): a ring of −3 (port one −3 disc-tick DEEPER) on four of them,
+  +6 (port two ticks SHALLOWER) on two. The `known-deviations` rule `mc2-archer-ground-z`
+  ("(5,4) archers … l4: constant −192 from t=0") is this family: 33 (5,4) stand on the (127,62)
+  ring, and −3 × 64 = −192. The (10,11) life/tick count for AUTHORED records (the river's rings
+  on mc2l15 are exact) — probably the `sub_104A0 & 1` random death or an un-imported field.
+- **mc2l22 — the (10,45) wall-chain lerp ±1 (height 2,941, shading 3,432, angle 1,295):** the two
+  big blobs are the `parent = 50` wall chains (slots 61-112), height ±1 with matching shading ±1/2
+  mid-lerp at phase 9, plus angle-only rectangles (165/80/79 cells: lock/seal bits on pads).
+  mc2l15's (10,45) buildings are exact at phase 6; mc2l22 is the only `gfx_type & 4` (castle
+  purge) day level — start there, then the lerp's `/ life` under the in-sweep free (109-2).
+- **mc2l6-rsg — 320 angle-only cells** on three pads with (10,13)/(10,5)/(10,1) clusters
+  (167..181/218..233, 109..121/215..227, 41..54/6..17) + 8 shading cells (−2) on the (3,7) keep.
+- **mc2l0 — 34 cells** at (74..81,216..223): the human's own start pad (3,4)@(77,222) with its
+  (10,60)/(10,1) ring, dh ±3..5 mid-lerp. **mc2l3 — ONE ceiling cell** (251,88) −1.
+- **mc1l49 — ANGLE ONLY on the ten `(10,11)` dis-0 crater discs** (~110 cells each; type/height/
+  shading exact at phase 18): the crater floor's orientation bits 4-6 (retail 1/17/33/…/97 vs the
+  port's, all ≡ 1 mod 16) — the retile's random ORIENTATION pick runs on a different stream
+  position for these ten digs (mc1l2/l3's villager craters are exact, angle included). Plus ~60
+  cells of small runtime craters under (5,3)/(5,7)/(5,11).
+- **mc1hwl2 — the (10,45) row-7 building at (82,250) (parent 7, 16 (5,4) archers):** the port
+  digs its 3×3 pad from 43 to 15 and drops the 18/32/19/20 types to 6 **at tick 13 exactly**
+  (settle 12 → 43, settle 13 → 15); retail keeps it through t=30. Ten other row-7 buildings on the
+  level are fine — a runtime event on that one building (a demolish/flatten), not the painter.
+  Plus the two (5,11) genie stamps (12/11 cells, type re-picks 36↔37/0→37, no height).
+- **mc1l42 — the (5,11) genie's spawn scorch** (16 cells): a radius-2 burnt crater (48/50/51, floor
+  1, −4..−10) that the port places ONE CELL down-left of retail's — the genie's opening cast lands
+  a cell off (runtime, not generate).
+- **NOT bugs, retired this round:** mc1's rival starting castle (mc1hwl2/l48/l5), mc1's villager
+  burrows (mc1l2/l3), mc1l49's craters' height/type, mc2l3/mc2l30's cave doors (−4/+4 strips) —
+  ALL phase. The castle ANGLE residual seen at settle 30 on mc1l48 (608 cells) is an OVER-settle
+  artifact (0 at phase 18): never grade a take past its phase.
+
+## THE FINAL TABLE
+18 of 27 gradable takes IDENTICAL (12 in round 109); banked as `conformance/terrain-check-baseline.txt`.
+```
+TERRAIN mc1hwl0.mgcr: IDENTICAL — 4, port settled 8 tick(s)
+TERRAIN mc1hwl1.mgcr: IDENTICAL — 4, port settled 13 tick(s)
+TERRAIN mc1hwl2.mgcr: DIFFERENT — type 25 · height 12 · shading 26 · angle 45, port settled 19 tick(s) (level 2, base @t=0)
+TERRAIN mc1l0.mgcr: IDENTICAL — 4, port settled 16 tick(s)
+TERRAIN mc1l0-spells-galore.mgcr: IDENTICAL — 4, port settled 5 tick(s)
+TERRAIN mc1l1.mgcr: IDENTICAL — 4, port settled 18 tick(s)
+TERRAIN mc1l2.mgcr: IDENTICAL — 4, port settled 12 tick(s)
+TERRAIN mc1l32.mgcr: IDENTICAL — 4, port settled 16 tick(s)
+TERRAIN mc1l32-quick.mgcr: IDENTICAL — 4, port settled 18 tick(s)
+TERRAIN mc1l32-terrainless.mgcr: ERROR — recording has no terrain channel (format-1 take?)
+TERRAIN mc1l37.mgcr: IDENTICAL — 4, port settled 18 tick(s)
+TERRAIN mc1l3.mgcr: IDENTICAL — 4, port settled 22 tick(s)
+TERRAIN mc1l42.mgcr: DIFFERENT — type 8 · height 13 · shading 23 · angle 8, port settled 24 tick(s) (level 42, base @t=0)
+TERRAIN mc1l48.mgcr: IDENTICAL — 4, port settled 18 tick(s)
+TERRAIN mc1l49.mgcr: DIFFERENT — type 14 · height 24 · shading 43 · angle 1135, port settled 18 tick(s) (level 49, base @t=0)
+TERRAIN mc1l4.mgcr: IDENTICAL — 4, port settled 14 tick(s)
+TERRAIN mc1l5.mgcr: IDENTICAL — 4, port settled 17 tick(s)
+TERRAIN mc1l6.mgcr: IDENTICAL — 4, port settled 12 tick(s)
+TERRAIN mc2l0.mgcr: DIFFERENT — height 18 · shading 27, port settled 8 tick(s) (level 0, base @t=0)
+TERRAIN mc2l0-spells-galore.mgcr: DIFFERENT — height 18 · shading 32, port settled 8 tick(s) (level 0, base @t=0)
+TERRAIN mc2l15.mgcr: IDENTICAL — 5, port settled 6 tick(s)
+TERRAIN mc2l1.mgcr: IDENTICAL — 4, port settled 8 tick(s)
+TERRAIN mc2l22.mgcr: DIFFERENT — type 19 · height 2941 · shading 3432 · angle 1295, port settled 9 tick(s) (level 22, base @t=0)
+TERRAIN mc2l24.mgcr: IDENTICAL — 4, port settled 6 tick(s)
+TERRAIN mc2l30.mgcr: IDENTICAL — 5, port settled 8 tick(s)
+TERRAIN mc2l3.mgcr: DIFFERENT — ceiling 1, port settled 8 tick(s) (level 3, base @t=0)
+TERRAIN mc2l4.mgcr: DIFFERENT — type 1 · height 1357 · shading 582 · angle 927, port settled 8 tick(s) (level 4, base @t=0)
+TERRAIN mc2l6-rival-spells-galore.mgcr: DIFFERENT — shading 8 · angle 320, port settled 8 tick(s) (level 6, base @t=0)
+```
+
+## NEUTRALITY
+- **Corpus: 28 of 28 takes BYTE-IDENTICAL** to `conformance/brief-baseline.txt` (`replay --segmented
+  --brief`), swept TWICE: after 110-1 + 110-2, and again after 110-3. Expected — `replay` imports
+  terrain and the pool every pair, so none of the three laws has an import witness; the generated
+  world (`terrain-check`, the app) is the only surface they change.
+- **Tests: 1,016 of 1,016, 2 ignored, 49 suites** (the whole workspace in release): the 1,014 of
+  round 109 unchanged (every golden, cave goldens included — cave levels derived the flag already
+  and have no authored rival castles) + the two new `mc2_authored_castles` pins. ⚠ The pins settle
+  12 ticks: the level-up commit's painter paints its codes on a cadence, so a count taken before
+  ~tick 8 still reads the stamps alone (16/0/332…).
+- The app now passes the header's MapType at construction (`WorldInit::build` →
+  `new_full_env`): night levels' authored pads and chain roads shade as retail's from the first
+  frame. A player look at mc2:0 / mc2:6 in play is owed (visual only — building pads on night maps).
+
+## OWED INTO ROUND 111
+- 🎬 **THE TERRAIN ORACLE CORPUS** (player-offered, now worth asking for): a few-tick take of EVERY
+  level of both games under `recordings/terrain/`, graded by a cargo test that runs the
+  `terrain-check` comparison at the recorder's phase. Design note: `terrain_compare` lives in the
+  `mgc-conform` BIN (`main.rs`); the test needs it in a lib module (or shells out to the binary).
+  The phase read makes short takes safe — no need to "wait for the settle" when recording.
+- The 110-4 families, in order of size: mc2l22's wall-chain ±1, mc2l4's (10,11) pads
+  (= the `mc2-archer-ground-z` rule), mc1l49's crater orientation stream, mc1hwl2's tick-13
+  demolish, the angle-only pad bits on mc2l6.
+- Re-read `known-deviations.json` terrain rules against the new table: `mc2-archer-ground-z`
+  (named above), `mc2l30-plateau-markers` (mc2l30 is IDENTICAL now — the "2176 plateau the port
+  lacks" was the phase; re-triage its rows), `mc2-token-fall-z`, `mc2-guard-terrain`.
+- `terrain-diff` (default settle 0) should probably default to the phase too — kept at 0 this round
+  so every banked A/B number in 107-109 still reproduces.
+- Everything owed into 110 that is not listed above (7 uncertified takes; the wrapper tails).

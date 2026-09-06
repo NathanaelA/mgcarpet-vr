@@ -1241,18 +1241,23 @@ pub(crate) fn build_world_mc2(
         assets = assets.with_spells(sp)?;
     }
     let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);
-    let mut w = World::new_for_game(
+    let night = matches!(
+        header.map(|h| h.map_type),
+        Some(mgc_formats::MapType::Night) | Some(mgc_formats::MapType::Cave)
+    );
+    // The environment goes in at CONSTRUCTION (round 110): the load
+    // settle's repaints read it inside `new_full`; the setter below
+    // still owns the SPELLS rows-4/19 patch and the runtime repaints.
+    let mut w = World::new_for_game_env(
         planes,
         &pkg.things.things,
         seed,
         assets,
         mgc_sim::ids::GameId::Mc2,
+        night,
     );
     w.set_placeholders(true);
-    w.set_mc2_night_shade(matches!(
-        header.map(|h| h.map_type),
-        Some(mgc_formats::MapType::Night) | Some(mgc_formats::MapType::Cave)
-    ));
+    w.set_mc2_night_shade(night);
     w.set_mc2_doom_level(header.is_some_and(|h| h.gfx_type & 2 != 0));
     w.set_mc2_castle_purge_level(header.is_some_and(|h| h.gfx_type & 4 != 0));
     w.set_mc2_level_replayed(replayed);

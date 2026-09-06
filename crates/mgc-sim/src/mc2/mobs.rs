@@ -3252,6 +3252,93 @@ impl Gen {
     /// dying/besieged building: ONE entity-RNG draw %12 → 0-1 archers
     /// (dock 33), 2-3 trader (113), 4-8 villager (105), 9-11 settler
     /// (97).
+    /// `sub_36FC0` (EF:27031-27171) — the INSTANT build-row stamp, the
+    /// [`Gen::mc2_building_tick`] lerp collapsed to one pass: owner
+    /// clear (`sub_57390`), pad cells written to `pad + (z >> 5)`
+    /// outright (no `/ life` step), the angle-nibble seed + retile on
+    /// a cleared cell, the cave headroom bubble asserted at once, then
+    /// every paint code through `sub_45DC0` with the column argument
+    /// **0** (`char v14 = 0`, :27153 — the lerp passes `dx`). Retail's
+    /// callers run it on the scratch slot 0 with a copied position:
+    /// the authored starting castle's `j`-loop (EF:43787-43800, one
+    /// call per row `0..castle_level`) and the `sub_5C950` stage
+    /// machinery. Round 110: the port used to settle the authored
+    /// castle through the (10,42) repaint painter at row `level - 1`,
+    /// which paints NOTHING at castle level 1 (row 0 is a real 4×4 row
+    /// here) and 332 of level 5's 820 cells — mc2l22's four rival
+    /// castles and mc2l4/mc2l6's level-1 stumps were absent from the
+    /// generated terrain while the takes certified.
+    pub(crate) fn mc2_stamp_build_row_instant(&mut self, pos: (u16, u16, i16), row: u8, owner: u16) {
+        let Some(def) = self.assets.build_tab.get(row as usize).copied() else {
+            return;
+        };
+        let (w, h) = (def.w as usize, def.h as usize);
+        let start = def.offset as usize;
+        let Some(cells) = self
+            .assets
+            .build_dat
+            .get(start..start + 2 * w * h)
+            .map(<[u8]>::to_vec)
+        else {
+            return;
+        };
+        if std::env::var_os("MGC_SCULPT_TRACE").is_some() {
+            let pads = cells.chunks(2).filter(|c| c[1] != 0xff).count();
+            let codes = cells.chunks(2).filter(|c| c[0] != 0xff).count();
+            eprintln!("SCULPT castle-row-stamp row={row} w={w} h={h} pads={pads} codes={codes} at ({},{})", pos.0 >> 8, pos.1 >> 8);
+        }
+        let cx = ((pos.0.wrapping_add(128)) >> 8) as u8;
+        let cy = ((pos.1.wrapping_add(128)) >> 8) as u8;
+        let tlx = cx.wrapping_sub((w / 2) as u8);
+        let tly = cy.wrapping_sub((h / 2) as u8);
+        let base = (pos.2 >> 5) as i32; // v25
+        let cave_raise = self.is_cave()
+            && self
+                .assets
+                .bldgprm
+                .get(row as usize)
+                .is_none_or(|b| b.flags & 4 == 0);
+        for dy in 0..h {
+            for dx in 0..w {
+                let t = crate::engine::features::tile(
+                    tlx.wrapping_add(dx as u8),
+                    tly.wrapping_add(dy as u8),
+                );
+                self.mc2_building_clear_tile(t, owner);
+                let pad = cells[2 * (dy * w + dx) + 1];
+                if pad != 0xff {
+                    self.t.height[t] = (pad as i32 + base) as u8;
+                    if self.t.angle[t] & 7 == 0 {
+                        self.t.angle[t] = (self.t.angle[t] & 0xF8) | 1;
+                        let (cx2, cy2) = (tlx.wrapping_add(dx as u8), tly.wrapping_add(dy as u8));
+                        self.mc2_retile_region(cx2, cy2, cx2, cy2);
+                    }
+                }
+                if cave_raise {
+                    let bubble = ((self.t.height[t] as i32).max(base) + 80).min(255);
+                    if bubble > self.t.ceiling[t] as i32 {
+                        self.t.ceiling[t] = bubble as u8;
+                    }
+                    self.cave_seal_fixup(t);
+                }
+            }
+        }
+        for dy in 0..h {
+            for dx in 0..w {
+                let code = cells[2 * (dy * w + dx)];
+                if code == 0xff {
+                    continue;
+                }
+                self.mc2_paint_cell(
+                    0,
+                    tlx.wrapping_add(dx as u8),
+                    tly.wrapping_add(dy as u8),
+                    code,
+                );
+            }
+        }
+    }
+
     pub(crate) fn mc2_rand_occupant(&mut self, i: usize, x: u16, y: u16, z: i16) -> Option<usize> {
         let d = self.mc2_rand(i) % 12;
         let (s, dock) = match d {

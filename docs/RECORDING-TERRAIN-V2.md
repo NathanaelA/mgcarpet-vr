@@ -49,9 +49,14 @@ corpus).** Landed shape:
   captured-but-not-yet-installed (banked: install once a real take
   shows whether pristine bakes drift).
 - Harness: `terrain-check` — THE NAKED TRUTH: one verdict line per take, is the
-  port's GENERATED terrain bit-identical to record 0 (port settled by the
-  recorder's phase: MC2 6 ticks, MC1 0)? Exit 1 on any differing plane;
-  `terrain-diff [--settle n] [--out dir]` gives the cell-level view.
+  port's GENERATED terrain bit-identical to record 0? The port is settled by the
+  recorder's PHASE, READ FROM RECORD 0 (round 110): the recorder attaches some
+  ticks after LoadLevel and the count is per take — MC2 = 100 − the human's
+  spawn-invulnerability countdown (mc2l15 6, mc2l30 8, mc2l22 9), MC1 = the
+  per-entity continuity byte `+63` minus its slot, max over the first live
+  slots (8..24 across the corpus). Exit 1 on any differing plane;
+  `terrain-diff [--settle n] [--out dir]` gives the cell-level view (its
+  default settle stays 0; `terrain-check --settle n` overrides the read).
 
 Original plan below for the remaining steps' context.
 

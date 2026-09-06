@@ -1729,50 +1729,40 @@ impl World {
         // The team flag: retail `+90 += TransformPlayerColorIndex`
         // (EF:61133) — flag family 177 + COLOR_ART[slot] (the MC2
         // stage pieces carry the visible castle).
-        self.g
-            .mc2_set_sprite(c, 177 + crate::mc2::color_art(r.slot) as u16);
-        // ...and LATCH the bit with it. Retail's authored castle takes
-        // its colour from the same one-shot in `mc2_castle_build` case
-        // 0 on its first build tick; the port settles the whole build
-        // synchronously at load, so without the bit the castle's first
-        // later upgrade would re-enter case 0 and add the colour a
-        // SECOND time (180 -> 183).
-        self.g.ent[c].flags |= 2;
+        // Round 110: 177 FLAT, no colour latch — the castle now takes
+        // retail's own road: the ctor's build action (5) at level
+        // `castle_level - 1`, whose FIRST tick runs `mc2_castle_build`
+        // case 0 = the colour one-shot + the level-up commit that
+        // paints BUILD00 row `castle_level` (the mint's j-loop below
+        // stamps rows 0..castle_level-1 only — row 0 is empty, so a
+        // level-1 castle owes its whole 4×4 keep to that first tick,
+        // and a level-5 castle its outer walls: mc2l22 record 0 reads
+        // 16 / 820 castle tiles where the standing-at-`level-1`
+        // shortcut left 0 / 332).
+        self.g.mc2_set_sprite(c, 177);
         let lvl = (castle_level - 1).min(7);
         self.g.ent[c].f26 = lvl as i16;
-        // One BUILD00 terrain pass per authored level (the EF:43787
-        // j-loop over sub_36FC0): the repaint painter at the final
-        // level stamps the full footprint; settle it synchronously
-        // (a load-time stamp, like retail's pre-play passes).
-        self.g.mc2_spawn_castle_painter(c, true);
-        for _ in 0..4096 {
-            let mut live = false;
-            for j in 1..self.g.ent.len() {
-                if self.g.ent[j].class64 == 10
-                    && self.g.ent[j].model65 == 42
-                    && self.g.ent[j].flags & 0x400 == 0
-                {
-                    self.g.mc2_castle_painter_tick(j);
-                    live = true;
-                }
-            }
-            if !live {
-                break;
-            }
+        // One INSTANT BUILD00 pass per authored level (EF:43787-43800):
+        // retail loads the scratch slot 0 with the castle's site axis
+        // and id, sets its row byte to `j` and runs `sub_36FC0` for
+        // every `j in 0..castle_level` — rows 0..=level-1, cumulative,
+        // synchronous, no painter record. ⚠ Round 110: this used to be
+        // the (10,42) REPAINT painter settled at row `level - 1`, which
+        // stamps nothing for castle level 1 (row 0 is a real 4×4 row on
+        // MC2) and 332 of a level-5 castle's 820 cells — every authored
+        // rival castle on mc2l22 (levels 5/5/5/7) and the level-1
+        // stumps on mc2l4/mc2l6 were missing or short in the GENERATED
+        // terrain for 100+ rounds (certification imports terrain).
+        let id = self.g.ent[c].id24;
+        for j in 0..castle_level {
+            self.g.mc2_stamp_build_row_instant((sx, sy, z), j, id);
         }
-        // Painter completion signals the castle f59 = 2 (pass-done);
-        // it is standing already — clear the build scratch.
-        self.g.ent[c].tick70 = 4;
+        // The ctor's state (`sub_4AA40` EF:33377: actionIndex 5 = the
+        // build machine, sub-state 0): the first tick commits the
+        // level-up to `castle_level`.
+        self.g.ent[c].tick70 = 5;
         self.g.ent[c].f59 = 0;
         self.g.ent[c].f50 = 0;
-        for j in 1..self.g.ent.len() {
-            if self.g.ent[j].class64 == 10
-                && self.g.ent[j].model65 == 42
-                && self.g.ent[j].flags & 0x400 != 0
-            {
-                self.free_slot(j);
-            }
-        }
         // Extents + ladder (Life-scaled HP) + the stage pieces.
         self.g.mc2_castle_extents(c, lvl);
         self.g.mc2_castle_ladder(c);
