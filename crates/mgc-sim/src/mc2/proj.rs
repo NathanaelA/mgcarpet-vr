@@ -88,6 +88,15 @@ fn no_muzzle_admission() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MUZZLE_ADMISSION").is_some())
 }
 
+/// A/B toggle for `sub_1D460`'s UNMASKED FAN YAW (EF:9962 — see the
+/// write-up at [`Gen::mc2_atk_fan`]): set `MGC_NO_MC2_FAN_YAW_UNMASKED`
+/// to restore the pre-dig `& 0x7FF`, which retail's raw `int16_t` store
+/// does not perform and which is wrong on the ±226 wings of every fan.
+fn no_mc2_fan_yaw_unmasked() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FAN_YAW_UNMASKED").is_some())
+}
+
 /// A/B toggle for `sub_1D260`'s MUZZLE-ORIGIN AIM: set
 /// `MGC_NO_MC2_HEAVY9_MUZZLE_AIM` to restore the pre-dig behaviour,
 /// where m23's (9,9) heavy bolt was aimed from the caster's RAW z
@@ -3994,7 +4003,32 @@ impl Gen {
             // EF:9962 — the offset rides the yaw only; `sub_1D460`
             // writes no roll either (and lifts z by 200 after the aim,
             // which `mc2_arm_proj` now honours).
-            self.ent[p].f30 = (self.ent[p].f30 as i32 + off) as u16 & 0x7FF;
+            //
+            // ⭐⭐⭐ **AND THE FAN'S YAW IS NOT MASKED.** The line is
+            // `v4x->yaw_0x1C_28 = v3 + Maths::sub_581E0_maybe_tan2(v9,
+            // &a2x->position_0x4C_76);` — a RAW store into an
+            // `int16_t`, with no `& 0x7FF` anywhere in `sub_1D460`.
+            // The `+226`/`-226` wings therefore leave the 0..2047
+            // bearing space on purpose and the flyer carries a yaw
+            // ABOVE 0x7FF (or below 0) until whatever reads it folds
+            // it at index time. The port's mask was INVENTED, and it
+            // is false exactly on the two outer wings of every fan —
+            // the classic invented-write shape (rounds 83-84).
+            //
+            // WITNESS — mc2l15 pair 15433→15434, slot 2, the +226 wing
+            // of the (5,18) tank at slot 4 (`MGC_WRITE_TRACE=2:f30`
+            // names the writer): the aimed bearing is 2035, retail
+            // stores **2261**, and 2261 & 0x7FF = **213** — exactly
+            // what the port wrote. The other four bolts of the same
+            // volley (slots 7/225/265/268) were bit-exact, because
+            // their offsets kept them inside the mask.
+            //
+            // `MGC_NO_MC2_FAN_YAW_UNMASKED=1` restores the mask.
+            self.ent[p].f30 = if no_mc2_fan_yaw_unmasked() {
+                (self.ent[p].f30 as i32 + off) as u16 & 0x7FF
+            } else {
+                (self.ent[p].f30 as i32 + off) as u16
+            };
             fired = true;
         }
         if fired {

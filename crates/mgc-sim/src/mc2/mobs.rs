@@ -428,6 +428,29 @@ impl Gen {
 
     /// `sub_49E10` (:32865): sprite + the quad doubled (the arrow's
     /// call with 195).
+    /// `SetEntityIndex_49C90` (EF:32832-36) — the PLAIN sprite commit:
+    /// index, frame reset, frame count, and **nothing else**.
+    ///
+    /// ⭐⭐⭐ **THERE ARE TWO SPRITE SETTERS AND THE QUAD IS THE ONLY
+    /// DIFFERENCE.** [`Self::mc2_set_sprite`] is
+    /// `SetEntityIndexAndRot_49CD0`, which calls this and THEN stamps
+    /// the `array_0x52_82` half-extents from the particle-param row
+    /// (`.yaw = .fov = rotSpeed_8/2`, `.pitch = .roll = speed_6/2`).
+    /// Handlers that re-sprite an entity mid-life mostly want THIS one
+    /// — their box was set once at spawn and must not be re-derived
+    /// every time the animation changes. Reaching for the `AndRot`
+    /// twin on a re-sprite silently resizes the creature's collision
+    /// box, which nothing else in the tick will put back.
+    pub(crate) fn mc2_set_sprite_index(&mut self, i: usize, idx: u16) {
+        let frames = mc2_sprite_frames(idx as usize);
+        let e = &mut self.ent[i];
+        e.type86 = idx;
+        e.frame88 = 0;
+        if !no_mc2_frames89() {
+            e.frames89 = frames;
+        }
+    }
+
     pub(crate) fn mc2_set_sprite_x2(&mut self, i: usize, idx: u16) {
         self.mc2_set_sprite(i, idx);
         let e = &mut self.ent[i];
@@ -1037,6 +1060,45 @@ impl Gen {
         if t.class64 == 0 || t.act_life < 0 || t.flags & 0x400 != 0 {
             return None;
         }
+        Some((t.x, t.y, t.z))
+    }
+
+    /// [`Self::mc2_target`] WITHOUT the liveness test — the position of
+    /// `Entities_EA3E4[slot]` whatever state the record is in.
+    ///
+    /// ⭐⭐⭐ **THE LIFE TEST BELONGS TO THE CALLER, AND HALF THE
+    /// CALLERS DO NOT MAKE IT.** `mc2_target`'s own doc already says
+    /// each caller guards the resolved pointer with
+    /// `life_0x8 < 0 || byte[1] & 4` — but it then bakes that guard
+    /// into the RESOLVER, which silently applies it to the call sites
+    /// that have no such test. m18's barrage machine has BOTH shapes,
+    /// eight lines apart (`sub_250B0` EF:15995 / EF:16028):
+    /// ```text
+    ///   case 0: sub_254E0(a1x, Entities_EA3E4[a1x->word_0x96_150], 4u);   // NO guard
+    ///   case 1: v5x = sub_1ED30(a1x, Entities_EA3E4[a1x->word_0x96_150]);
+    ///           if (v5x <= Entities_EA3E4[0] || v5x->life_0x8 < 0
+    ///               || v5x->struct_byte_0xc_12_15.byte[1] & 4) …      // guarded
+    /// ```
+    /// So a tank in the barrage's aim phase KEEPS TURNING toward a
+    /// corpse, and only the phase that actually FIRES rejects it.
+    /// Applying case 1's guard to case 0 is an INVENTED GUARD of the
+    /// rounds 83-84 class — false exactly when the target dies.
+    ///
+    /// Retail makes no bounds test either (case 0 would happily index
+    /// `Entities_EA3E4[0]`, the sentinel); the port keeps only the
+    /// slice bound, which cannot change a shipped-data outcome.
+    pub(crate) fn mc2_target_raw(&self, slot: u16, ctx: &MobCtx) -> Option<(u16, u16, i16)> {
+        if slot == PLAYER_TARGET {
+            // The carpet is an ordinary pool record in retail, so an
+            // UNGUARDED caller reads a dead player's position too —
+            // no `ctx.pdead` arm here on purpose.
+            return Some((ctx.px, ctx.py, ctx.pz));
+        }
+        let j = slot as usize;
+        if j >= self.ent.len() {
+            return None;
+        }
+        let t = &self.ent[j];
         Some((t.x, t.y, t.z))
     }
 
@@ -2903,7 +2965,7 @@ impl Gen {
     pub(crate) fn mc2_building_tick(
         &mut self,
         i: usize,
-        human: Option<((u16, u16, i16), u16, bool)>,
+        human: Option<((u16, u16, i16), u16, bool, u8)>,
     ) -> bool {
         // EF:27234-36 — the opener, ahead of everything including the
         // `IsNextEvent0A_2A_37740` carousel: on the FIRST countdown
@@ -3021,7 +3083,7 @@ impl Gen {
             // re-mint the (10,42) painters or re-stamp f46 (mc2l30
             // t=402: a phantom painter off the free stack every
             // pair, castle f2c 0→4; mc2l0-sg t=7283: seven at once).
-            if let Some((pose, slot, alive)) = human {
+            if let Some((pose, slot, alive, human_row)) = human {
                 let pw = (self.mc2_params_ext(44).0 / 2) as i32;
                 let slot = slot as usize;
                 // A native world has no pooled carpet (slot 0):
@@ -3037,11 +3099,32 @@ impl Gen {
                         // The out-of-pool carpet, tested where its
                         // pool slot sits in retail's walk. Its spare
                         // axis @0x9A is unwritten on the wizard body
-                        // — (0,0,0), row 0 (@0x10).
+                        // — (0,0,0).
+                        //
+                        // ⭐ THE ROW IS THE HUMAN'S `dword_0x10_16`,
+                        // NOT 0. `sub_377A0` stamps
+                        // `byte_0x46_70 = wizard->dword_0x10_16` for
+                        // EVERY class-3 member it re-paints, the human
+                        // included — and on the human that word is the
+                        // DEATH RESPAWN TIMER (0 before the first
+                        // death, 1200 after; the human arm never counts
+                        // it down). The port hard-coded 0 because the
+                        // out-of-pool carpet had nowhere to keep it;
+                        // [`Player::mc2_respawn_timer`] is that home
+                        // now, and the caller hands the low byte in.
+                        // mc2l15 t=24152 slot 719: `b46` retail 176
+                        // (= 1200 & 0xFF) / port 0. PLAYER-RULED
+                        // 2026-09-06.
+                        // ⚠ The EXTENTS still diverge — row 176 is off
+                        // the end of a 77-row table on both sides and
+                        // retail reads heap residue there (the
+                        // registered `mc2-painter-oob-build-row-*`
+                        // deviation). This fixes the INDEX, not the
+                        // residue it lands in.
                         if human_hit {
                             self.mc2_spawn_wizard_painter(
                                 (0, 0, 0),
-                                0,
+                                human_row,
                                 crate::mc1::mobs::PLAYER_TARGET,
                                 slot as u16,
                             );
@@ -3070,7 +3153,12 @@ impl Gen {
                     }
                 }
                 if !human_in_walk && human_hit {
-                    self.mc2_spawn_wizard_painter((0, 0, 0), 0, crate::mc1::mobs::PLAYER_TARGET, 0);
+                    self.mc2_spawn_wizard_painter(
+                        (0, 0, 0),
+                        human_row,
+                        crate::mc1::mobs::PLAYER_TARGET,
+                        0,
+                    );
                 }
             }
             return true;

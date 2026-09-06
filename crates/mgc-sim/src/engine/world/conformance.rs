@@ -1621,6 +1621,15 @@ impl World {
         let castle = c == 3 && m == 2;
         let piece = c == 10 && m == 79;
         let sphere = c == 10 && matches!(m, 39 | 57);
+        // The (10,89) CAVE-IN keeps its wave in `f44` (@0x2C) and its
+        // one-shot debris latch in `f54` (@0x36) — see
+        // `import_ent_mc2`. Its `@0x2A` (the NewEvent default 100) has
+        // NO port home at all, and `@0x34` is dead on it, so both of
+        // those lanes must print `—` rather than borrow a field that
+        // means something else. Publishing `f44` in the `f2a` lane and
+        // `f54` in the `f34` lane made every live collapse read as
+        // four bogus `≠` rows.
+        let cavein = c == 10 && m == 89;
         let m27 = c == 5 && m == 27;
         let pyramid = c == 5 && m == 10;
         // The class-9 F_MC2PROJ stamp overwrites both bit 3 and bit 29
@@ -1841,7 +1850,7 @@ impl World {
                     some(e.f140 as i64)
                 } else if worm22 {
                     some(e.f46 as i64) // the head's spiral angle (@0x2A → f46)
-                } else if ramp2c || piece || (c == 10 && m == 16) {
+                } else if ramp2c || piece || cavein || (c == 10 && m == 16) {
                     None
                 } else {
                     some(e.f44 as i64)
@@ -1915,7 +1924,7 @@ impl World {
             ("f32", some(untr(e.f52))),
             (
                 "f34",
-                if c == 15 || piece {
+                if c == 15 || piece || cavein {
                     None // f54 holds @0x36 there; @0x34 unrecoverable
                 } else {
                     some(untr(e.f54))
@@ -1923,7 +1932,7 @@ impl World {
             ),
             (
                 "f36",
-                if c == 15 || piece {
+                if c == 15 || piece || cavein {
                     some(e.f54 as i64)
                 } else if wind_node {
                     some(e.f50 as i64) // the whirlwind node's z-stack offset
@@ -3103,6 +3112,19 @@ impl World {
                 && carpet.flags & 0x40_0000 != 0,
             rebound: std::env::var_os("MGC_NO_MC2_REBOUND_SEAT").is_none()
                 && carpet.flags & 0x8000 != 0,
+            // ⭐ THE HUMAN'S `dword_0x10_16` (@0x10) — the death
+            // respawn timer, 0 before the first death and 1200 after
+            // (EF:60170; the human arm of `sub_5E7C0` never counts it
+            // down). The port's home is
+            // [`Player::mc2_respawn_timer`], because the human carpet
+            // is OUT OF POOL and so cannot ride the entity import, and
+            // its one reader is `sub_377A0`'s painter mint, which
+            // stamps it into the (10,42)'s `byte_0x46_70`. Without
+            // this seat a pair-mode world minted row 0 forever and
+            // published `b46` 0 against retail's 176 — mc2l15 t=24152
+            // slot 719 and t=24184 slot 314, on a human that died
+            // earlier in the take.
+            mc2_respawn_timer: carpet.scratch10.max(0) as u32,
             ..Player::default()
         };
         // The knock/buffet channel (`moveBoost` @+30 + direction @+32:
@@ -3917,7 +3939,7 @@ pub(crate) fn c10_2a_in_f140(model: u8) -> bool {
 /// (displacing the uniform `@0x2A` copy). The inverse of this list is
 /// what `port_ent_lanes_mc2` publishes in its `f2c` lane.
 pub(crate) fn c10_2c_in_f44(model: u8) -> bool {
-    matches!(model, 0 | 6 | 9 | 16 | 18 | 19 | 67 | 71 | 76 | 77)
+    matches!(model, 0 | 6 | 9 | 16 | 18 | 19 | 67 | 71 | 76 | 77 | 89)
         || (matches!(model, 22 | 75) && c10_field_home())
 }
 
@@ -5077,6 +5099,38 @@ pub(crate) fn import_ent_mc2(
     // outer-ring raise `if f44 < v11 { f44 = v11 }`.
     if r.class3f == 10 && r.model40 == 67 {
         e.f44 = r.f2c as u16;
+    }
+    // ⭐ The (10,89) CAVE-IN is the next `word_0x2C_44` tenant, and it
+    // is the first one to need a SECOND word with it. `sub_311E0`
+    // (EF:22860) runs the collapse entirely out of two homes the
+    // uniform map spends elsewhere:
+    //   @0x2C = the WAVE PHASE — phase 0 seeds 227 (EF:22936), every
+    //     tail adds 22 (:23085) and trips phase 3 past 1024 (:23088),
+    //     and the six-ring sculpt reads it as `v7` (:22957) to scale
+    //     the `sin_DB750` rise/drop profile;
+    //   @0x36 = the one-shot DEBRIS LATCH — the burst is
+    //     `if (!word_0x36_54 && word_0x2C_44 > 455)` (:23052), which
+    //     flings ~74 (10,13) rocks and latches @0x36 = 1.
+    // The port's homes are `f44` and `f54` (`mc2_cave_in_tick`,
+    // mc2/cave.rs). The uniform map fed f44 the subSpell @0x2A (100 on
+    // every cave-in) and f54 the multipart TAIL LINK @0x34 (dead 0
+    // here), so an imported collapse was wrong three ways at once:
+    //   1. `100 > 455` is never true ⇒ THE DEBRIS BURST NEVER FIRED.
+    //      mc2l15 pair 35203→35204: retail spawns the ring, the port
+    //      spawns nothing, and the free stack reads retail 766 /
+    //      port 840 — exactly the 74 unallocated rocks.
+    //   2. the wave restarts from 100 instead of its real phase, so
+    //      the sculpt profile is evaluated at the wrong point of the
+    //      sine and the ring writes the WRONG FLOOR/CEILING heights —
+    //      which is what the take's `z` and `pose.z` rows are.
+    //   3. 100 + 22/tick takes far longer to pass 1024, so phase 3
+    //      lands late and `life` (+4/tick, EF:23086) over-runs its
+    //      188 cap — the recurring `life: retail 188 port 192`
+    //      signature (mc2l15 slots 684/709/737/857).
+    // ⚠ @0x36 must NOT go through `tr()`: it is a latch, not a slot.
+    if r.class3f == 10 && r.model40 == 89 {
+        e.f44 = r.f2c as u16;
+        e.f54 = r.f36;
     }
     // ⭐ THE CLASS-10 `@0x2A` FIELD-HOME AUDIT (`c10_2a_in_f140`):
     // every remaining class-10 model whose PORT CTOR stamps its

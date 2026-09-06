@@ -1934,6 +1934,78 @@ impl Gen {
         }
     }
 
+    /// `sub_4FA60` (EF:36292) — the (10,32) RIVER HEAD, the worker the
+    /// (10,31) author chain spawns per leg (`sub_487D0`, EV:5558):
+    /// action 0x22, actSpeed 256, default width f71 = 2, maxLife 0,
+    /// untargetable (byte[0] bit3 clear), NOT map-registered, no
+    /// sprite. The chain painter overwrites yaw, life (= leg length
+    /// in tiles) and the width.
+    pub(crate) fn mc2_spawn_river_head(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 10;
+            e.model65 = 0x20;
+            e.tick70 = 0x22;
+            e.max_life = 0;
+            e.f130 = 256;
+            e.f71 = 2;
+            e.flags &= !8;
+            e.x = x;
+            e.y = y;
+            e.z = z;
+        }
+        self.refill_life(i);
+        Some(i)
+    }
+
+    /// `sub_344A0` (EF:25052) — the (10,32) action-0x22 tick, the
+    /// fire trail's AUTHORED twin: life--, death on life < 0 or a
+    /// class-0 (nibble-0) cell under it (`sub_104A0 & 1`); else drop
+    /// ONE (10,11) SCORCH RING here (fov + id inherited, `life =
+    /// byte_0x46_70` = the river WIDTH: 2/6/16/32) and advance
+    /// actSpeed (256 = one tile) along the yaw. No RNG, no sound.
+    ///
+    /// ⭐ THIS IS THE CAVE LAVA. The ring's own tick (`sub_31FB0`)
+    /// digs its growing disc −3 every tick for `life` ticks, one ring
+    /// per tile of the leg, and adjacent rings OVERLAP — so a width-16
+    /// leg carves a ~4-wide channel to floor 0 with a ~5-cell graded
+    /// rim, and a cave floor at 0 retiles to the lava types 36/37/39.
+    /// mc2:15's two (10,31) rectangles (slots 50-54 and 268-272) ARE
+    /// its lava moats: retail record 0 holds 1,747 floor-0 cells, the
+    /// port before this arm 887, every missing one inside those two
+    /// rings (round 109). docs/traces/mc2-terrain-author-painters.md
+    /// §3.4 called the consumer a stub because it read `4A190(.., 10,
+    /// 32)` as hex (10,50) — the argument is DECIMAL: (10,32) = 0x20.
+    pub(crate) fn mc2_river_head_tick(&mut self, i: usize) {
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life -= 1;
+        let (x, y, z) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        if life < 0 || self.on_water(x, y) {
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        let (fov, id, width, yaw, speed) = {
+            let e = &self.ent[i];
+            (e.f84, e.id24, e.f71, e.f30, e.f130)
+        };
+        if let Some(s) = self.mc2_spawn_scorch_ring(x, y, z) {
+            let e = &mut self.ent[s];
+            e.f84 = fov;
+            e.id24 = id;
+            e.act_life = width as i32;
+        }
+        let mut pos = (x, y, z);
+        Self::polar_step(&mut pos, yaw, 0, speed as i16);
+        let e = &mut self.ent[i];
+        e.x = pos.0;
+        e.y = pos.1;
+        e.z = pos.2;
+    }
+
     /// `sub_32F40` (EF:24095) — the (10,19) ground-fire-spray tick:
     /// while alive, walk the radius-0 splat TEMPLATE — retail loops
     /// `AddE7EE0x_10080(0, 0)` = ring 0 (4 cells, last dropped as the

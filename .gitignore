@@ -23,6 +23,7 @@
 
 # Flight recordings
 /conformance/brief-baseline.txt
+/conformance/terrain-check-baseline.txt
 /recordings/*.mgcr
 
 # Python caches

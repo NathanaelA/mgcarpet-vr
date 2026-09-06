@@ -36,6 +36,13 @@ fn usage() -> ! {
            terrain-diff <file.mgcr>…      diff the take's measured terrain base\n\
                                           against the port's generated planes\n\
                                           (the record-0 stock-bake validator)\n\
+           terrain-check <file.mgcr>…     THE NAKED TRUTH: one VERDICT line per\n\
+                                          take — is the port's GENERATED terrain\n\
+                                          bit-identical to what retail had at\n\
+                                          record 0? The port is settled by the\n\
+                                          recorder's phase (MC2: 6 ticks into the\n\
+                                          building settle; MC1: 0) unless --settle\n\
+                                          is given. Exit 1 = some plane differs\n\
            verify-deltas <file.mgcr>      import state@N, tick, diff obs@N+1\n\
            replay <file.mgcr>             PURE INPUT REPLAY: seed once from the\n\
                                           first closure, free-run on the recovered\n\
@@ -85,6 +92,13 @@ fn usage() -> ! {
            --baseline <dir>  read the MEASURED planes from an earlier --out\n\
                              dump instead of this take's record-0 base (keeps\n\
                              an attribution reproducible after a re-record)\n\
+           --settle <n>      tick the port's world n times (idle pose at the\n\
+                             level start) before diffing, so the AUTHORED\n\
+                             terrain (buildings, cave sculptors, rivers) is\n\
+                             built. terrain-diff defaults to 0 (the raw\n\
+                             generator), terrain-check to the recorder's phase\n\
+                             (MC2 record 0 = 6 ticks in); retail@t for any\n\
+                             other t is `slice --from t --to t+6`\n\
          extract flags:\n\
            --out <path>          manifest destination (required)\n\
            --sample-every <n>    conforming-pair sampling stride (default 10).\n\
@@ -191,6 +205,10 @@ pub struct Args {
     /// terrain-diff: take the MEASURED planes from a cached `--out`
     /// dump directory instead of the recording's record-0 base.
     pub baseline: Option<PathBuf>,
+    /// terrain-diff: tick the port's world this many times before
+    /// taking its planes (MC2 has no load-time pass — the authored
+    /// terrain lands over the first ~40 gameplay ticks).
+    pub settle: Option<u32>,
     pub sample_every: u64,
     /// Feed the input channel k ticks late (retail's mouse→control→
     /// consume pipeline shows ~2-3 ticks of latency vs the sampled
@@ -273,6 +291,7 @@ fn parse_args() -> Args {
         csv: None,
         out: None,
         baseline: None,
+        settle: None,
         sample_every: 10,
         no_roster: false,
         resync_deviations: false,
@@ -334,6 +353,13 @@ fn parse_args() -> Args {
             "--out" => a.out = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--baseline" => {
                 a.baseline = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage()))
+            }
+            "--settle" => {
+                a.settle = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or_else(|| usage()),
+                )
             }
             "--sample-every" => {
                 a.sample_every = it
@@ -426,7 +452,12 @@ fn main() {
     // silently accepting it reads as "the tool stopped writing my
     // file" — the classic slip is `verify-deltas --out x.tsv` for
     // what is spelled `--csv x.tsv`.
-    if args.out.is_some() && !matches!(args.mode.as_str(), "terrain-diff" | "extract" | "slice") {
+    if args.out.is_some()
+        && !matches!(
+            args.mode.as_str(),
+            "terrain-diff" | "terrain-check" | "extract" | "slice"
+        )
+    {
         eprintln!(
             "error: --out is not a {} flag (terrain-diff/extract/slice only); \
              the verify-deltas per-pair TSV is written with --csv <path>",
@@ -458,6 +489,12 @@ fn main() {
         "explain" => explain::explain(&args),
         "ground-audit" => ground_audit(&args),
         "trace" => trace(&args),
+        "terrain-check" => args
+            .files
+            .iter()
+            .map(|f| terrain_check(f, &args))
+            .max()
+            .unwrap_or(0),
         "terrain-diff" => args
             .files
             .iter()
@@ -951,24 +988,46 @@ fn trace(args: &Args) -> i32 {
     0
 }
 
-/// `terrain-diff <rec.mgcr>…` — the record-0 STOCK-BAKE VALIDATOR
-/// (docs/RECORDING-TERRAIN-V2.md "free instruments"): decode the
-/// take's measured terrain base and diff it plane-by-plane against
-/// the port's own generated level terrain. Agreement certifies the
-/// generator chain; disagreement prints cell-level examples to dig
-/// at. Exit 0 = every compared plane matched.
-fn terrain_diff(path: &std::path::Path, args: &Args) -> i32 {
-    match terrain_diff_inner(path, args) {
-        Ok(true) => 0,
-        Ok(false) => 1,
-        Err(e) => {
-            eprintln!("{}: {e}", path.display());
-            2
-        }
+/// The recorder's record-0 PHASE: how many gameplay ticks retail had
+/// already run when the take's first terrain base was captured. MC2's
+/// (10,45) building settle is a 30-tick height lerp and a unique fit of
+/// it on mc2l15 (docs/CONFORMANCE-FINDINGS.md round 107) reads record 0
+/// as 6 ticks in; settled exactly 6 ticks the port's mc2:15 planes are
+/// bit-identical to record 0 on all five planes (round 109). MC1's
+/// load-time pass is synchronous, so its record 0 is the settled level.
+fn retail_record0_settle(family: mgc_formats::mgcr::Family) -> u32 {
+    match family {
+        mgc_formats::mgcr::Family::Mc1 => 0,
+        mgc_formats::mgcr::Family::Mc2 => 6,
     }
 }
 
-fn terrain_diff_inner(path: &std::path::Path, args: &Args) -> Result<bool, String> {
+/// One take's generated-vs-measured terrain comparison.
+struct TerrainReport {
+    game: String,
+    level: u32,
+    base_t: u64,
+    settle: u32,
+    /// (plane, cells, differing cells, first examples as (x, y, retail, port))
+    planes: Vec<(String, usize, usize, Vec<(usize, usize, u8, u8)>)>,
+    skipped: Vec<String>,
+}
+
+impl TerrainReport {
+    fn identical(&self) -> bool {
+        self.planes.iter().all(|p| p.2 == 0)
+    }
+}
+
+/// The shared core of `terrain-diff` and `terrain-check`: decode the
+/// take's record-0 terrain base (or a `--baseline` dump), build the
+/// port's level, settle it `settle` ticks, and count differing cells
+/// per declared plane.
+fn terrain_compare(
+    path: &std::path::Path,
+    args: &Args,
+    settle: u32,
+) -> Result<TerrainReport, String> {
     let mut rec = Recording::open(path)?;
     let decl = rec
         .header
@@ -993,26 +1052,42 @@ fn terrain_diff_inner(path: &std::path::Path, args: &Args) -> Result<bool, Strin
         base: Some(base),
         delta: None,
     })?;
-    let pristine = match family {
-        mgc_formats::mgcr::Family::Mc1 => verify::build_world(&args.baked, &game, level)?.1,
+    let (mut w, pristine) = match family {
+        mgc_formats::mgcr::Family::Mc1 => {
+            verify::build_world(&args.baked, &game, level)?
+        }
         mgc_formats::mgcr::Family::Mc2 =>
         // planes only — no entity dispatch, so the replay gate cannot apply
         {
-            verify_mc2::build_world_mc2(&args.baked, level, false)?.1
+            let (w, p, _) = verify_mc2::build_world_mc2(&args.baked, level, false)?;
+            (w, p)
         }
     };
-    println!(
-        "== terrain-diff {} (game {game}, level {level}, base @t={})",
-        path.display(),
-        first.t
-    );
-    // `--out <dir>`: dump both sides of every plane as raw
-    // 256x256 byte images (`<plane>.retail` / `<plane>.port`) so an
-    // offline clusterer can attribute the diffs region by region.
+    let planes = if settle > 0 {
+        // The app's `--map-settle` driver: real ticks (not
+        // `tick_paused`), the carpet idle at the level start.
+        let (px, pz) = mc2_player_start(&args.baked, &family, level).unwrap_or((128.5, 128.5));
+        let idle = mgc_sim::engine::world::PlayerCommand::default();
+        for _ in 0..settle {
+            let alt = w.ground_height_tiles(px, pz) + 2.0;
+            let pose = mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+            w.tick(pose, idle);
+        }
+        w.planes_clone()
+    } else {
+        pristine
+    };
     if let Some(dir) = &args.out {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    let mut dirty = 0usize;
+    let mut report = TerrainReport {
+        game: game.to_string(),
+        level,
+        base_t: first.t,
+        settle,
+        planes: Vec::new(),
+        skipped: Vec::new(),
+    };
     for name in &decl.planes {
         // `--baseline <dir>`: read the MEASURED planes from a cached
         // `--out` dump (`<dir>/<plane>.retail`) instead of the take's
@@ -1029,13 +1104,13 @@ fn terrain_diff_inner(path: &std::path::Path, args: &Args) -> Result<bool, Strin
             img.plane(name).ok_or("declared plane missing")?
         };
         let baked: &[u8] = match name.as_str() {
-            "type" => &pristine.tile_type,
-            "height" => &pristine.height,
-            "shading" => &pristine.shading,
-            "angle" => &pristine.angle,
-            "ceiling" => &pristine.ceiling,
+            "type" => &planes.tile_type,
+            "height" => &planes.height,
+            "shading" => &planes.shading,
+            "angle" => &planes.angle,
+            "ceiling" => &planes.ceiling,
             other => {
-                println!("  {other}: not a port plane — skipped");
+                report.skipped.push(other.to_string());
                 continue;
             }
         };
@@ -1046,38 +1121,146 @@ fn terrain_diff_inner(path: &std::path::Path, args: &Args) -> Result<bool, Strin
                 .map_err(|e| format!("{name}.port: {e}"))?;
         }
         if baked.len() != measured.len() {
-            println!(
-                "  {name}: size mismatch — port {} cells vs measured {}",
+            return Err(format!(
+                "{name}: size mismatch — port {} cells vs measured {}",
                 baked.len(),
                 measured.len()
-            );
-            dirty += 1;
-            continue;
+            ));
         }
-        let diffs: Vec<usize> = (0..measured.len())
+        let mut examples = Vec::new();
+        let diffs = (0..measured.len())
             .filter(|&i| measured[i] != baked[i])
-            .collect();
-        if diffs.is_empty() {
-            println!("  {name}: MATCH ({} cells)", measured.len());
-            continue;
-        }
-        dirty += diffs.len();
-        println!(
-            "  {name}: {} cell(s) differ ({:.2}%); examples:",
-            diffs.len(),
-            diffs.len() as f64 * 100.0 / measured.len() as f64
-        );
-        for &i in diffs.iter().take(args.max_diffs) {
+            .inspect(|&i| {
+                if examples.len() < args.max_diffs {
+                    examples.push((i % 256, i / 256, measured[i], baked[i]));
+                }
+            })
+            .count();
+        report
+            .planes
+            .push((name.clone(), measured.len(), diffs, examples));
+    }
+    Ok(report)
+}
+
+/// The level's authored player start (the class-3 model-4 THING,
+/// tile centre) — the app's `entities::player_start` resolver.
+fn mc2_player_start(
+    baked: &std::path::Path,
+    family: &mgc_formats::mgcr::Family,
+    level: u32,
+) -> Option<(f32, f32)> {
+    let dir = match family {
+        mgc_formats::mgcr::Family::Mc1 => "mc1",
+        mgc_formats::mgcr::Family::Mc2 => "mc2",
+    };
+    let lp = baked.join(dir).join(format!("level-{level:03}.mgcl"));
+    let pkg: mgc_formats::LevelPackage = mgc_formats::mgcl::read(std::fs::File::open(lp).ok()?).ok()?;
+    pkg.things
+        .things
+        .iter()
+        .find(|t| t.kind == mgc_formats::ThingKind::Entity && t.class == 3 && t.model == 4)
+        .map(|t| (t.x as f32 + 0.5, t.y as f32 + 0.5))
+}
+
+/// `terrain-diff <rec.mgcr>…` — the record-0 STOCK-BAKE VALIDATOR
+/// (docs/RECORDING-TERRAIN-V2.md "free instruments"): decode the
+/// take's measured terrain base and diff it plane-by-plane against
+/// the port's own generated level terrain. Agreement certifies the
+/// generator chain; disagreement prints cell-level examples to dig
+/// at. Exit 0 = every compared plane matched.
+fn terrain_diff(path: &std::path::Path, args: &Args) -> i32 {
+    match terrain_compare(path, args, args.settle.unwrap_or(0)) {
+        Ok(r) => {
             println!(
-                "    ({:3},{:3}) retail {:3} vs port {:3}",
-                i % 256,
-                i / 256,
-                measured[i],
-                baked[i]
+                "== terrain-diff {} (game {}, level {}, base @t={}, port settle {})",
+                path.display(),
+                r.game,
+                r.level,
+                r.base_t,
+                r.settle
             );
+            for other in &r.skipped {
+                println!("  {other}: not a port plane — skipped");
+            }
+            for (name, cells, diffs, examples) in &r.planes {
+                if *diffs == 0 {
+                    println!("  {name}: MATCH ({cells} cells)");
+                    continue;
+                }
+                println!(
+                    "  {name}: {diffs} cell(s) differ ({:.2}%); examples:",
+                    *diffs as f64 * 100.0 / *cells as f64
+                );
+                for (x, y, retail, port) in examples {
+                    println!("    ({x:3},{y:3}) retail {retail:3} vs port {port:3}");
+                }
+            }
+            if r.identical() { 0 } else { 1 }
+        }
+        Err(e) => {
+            eprintln!("{}: {e}", path.display());
+            2
         }
     }
-    Ok(dirty == 0)
+}
+
+/// `terrain-check <rec.mgcr>…` — THE NAKED TRUTH, one line per take:
+/// is the port's GENERATED level terrain bit-identical to what retail
+/// had when the take began? The port is settled by the recorder's
+/// record-0 phase ([`retail_record0_settle`]) unless `--settle` says
+/// otherwise, then every declared plane must match on every cell.
+/// This is the GENERATE-axis witness — `replay` imports the measured
+/// terrain every pair and can never see a generator deviation
+/// (round 109: the mc2:15 lava was missing for 100+ rounds while the
+/// take certified). Exit 0 = identical, 1 = some plane differs.
+fn terrain_check(path: &std::path::Path, args: &Args) -> i32 {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let family = match Recording::open(path).and_then(|r| r.header.family()) {
+        Ok(f) => f,
+        Err(e) => {
+            println!("TERRAIN {name}: ERROR — {e}");
+            return 2;
+        }
+    };
+    let settle = args.settle.unwrap_or_else(|| retail_record0_settle(family));
+    match terrain_compare(path, args, settle) {
+        Ok(r) if r.identical() => {
+            println!(
+                "TERRAIN {name}: IDENTICAL — {} plane(s) × {} cells, port settled {} tick(s){}",
+                r.planes.len(),
+                r.planes.first().map_or(0, |p| p.1),
+                r.settle,
+                if args.settle.is_none() { " (retail record-0 phase)" } else { "" }
+            );
+            0
+        }
+        Ok(r) => {
+            let cells = r.planes.first().map_or(0, |p| p.1);
+            let detail: Vec<String> = r
+                .planes
+                .iter()
+                .filter(|p| p.2 != 0)
+                .map(|p| format!("{} {}", p.0, p.2))
+                .collect();
+            println!(
+                "TERRAIN {name}: DIFFERENT — {} of {cells} cells, port settled {} tick(s) (level {}, \
+                 base @t={})",
+                detail.join(" · "),
+                r.settle,
+                r.level,
+                r.base_t
+            );
+            1
+        }
+        Err(e) => {
+            println!("TERRAIN {name}: ERROR — {e}");
+            2
+        }
+    }
 }
 
 /// Re-decode every tick's raw struct image and compare against the

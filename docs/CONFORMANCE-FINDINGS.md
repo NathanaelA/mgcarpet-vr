@@ -30829,3 +30829,635 @@ Switch `MGC_NO_MC2_CONTROLLED_WRAPPER_TAIL`.
   (the nearest record locked onto the parent) because `MobCtx` carries no player target lock —
   the same `proll` shaped gap round 105 banked. A `MobCtx` lock field closes both.
 - Everything owed into round 106 is still owed (round 105's list below).
+
+# ROUND 107 (2026-09-06) — **THE HELD SEAM AND THE WRAPPER TAILS**: mc2l15 9,361 → 767 segments, plus the terrain-instrument ruling
+
+**Player:** *"let's look at the banked task — mc2l15, and its specifics — namely the troglodyte,
+and a couple of the cavern specifics. Also banked, we need to get to the bottom of the comparison
+of the port terrain generation vs. recording terrain… One of the large cave rooms has a moat of
+lava, which the port completely fails to express."* Serial digs on head slices, no subagents.
+
+```
+mc2l15  segments=9361 devs=9360 clean=33827 horizon= 7574 sig=(5,21)slot4:rand
+     -> segments= 767 devs= 764 clean=42421 horizon=35345 sig=pose:pose.z      roster=2
+    42,421 of 43,187 boundaries bit-exact; segments −91.8%; the horizon reaches 82% of the take.
+    mc2l4 IMPROVED 48 -> 14 segments off the same hunks. Every other take BYTE-IDENTICAL,
+    mc2l22 included (still horizon=END). Fixtures 448 -> 455. Lib tests 648 -> 649.
+```
+
+## ⭐⭐⭐ THE TERRAIN LANE FIRST: `terrain-diff` IS PHASE-SHIFTED, AND THE MOAT WAS NEVER WRONG
+The port's SIM builds mc2l15's lava moat **byte for byte**. What was wrong was the instrument.
+- `terrain-diff`'s port side is `w.planes_clone()` taken in `verify_mc2::build_world_mc2`
+  **before any tick**, and `World::new_full` runs **no load-time pass for MC2 at all**
+  (`if !matches!(game, GameId::Mc2) { g.load_time_pass(&mut table); }`), so every authored
+  terrain edit is outside what it was measuring. `mc2_terrain.rs` (the oracle-checked
+  `GenerateLevelMap_43830` port) never reads THINGS.
+- Its retail side is record 0 — which catches retail **6 ticks into a 30-tick building lerp**.
+- 🔑 **`slice --from T --to T+6` + `terrain-diff` reads retail's terrain AT TICK T** (the slice
+  re-bases terrain at its first record). Cutting t=0/12/30/120/600 on mc2l15:
+  `(142,73)` retail 1 → 24, `(139,73)` 12 → 60 … and the port's settled values are 24 and 60.
+- Phase-aligned (retail@t=30 vs port settled), the **moat rectangle** (x135..180, y70..110) is
+  `type 0.0% · height 0.0% · shading 0.0% · ceiling 0.0% · angle 7 cells`. Types 8/10/11/23
+  match 64/64, 381/381, 1/1, 5/5 map-wide; seal bits agree to 0.2%.
+- The moat is ten `(10,45)` buildings: five of build id 18 as a rectangle of 4 corners + centre
+  (x142..172, y77..101), four of id 37 at the edge midpoints, one id 23 at (214,182). BUILD00
+  cells are **2 bytes `[paint_code, pad]`**; all four MC2 banks are byte-identical.
+  ⚠ The stamp anchors at `(x+128)>>8`, so its top-left is `cx − w/2` **+0 or +1** — derive the
+  offset empirically or the code→height table comes out one-to-many; and OVERLAPPING footprints
+  (slots 373/374/375) are overwritten by neighbours.
+- 🔧 The fit that cracked it: brute-forcing the truncating lerp `h += (pad−h)/life` gave a
+  UNIQUE solution `life0=29, ticks=6`. **A clean unique lerp fit means a PHASE offset, not a
+  value bug.**
+- ⚠ CORRECTED: mc2l15 is **not** the only take with a `ceiling` plane — mc2l3 (0.20%) and
+  mc2l30 (0.13%) have one. Its 12.11% is the outlier. Phase-aligned, mc2l15 reads
+  type 9.3% / height 12.2% / shading 10.2% / angle 20.8% / ceiling 11.8% — barely moved, because
+  **the buildings were never the bulk of it.** What remains is the CAVE SCULPTOR BAND
+  ((10,80)×77, (10,82)×13, (10,84)×10, (10,85)×8), clustered AWAY from the moat.
+
+### ✅ AND THE PLAYER'S "NO LAVA IN `--level`" IS AN APP BUG, NOT A TERRAIN BUG
+The player's own question settled it — *"could this be a difference between the app vs. the
+replay instrument?"* — yes:
+1. `--replay` **imports** retail's terrain; record 0 already holds the moat.
+2. `--level` **generates**. `mgc-app`'s `load_level` does `let w = init.build();` then
+   `tile_type.copy_from_slice(&w.planes().tile_type)` under the comment *"The view starts from
+   the post-feature planes"* — **true for MC1 only**, since MC2 runs no load-time pass. The MC2
+   view snapshot is bare generator output.
+3. The sim then DOES build the moat over ticks 1..8 — but **`mc2_building_tick`
+   (`mc2/mobs.rs`) never sets `terrain_dirty`**, while every sibling terrain writer does
+   (`mc2_castle_unstamp`, `mc2/pads.rs`, `mc2/rivals.rs`, `mc2/doomsday.rs`, `mc2/probes.rs`).
+   The app syncs on `w.terrain_dirty`, so it never re-uploads.
+⚠ NOT LANDED — `terrain_dirty` is serialized into the snapshot, so it needs its own A/B +
+neutrality sweep. Player confirmed the shape from play: *"the settle does propagate for most
+things… but I feel this one terrain transform is absent."*
+⭐⭐⭐ **AN IMPORT PATH AND A GENERATE PATH THAT AGREE ON THE SIM CAN STILL DISAGREE ON WHAT THE
+PLAYER SEES.** Certification only ever exercises the import path.
+🏦 BANKED (player-set): re-run the WHOLE CORPUS phase-aligned; land `terrain-diff --settle <n>`.
+
+## THE EIGHT LAWS
+Every one of them is a **phase-7 wrapper tail or a held-seam arm** — one family, found by
+walking consecutive ticks of one slot on a slice.
+
+**HEAD 1, t=7575 `(5,21)slot4:rand` (INHERITED)** — ⭐⭐ m21's wrapper tail is an IDENTITY ON THE
+ACTION AND A PURE SIDE EFFECT. `sub_26470` ends `if (actionIndex != 175) sub_268F0(a1x,
+actionIndex + 88)`. `a2 = action + 88` is u8 arithmetic over `action = 168 + k`, so `a2 ≡ k` and
+`sub_268F0` writes `action = a2 − 88` — the same byte back. It exists only to re-apply the mode
+side effect to whatever action the `sub_1D5D0` legs promoted to: `a2==1` arms the rest base,
+`a2==2` zeroes it. It sits OUTSIDE the StageVar2 switch and retail's `default:` **breaks**
+(m0's twin `sub_1F300` `return`s and has no tail at all). Witness: pair 7527→7528, the devil
+takes 160, `sv2 6→10`, `action 175→170`, retail `b43 64→0`. Also fixed: `m21_mode`'s bare `else`
+zeroed `byte_0x43_67` for every mode ≠ 1 — an invented arm.
+⚠ **`b43` IS RECORDED BUT NEITHER GRADED NOR IMPORTED** (not in `EntObsMc2`, no seat in
+`import_ent_mc2`) — so no pair fixture can witness this law, and it is pinned by a UNIT TEST.
+That two-sided lane gap is why the head classified INHERITED.
+
+**HEAD 2, t=14445 `(5,18)slot2:rand`** — m18's `sub_25550` tail
+`if (actionIndex == 146) sub_253B0(a1x, 2u, 0)`: one entity draw and
+`dword_0x10_16 = rand % 200 + 200`. Arithmetic confirms it exactly —
+`9377*40649 + 9439 mod 2^16 = 17736` and `17736 % 200 + 200 = 336`.
+🏦 OWED: the wrapper's middle line, the unconditional `position.z = getTerrainAlt(position)`.
+
+**HEAD 3, t=15434 `(9,0)slot2:heading`** — ⭐⭐⭐ the m18 fan's bolt yaw is NOT masked.
+`sub_1D460` (EF:9962) stores `v3 + bearing` raw into an `int16_t`; the port's `& 0x7FF` is
+invented and false on exactly the ±226 wings. `2261 & 0x7FF = 213`. The other four bolts of the
+volley were bit-exact, which is why it survived every earlier take.
+
+**HEAD 4, t=16734 `(5,18)slot3:heading`** — ⭐⭐⭐ m18's barrage AIMS AT A CORPSE. `sub_250B0`
+case 0 is a bare `sub_254E0(a1x, Entities_EA3E4[word_0x96_150], 4u)` with no liveness test;
+case 1, eight lines away, rejects on `life < 0 || byte[1] & 4`. The port routed both through
+`mc2_target`, whose baked-in guard IS case 1's. **`mc2_target`'s own doc stated the law — "each
+caller guards the resolved pointer" — and then baked the guard into the resolver**, which is
+what hid it. New `mc2_target_raw`. 🏦 OWED: the roam arm (`sub_24E20`) is unguarded too.
+
+**HEAD 5, t=19532 `(5,24)slot32:applied_pitch`** — TWO laws, both in `sub_287B0`/`sub_28500`:
+(a) ⭐⭐⭐ m24's pose commits through `SetEntityIndex_49C90` INLINED, **not**
+`SetEntityIndexAndRot_49CD0` — the `array_0x52_82` quad is never touched. The ctor proves it:
+`mc2_shift_rot(i, 256, 640)` is exactly the 256/256/640 retail holds. The guard is on BOTH
+sprites and the write on ALL FOUR ladder arms.
+(b) ⭐⭐⭐ m24's idle `else` is UNCONDITIONAL: any action the IDLE PRIMITIVE moved to — 194
+included — is overwritten with 198. Only `sub_28690`'s own acquire survives at 194. Its
+action-192 twin `sub_28490` has the identical shape and the port's `0 =>` arm already matched
+it; the `1 =>` arm alone carried an invented `else if action == 194 {}`.
+
+**HEAD 6, t=19906 `(5,9)slot4:…`** — TWO more:
+(c) ⭐⭐⭐ **KIND 4 IS A GUARDIAN TOO, AND THE DISPATCH IS CROSSED.** `sub_1D5D0` sends case 3 →
+`sub_1D7C0` and case 4 → `sub_1D700` — *not* in case order. Kind 3 chases the WATCHED ENTITY;
+kind 4 inherits the watched entity's OWN quarry and measures the reach to THAT. The port gated
+the whole arm on `kind == 3`.
+⚠ TRAP RECORDED: reading the mapping off FUNCTION ORDER inverts the two laws, and the inverted
+version fires at the right tick with the wrong quarry — measured **worse** than not firing
+(horizon 19,905 → 19,750). Reverted, re-read the `case` labels, re-landed.
+(d) m9's `sub_20FC0` tail `if (actionIndex == 74) sub_20EC0(a1x)` — the engage pose. The port
+already owned it as `m9_engage_pose` but hangs it off `m9_tick`, which the seam pre-empts.
+Note `sub_20EC0` uses the **AndRot** setter, the opposite of m24's pose.
+🏦 OWED: `m9_engage_pose` writes speed and sprite BEFORE its self-target check; retail writes
+them only in the `else` arm.
+
+## ⚠⚠⚠ TWO EXISTING TESTS ENCODED THE PRE-DIG BEHAVIOUR AS LAW
+- `the_phase_seven_wrappers_zero_the_sub_state_on_release`'s SCOPE CONTROL asserted "m18 has no
+  phase-7 sub-state reset". m18 DOES reset it — as `sub_253B0`'s `a4` argument, alongside a
+  timer write and a draw. Rewritten to assert the mechanism, so the control still fails if a
+  bare zero is ever hung off the release.
+- ⭐⭐⭐ `mc2_kind4_hold_never_joins_the_watched_fight` asserted kind 4's join arm is
+  **retail-inert**, citing a player replay of mc2:04 ("the worms crawl along and never join")
+  and remc2's hand-added `if (v4 == 0xae02) return;//fix`. mc2l15 pair 19905→19906 is a direct
+  RECORDED counterexample. **A RECORDING OUTRANKS A VISUAL REPLAY** — and the two RECONCILE on
+  the `v4 &&` guard the old reading dropped: the arm fires only when the watched creature
+  actually HAS a quarry. Renamed `mc2_kind4_hold_joins_only_when_the_watch_has_a_quarry` and
+  both halves are now pinned. **PLAYER: this reverses a conclusion drawn from your own replay —
+  flagging it explicitly.**
+
+## OWED INTO ROUND 108
+- **HEAD 9, t=24152 `(10,42)slot719:applied_pitch` — A RULING, NOT A DIG.** The painter is born
+  at the ORIGIN with `owner28 = 165`: `sub_377A0`'s class-3 sweep over the human. `b46 = 176` is
+  the human's `dword_0x10_16`, which the port's out-of-pool human does not carry, and
+  `apitch 5504 / aroll 2944` are the OOB read indexed by it. `known-deviations.json`'s
+  `mc2-painter-oob-build-row-applied-pitch` covers **`applied_pitch` only**, so the boundary is
+  not excused. Two separable questions: (a) is `b46` a real port gap (model the human's
+  `dword_0x10_16`)? (b) should the rule extend to `applied_roll`?
+- The terrain items above (`terrain_dirty`; the corpus-wide phase-aligned re-sweep;
+  `terrain-diff --settle`; the CAVE SCULPTOR BAND at 20.8% angle).
+- ⚠ THE TROGLODYTE WAS NOT TOUCHED THIS ROUND — still the banked `(5,15)` lead, still
+  UNCONFIRMED, still needs the player's identification.
+- Everything owed into round 107 is still owed.
+
+# ROUND 108 (2026-09-06) — **mc2l15 CERTIFIED**: the Cave-In's IMPORT SEAT and its SURVIVAL POCKET
+
+```
+mc2l15  segments=767 devs=764 clean=42421 horizon= 7574->35345 sig=pose:pose.z
+     ->  segments=  3 devs=  0 clean=43185 horizon=END          roster=2
+    43,185 of 43,187 boundaries BIT-EXACT. devs=0 — every remaining reset is
+    ROSTER-EXCUSED (the registered (10,42) painter BUILD00 OOB row at t=24152 and
+    t=24184), the same shape that certified mc2l6-rival-spells-galore in round 103.
+    ⇒ **17 of 24 TAKES CERTIFIED.**
+    THREE laws, all one feature. Every other take BYTE-IDENTICAL across all three
+    (28 of 28 recordings measured; brief-baseline's stale `mc1hwl3` row is now dropped).
+    456 fixtures pass (+1), 0 regressions. 1,013 workspace tests pass (+2 pins).
+    Every one A/B-proved non-vacuous on the reverted tree.
+```
+
+## 108-1 ⭐⭐⭐ THE (10,89) CAVE-IN HAD NO IMPORT SEAT — AND IT OWNED THE WHOLE TAIL OF mc2l15
+`sub_311E0` (EF:22860) runs the Cave-In collapse out of **two** struct words the uniform MC2
+import map spends elsewhere:
+- **`@0x2C` = the WAVE PHASE.** Phase 0 seeds 227 (:22936); the tail adds 22/tick (:23085) and
+  trips phase 3 past 1024 (:23088); the six-ring sculpt reads it as `v7` (:22957) to scale the
+  `sin_DB750` rise/drop profile.
+- **`@0x36` = the ONE-SHOT DEBRIS LATCH.** The burst is
+  `if (!word_0x36_54 && word_0x2C_44 > 455)` (:23052) — ~74 `(10,13)` rocks flung on a 2048/28
+  yaw ring — and it latches `@0x36 = 1`.
+
+The port's homes are `f44` and `f54` (`mc2_cave_in_tick`, `mc2/cave.rs`), but `import_ent_mc2`
+had **no class-10 model-89 arm**, so an imported collapse took the uniform `@0x2A` (the NewEvent
+default **100**) into `f44` and the multipart TAIL LINK `@0x34` (dead 0) into `f54`. Wrong three
+ways at once:
+1. **`100 > 455` is never true ⇒ THE DEBRIS BURST NEVER FIRED.** mc2l15 pair 35203→35204:
+   retail spawns the ring, the port spawns nothing, and the free stack reads **retail 766 /
+   port 840** — exactly the 74 unallocated rocks.
+2. **The sculpt profile is evaluated at the wrong point of the sine**, so the rings write the
+   wrong floor/ceiling — the take's `z` and `pose.z` rows.
+3. **100 + 22/tick reaches 1024 far too late**, so phase 3 lands late and `life` (+4/tick,
+   :23086) over-runs its cap — the recurring **`life: retail 188 port 192`** signature
+   (slots 684 / 709 / 737 / 857). 188 = 40 + 4×37 is exactly the tick `wave` = 227 + 22×37 =
+   1041 crosses 1024; the port ran one increment past it.
+
+**Landed**: a `class3f == 10 && model40 == 89` arm in `import_ent_mc2` seating `f44 <- r.f2c`
+and `f54 <- r.f36` (⚠ `@0x36` must NOT go through `tr()` — it is a latch, not a slot), plus
+model 89 added to `c10_2c_in_f44`.
+
+**Measured**: mc2l15 **767 → 593 segments**, clean 42,421 → 42,595. On the dig slice
+(t=35146..37346) the PAIR view went `2,189 conforming / 666 missing / 2 field` → **2,200 of
+2,200 conforming, ZERO unexplained rows**. `rng` divergence 243 → **0**;
+`missing (10,13)` 484 → **0**.
+
+⭐⭐⭐ **THE LESSON, AND IT IS THE ROUND-98 IMPORT-SEAT LESSON WITH A NEW EDGE: THE FEATURE HAD
+NO WITNESS UNTIL ONE RECORDING EXERCISED IT.** The Cave-In is CAVE-ONLY and mc2l15 is the only
+cave take, so every one of these three bugs sat unexposed through 107 rounds. **A take that is
+the sole witness of a feature will surface that feature's WHOLE import column at once — expect
+a cluster, not a row.**
+
+⭐⭐ **A CORRELATION SWEEP FOUND THE FEATURE BEFORE ANY DIG DID.** Censusing `(10,89)`/`(10,13)`
+against tick showed collapses live only between **t≈35,200 and t≈40,720** — and every one of the
+divergences sits inside a window with a live `(10,89)`, with the take's last **2,461 ticks
+bit-exact**. ⇒ **Before digging a head, census the take for WHERE the divergences are NOT. A
+take whose breaks all sit inside one feature's lifetime has ONE broken feature, not 764 bugs.**
+⚠ **AND CENSUS AT THE HEAD TICKS, NOT ON A ROUND-NUMBER GRID.** A first pass on a coarse grid
+(35100/35200/…/43000) reported only three collapse windows and MISSED four more (38393-38506,
+39277-39604, 40072-40380, 40444-40719 — 546 of the 590 heads). Deriving the windows from the
+classify's own `first divergence` ticks and only THEN censusing is what got it right.
+
+⚠ **AND THE PAIR VIEW IS BLIND TO THE ACCUMULATING HALF.** `verify-deltas` re-imports the
+MEASURED terrain every pair, so the cave-in's own sculpt drift is invisible to it — which is why
+the slice reads 2,200/2,200 clean while the free run still breaks 590 times. The remaining
+mc2l15 tail is `pose.z` (510 rows) + `z` (292) and it is TERRAIN, not entities.
+
+## 108-2 THE PAINTER's `b46` — PLAYER-RULED, AND IT NEEDED ITS OWN SEAT TOO
+Round 107 owed this as a ruling. **PLAYER, 2026-09-06: *"Real port gap — model it."***
+
+Retail's `sub_377A0` stamps `byte_0x46_70 = wizard->dword_0x10_16` on every (10,42) painter it
+mints, and on the human that word is the **death respawn timer** — 0 until the first death,
+1200 after (EF:60170; the human arm of `sub_5E7C0` never counts it down). The port's human
+carpet is OUT OF POOL and had nowhere to keep it, so it hard-coded row 0 and published
+`b46` **0** against retail's **176** (= 1200 & 0xFF).
+
+**Landed**: `Player::mc2_respawn_timer` (the port's home for `@0x10`), latched to 1200 in the
+death payout, hashed **only when non-zero** (the `life_rate` / `death_owned_blue`
+transparent-at-pristine shape, so no golden moves), snapshot put/get, and plumbed into
+`mc2_building_tick`'s human painter row.
+
+⚠⚠ **AND IT TOOK A SECOND SEAT TO WORK.** The first attempt wrote
+`self.player.mc2_respawn_timer` early in `retail_import_mc2` — and **line 3065's wholesale
+`self.player = Player { … }` clobbered it back to 0**. `b46` stayed 0 and the law looked wrong.
+⇒ **WHEN AN IMPORT SEAT DOES NOT TAKE, GREP THE IMPORTER FOR A LATER WHOLESALE ASSIGNMENT OF
+THE STRUCT YOU JUST WROTE INTO.** The seat now lives inside that literal.
+
+**Verified**: mc2l15 t=24152 slot 719 `b46` retail 176 / **port 176**. `apitch 5504 / aroll 2944`
+vs 640 REMAIN, exactly as predicted — row 176 is off the end of a 77-row table on both sides and
+retail reads heap residue there. **This fixes the INDEX, not the residue it lands in**; the
+`mc2-painter-oob-build-row-*` deviation is unchanged and still correctly scoped to
+`applied_pitch`/`applied_yaw`. Zero graded effect (`b46` is not a graded lane) — this was
+fidelity, ruled as such.
+
+⇒ round 107's question (b) — "should the rule extend to `applied_roll`?" — is **MOOT as asked**:
+`applied_roll` is not in `compare_mc2_gated`'s lane set at all, so it never reaches grading. It
+IS the same OOB read and would need the rule the day that lane is graded. Recorded here rather
+than added speculatively.
+
+## 108-3 ⭐⭐ THE TROGLODYTE IS `(5,24)`, NOT `(5,15)` — AND IT WAS NEVER UNPORTED
+**PLAYER, 2026-09-06:** *"The first encounter with troglodytes is at t=19550, right after
+destruction of one of the quest goal buildings. They pop up all over the room where the quest
+buildings stand."* And: *"troglodytes are NOT unported. The port has them. They work. My point
+was that there was no faithfulness recording of them prior to this level."*
+
+Measured: mc2l15 has **0** `(5,24)` at t=19530 and **30** at t=19531 — all thirty born in one
+tick, scattered x 33920..46976 / y 17280..26496, `max_life/life` 16000, `mana` 8000, `f2a` 1500,
+`action45` 193, sprite 335, extents 225/256/256/640. `explain 19549..19552` shows the matching
+`(10,0)` particle storm of the building's destruction.
+
+⛔ **THE BANKED `(5,15)` LEAD WAS WRONG, AND WRONG IN AN INSTRUCTIVE WAY.** It came from a
+**t=30000 census** (32 × `(5,15)` and nothing else class-5). That census was accurate but the
+inference was backwards: `(5,15)` is the LAST SPECIES STANDING, not the newcomer — it is already
+present at t=8000. ⇒ **A "only species alive at time T" census identifies the SURVIVOR. To name
+a newcomer, BRACKET ITS FIRST APPEARANCE.** `known-deviations.json`'s `mc2-guard-terrain` note
+calling `(5,15)` "castle guards" is therefore NOT in conflict and stands unchanged.
+
+⇒ The troglodyte is **not a build task**. Its machine is `Gen::m24_tick` (`mc2/roster.rs:4630`),
+and **round 107's two m24 laws were troglodyte fixes without knowing it**. Ordinary
+certification of mc2l15 past t=19531 IS the troglodyte witness.
+⭐ Also: mc2l15's t=0 roster (m9/m19/m20) badly under-states it — m3, m9, m15, m18, m19, m20,
+m21, m24, m25 all appear over its life. **A t=0 census UNDER-COUNTS a take's model coverage.**
+
+## 108-4 ⭐⭐⭐ THE SURVIVAL POCKET HAD NEVER ONCE BEEN CARVED — AND IT CERTIFIED THE TAKE
+With 108-1 landed, mc2l15's remaining 590 breaks were 510 `pose.z` + 292 `z`, all inside the
+collapse windows and **all invisible to the pair view** (which re-imports measured terrain every
+pair — the dig slice graded 2,200 of 2,200 conforming with the bug still in). The instrument that
+cracked it was `MGC_CELL_TRACE`, which prints the port's live planes beside the take's truth
+channel:
+```
+CELL t=35340 (51,55) port h=68  truth=65     CELL t=35344 (51,54) port h=64  truth=62
+CELL t=35341 (51,55) port h=68  truth=63     CELL t=35345 (51,54) port h=64  truth=59
+CELL t=35342 (51,55) port h=68  truth=61     CELL t=35346 (52,53) port h=66  truth=63
+CELL t=35343 (51,55) port h=68  truth=59
+```
+**Retail is digging the floor out from under the descending carpet; the port's floor is frozen.**
+That ramp IS the take's head (`pose.z` at t=35346, retail 2425 / port 2427).
+
+`sub_311E0` (EF:23003-37) walks `dword_38519` — the tick-top class-3 LIVE LIST — and for every
+member with `!model_0x40_64` digs a spherical cavity: floor DOWN to `z/32 - r`, ceiling UP to
+`z/32 + r`, `r = isqrt(0x64000 - d2) >> 5`. It is a SURVIVAL POCKET, not a burial — the wizard
+caught in its own collapse is spared.
+
+⭐⭐⭐ **AND `model == 0` IS THE HUMAN CARPET ALONE.** MC2's rival wizards are (3,1) and its
+castles (3,2); nothing else in the game is (3,0). The port's scan walked `self.ent` for
+`class64 == 3 && model65 == 0` — and **the carpet lives OUT OF POOL** (a zeroed husk at its slot
+under the conformance import, absent entirely in a native world). So the loop matched NOTHING, on
+any level, ever: **the port had never dug a single pocket.** A whole retail mechanic was dead code
+behind a predicate that could not fire.
+
+**Landed**: `mc2_cave_in_tick` takes the carpet the way `mc2_building_tick` does — the mid-walk
+`ctx` pose under the tick-top `!ctx.pdead_top` liveness (`dword_38519` membership is `life >= 0`
+at the tick top). The human is tested BESIDE the pool walk rather than at its slot: both writes
+are monotone (floor a min, ceiling a max), so unlike `sub_377A0`'s painter mint the ORDER provably
+cannot matter here — worth stating, because round 107 lost a law to assuming the opposite.
+
+**Measured**: mc2l15 **593 → 3 segments, devs 590 → 0, horizon 35,345 → END. CERTIFIED.**
+
+⚠ PINNED BY A UNIT TEST, NOT A FIXTURE — the pair lane cannot see a pure terrain write. See
+`the_cave_in_pocket_follows_the_out_of_pool_human`, which pins the DEPTH arithmetic and not just
+"lower": the swept cell probes TILE-ALIGNED (`x << 8`) while the carpet sits at the tile CENTRE,
+so at the centre tile `d2 = 2·128²` and `r = isqrt(0x64000 − 32768) >> 5 = 613 >> 5 = 19`.
+
+⭐⭐⭐ **THE GENERAL LESSON, AND IT IS THE ROUND'S BIGGEST: A PREDICATE THAT CANNOT FIRE LOOKS
+EXACTLY LIKE A PREDICATE THAT NEVER NEEDS TO.** `class64 == 3 && model65 == 0` reads as a correct
+transcription of retail's `!model` and passed every review — but in the port's architecture no
+record can ever satisfy it. ⇒ **WHEN A PORTED SCAN'S TARGET IS THE HUMAN, ASK WHETHER THE HUMAN IS
+IN THE STRUCTURE BEING SCANNED.** The out-of-pool carpet is a standing hole in EVERY pool walk;
+this round found two of them (this and `sub_377A0`'s painter row) in one feature.
+
+## 108-5 ⚠ THE ROUND-107 WRAPPER-TAIL GREP WAS ITSELF INCOMPLETE
+107's own closing instruction was `grep "sub_1D5D0(a1x, "`. That pattern **misses call sites
+that name the parameter differently** — `sub_1D5D0(a2x, 0)` (m0, :11356), `sub_1D5D0(event, 8)`
+(:11454) and `sub_1D5D0(event, 176)` (:18048). The honest enumeration is `grep "sub_1D5D0("`:
+**22 call sites**, not 18. ⇒ **NEVER PUT A PARAMETER NAME IN AN ENUMERATION GREP.**
+
+Full tail census (model = arg/8). Tails NOT yet mirrored in the held seam:
+| model | arg | tail |
+|---|---|---|
+| **m2** | 16 | roll wobble under `!(b3E&7) && (sv2-1)<=8` (TWO entity draws); `if action==18 → @0x10 = 1` |
+| **m13** | 104 | `actSpeed = action==110 ? minSpeed : maxSpeed` |
+| **m14** | 112 | `actSpeed = action==118 ? minSpeed : maxSpeed` |
+| **m24** | 192 | `sub_287B0` — the troglodyte's pose |
+| **m26** | 208 | `sub_293B0` — attack-state slowdown |
+| **m27** | 216 | `sub_2AED0(315/337)` by sv2; `life = 1000000`; the action-218 chain walk |
+Already landed: m4, m9, m17, m18, m19, m20, m21, m28. No tail at all: m3, m15, m16, m23, m25.
+
+## 108-6 🔴 THE mc2:15 LAVA IS REALLY MISSING — AND ROUND 107's "SOLVED" TERRAIN VERDICT WAS WRONG
+Player, 2026-09-06: *"the terrain effectors that do not take effect … it's missing those lava
+sections entirely, it's more of them than one. I find it hard to believe that this would not be
+visible as a delta in the levelmap."* **Correct on both counts.**
+
+Round 107 concluded (i) `mc2_building_tick` never sets `terrain_dirty`, so the app never
+re-uploads, and (ii) phase-aligned, the sim builds the moat byte-for-byte. **Both are false.**
+- **`mc2_building_tick` ENDS IN `true`**, and `tick_arm_mc2_building` does
+  `if self.g.mc2_building_tick(i, human) { self.terrain_dirty = true; … }`. Measured: the flag is
+  re-set on EVERY tick to t≈40. The app-side upload was never the bug.
+- The moat's HEIGHT is right. **Three whole TILE TYPES are not.**
+
+🔑 **Naming an MC2 terrain type**: `baked/assets/<bank>/tile-colors.bin`[type] → palette index →
+`palette.bin`[idx*3..]. **Type 37 → idx 253 → RGB (255, 32, 24) = THE LAVA RED.**
+
+| type | raw bake `.mgcl` | + LOAD settle (t=0) | + 120 gameplay ticks | retail record 0 |
+|---|---|---|---|---|
+| 8 / 10 / 11 / 23 | 0 | 0 | 64 / 381 / 1 / 5 | **64 / 381 / 1 / 5 ✓** |
+| 26 / 27 | 0 | 0 | 143 / 159 | 218 / 84 ✗ |
+| **36** | 6 | 26 | **26** | **464 ✗** |
+| **37 LAVA** | 4 | 22 | **22** | **125 ✗** |
+| **39** | 8 | 20 | **20** | **127 ✗** |
+| 48 / 50 / 51 | 0 | 575 / 732 / 2997 | 618 / 743 / 3125 | 828 / 1103 / 3979 ✗ |
+
+The (10,45) building settle is EXACT on 8/10/11/23 — that is the slice round 107 measured and
+over-generalised from. **36/37/39 stall at ~5% and no number of ticks moves them.** Spatially the
+port's cells are an exact PREFIX of retail's (both hold the ring at x 57..70 / y 245..255+0 and
+the blob at x 252..255 / y 128..131; retail then has many more at x 74..78 / y 136..140 and
+x 188..239 / y 155..158 — the CAVE SCULPTOR BAND). Where retail has type 37 the port has type
+**3**, plain ground, in 102 of 125 cells.
+
+**WHERE IT STOPS.** `mc2_generate_events` → `mc2_apply_events` (`ApplyEvents_498A0`) is the MC2
+load settle and it DOES run. `MGC_SCULPT_TRACE=1` (landed here) prints one line per sculptor it
+touches, tagged `ran` / `reap-unrun` / `disable-band`:
+```
+58 SCULPT ran (10,81) action=88     <- tube carve, off the 77 (10,80) chain heads
+13 SCULPT ran (10,82) action=89     <- room / mesa carve
+   (10,84) x10 and (10,85) x8 NEVER APPEAR under any tag
+```
+The THINGS are `(10,80)×77 (10,82)×13 (10,84)×10 (10,85)×8` and `dis_id` is the discriminator:
+80/82 carry `0xFFFF` (the LOAD sentinel) while **84 carries 13/31 and 85 carries 26/31 —
+DISPOSITION-GATED**, so the load settle never sees them.
+⚠ **That alone cannot explain a 5% yield: 71 sculptors DID run and produced 20 extra type-36
+cells between them. There are TWO bugs here** — the 18 that never fire, and the 71 whose carve
+does not paint 36/37/39 the way retail's does.
+
+⭐⭐⭐ **THE LESSON: A SUBSET VERIFIED EXACTLY IS NOT THE WHOLE VERIFIED.** Round 107 checked the
+moat rectangle's height/type at chosen cells, found them byte-identical, and wrote "the port's
+SIM builds that moat byte-for-byte". A WHOLE-MAP PER-TYPE HISTOGRAM — six lines of Python over
+`terrain-diff --out` — showed six types at zero and three more at 5%. **When claiming a plane
+matches, histogram the WHOLE plane; a spot check proves only the spots.**
+⚠ AND THE COROLLARY THAT COST THE MOST: 107 turned a player report into a port-is-fine verdict
+by measuring the instrument instead of the complaint. **The player said "no lava". The check that
+answers that is "count the lava cells", and nobody had run it.**
+
+**Landed here**: `MGC_SCULPT_TRACE=1`, and `mgcarpet --level … --map out.png --map-settle N`
+(ticks the level's own world N times and re-copies its planes before the headless render — a
+`--map` at settle 0 is a picture of a level that has not been built yet). ⚠ `--map-settle` must
+use a real `tick(pose, cmd)`; `tick_paused()` does not advance the buildings.
+Both are additive and behaviour-neutral: 1,013 tests pass, mc2l15 still certified.
+
+## OWED INTO ROUND 109
+- ✅ **RESOLVED IN-ROUND: `mc2_cave_behaviors_and_goldens`.** It failed at HEAD, and was carried
+  as a RED failure through most of this round on purpose. **Checkpoint D was attributed by
+  BISECTION** — the test PASSED on a build of round 107's PARENT commit (`a913653`, "mc1l6-sg
+  certified") and FAILED on round 107's own commit, whose diff is the held-seam / wrapper-tail
+  family and which touched no golden. ⚠ That commit was `279f731` at bisect time and has since
+  been squashed into this round's; bisect from `a913653` to re-derive. Checkpoint C
+  then moved for this round's own survival-pocket law. Both are now re-pinned WITH their
+  attributions written into the test, and both the state and OBSERVABLE arrays moved, which is
+  correct — these are behaviour, not hashed-field noise. ⭐ **THE PROCESS POINT: the re-pin only
+  became legitimate once the cause was NAMED. `git archive <commit>^` + build is the tool that
+  turns "pre-existing" into "attributed" — a two-minute bisect against one commit.**
+- ✅ **RESOLVED IN-ROUND: mc2l15's 590 terrain breaks** — they were the survival pocket (108-4),
+  not a sculpt-arithmetic error. The banked `terrain-diff --settle <n>` work is still owed on its
+  own merits, but it is NOT what this take needed.
+- ✅ **RESOLVED IN-ROUND: the 68 `extra in port` (10,89) rows.** Mid-round they looked like a
+  late reap; they were not, and the correction is worth keeping. The port's tick-top reap
+  (`world.rs:5041`, live for MC2 under `strict_retail`, which `retail_import_mc2` sets) frees the
+  collapsed record on schedule — and the freed slot was then **re-popped for a BRAND-NEW
+  collapse** (port 739 at 37712 read `life 40`, `f71 0`, `f44 100` — a phase-0 record — where
+  retail's read class 0; retail 10 live `(10,89)`, port 11). With the survival pocket landed the
+  terrain matches, the (9,30) manifestations impact on retail's ticks, and the extras are gone:
+  the t=37600..38000 slice now grades **400 of 400 pairs conforming, zero unexplained rows**.
+  ⭐⭐ **THE METHOD LESSON: an "extra in port" row means READ THE PORT'S RECORD, not the
+  decompile.** Two decompile-first readings both said "reap timing"; one `dump-state --port` line
+  (`life 40` on a record retail had already freed) said "fresh spawn" immediately.
+  ⛔ AND `ApplyEvents_498A0` (Events.cpp:410-525) is RULED OUT as the per-tick reaper — its
+  class-10 arm does look like an unconditional disable-then-`sub_57F20` for model 0x59, but its
+  callers walk the THINGS array via `PrepareEvents_49540`, so it is a **LOAD-TIME** pass.
+  `sub_57F20` (Events.cpp:5209) is the plain free: unlink, drop from the recycle list,
+  `class = 0`, push the free stack.
+- **The six unmirrored wrapper tails in 108-5** (m2/m13/m14/m24/m26/m27) — m24's is troglodyte
+  work. With mc2l15 certified these no longer have a witness on it; they want a take that HOLDS
+  those models, or unit pins.
+- 🔴 **THE mc2:15 LAVA (108-6) IS THE PLAYER'S STANDING ASK AND IT IS OPEN.** Two bugs: the 18
+  disposition-gated pit/hill sculptors that never fire at load, and the 71 tube/mesa carves that
+  under-paint types 36/37/39. Start at `mc2_tube_carve_tick` / `mc2_cave_mesa_tick`
+  (`mc2/cave.rs`) against their decompile, on the TILE-TYPE writes. ⚠ This is the GENERATE axis —
+  `replay` imports terrain, so certification cannot see it and will not regress on it.
+- **7 UNCERTIFIED TAKES REMAIN** (17 of 24 certified). Steer from `replay --segmented --classify`
+  over `conformance/brief-baseline.txt` and pick the next target there.
+- Everything owed into rounds 107 and 108 that is not listed above is still owed.
+
+# ROUND 109 — 2026-09-06 — THE mc2:15 LAVA: THE RIVER WAS NEVER INERT
+
+```
+mc2:15 generated terrain vs retail's measured planes, PHASE-ALIGNED (slice --from 120 --to 126,
+port --settle 130):   type MATCH · height MATCH · shading MATCH · angle MATCH · ceiling MATCH
+                       65,536 / 65,536 cells on ALL FIVE PLANES.
+Before this round (settle 120 vs record 0): type 6,316 cells differ (9.6%), height 9,638 (14.7%),
+angle 14,247 (21.7%), ceiling 8,546 (13.0%); lava types 36/37/39 at 26/22/20 vs 464/125/127.
+TWO laws, both GENERATE-axis (replay imports terrain: certification cannot see them).
+Player-confirmed in play: "in launching the level, it naively looks identical."
+```
+
+## 109-1 ⭐⭐⭐ THE (10,31) RIVER CHAIN SPAWNS (10,32), DECIMAL — AND IT IS THE CAVE LAVA
+Round 108 left the dig scoped at the cave sculptors: 18 disposition-gated pits/hills that never
+fire, and 71 tube/mesa carves that "under-paint". **Both leads were wrong.** The THING dump
+(`MGC_SCULPT_TRACE=1` now prints every authored record first) put every gated pit/hill OUTSIDE the
+missing block (x 46..70 / y 3..6, y 206..219, and (179|188, 255)); the mesa and tube arithmetic
+matched retail line for line. What sat exactly on the two missing lava rings were two **(10,31)**
+chains: THING slots 50-54 = (189,157)→(189,207)→(240,207)→(240,157)→(189,157) and 268-272 =
+(205,172)→(205,191)→(224,191)→(224,172)→(205,172) — closed rectangles inside the two (10,82)
+mesa rooms centred at (215,182).
+
+The port's chain arm read `0x1F => {}` on the strength of `docs/traces/mc2-terrain-author-painters.md`
+§3.4: *"sub_487D0 spawns a (10,50)=0x32 whose action 0x36 self-destructs — the river is inert."*
+**The spawn is `IfSubtypeCallCreatingManaSphere_4A190(&v8x, 10, 32)` — DECIMAL 32 = 0x20 =
+(10,32)**, exactly as the beam stamper's `51` is decimal (10,51)=0x33 in the same document.
+- (10,32) ctor `sub_4FA60` (EF:36292): action **0x22**, actSpeed 256, `byte_0x46_70 = 2`, maxLife 0,
+  untargetable, not map-registered. `sub_487D0` then seats yaw (from→to), `life = dist >> 8` (tiles),
+  and `byte_0x46_70 = width` (par3 remap 0/1/2/3 → 2/6/16/32; mc2:15's legs are par3 = 2 → 16).
+- Action 0x22 = `sub_344A0` (EF:25052): life−−, die on life < 0 or `sub_104A0 & 1`; else spawn ONE
+  **(10,11) SCORCH RING** at the head (`fov` + `id` inherited, **`life = width`**) and `MoveEntity`
+  256 along the yaw — the fire trail's authored twin.
+- The ring's own `sub_31FB0` digs its growing disc −3 every tick for `life` ticks. One ring per
+  tile, overlapping, carves a ~4-wide channel to floor 0 with a ~5-cell graded rim, and on a cave a
+  floor of 0 retiles (nibble 0 corners) to **types 36 / 37 / 39 — the lava.**
+Port: `mc2_stamp_river_leg` (world.rs, the 0x1F chain arm), `mc2_spawn_river_head` +
+`mc2_river_head_tick` (mc2/tail.rs), action 0x22 in the `mc2_apply_events` dispatch. Every model it
+touches was already in the settle-TICK band (0x1B..=0x20, 0xB). A/B on the whole plane
+(settle 120 vs record 0): types 37/39 → EXACT, 36 → 466 vs 464, floor-0 cells 887 → 1,800 vs 1,747.
+
+⭐⭐⭐ **THE LESSON: A "STUB" VERDICT ON A DECOMPILE ARGUMENT NEEDS THE RADIX CHECKED.** The trace
+doc reasoned carefully about the wrong model for 300 lines because one literal was read in the
+wrong base; the remc2 authors write model numbers in DECIMAL inside calls and in HEX inside
+`case` labels, in the same file. **Before ruling any authored feature inert, cross-check the
+spawned model's number in BOTH bases against the ctor table.**
+⭐⭐ **AND: WHEN A DIG IS SCOPED AT ONE FEATURE, DUMP THE THINGS UNDER THE MISSING CELLS FIRST.**
+Round 108's "two bugs in the sculptors" scope came from a census of which sculptors ran; a
+30-line dump of every THING inside the missing block named the (10,31) chains in one look and
+cleared the sculptors in the same look.
+
+## 109-2 ⭐⭐ THE SETTLE FREES A FINISHED RECORD INSIDE THE SWEEP, NOT AFTER IT
+With the river landed the channel cores were exact and the RIMS were over-dug by one or two
+ring-ticks (port 76/37/46/79 against retail 79/43/52/82 across the top channel at x=200; ±3
+multiples on every rim cell, the core untouched). `ApplyEvents_498A0` calls `sub_57F20` on a
+flagged record **right after its arm, inside the slot loop** (EV:439/462/471/486/499/512/523/537/
+545/552); `mc2_apply_events` deferred every free to the sweep's end. The difference only matters
+when a LATER slot in the same sweep spawns: retail's head re-pops a slot freed earlier in the
+sweep — often BELOW the head's own index — so that ring first ticks on the NEXT sweep, while the
+port's head popped a fresh higher slot and ticked it immediately. One sweep of phase per re-popped
+ring, and the overlapping rims counted it. Fix: free in-loop (the post-loop reap stays as a no-op
+safety). A/B whole plane: floor-0 1,800 → **1,747 = retail**, type diff 6,316 → 227 cells, angle
+19.3% → 1.3%, ceiling 13.0% → 1.35%; phase-aligned at t=120, **zero cells on any plane.**
+⭐ **A GENERATE-PATH ORDER LAW HAS NO IMPORT WITNESS AT ALL** — the free stack is imported at every
+pair, so no replay ever graded which slot a load-time spawn lands in. The whole-plane histogram was
+its only instrument, and it needed the phase-aligned recipe to read zero.
+
+## 109-3 🔧 `terrain-diff --settle <n>` LANDED (the banked instrument)
+Ticks the port's world n times with the carpet idle at the level's class-3 model-4 start before
+diffing, so the AUTHORED terrain (buildings, sculptors, rivers) is in the port's planes. Paired
+with `slice --from T --to T+6` it reads retail@T against the settled port. `--settle 0` is
+byte-identical to the old behaviour. The corrected mc2:15 table, always naming the phase:
+
+| comparison | type | height | shading | angle | ceiling |
+|---|---|---|---|---|---|
+| before 109, settle 120 vs record 0 | 9.64% | 14.71% | 11.46% | 21.74% | 13.04% |
+| 109-1 only, settle 120 vs record 0 | 5.39%* | 7.06% | 5.84% | 19.26% | 4.43% |
+| 109-1 + 109-2, settle 120 vs record 0 | 0.35% | 3.77% | 1.24% | 1.26% | 1.35% |
+| 109-1 + 109-2, settle 120 vs **retail@t=30** | 0 | 0.16% | 0 | 0.16% | 0 |
+| 109-1 + 109-2, settle 130 vs **retail@t=120** | **0** | **0** | **0** | **0** | **0** |
+
+(*the record-0 rows are the mid-lerp phase artifact of [[terrain-diff-is-phase-shifted]]; the
+107 cells at t=30 are the last (10,45) lerps, gone by t=120.)
+
+## 109-4 🔧 `mgc-conform terrain-check` — THE NAKED-TRUTH INSTRUMENT (player-requested, landed)
+Player, mid-round: *"an instrument … that will actually do the 1:1 comparison of the port-generated
+terrain vs. the recorded terrain at t=0 … and would clearly say 'the terrain from retail is
+different'. Because it should be bit-identical before the game begins."* Landed as a mode:
+```
+mgc-conform terrain-check <take.mgcr>…      one VERDICT line per take, exit 1 if any plane differs
+TERRAIN mc2l15.mgcr: IDENTICAL — 5 plane(s) × 65536 cells, port settled 6 tick(s) (retail record-0 phase)
+TERRAIN mc2l22.mgcr: DIFFERENT — type 2454 · height 5908 · shading 3667 · angle 3619 of 65536 cells, …
+```
+The one subtlety, now a constant in the code (`retail_record0_settle`): retail's record 0 is NOT
+pre-game terrain — the recorder captures it **6 gameplay ticks into MC2's 30-tick building settle**
+(round 107's unique lerp fit), so "bit-identical" means identical AT THAT PHASE. Settled exactly 6
+ticks, mc2:15 is bit-identical to record 0 on all five planes; 5 or 7 ticks each leave hundreds of
+height/ceiling cells. MC1's load pass is synchronous, phase 0. `--settle <n>` overrides;
+`terrain-diff` keeps its cell-level examples and its settle-0 default (its output is byte-identical
+to the pre-refactor binary: both modes share one `terrain_compare` core). `terrain-diff --settle`
+and `terrain-check` are the GENERATE-axis witnesses this round lacked for 100+ rounds.
+
+**THE NAKED-TRUTH TABLE (first cut, right after 109-1/2; banked as
+`conformance/terrain-check-baseline.txt`):**
+
+| take | verdict | detail |
+|---|---|---|
+| mc1hwl0 | IDENTICAL | 4, settle 0 |
+| mc1hwl1 | IDENTICAL | 4, settle 0 |
+| mc1hwl2 | DIFFERENT | type 728 · height 611 · shading 625 · angle 782, settle 0 (level 2, base @t=0) |
+| mc1l0 | IDENTICAL | 4, settle 0 |
+| mc1l0-spells-galore | IDENTICAL | 4, settle 0 |
+| mc1l1 | IDENTICAL | 4, settle 0 |
+| mc1l2 | DIFFERENT | type 12 · height 5 · shading 14 · angle 11, settle 0 (level 2, base @t=0) |
+| mc1l32 | IDENTICAL | 4, settle 0 |
+| mc1l32-quick | IDENTICAL | 4, settle 0 |
+| mc1l32-terrainless | ERROR | recording has no terrain channel (format-1 take?) |
+| mc1l37 | IDENTICAL | 4, settle 0 |
+| mc1l3 | DIFFERENT | type 23 · height 11 · shading 35 · angle 23, settle 0 (level 3, base @t=0) |
+| mc1l42 | DIFFERENT | type 26 · height 12 · shading 24 · angle 22, settle 0 (level 42, base @t=0) |
+| mc1l48 | DIFFERENT | type 724 · height 608 · shading 611 · angle 755, settle 0 (level 48, base @t=0) |
+| mc1l49 | DIFFERENT | type 1986 · height 1999 · shading 1716 · angle 1954, settle 0 (level 49, base @t=0) |
+| mc1l4 | IDENTICAL | 4, settle 0 |
+| mc1l5 | DIFFERENT | type 16 · height 9 · shading 20 · angle 64, settle 0 (level 5, base @t=0) |
+| mc1l6 | IDENTICAL | 4, settle 0 |
+| mc2l0 | DIFFERENT | height 18 · shading 3656, settle 6 (level 0, base @t=0) |
+| mc2l0-spells-galore | DIFFERENT | height 18 · shading 3661, settle 6 (level 0, base @t=0) |
+| mc2l15 | IDENTICAL | 5, settle 6 |
+| mc2l1 | IDENTICAL | 4, settle 6 |
+| mc2l22 | DIFFERENT | type 2454 · height 5908 · shading 3667 · angle 3619, settle 6 (level 22, base @t=0) |
+| mc2l24 | IDENTICAL | 4, settle 6 |
+| mc2l30 | DIFFERENT | height 250 · ceiling 84, settle 6 (level 30, base @t=0) |
+| mc2l3 | DIFFERENT | height 85 · ceiling 81, settle 6 (level 3, base @t=0) |
+| mc2l4 | DIFFERENT | type 28 · height 1357 · shading 583 · angle 940, settle 6 (level 4, base @t=0) |
+| mc2l6-rival-spells-galore | DIFFERENT | type 16 · height 533 · shading 1363 · angle 470, settle 6 (level 6, base @t=0) |
+
+**NON-VACUITY (player-asked, proved through the instrument itself):** with BOTH round-109 laws
+reverted by inverse edit, `terrain-check recordings/mc2l15.mgcr` reads
+`DIFFERENT — type 6101 · height 7701 · shading 6725 · angle 13630 · ceiling 7815`, exit 1; restored
+(md5-verified) it reads `IDENTICAL — 5 plane(s) × 65536 cells`, exit 0.
+
+12 of the 27 gradable takes are IDENTICAL (incl. mc2l15, mc2l1, mc2l24, and 9 MC1 takes). The
+DIFFERENT rows are the generate-axis campaign that certification never saw: mc2l22 (thousands of
+cells on four planes), mc2l4, mc2l6-rsg, mc2l30/mc2l3 (height + ceiling), mc2l0's 3,656 shading
+cells (shading only — a repaint-phase question, not geometry), and the MC1 family mc1hwl2/l48/l49
+(hundreds to ~2,000 cells) + small mc1l2/l3/l5/l42 clusters. ⚠ Cluster each against
+`known-deviations.json` first (`mc2-terraform-houses`, `mc2-castle-pad-z`, `mc2-guard-terrain`,
+`mc2l30-plateau-markers`, `mc2-walker-ground-z` may already be these).
+
+## NEUTRALITY
+- **Corpus: 28 of 28 takes BYTE-IDENTICAL** to `conformance/brief-baseline.txt` (`replay --segmented
+  --brief`, 4-parallel, `mgc-conform` md5 checked before and after). Expected: `replay` imports
+  terrain and the free stack every pair, so neither law has an import witness — the free-run
+  `--level` world and the phase-aligned `terrain-diff --settle` are the only instruments.
+- **Tests: 1,014 of 1,014, 2 ignored, 48 suites** (the whole workspace in release). `mc2_cave_behaviors_and_goldens`
+  moved on ALL FOUR checkpoints (state AND observable) and is re-pinned with BOTH causes named:
+  level-014 carries 19 river/ring/trail records, so the river arm carves it, and the in-sweep free
+  re-orders every load-time spawn's slot. A/B: reverting the free alone → `c8ce…/1bdd…/a053…/8abf…`,
+  reverting the river alone → `c2ba…/effb…/7147…/c7dc…`; neither reproduces the previous pin, so
+  each law moves the golden independently.
+- **New pin: `mc2_level_015_lava_moats_are_carved`** — lava types 36/37/39 = 464/125/127, floor-0
+  cells = 1,747, channel/plateau spot cells, every A/B number in the assertion message.
+- ⚠ The (10,32) river head has NO cave gate (`sub_4FA60`): every level with authored (10,31)
+  chains now carves them. That is retail's behaviour; the corpus says it costs nothing on the
+  certified takes. A native-play look at the non-cave levels with (10,31) chains is owed.
+
+## OWED INTO ROUND 110
+- 🎯 **PLAYER-SET: A CLEAN SESSION DEDICATED TO CERTIFYING THE TERRAIN TAKES** with
+  `terrain-check` — *"Chances are that these fixes have also fixed other levels silently, but in any
+  case we should dedicate an entire clean session to certifying the terrain takes now that we have
+  this insight and will have this tool."* Start from `conformance/terrain-check-baseline.txt`.
+- 🎬 **THE TERRAIN ORACLE CORPUS (player-offered):** short recordings of EVERY level, a few ticks
+  long, purely to capture record-0 terrain as the retail oracle. *"That would in fact somewhat
+  displace the goldens overall, because we could instead replace all of them with a single fixture
+  per level at t=0 used for this comparison only and tested automatically."* ⇒ design: one
+  `terrain-check`-style cargo test over `recordings/terrain/*.mgcr` (every level, both games),
+  asserting IDENTICAL at the recorder's phase; the hash goldens then retire to behaviour-only pins.
+  ⚠ Ask for the oracle takes once the current DIFFERENT rows are understood — a bug-free oracle
+  set is worth more after the known generate-axis families are named.
+- **7 UNCERTIFIED TAKES REMAIN** (17 of 24). Steer from `replay --segmented --classify` over
+  `conformance/brief-baseline.txt`.
+- The six unmirrored phase-7 wrapper tails (m2/m13/m14/m24/m26/m27) — need a witness or unit pins.
+- The banked corpus-wide phase-aligned `terrain-diff` re-sweep is now CHEAP: `slice --from 120 --to
+  126` + `terrain-diff <slice> --settle 130` per take. Some registered `capture` terrain deviations
+  (`mc2-terraform-houses`, `mc2-castle-pad-z`, `mc2-guard-terrain`, `mc2l30-plateau-markers`,
+  `mc2-walker-ground-z`) may fall to it — cluster against `known-deviations.json` first.
+- The trace doc's §3.4 carries the correction; its §5 pass table still names "(10,31) river" as
+  pass 2 correctly. The port's pass list comment in `mc2_generate_events` is updated.
+- Everything owed into 108 and 109 that is not listed above.

@@ -87,6 +87,39 @@ fn no_sv_watch_chain_scan() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_SV_WATCH_CHAIN_SCAN").is_some())
 }
 
+/// A/B toggle for m9's HELD ENGAGE POSE (`sub_20FC0`'s
+/// `if (actionIndex_0x45_69 == 74) sub_20EC0(a1x)`, EF:12650-51 — see
+/// the write-up at the call): set `MGC_NO_MC2_M9_HELD_ENGAGE` to
+/// restore the pre-dig behaviour, where a stage-held (5,9) released
+/// into its attack state kept the patrol sprite, the patrol speed and
+/// the patrol collision box, and never stamped its quarry's
+/// class/model filter.
+fn no_mc2_m9_held_engage() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M9_HELD_ENGAGE").is_some())
+}
+
+/// A/B toggle for the KIND-4 GUARDIAN ARM (`sub_1D700`, EF:10037-58 —
+/// see the write-up at [`World::mc2_held_watch`]): set
+/// `MGC_NO_MC2_HELD_KIND4_GUARD` to restore the pre-dig `kind == 3`
+/// gate, under which a stage-held kind-4 guardian never woke at all.
+fn no_mc2_held_kind4_guard() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HELD_KIND4_GUARD").is_some())
+}
+
+/// A/B toggle for m18's HELD AIM TAIL (`sub_25550`'s
+/// `if (actionIndex_0x45_69 == 146) sub_253B0(a1x, 2u, 0)`, EF:16254-55
+/// — see the write-up at the call): set `MGC_NO_MC2_M18_HELD_AIM` to
+/// restore the pre-dig behaviour, where a stage-held (5,18) the kind-2
+/// wizard watch promoted out of its hold entered its attack state
+/// WITHOUT the entry draw, so its `dword_0x10_16` attack timer kept the
+/// hold's stale value and its entity LCG ran one draw behind retail's.
+fn no_mc2_m18_held_aim() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M18_HELD_AIM").is_some())
+}
+
 /// One live StageVar slot (`D41A0_0.StageVars2_0x365F4[slot]`, LS:249).
 /// Index-aligned with the level file's 11-slot array; slot 0 is unused.
 #[derive(Debug, Clone, Copy, Default, Hash)]
@@ -736,7 +769,7 @@ impl World {
                     // the kind-3/4 guardian arm and the kind-2 wizard
                     // watch.
                     self.mc2_held_move(i, kind, ctx);
-                    self.mc2_held_watch(i, base);
+                    self.mc2_held_watch(i, base, ctx);
                     if self.g.ent[i].tick70 & 7 == 7 && self.g.ent[i].site_z == 2 {
                         self.mc2_held_wizard_scan(i, base, ctx);
                     }
@@ -788,6 +821,20 @@ impl World {
                 _ => {}
             }
         }
+        // ⭐⭐⭐ **AND m21's WRAPPER ENDS IN A MODE RE-APPLY.**
+        // `sub_26470` (EF:16963-65) closes with `if (actionIndex !=
+        // 175) sub_268F0(a1x, actionIndex + 88)` — an IDENTITY on the
+        // action byte whose whole purpose is to re-fire the mode side
+        // effect for whatever action the `sub_1D5D0` legs just wrote
+        // ([`Gen::m21_wrapper_tail`] carries the arithmetic and the
+        // witness). It sits OUTSIDE the `StageVar2` switch, and
+        // retail's `default:` arm BREAKS rather than returning — so
+        // unlike the physics above it is NOT gated on the kind.
+        // m0's twin `sub_1F300` has no tail at all, so this is m21's
+        // alone.
+        if self.g.ent[i].model65 == 21 {
+            self.g.m21_wrapper_tail(i);
+        }
         // ⭐⭐ **AND m4's TAIL IS AN AIM RE-TEST, NOT AMBIENT
         // PHYSICS.** `AddScroll05_04_20140` (EF:11960-66) is the
         // archer's phase-7 wrapper and its whole body is
@@ -807,6 +854,79 @@ impl World {
         // by this point the action is `base + 2`, not phase 7.
         if self.g.ent[i].model65 == 4 && self.g.ent[i].tick70 == base.wrapping_add(2) {
             self.g.archer_aim(i);
+        }
+        // ⭐⭐ **AND m18's TAIL IS THE SAME SHAPE AS m4's.** `sub_25550`
+        // (EF:16247-56) is the (5,18) tank's phase-7 wrapper and its
+        // whole body is
+        // ```text
+        //   sub_1D5D0(a1x, 144);
+        //   a1x->position_0x4C_76.z = getTerrainAlt_10C40(&a1x->position_0x4C_76);
+        //   if (a1x->actionIndex_0x45_69 == 146) sub_253B0(a1x, 2u, 0);
+        // ```
+        // — the test reads the action the held legs JUST WROTE, so the
+        // tick the kind-2 wizard watch promotes a held tank is the tick
+        // it enters its ATTACK TIMER: one entity draw and
+        // `dword_0x10_16 = rand % 200 + 200`. That is [`Gen::m18_timer`]'s
+        // `(2, 0)` arm, which the port already owns but hangs off
+        // `m18_tick` — and this seam pre-empts the normal dispatch
+        // (world.rs), so it never ran for a HELD tank.
+        // ⚠ `sub_253B0(2, 0)` writes `actionIndex = 146` itself, so the
+        // call is an IDENTITY on the action and a PURE SIDE EFFECT —
+        // the same shape as m21's wrapper tail above.
+        //
+        // WITNESS — mc2l15 pair 14444→14445, slot 2, a stage-held
+        // (5,18) on the kind-2 watch: retail `sv2 2 → 10`,
+        // `action45 151 → 146`, `target96 0 → 165`, and
+        // **`rand 40649 → 17736`** (= `9377*40649 + 9439 mod 2^16`)
+        // with **`scratch10 100 → 336`** (= `17736 % 200 + 200`). The
+        // port promoted the action, matched every other lane, and drew
+        // NOTHING — the take's first divergence after the m21 tail
+        // landed.
+        //
+        // 🏦 OWED — the wrapper's MIDDLE line, the unconditional ground
+        // snap `position.z = getTerrainAlt_10C40(&position)`, is NOT
+        // landed here: it was a no-op on this witness (the tank was
+        // already grounded) so it has no evidence of its own and wants
+        // its own A/B. Same standing as m4's `dword_0x10_16 = 0` opener.
+        if !no_mc2_m18_held_aim()
+            && self.g.ent[i].model65 == 18
+            && self.g.ent[i].tick70 == base.wrapping_add(2)
+        {
+            self.g.m18_timer(i, 2, 0);
+        }
+        // ⭐⭐ **AND m9's WRAPPER IS THE SAME SHAPE A THIRD TIME.**
+        // `sub_20FC0` (EF:12646-51) is the (5,9) imp's phase-7 wrapper
+        // and its whole body is
+        // `sub_1D5D0(a1x, 72); if (actionIndex_0x45_69 == 74) sub_20EC0(a1x);`
+        // — the ENGAGE POSE, read off the action the held legs just
+        // wrote. `sub_20EC0` (EF:12283) stops the imp
+        // (`actSpeed_0x82_130 = 0`), re-sprites it to 202 through
+        // `SetEntityIndexAndRot_49CD0` (so the extents quad DOES move
+        // here — the opposite of m24's pose, which uses the plain
+        // setter) and stamps the quarry's class/model into
+        // `xtype_0x41_65`/`xsubtype_0x42_66`. The port already owned it
+        // as [`Gen::m9_engage_pose`] but hangs it off `m9_tick`, which
+        // this seam pre-empts — so a RELEASED imp kept walking with the
+        // patrol sprite and the patrol box.
+        //
+        // WITNESS — mc2l15 pair 19905→19906, slot 4, the same kind-4
+        // release the guardian arm above fixes: with the release landed
+        // the action and target were right and retail still had
+        // `f5a 201 → 202`, `speed 20 → 0`, the quad `74 → 86` and
+        // `b42 255 → 0` that the port did not write.
+        //
+        // ⚠🏦 OWED — the port's `m9_engage_pose` writes the speed and
+        // the sprite BEFORE its self-target check, where retail writes
+        // them only in the `else` arm (`if (id == v1x->id) actionIndex
+        // = 73; else { actSpeed = 0; SetEntityIndexAndRot(202); … }`).
+        // Unwitnessed here; its own dig.
+        //
+        // `MGC_NO_MC2_M9_HELD_ENGAGE=1` restores the old behaviour.
+        if !no_mc2_m9_held_engage()
+            && self.g.ent[i].model65 == 9
+            && self.g.ent[i].tick70 == base.wrapping_add(2)
+        {
+            self.g.m9_engage_pose(i);
         }
         // ⭐⭐ **AND FOUR MORE WRAPPERS END IN A SUB-STATE RESET.**
         // `sub_24DF0` (m17, EF:15833-37), `AddFirebug05_13_25D50`
@@ -1167,12 +1287,54 @@ impl World {
     /// made our worms attack the archers, who then killed them and
     /// died in the death-novas. Kind 4 keeps the shadow walk, the
     /// held-hit retaliation and the fired-bit release.
-    fn mc2_held_watch(&mut self, i: usize, base: u8) {
+    fn mc2_held_watch(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         if self.g.ent[i].f63 & 7 != 0 {
             return;
         }
+        // ⭐⭐⭐ **KIND 4 IS A GUARDIAN TOO, AND ITS ARM WAS NEVER
+        // PORTED.** `sub_1D5D0` sends kinds 3 and 4 to two DIFFERENT
+        // functions — and note the CROSS: case 3 goes to `sub_1D7C0`,
+        // case 4 to `sub_1D700` (EF:9985-9992). They differ in WHOM the
+        // guardian chases:
+        // ```text
+        //   case 3 -> sub_1D7C0   if (dist3d(me, v3x) <= reach) {          // the WATCHED ENTITY itself
+        //                             word_0x96_150 = v3x - struct_0x6E8E;
+        //                             StageVar2 = 10; sub_1E040(); }
+        //   case 4 -> sub_1D700   v4 = v3x->word_0x96_150;                 // the watched entity's OWN target
+        //                         if (v4 && dist3d(me, Entities_EA3E4[v4]) <= reach) {
+        //                             word_0x96_150 = v3x->word_0x96_150;
+        //                             StageVar2 = 10; sub_1E040(); }
+        // ```
+        // So a kind-3 guardian wakes when the thing it watches comes
+        // near, while a kind-4 guardian wakes when whatever THAT thing
+        // is hunting comes near, and INHERITS the quarry. The port had
+        // the kind-3 body right and gated the whole arm on `kind == 3`,
+        // so a kind-4 guardian never woke at all.
+        //
+        // ⚠ The `+ 88`-style trap here is the CROSSED dispatch: reading
+        // 3→`sub_1D700` / 4→`sub_1D7C0` off the function ORDER rather
+        // than off the `case` labels inverts the two laws, and the
+        // inverted version fires at the right tick with the wrong
+        // quarry (measured: horizon 19,905 → 19,750 — WORSE than not
+        // firing at all).
+        //
+        // WITNESS — mc2l15 pair 19905→19906, slot 4, a stage-held
+        // (5,9) at `sv2 4` whose watch handle (`sv_timer` = retail's
+        // `word_0x4A_74`) is slot **66** on both sides: retail reads
+        // slot 66's own `word_0x96_150` = **165**, the human, measures
+        // the reach to IT and inherits it — `sv2 4 → 10`,
+        // `action45 79 → 74` (8m+7 → 8m+2), `target96 0 → 165`,
+        // `f5a 201 → 202`, `speed 20 → 0`, quad 74 → 86. The port held
+        // every one of them at the phase-7 wait.
+        //
+        // `MGC_NO_MC2_HELD_KIND4_GUARD=1` restores the `kind == 3` gate.
         let kind = self.g.ent[i].site_z;
-        if kind != 3 {
+        let wanted = if no_mc2_held_kind4_guard() {
+            kind == 3
+        } else {
+            matches!(kind, 3 | 4)
+        };
+        if !wanted {
             return;
         }
         let Some(hpos) = self.mc2_sv_held.iter().position(|h| h.ent as usize == i) else {
@@ -1189,18 +1351,33 @@ impl World {
         if watch == 0 {
             return;
         }
-        let aggro_at = watch;
+        // kind 3 (`sub_1D7C0`) chases the WATCHED ENTITY; kind 4
+        // (`sub_1D700`) inherits the watched entity's OWN quarry and
+        // measures the reach to THAT. Retail reads the quarry's
+        // position with no liveness test, hence `mc2_target_raw`; and
+        // the inherited handle is COPIED VERBATIM, so the port's
+        // `PLAYER_TARGET` sentinel propagates exactly as retail's
+        // human slot does.
+        let (quarry, tp) = if kind == 3 {
+            let e = &self.g.ent[watch];
+            (watch as u16, (e.x, e.y, e.z))
+        } else {
+            let q = self.g.ent[watch].f146;
+            if q == 0 {
+                return;
+            }
+            let Some(p) = self.g.mc2_target_raw(q, ctx) else {
+                return;
+            };
+            (q, p)
+        };
         let me = {
             let e = &self.g.ent[i];
             (e.x, e.y, e.z)
         };
-        let tp = {
-            let e = &self.g.ent[aggro_at];
-            (e.x, e.y, e.z)
-        };
         let reach = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as u32;
         if super::super::engine::features::Gen::mc2_dist3(me, tp) <= reach {
-            self.g.ent[i].f146 = aggro_at as u16;
+            self.g.ent[i].f146 = quarry;
             self.g.ent[i].site_z = 10;
             self.mc2_aggro_raise(i, base);
         }
@@ -1417,7 +1594,7 @@ impl World {
                     if physics {
                         self.g.m27_move(i, true);
                     }
-                    self.mc2_held_watch(i, 216);
+                    self.mc2_held_watch(i, 216, ctx);
                 }
             }
         } else if kind == 10 {
@@ -1611,6 +1788,77 @@ mod tests {
             strict: false,
             patches: WorldPatches::RETAIL,
             mc2_turn: 0,
+        }
+    }
+
+    /// One (5,21) devil parked at `action = 168 + k` with the IDLE
+    /// rest base armed (`f68` = `byte_0x43_67` = 64).
+    fn devil_at(g: &mut Gen, k: u8) -> usize {
+        let i = g.new_event().expect("devil slot");
+        let e = &mut g.ent[i];
+        e.class64 = 5;
+        e.model65 = 21;
+        e.tick70 = 168u8.wrapping_add(k);
+        e.f68 = 64; // the idle rest base
+        e.f146 = 7; // a live target slot
+        i
+    }
+
+    /// `sub_26470`'s TAIL (EF:16963-65) — `if (actionIndex != 175)
+    /// sub_268F0(a1x, actionIndex + 88)`. The action byte is an
+    /// IDENTITY across the call (`a2 - 88` undoes `+ 88` in u8), so
+    /// the tail is a PURE SIDE EFFECT on the rest base, re-applied to
+    /// whatever action the `sub_1D5D0` legs just promoted the devil
+    /// to. `b43` is recorded but NOT in the graded `EntObsMc2`
+    /// projection, so a pair fixture cannot see this — it is pinned
+    /// here (the ungraded-but-recorded lane's prescribed fix).
+    ///
+    /// The witness is mc2l15 pair 7527→7528, slot 4: a stage-held
+    /// devil takes the human's 160, `sv2 6 → 10`, `action 175 → 170`,
+    /// and retail writes `b43 64 → 0`. Holding 64 costs an extra
+    /// entity LCG draw in `m21_jump`'s state-9 rest and surfaced 47
+    /// ticks later as the take's first divergence.
+    #[test]
+    fn m21_wrapper_tail_re_applies_the_mode() {
+        let mut g = flat_gen();
+
+        // k == 2 (action 170, the ATTACK the hit arm promotes to):
+        // zero the rest base, leave the action and the target alone.
+        let i = devil_at(&mut g, 2);
+        g.m21_wrapper_tail(i);
+        assert_eq!(g.ent[i].f68, 0, "a2 == 2 zeroes byte_0x43_67");
+        assert_eq!(g.ent[i].tick70, 170, "the action byte is an identity");
+        assert_eq!(g.ent[i].f146, 7, "a2 == 2 does not touch word_0x96_150");
+
+        // k == 1 (action 169, the IDLE mode): arm the rest base and
+        // drop the target.
+        let i = devil_at(&mut g, 1);
+        g.ent[i].f68 = 0;
+        g.m21_wrapper_tail(i);
+        assert_eq!(g.ent[i].f68, 64, "a2 == 1 arms byte_0x43_67");
+        assert_eq!(g.ent[i].f146, 0, "a2 == 1 clears word_0x96_150");
+        assert_eq!(g.ent[i].tick70, 169, "the action byte is an identity");
+
+        // k == 7 (action 175): the guard — the wrapper's own phase is
+        // excluded, so a devil the legs did NOT promote keeps its base.
+        let i = devil_at(&mut g, 7);
+        g.m21_wrapper_tail(i);
+        assert_eq!(g.ent[i].f68, 64, "action 175 is guarded out");
+        assert_eq!(g.ent[i].tick70, 175);
+
+        // Every OTHER action touches nothing — retail acts on a2 == 1
+        // and a2 == 2 alone. `m21_mode`'s bare `else` used to zero the
+        // base here, an invented arm this tail would have made live.
+        for k in [0u8, 3, 4, 5, 6, 8] {
+            let i = devil_at(&mut g, k);
+            g.m21_wrapper_tail(i);
+            assert_eq!(
+                g.ent[i].f68,
+                64,
+                "a2 == {k} carries no side effect in sub_268F0"
+            );
+            assert_eq!(g.ent[i].f146, 7, "...and does not clear the target");
+            assert_eq!(g.ent[i].tick70, 168u8.wrapping_add(k), "action identity");
         }
     }
 

@@ -776,10 +776,68 @@ fn mc2_cave_behaviors_and_goldens() {
             // None of the 18 is a multipart model (0/3/22/27) — verified by
             // re-deriving each site's class/model from the ctor — so no port
             // reader consumes it and the stray 1 was inert but recorded.
-            0x9437af5b85e0b34a_u64,
-            0xea13f2bab820e3b6,
-            0xa7d951c9c30f8f13,
-            0x3053a3ccb807efed,
+            // ⭐⭐⭐ ALL FOUR RE-PINNED 2026-09-06 (ROUND 109) FOR TWO
+            // GENERATE-AXIS LAWS, EACH A/B-ATTRIBUTED ALONE:
+            // (1) the (10,31) RIVER chain arm (`mc2_stamp_river_leg` →
+            // a (10,32) head per leg, action 0x22 = a traveling (10,11)
+            // scorch-ring emitter — `sub_487D0`'s `4A190(.., 10, 32)`
+            // is DECIMAL (10,32), not the hex (10,50) the trace doc
+            // read, so the "inert river" was never inert); level-014
+            // carries 19 river/ring/trail records, so its floor is
+            // carved differently from tick 0.
+            // (2) `mc2_apply_events` frees a finished record INSIDE the
+            // sweep, like retail's per-arm `sub_57F20` — a later slot's
+            // load-time spawn re-pops it, so every settle-band spawn
+            // (authored rings, fire trails, river rings) lands in
+            // retail's slot instead of a fresh higher one.
+            // A/B: reverting (2) alone gives 0xc8ce1ca59242c806 /
+            // 0x1bddaeedd5f02a8f / 0xa0531f1b4c0b05f7 / 0x8abf44b8ae49d939;
+            // reverting (1) alone gives 0xc2ba382b0d8d3a69 /
+            // 0xeffb74b5307a144f / 0x71474279f9392450 / 0xc7dcb70777a8b628
+            // — neither reproduces the previous pin (0x9437af5b85e0b34a /
+            // 0xea13f2bab820e3b6 / 0x93f294ee5acf9025 / 0x3a2cb5a2bbae8d82),
+            // so BOTH move every checkpoint from the load on. Witness for
+            // both: mc2:15's terrain, phase-aligned at t=120, matches
+            // retail on all five planes, 65,536/65,536
+            // (`terrain-diff --settle`, ROUND 109).
+            0x921f2692901c8c49_u64,
+            0x548f26fbb5411d18,
+            // ⭐⭐⭐ CHECKPOINTS C AND D RE-PINNED 2026-09-06 (ROUND 108),
+            // A/B HOLD — TWO SEPARATE, SEPARATELY ATTRIBUTED CAUSES.
+            //
+            // **C moved for THE CAVE-IN'S WIZARD SURVIVAL POCKET.**
+            // `sub_311E0` (EF:23003-37) digs a spherical cavity around
+            // every class-3 MODEL-0 wizard inside the collapse — floor
+            // down to `z/32 - r`, ceiling up to `z/32 + r`, walking
+            // `dword_38519` (the tick-top class-3 live list) and
+            // testing only `!model`. In MC2 model 0 is the HUMAN
+            // CARPET ALONE (rivals are (3,1), castles (3,2)) and the
+            // port's carpet lives OUT OF POOL — so the port's pool
+            // walk matched NOTHING and the pocket had never once been
+            // carved. mc2l15 t=35340..46 under the descending human at
+            // tile (51,54): retail's floor falls 68 → 65 → 63 → 61 →
+            // 59 → 58 → 57 while the port's stayed frozen at 68.
+            // Landing it took mc2l15 from 593 segments to **3, devs=0,
+            // horizon=END — the take CERTIFIED**. A caves world flies
+            // its human through its own collapses, so this checkpoint
+            // moving is the law working.
+            //
+            // **D moved in ROUND 107 AND WAS NEVER RE-PINNED.** Proved,
+            // not assumed: this test PASSED on a build of the commit
+            // BEFORE round 107's (`a913653`, "mc1l6-sg certified") and
+            // FAILED on round 107's own commit, whose diff is the
+            // held-seam / phase-7 wrapper-tail family (roster.rs,
+            // stagevars.rs, mobs.rs, proj.rs) and which touched no
+            // golden. ⚠ That commit was `279f731` when the bisect ran
+            // and has since been SQUASHED away — bisect from `a913653`
+            // if this ever needs re-deriving. Same mechanism as the 2026-08-29 re-pin below: a
+            // caves world runs creatures, and a changed creature seam
+            // reshapes the late checkpoints. ⚠ It was carried into this
+            // round as a RED failure on purpose rather than papered
+            // over, and is re-pinned only now that its cause is named.
+            // (C and D carried forward under ROUND 109's two laws above.)
+            0xaba02729e2083cca,
+            0x5b1a79824eb6d514,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -911,11 +969,26 @@ fn mc2_cave_behaviors_and_goldens() {
     // moves ALL FOUR of the layout hashes above, moves NOTHING here —
     // both arms are byte-identical. That is the independent proof that
     // the stamp is a hashed-field move and not behaviour.
+    // ⚠ C AND D RE-PINNED HERE TOO 2026-09-06 (ROUND 108) — and unlike
+    // most re-pins above, these two are NOT hashed-field moves: both
+    // are real behaviour. C is the cave-in's survival pocket actually
+    // digging for the first time (the port carved no pocket at all
+    // before, because model 0 is the out-of-pool human); D is round
+    // 107's creature-seam family, proved by bisecting round 107's
+    // commit against its parent `a913653`. A/B are untouched, which is
+    // the evidence that neither change reached the pre-collapse world.
+    // ⚠ ALL FOUR RE-PINNED 2026-09-06 (ROUND 109) — real behaviour, not a
+    // hashed-field move: the (10,31) river chains now CARVE (level-014
+    // has them), and the load settle allocates its spawns in retail's
+    // slot order (in-sweep free). Each law reverted alone moves all
+    // four away from both the previous pin (0xca0e5c449cf57b10 /
+    // 0xb60c271e559caa80 / 0x478ffb68996ab8ea / 0x9d0d9120f359f775) and
+    // HEAD — see the state-pin note above for the arm values.
     const OBSERVABLE: [u64; 4] = [
-        0xca0e5c449cf57b10,
-        0xb60c271e559caa80,
-        0x020feba34505bd3b,
-        0xf08daed0a7324021,
+        0x536144e2ca06878d,
+        0x4cfe444e3d74d9d1,
+        0x674d00718d9a0d5b,
+        0x7c5397293f30a730,
     ];
     assert_eq!(
         obs, OBSERVABLE,
@@ -1100,6 +1173,65 @@ fn mc2_cave_enhanced_funnel_never_breaches_ceiling() {
 /// leaves the start tile (and a 3×3 ring around it) open cave with
 /// real headroom, so the port never regresses to the ctor-default
 /// 6×6 carve that left the player inside the wall.
+/// ROUND 109 — mc2:15's LAVA MOATS. The two (10,31) river chains
+/// (THING slots 50-54 and 268-272, closed rectangles inside the two
+/// (10,82) mesa rooms at (215,182)) spawn one (10,32) river head per
+/// leg (`sub_487D0` EV:5558, `mc2_stamp_river_leg`), and the head
+/// (`sub_344A0`, action 0x22) drops a (10,11) scorch ring per tile
+/// whose −3/tick disc dig carves the channel to floor 0 — which the
+/// cave retile paints as the lava types 36/37/39. Two laws, both
+/// A/B-proved against retail's measured planes (`terrain-diff` on a
+/// `slice --from 120 --to 126`, port settle 130: ALL FIVE PLANES MATCH
+/// on 65,536 cells):
+/// 1. the river arm itself — before it the port held 26/22/20 cells of
+///    types 36/37/39 (the trace doc's §3.4 called the consumer a stub
+///    after reading `4A190(.., 10, 32)` as hex; retail spawns (10,32));
+/// 2. `mc2_apply_events` frees a finished record INSIDE the sweep, like
+///    retail's per-arm `sub_57F20` — deferring it to the sweep's end
+///    let a river head's re-popped ring tick one sweep early and over-
+///    dug the rims: floor-0 cells 1,800 against retail's 1,747.
+/// Retail record 0 counts (whole plane): type 36 = 464, 37 = 125,
+/// 39 = 127, floor 0 = 1,747.
+#[test]
+fn mc2_level_015_lava_moats_are_carved() {
+    let Some(root) = baked_root() else {
+        common::golden_skip("baked mc2 data not present");
+        return;
+    };
+    let Some((mut w, _)) = build_world_level(&root, "mc2/level-015.mgcl") else {
+        common::golden_skip("mc2 level-015 has no baked ceiling");
+        return;
+    };
+    let (sx, sy) = open_spot(&w);
+    // The (10,45) building lerps still run over the first ~40 ticks;
+    // the lava is a LOAD product (present at tick 0) and unmoved by
+    // them. Settle past the buildings so the whole-plane counts are
+    // the retail record's.
+    hover(&mut w, sx, sy, 60, PlayerCommand::default());
+    let p = w.planes_clone();
+    let count_type = |t: u8| p.tile_type.iter().filter(|&&v| v == t).count();
+    assert_eq!(
+        (count_type(36), count_type(37), count_type(39)),
+        (464, 125, 127),
+        "mc2:15 lava types 36/37/39 (retail 464/125/127; 26/22/20 before the (10,31) river arm)"
+    );
+    assert_eq!(
+        p.height.iter().filter(|&&h| h == 0).count(),
+        1747,
+        "mc2:15 floor-0 cells (retail 1,747; 887 before the river arm, 1,800 with the \
+         settle's free deferred to the sweep end)"
+    );
+    // The outer moat's top leg: (189,157)→(240,157), a channel at
+    // floor 0 (rows 156..158 everywhere along it; row 159 carries a
+    // stray 1 at x=220 in retail too) with the 88 mesa plateau below.
+    for x in [200u8, 220, 236] {
+        for y in 156..=158u8 {
+            assert_eq!(p.height[y as usize * 256 + x as usize], 0, "channel cell ({x},{y})");
+        }
+        assert_eq!(p.height[162 * 256 + x as usize], 88, "plateau cell ({x},162)");
+    }
+}
+
 #[test]
 fn mc2_level_023_start_chamber_is_carved_open() {
     let Some(root) = baked_root() else {

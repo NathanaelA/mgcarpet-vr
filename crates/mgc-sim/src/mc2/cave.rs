@@ -531,7 +531,7 @@ impl Gen {
     /// ring-swept cell — retail's stale `ix`). Wave += 22/tick,
     /// life += 4; wave > 1024 → phase 3. NO direct HP write — the
     /// terrain is the weapon.
-    pub(crate) fn mc2_cave_in_tick(&mut self, i: usize) -> bool {
+    pub(crate) fn mc2_cave_in_tick(&mut self, i: usize, human: Option<(u16, u16, i16)>) -> bool {
         let rings: i32 = match self.ent[i].max_life {
             1 => 5,
             2 => 7,
@@ -603,28 +603,79 @@ impl Gen {
                                 self.t.ceiling[t] = drop as u8;
                             }
                             // The wizard survival pocket (EF:23003-37):
-                            // class-3 model-0 within 0x64000 sq units
-                            // gets a spherical cavity dug around it.
+                            // a class-3 MODEL-0 wizard within 0x64000
+                            // square units gets a spherical cavity dug
+                            // around it — floor DOWN to `z/32 - r`,
+                            // ceiling UP to `z/32 + r`. Retail walks
+                            // `dword_38519`, the tick-top class-3 LIVE
+                            // LIST, and tests only `!model` because
+                            // the list is already class-filtered.
+                            //
+                            // ⭐⭐⭐ **AND MODEL 0 IS THE HUMAN CARPET,
+                            // WHICH LIVES OUT OF POOL — so this whole
+                            // feature was DEAD in the port.** MC2's
+                            // rival wizards are (3,1) and the castles
+                            // (3,2); (3,0) is the human alone, and the
+                            // port's carpet is not a pool record (its
+                            // pooled slot is a zeroed husk under the
+                            // conformance import, and a native world
+                            // has none at all). So this loop never
+                            // matched anything, ever, and the port
+                            // simply did not carve the pocket.
+                            //
+                            // WITNESS — mc2l15 t=35340..35346 under the
+                            // descending human at tile (51,54):
+                            // `MGC_CELL_TRACE` reads retail's floor
+                            // falling 68 → 65 → 63 → 61 → 59 → 58 → 57
+                            // as the carpet drops through the collapse,
+                            // while the port's stays FROZEN at 68. That
+                            // is the take's `pose.z` head (t=35346,
+                            // retail 2425 / port 2427): the human is
+                            // standing on a floor retail dug out from
+                            // under it. The ramp is the pocket's own
+                            // shape — `lo = z/32 - r` follows the
+                            // wizard's own altitude down.
+                            //
+                            // The human is tested BESIDE the pool walk
+                            // rather than at its slot: both writes are
+                            // monotone (`floor` a min, `ceiling` a
+                            // max), so unlike `sub_377A0`'s painter
+                            // mint the ORDER cannot matter here.
                             let (wx, wy) = (((x as u16) << 8), ((y as u16) << 8));
+                            let pocket = |gx: u16, gy: u16, gz: i16| -> (i32, i32, bool) {
+                                let dx = (wx.wrapping_sub(gx) as i16 as i32).abs();
+                                let dy = (wy.wrapping_sub(gy) as i16 as i32).abs();
+                                let d2 = dx * dx + dy * dy;
+                                if d2 > 0x64000 {
+                                    return (0, 0, false);
+                                }
+                                let r = (isqrt((0x64000 - d2) as u32) >> 5) as i32;
+                                let cz = (gz >> 5) as i32;
+                                ((cz - r).clamp(0, 254), (r + cz).clamp(0, 254), true)
+                            };
+                            let dig = |g: &mut Self, lo: i32, hi: i32| {
+                                if g.t.height[t] as i32 > lo {
+                                    g.cave_write_floor(x, y, lo, false, true);
+                                }
+                                if (g.t.ceiling[t] as i32) < hi {
+                                    g.t.ceiling[t] = hi as u8;
+                                }
+                            };
                             for j in 1..self.ent.len() {
                                 let c = &self.ent[j];
                                 if c.class64 != 3 || c.model65 != 0 || c.flags & 0x400 != 0 {
                                     continue;
                                 }
-                                let dx = (wx.wrapping_sub(c.x) as i16 as i32).abs();
-                                let dy = (wy.wrapping_sub(c.y) as i16 as i32).abs();
-                                let d2 = dx * dx + dy * dy;
-                                if d2 <= 0x64000 {
-                                    let r = (isqrt((0x64000 - d2) as u32) >> 5) as i32;
-                                    let cz = (self.ent[j].z >> 5) as i32;
-                                    let lo = (cz - r).clamp(0, 254);
-                                    if self.t.height[t] as i32 > lo {
-                                        self.cave_write_floor(x, y, lo, false, true);
-                                    }
-                                    let hi = (r + cz).clamp(0, 254);
-                                    if (self.t.ceiling[t] as i32) < hi {
-                                        self.t.ceiling[t] = hi as u8;
-                                    }
+                                let (cx, cy, cz) = (c.x, c.y, c.z);
+                                let (lo, hi, hit) = pocket(cx, cy, cz);
+                                if hit {
+                                    dig(self, lo, hi);
+                                }
+                            }
+                            if let Some((hx, hy, hz)) = human {
+                                let (lo, hi, hit) = pocket(hx, hy, hz);
+                                if hit {
+                                    dig(self, lo, hi);
                                 }
                             }
                         }

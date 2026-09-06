@@ -295,6 +295,20 @@ void sub_352A0(type_entity_0x6E8E* a1x)//2162a0
 ```
 **⇒ It paints NOTHING.** `sub_352A0` never reads `life`, `yaw`, or `byte_0x46_70`. On its first settle tick (model 0x32 → `v4 >= 0x32 && !(v4 > 0x33)` → TICKED, EV:506-525) it simply despawns.
 
+### 3.4 ⛔ RESOLVED 2026-09-06 (ROUND 109): THE RIVER IS NOT INERT — THE SPAWN ARGUMENT IS DECIMAL
+`IfSubtypeCallCreatingManaSphere_4A190(&v8x, 10, 32)` passes **decimal 32 = 0x20 = (10,32)**, not
+(10,50)=0x32 (the beam stamper's `51` is decimal 0x33 = (10,51) by the same rule). The (10,32) ctor is
+`sub_4FA60` (EF:36292): action **0x22**, actSpeed 256, `byte_0x46_70 = 2`, maxLife 0, untargetable,
+not map-registered. Action 0x22 = `sub_344A0` (EF:25052): life−−, die on life < 0 or `sub_104A0 & 1`,
+else spawn ONE **(10,11) scorch ring** at the head (`fov` + `id` inherited, `life = byte_0x46_70` =
+the width 2/6/16/32) and `MoveEntity` 256 along the yaw. The ring's own `sub_31FB0` digs its growing
+disc −3/tick; one ring per tile, overlapping, carves a ~4-wide channel to floor 0 with a ~5-cell graded
+rim — **on a cave that floor retiles to the lava types 36/37/39.** Witness: mc2l15's two (10,31)
+rectangles (THING slots 50-54, 268-272) ARE its lava moats; with the arm ported, every terrain plane of
+mc2:15 is byte-identical to the take at t=120 (`terrain-diff --settle`, 65,536/65,536 ×5). Port:
+`mc2_stamp_river_leg` (world.rs), `mc2_spawn_river_head` / `mc2_river_head_tick` (mc2/tail.rs). The
+section below is kept as the record of the wrong reading.
+
 ### 3.4 The discrepancy (OPEN-1) — river vs. beam model mixup
 The river painter `sub_487D0` and the beam-chain stamper `sub_48880` (m50 doc §1.3) are structurally identical, differing only in the subtype they spawn:
 | painter | spawns | ctor action | that action's tick |

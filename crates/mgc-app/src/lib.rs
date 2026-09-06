@@ -8038,6 +8038,10 @@ struct Args {
     /// scaled by `map_scale`).
     map: Option<PathBuf>,
     map_scale: u32,
+    /// `--map-settle N`: tick the level's own world N times before
+    /// rendering the headless map (see `run_map`). MC2 terrain is built
+    /// by gameplay ticks, so 0 renders an unbuilt level.
+    map_settle: u32,
     /// Render `--screenshot` showing the book screen instead of the world.
     map_view: bool,
     /// Spell-selector surface override (config `spell_selector`).
@@ -8132,6 +8136,7 @@ fn parse_args() -> Result<Args, String> {
     let mut bindings = None;
     let mut map = None;
     let mut map_scale = 4u32;
+    let mut map_settle = 0u32;
     let mut map_view = false;
     let mut spell_selector = None;
     let mut rival_tags = None;
@@ -8373,6 +8378,13 @@ fn parse_args() -> Result<Args, String> {
             "--map" => {
                 map = Some(PathBuf::from(it.next().ok_or("--map needs a path")?));
             }
+            "--map-settle" => {
+                map_settle = it
+                    .next()
+                    .ok_or("--map-settle needs a tick count")?
+                    .parse()
+                    .map_err(|_| "--map-settle wants an integer")?;
+            }
             "--map-scale" => {
                 map_scale = it
                     .next()
@@ -8476,7 +8488,10 @@ fn parse_args() -> Result<Args, String> {
                      [--fps|--no-fps] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
-                     [--map out.png [--map-scale N]] [--no-terrain-features] \
+                     [--map out.png [--map-scale N] [--map-settle TICKS (MC2 \
+                     terrain is BUILT by gameplay ticks — 0 renders an unbuilt \
+                     level; 8 matches a recording's first frame)]] \
+                     [--no-terrain-features] \
                      [--pool-slots N] [--awake-range TILES (0 = always awake)] \
                      [--replay take.mgcr (play a recording — retail or port — as \
                      the session; level from the header)] \
@@ -8523,6 +8538,7 @@ fn parse_args() -> Result<Args, String> {
         bindings,
         map,
         map_scale,
+        map_settle,
         map_view,
         spell_selector,
         rival_tags,
@@ -8567,7 +8583,66 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), St
 /// Write the overhead map (one pixel per tile through the engine's
 /// map-color path), nearest-neighbor scaled — the axis-aligned,
 /// rotation-free comparison artifact for original map screenshots.
-fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> Result<(), String> {
+/// `--map-settle N` ticks the level's OWN world N times and re-copies
+/// its planes into the view before rendering.
+///
+/// ⭐ WHY IT EXISTS: MC2's authored terrain is NOT in the bake. The
+/// generator output is the bare landscape; the moats, lava and cave
+/// sculpting are built by the (10,45) building records over the first
+/// ~40 GAMEPLAY TICKS (`mc2_building_tick`, the 30-tick height lerp).
+/// `World::new_full` runs `load_time_pass` for MC1 and NOTHING for MC2,
+/// so `load_level`'s view snapshot — taken right after `init.build()` —
+/// is that bare landscape. mc2l15's generated planes hold **ZERO** cells
+/// of terrain types 8/10/11/23/26/27 where retail's measured terrain
+/// holds 64/381/1/5/218/84; after 8 ticks the port matches retail's
+/// record 0 EXACTLY on all six.
+/// ⇒ a `--map` at settle 0 is a picture of a level that has not been
+/// built yet. Pass `--map-settle 8` for the comparable image.
+fn run_map(
+    level: &mut LoadedLevel,
+    out: &Path,
+    scale: u32,
+    map_triggers: bool,
+    settle: u32,
+) -> Result<(), String> {
+    if settle > 0 {
+        let Some(w) = level.world.as_mut() else {
+            return Err("--map-settle needs the living world (do not pass \
+                        --no-terrain-features)"
+                .to_string());
+        };
+        // A real tick, not `tick_paused` — the buildings only advance
+        // on an UNPAUSED tick. The pose stands the player at the
+        // level's own start (or map centre), out of the way.
+        let (px, pz) = level
+            .start
+            .as_ref()
+            .map(|f| (f.x, f.z))
+            .unwrap_or((128.0, 128.0));
+        let idle = mgc_sim::engine::world::PlayerCommand::default();
+        for _ in 0..settle {
+            let alt = w.ground_height_tiles(px, pz) + 2.0;
+            let pose =
+                mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+            w.tick(pose, idle);
+        }
+        if let (Some(shading), Some(angle)) =
+            (level.view.shading.as_mut(), level.view.angle.as_mut())
+        {
+            w.copy_planes_into(mgc_sim::engine::features::TerrainPlanes {
+                height: &mut level.view.height,
+                tile_type: &mut level.view.tile_type,
+                shading,
+                angle,
+            });
+        }
+        if let Some(c) = level.view.ceiling.as_mut() {
+            let live = w.ceiling_plane();
+            if live.len() == c.len() {
+                c.copy_from_slice(live);
+            }
+        }
+    }
     let n = 256usize;
     // Stamps/path are screen-space projected at render time; this raw
     // CPU dump (the diagnostic artifact) shows dots only.
@@ -9925,7 +10000,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         || args.map.is_some()
         || args.flock_probe.is_some()
         || args.replay_check.is_some();
-    let boot_level = if campaign_run.is_some() && !headless {
+    let mut boot_level = if campaign_run.is_some() && !headless {
         None
     } else {
         match load_level(
@@ -9983,12 +10058,13 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     }
 
     if let Some(out) = &args.map {
-        let level = boot_level.as_ref().expect("headless paths load a level");
+        let level = boot_level.as_mut().expect("headless paths load a level");
         return match run_map(
             level,
             out,
             args.map_scale,
             cfg.render.debug.map_trigger_areas,
+            args.map_settle,
         ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {

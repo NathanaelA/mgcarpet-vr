@@ -362,6 +362,21 @@ to witness — that is faithful to the capture and wrong everywhere else.
   not retail. **Permanently diverging rows: the painter's BIRTH extents**
   (`applied_pitch`/`applied_yaw` — which are the collision half-extents, not angles), one head
   per wizard-painter birth: rsg t=34,604 slot 24 and t=39,012 slot 631.
+  ⭐⭐ **NARROWED 2026-09-06 (ROUND 108) — THE INDEX IS NO LONGER PART OF THIS DEVIATION, ONLY
+  THE RESIDUE IT LANDS IN.** The sentence above that the respawn timer "is never written on the
+  human's out-of-pool wizard body" was true of THE PORT, not of retail: retail's carpet record
+  carries `@0x10 = 1200` plainly (mc2l15 slot 165 reads 1200 from its first death onward), and
+  the port simply had no home for it. It does now — [`Player::mc2_respawn_timer`], latched at
+  the death payout, seated by `retail_import_mc2` from the carpet's `@0x10`, and handed to
+  `mc2_building_tick` as the human painter's row. **PLAYER-RULED 2026-09-06: *"Real port gap —
+  model it."*** Verified at mc2l15 t=24152 slot 719: `b46` retail 176 / **port 176** (was 0).
+  ⚠ THE EXTENTS ARE UNCHANGED AND STILL DIVERGE — row 176 is off the end of the 77-row table on
+  BOTH sides, so retail still reads heap residue (`apitch 5504 / aroll 2944`) and the port still
+  takes the empty row (640/640). That is what this entry now covers, and nothing more. Pinned by
+  `the_human_painter_row_is_the_death_respawn_timer`, which asserts BOTH halves — the row moves
+  0 → 176, the half-extents do not move at all.
+  ⚠ `applied_roll` carries the same residue but is **not in `compare_mc2_gated`'s lane set**, so
+  it never reaches grading and needs no rule today; it would the day that lane is graded.
 - **castle.rs — `SetShiftByCastle_49EC0` (the castle FOOTPRINT table)** — ⭐ **WHAT THIS
   FAMILY ACTUALLY CONTROLS, verified 2026-09-04**: `SetShiftByCastle_49EC0(event, a2)` reads
   row `a2` of BUILD00's `posistruct` (the shipped sprite-position table) and writes the

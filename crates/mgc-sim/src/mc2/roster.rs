@@ -91,6 +91,48 @@ pub(crate) fn no_mc2_m23_lock_tests() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M23_LOCK_TESTS").is_some())
 }
+/// A/B toggle for m24's UNCONDITIONAL IDLE `else` (`sub_28500`
+/// EF:18670-72 — see the write-up at the arm): set
+/// `MGC_NO_MC2_M24_IDLE_ELSE_FORCES_CHARGE` to restore the pre-dig
+/// extra arm, which preserved action 194 when the IDLE PRIMITIVE
+/// promoted the creature, where retail overwrites any such promotion
+/// with 198 (the charge) and keeps 194 only for the acquire the
+/// handler runs itself.
+fn no_mc2_m24_idle_else_forces_charge() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M24_IDLE_ELSE_FORCES_CHARGE").is_some())
+}
+/// A/B toggle for m24's PLAIN SPRITE COMMIT (`sub_287B0`'s guarded
+/// tail, EF:18816-23 — see [`Gen::m24_pose`]): set
+/// `MGC_NO_MC2_M24_POSE_PLAIN_SPRITE` to restore the pre-dig pose,
+/// which committed through `SetEntityIndexAndRot_49CD0` (re-deriving
+/// the `array_0x52_82` extents quad on every animation change),
+/// re-stamped sprite 336 unguarded every tick, and never committed
+/// sprite 335 from actions 194/198 at all.
+fn no_mc2_m24_pose_plain_sprite() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M24_POSE_PLAIN_SPRITE").is_some())
+}
+/// A/B toggle for m18's UNGUARDED BARRAGE AIM (`sub_250B0` case 0,
+/// EF:15995 — see [`Gen::m18_face_raw`]): set
+/// `MGC_NO_MC2_M18_AIM_UNGUARDED` to restore the pre-dig liveness
+/// lookup, which applied case 1's `life_0x8 < 0 || byte[1] & 4` reject
+/// to case 0, where retail has no test at all — so a tank whose quarry
+/// died stopped tracking it instead of turning after the corpse.
+fn no_mc2_m18_aim_unguarded() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M18_AIM_UNGUARDED").is_some())
+}
+/// A/B toggle for the m21 PHASE-7 WRAPPER TAIL (`sub_26470`'s last
+/// two lines, EF:16963-65 — see [`Gen::m21_wrapper_tail`]): set
+/// `MGC_NO_MC2_M21_WRAPPER_TAIL` to restore the pre-dig behaviour,
+/// where the port ran the jump cycle and stopped, so a devil the
+/// `sub_1D5D0` legs promoted out of its hold kept the IDLE rest base
+/// (`byte_0x43_67 = 64`) that retail had just zeroed.
+pub(crate) fn no_mc2_m21_wrapper_tail() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M21_WRAPPER_TAIL").is_some())
+}
 /// A/B toggle for the METAMORPH CLOAK law (`sub_6A030`, EXE
 /// 0x8E92F `or dl,0x21` / 0x8EA50 `and cl,0xdf`, EF:56335 /
 /// EF:56403): set `MGC_NO_METAMORPH_CLOAK` to restore the
@@ -554,7 +596,7 @@ impl Gen {
 
     /// `sub_20EC0` (:12283) — the engage pose: stop, sprite 202,
     /// filter = target's class/model; targeting self resets to idle.
-    fn m9_engage_pose(&mut self, i: usize) {
+    pub(crate) fn m9_engage_pose(&mut self, i: usize) {
         self.ent[i].f126 = 0;
         self.mc2_set_sprite(i, 202);
         let t = self.ent[i].f146;
@@ -2763,15 +2805,63 @@ impl Gen {
         };
     }
 
-    /// `sub_254E0` (:16232): turn toward the target by `cap`.
+    /// `sub_254E0` (:16232): turn toward the target by `cap`. The
+    /// LIVENESS-GUARDED entry — for the call sites whose retail arm
+    /// really does reject a dead pointer.
     fn m18_face(&mut self, i: usize, ctx: &MobCtx, cap: i16) {
-        if let Some((tx, ty, _)) = self.mc2_target(self.ent[i].f146, ctx) {
-            let e = &self.ent[i];
-            let aim = Self::angle_between(e.x, e.y, tx, ty);
-            self.ent[i].f34 = aim;
-            let yaw = self.ent[i].f30;
-            self.ent[i].f30 = (yaw as i32 + Self::turn_step(yaw, aim, cap) as i32) as u16 & 0x7FF;
+        if let Some(t) = self.mc2_target(self.ent[i].f146, ctx) {
+            self.m18_face_at(i, t, cap);
         }
+    }
+
+    /// `sub_254E0` on the RAW pointer — the barrage's AIM phase.
+    ///
+    /// ⭐⭐⭐ **CASE 0 AIMS AT A CORPSE AND CASE 1 DOES NOT.**
+    /// `sub_250B0`'s two arms sit eight lines apart and guard
+    /// differently: case 0 is a bare
+    /// `sub_254E0(a1x, Entities_EA3E4[a1x->word_0x96_150], 4u)`
+    /// (EF:15995) with NO liveness test, while case 1 (EF:16028-31)
+    /// rejects on `v5x <= Entities_EA3E4[0] || v5x->life_0x8 < 0 ||
+    /// v5x->struct_byte_0xc_12_15.byte[1] & 4` and drops to sub-state
+    /// 2. So a tank whose quarry dies mid-barrage KEEPS TRACKING the
+    /// corpse through the aim phase, and only the firing phase lets go.
+    /// The port routed both through `mc2_target`, whose baked-in life
+    /// test is case 1's — an INVENTED GUARD on case 0, false exactly
+    /// when the target dies ([`Gen::mc2_target_raw`] carries the law).
+    ///
+    /// WITNESS — mc2l15 pair 16733→16734, slot 3, a (5,18) in the
+    /// barrage aim phase (`action45 146`, `f71 0`) tracking slot 47 —
+    /// a `(10,0)` at **`life = -1`** on BOTH sides. Retail turns
+    /// `yaw 1692 → 1714` (`turn_step(1692, 1897, 22)` = +22, the
+    /// `(4<<11)/360` cap) while decrementing the timer and drawing;
+    /// the port matched the timer and the draw and did not turn at
+    /// all, nor rewrite `roll` — the exact signature of the resolver
+    /// returning `None`.
+    ///
+    /// `MGC_NO_MC2_M18_AIM_UNGUARDED=1` restores the guarded lookup.
+    fn m18_face_raw(&mut self, i: usize, ctx: &MobCtx, cap: i16) {
+        let slot = self.ent[i].f146;
+        let t = if no_mc2_m18_aim_unguarded() {
+            self.mc2_target(slot, ctx)
+        } else {
+            self.mc2_target_raw(slot, ctx)
+        };
+        if let Some(t) = t {
+            self.m18_face_at(i, t, cap);
+        }
+    }
+
+    /// The body of `sub_254E0` once the target pointer is in hand:
+    /// stamp the bearing into `roll_0x20_32`, step the yaw toward it by
+    /// `sub_58350(.., 5, cap)` and fold to 11 bits (retail DOES mask
+    /// here — EF:16238 — unlike the fan spawner, see
+    /// [`Gen::mc2_atk_fan`]).
+    fn m18_face_at(&mut self, i: usize, (tx, ty, _): (u16, u16, i16), cap: i16) {
+        let e = &self.ent[i];
+        let aim = Self::angle_between(e.x, e.y, tx, ty);
+        self.ent[i].f34 = aim;
+        let yaw = self.ent[i].f30;
+        self.ent[i].f30 = (yaw as i32 + Self::turn_step(yaw, aim, cap) as i32) as u16 & 0x7FF;
     }
 
     pub(crate) fn m18_tick(&mut self, i: usize, ctx: &MobCtx) {
@@ -2844,7 +2934,17 @@ impl Gen {
                 }
                 match self.ent[i].f71 {
                     0 => {
-                        self.m18_face(i, ctx, 22); // (4<<11)/360 (EF:15995)
+                        // EF:15995 — UNGUARDED: retail hands
+                        // `Entities_EA3E4[word_0x96_150]` straight to
+                        // `sub_254E0` with no liveness test, so the aim
+                        // phase tracks a corpse. See [`Self::m18_face_raw`].
+                        // 🏦 OWED: the ROAM arm (`sub_24E20` EF:15872-76,
+                        // `m18_tick`'s `0 =>`) is unguarded in retail too —
+                        // its only gate is `word_0x96_150 != 0`, and the
+                        // DISTANCE test runs on the raw pointer as well —
+                        // but it has no witness on this corpus yet, so it
+                        // keeps the guarded lookup pending its own A/B.
+                        self.m18_face_raw(i, ctx, 22); // (4<<11)/360
                         if v2 == 1 {
                             self.ent[i].f26 -= 47;
                             if self.ent[i].f26 < 0 {
@@ -3460,14 +3560,68 @@ impl Gen {
 
     /// `sub_268F0` (:17212): mode switch — 1 idle (can-turn 64,
     /// target cleared), 2 attack.
+    /// `sub_268F0` (:17222) — the m21 mode write. The action byte is
+    /// `a2 - 88` in u8 arithmetic, which for `a2 = mode` is exactly
+    /// `M21_BASE + mode`; and **only modes 1 and 2 carry a side
+    /// effect** — 1 arms the idle rest base and drops the target
+    /// (`word_0x96_150 = 0`), 2 zeroes the rest base (the attack's
+    /// single-draw rest). Retail leaves `byte_0x43_67` ALONE for
+    /// every other `a2`, including 0.
+    ///
+    /// ⚠ The bare `else` that zeroed f68 for every non-1 mode was an
+    /// INVENTED ARM — harmless while only 1 and 2 were ever passed,
+    /// and false the moment the wrapper tail re-applies a LIVE action
+    /// ([`Self::m21_wrapper_tail`], which passes whatever the legs
+    /// left behind).
     fn m21_mode(&mut self, i: usize, mode: u8) {
         if mode == 1 {
             self.ent[i].f68 = 64;
             self.ent[i].f146 = 0;
-        } else {
+        } else if mode == 2 {
             self.ent[i].f68 = 0;
         }
-        self.ent[i].tick70 = M21_BASE + mode;
+        self.ent[i].tick70 = M21_BASE.wrapping_add(mode);
+    }
+
+    /// `sub_26470`'s TAIL (EF:16963-65) — the LAST two lines of m21's
+    /// phase-7 wrapper, after the `sub_1D5D0` legs and the
+    /// `StageVar2` switch:
+    /// ```text
+    ///   if (a1x->actionIndex_0x45_69 != 175)
+    ///       sub_268F0(a1x, a1x->actionIndex_0x45_69 + 88);
+    /// ```
+    /// ⭐ **IT IS AN IDENTITY ON THE ACTION AND A PURE SIDE EFFECT.**
+    /// `a2 = action + 88` is u8 arithmetic and `action = M21_BASE + k`
+    /// = `168 + k`, so `a2 = 256 + k ≡ k`, and `sub_268F0` then writes
+    /// `action = a2 - 88` — the same byte back. The call exists only to
+    /// RE-APPLY THE MODE SIDE EFFECT to whatever action the legs just
+    /// promoted the devil to. A non-lethal hit leaves it at
+    /// `M21_BASE + 2`, so the tail zeroes the rest base — which turns
+    /// the state-9 rest draw from TWO entity draws into ONE
+    /// (`m21_jump`'s div-by-zero special case).
+    ///
+    /// ⚠ It sits OUTSIDE the switch and retail's `default:` arm
+    /// **breaks** (unlike `sub_1F300`'s m0 twin, which `return`s and
+    /// has no tail at all), so the tail runs for EVERY `StageVar2` —
+    /// held kinds, kind 0, and the unhandled ones alike.
+    ///
+    /// WITNESS — mc2l15 pair 7527→7528, slot 4: the stage-held (5,21)
+    /// takes the human's 160 (`mail0.src 165`), `sv2 6 → 10`,
+    /// `action 175 → 170`, and retail writes **`b43 64 → 0`**. The port
+    /// reproduced every other field and held `b43 = 64`; the extra rest
+    /// draw then desynced the entity LCG, surfacing 47 ticks later as
+    /// the take's FIRST divergence — slot 4 `rand` retail 28492 vs port
+    /// 54187 at t=7575.
+    ///
+    /// `MGC_NO_MC2_M21_WRAPPER_TAIL=1` restores the old behaviour.
+    pub(crate) fn m21_wrapper_tail(&mut self, i: usize) {
+        if no_mc2_m21_wrapper_tail() {
+            return;
+        }
+        let k = self.ent[i].tick70.wrapping_sub(M21_BASE);
+        if k != 7 {
+            self.m21_mode(i, k);
+        }
     }
 
     /// `sub_26930` (:17234-44): yaw may commit only at the landing
@@ -3748,9 +3902,14 @@ impl Gen {
             5 => self.mc2_kill(i),
             6 => {} // sub_26420 MISSING from the decompile — unreachable
             _ => {
-                // +7 (:16925): 1D5D0 is a no-op for our StageVar2==0
-                // spawns; the jump cycle keeps the devil alive.
+                // +7 (:16925) — `sub_26470`. 1D5D0 is a no-op for our
+                // StageVar2==0 spawns; the jump cycle keeps the devil
+                // alive. This arm serves the devils the HELD SEAM does
+                // NOT claim (`mc2_held_tick` takes kinds 1-10 and 15),
+                // i.e. StageVar2 0 and 11/12/13/14/16+ — and retail's
+                // tail runs for those too (its `default:` BREAKS).
                 self.m21_jump(i);
+                self.m21_wrapper_tail(i);
             }
         }
     }
@@ -4407,21 +4566,64 @@ impl Gen {
         }
     }
 
-    /// `sub_287B0` (:18778): sprite/speed by state.
+    /// `sub_287B0` (EF:18779-18825) — m24's pose. Retail picks a speed
+    /// and a sprite in one `actionIndex` ladder and then commits the
+    /// sprite through ONE guarded tail:
+    /// ```text
+    ///   0xC0        -> v3 = 336, actSpeed = 0
+    ///   0xC2        -> v4 = minSpeed_0x84_132,     v3 = 335
+    ///   0xC6        -> v4 = 2 * maxSpeed_0x86_134, v3 = 335
+    ///   otherwise   -> v4 = maxSpeed_0x86_134,     v3 = 335
+    ///   if (v3 != a1x->word_0x5A_90) { word_0x5A_90 = v3;
+    ///       animationFrame_0x5C_92 = 0;
+    ///       byte_0x5D_93 = D8A2E[particlesParameters_D951C[v3].byte_12]; }
+    /// ```
+    /// ⭐⭐⭐ **THAT TAIL IS `SetEntityIndex_49C90` INLINED, NOT
+    /// `SetEntityIndexAndRot_49CD0`** — the `array_0x52_82` extents
+    /// quad is NEVER touched by this pose. The port called
+    /// [`Gen::mc2_set_sprite`] (the `AndRot` twin), so every time the
+    /// creature changed animation its collision box was re-derived
+    /// from the new sprite's particle-param row.
+    /// ⭐⭐ And the guard is on BOTH sprites and the write is on ALL
+    /// FOUR arms: the port guarded only the 335 arm, re-stamped 336
+    /// every single tick (resetting `animationFrame` with it), and
+    /// never committed 335 at all from actions 194/198.
+    ///
+    /// WITNESS — mc2l15 pair 19531→19532, slot 32, a (5,24) idling to
+    /// `action45 193 → 192`: retail's changelog moves `f5a 335 → 336`
+    /// and `speed 24 → 0` and **leaves the quad alone**, while the
+    /// port re-derived it to 152/152/225 against retail's held
+    /// 256/256/640 (`apitch`/`aroll`/`afov`). It was the head of a
+    /// 7,618-tick reset run.
+    ///
+    /// `MGC_NO_MC2_M24_POSE_PLAIN_SPRITE=1` restores the old behaviour.
     fn m24_pose(&mut self, i: usize) {
-        match self.ent[i].tick70 - M24_BASE {
-            0 => {
-                self.mc2_set_sprite(i, 336);
-                self.ent[i].f126 = 0;
-            }
-            2 => self.ent[i].f126 = self.ent[i].f128, // 80
-            6 => self.ent[i].f126 = 2 * self.ent[i].f130, // 48
-            _ => {
-                self.ent[i].f126 = self.ent[i].f130;
-                if self.ent[i].type86 != 335 {
-                    self.mc2_set_sprite(i, 335);
+        if no_mc2_m24_pose_plain_sprite() {
+            match self.ent[i].tick70 - M24_BASE {
+                0 => {
+                    self.mc2_set_sprite(i, 336);
+                    self.ent[i].f126 = 0;
+                }
+                2 => self.ent[i].f126 = self.ent[i].f128,
+                6 => self.ent[i].f126 = 2 * self.ent[i].f130,
+                _ => {
+                    self.ent[i].f126 = self.ent[i].f130;
+                    if self.ent[i].type86 != 335 {
+                        self.mc2_set_sprite(i, 335);
+                    }
                 }
             }
+            return;
+        }
+        let (speed, sprite) = match self.ent[i].tick70 - M24_BASE {
+            0 => (0, 336),
+            2 => (self.ent[i].f128, 335),          // minSpeed_0x84_132
+            6 => (2 * self.ent[i].f130, 335),      // 2 * maxSpeed_0x86_134
+            _ => (self.ent[i].f130, 335),          // maxSpeed_0x86_134
+        };
+        self.ent[i].f126 = speed;
+        if self.ent[i].type86 != sprite {
+            self.mc2_set_sprite_index(i, sprite);
         }
     }
 
@@ -4456,9 +4658,43 @@ impl Gen {
                     if self.ent[i].tick70 == M24_BASE + 1 {
                         self.m24_acquire(i, ctx);
                     }
-                } else if self.ent[i].tick70 == M24_BASE + 2 {
-                    // primitive acquire keeps +2
+                } else if no_mc2_m24_idle_else_forces_charge()
+                    && self.ent[i].tick70 == M24_BASE + 2
+                {
+                    // The pre-dig arm — see below; kept only under the
+                    // kill switch.
                 } else {
+                    // ⭐⭐⭐ **RETAIL'S `else` IS UNCONDITIONAL, AND
+                    // THE PORT'S EXTRA ARM WAS INVENTED.** `sub_28500`
+                    // (EF:18659-72), m24's action-193 handler, is
+                    // ```text
+                    //   sub_1BF90(a1x, 192);
+                    //   if (a1x->actionIndex_0x45_69 == 193) {
+                    //       … the 1-in-3 flip to 192 …
+                    //       if (actionIndex == 193) sub_28690(a1x);
+                    //   } else {
+                    //       a1x->actionIndex_0x45_69 = 198;
+                    //   }
+                    // ```
+                    // so ANY action the IDLE PRIMITIVE itself moved to
+                    // — 194 included — is overwritten with 198, the
+                    // charge. Only the acquire the handler runs ITSELF
+                    // (`sub_28690`, inside the taken branch) survives
+                    // at 194. Its action-192 twin `sub_28490`
+                    // (EF:18637-52) has the identical shape, and the
+                    // port's `0 =>` arm already matched it — this arm
+                    // alone carried an extra `else if action == 194 {}`
+                    // that preserved the primitive's promotion.
+                    //
+                    // WITNESS — mc2l15 pair 19531→19532, slot 46, a
+                    // (5,24) whose idle primitive acquires the human:
+                    // retail `action45 193 → 198`, `target96 0 → 165`,
+                    // `speed 24 → 48` (= 2 × maxSpeed, the 0xC6 pose
+                    // arm). The port kept `action 194` and
+                    // `speed 80` (= minSpeed, the 0xC2 arm).
+                    //
+                    // `MGC_NO_MC2_M24_IDLE_ELSE_FORCES_CHARGE=1`
+                    // restores the old behaviour.
                     self.ent[i].tick70 = M24_BASE + 6;
                 }
                 self.m24_pose(i);

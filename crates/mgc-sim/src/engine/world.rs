@@ -243,6 +243,35 @@ pub struct Player {
     /// lost + level-over flags (+13325 |= 0xC, :48620-33) — the
     /// level restarts.
     pub lost: bool,
+    /// ⭐ THE HUMAN WIZARD'S `dword_0x10_16` (@0x10) — the DEATH
+    /// RESPAWN TIMER, and the port's only home for it because the
+    /// human carpet lives OUT OF POOL.
+    ///
+    /// The death payout latches a flat **1200** (EF:60170) and the
+    /// HUMAN arm of `sub_5E7C0` never counts it down — only the AI arm
+    /// does — so on a human it is **0 until the first death and 1200
+    /// forever after**. Nothing in the human machine reads it back;
+    /// its one consumer is `sub_377A0`, the building-completion tail,
+    /// which castle-re-paints every class-3 live-list member
+    /// overlapping a finished building and stamps
+    /// `byte_0x46_70 = wizard->dword_0x10_16` on the (10,42) painter it
+    /// mints (`mc2/mobs.rs`). `SetShiftByCastle_49EC0` then indexes the
+    /// 77-row BUILD00 table with that byte, UNCLAMPED — the registered
+    /// MC2 out-of-bounds class.
+    ///
+    /// ⚠ MODELLING THIS DOES **NOT** RECOVER THE EXTENTS. Row
+    /// `1200 & 0xFF = 176` is out of range on both sides; retail reads
+    /// heap residue there (`apitch 5504 / aroll 2944`) and the port
+    /// takes BUILD00 row 0, so `applied_pitch`/`applied_yaw` stay
+    /// permanently deviant by construction
+    /// (`mc2-painter-oob-build-row-applied-pitch`). What this fixes is
+    /// the INDEX ITSELF: `b46`, which retail derives from shipped state
+    /// and the port was publishing as 0.
+    ///
+    /// PLAYER-RULED 2026-09-06: *"Real port gap — model it."* Witness:
+    /// mc2l15 t=24152 slot 719 and t=24184 slot 314, `b46` retail 176 /
+    /// port 0, the human having died earlier in the take.
+    pub mc2_respawn_timer: u32,
 }
 
 impl Default for Player {
@@ -280,6 +309,7 @@ impl Default for Player {
             death_owned_blue: [false; SPELL_COUNT],
             hit_flash: 0,
             lost: false,
+            mc2_respawn_timer: 0,
         }
     }
 }
@@ -324,12 +354,19 @@ impl std::hash::Hash for Player {
             death_owned_blue,
             hit_flash,
             lost,
+            mc2_respawn_timer,
         } = self;
         (mana, mana_max, mana_delta, banked, world_mana, left, right).hash(h);
         (owned, shield, invisible, rebound, beyond_sight, heal_active).hash(h);
         (accel, accel_held, speed_boost.to_bits(), teleport_return).hash(h);
         (life, grace, regen_delay, state, fall_speed, killer).hash(h);
         (death_owned, hit_flash, lost).hash(h);
+        // Transparent at pristine — the `life_rate` / `death_owned_blue`
+        // shape. 0 until the human's first death, so every fixture and
+        // golden whose human never dies keeps its hash byte-identical.
+        if *mc2_respawn_timer != 0 {
+            mc2_respawn_timer.hash(h);
+        }
         // Transparent at pristine: hashed only once the CASTLE rate
         // has latched — fixtures that never idle at their own castle
         // (or a dolmen) keep their goldens (the death_owned_blue
@@ -1834,6 +1871,23 @@ fn carpet_probe_window() -> Option<(u64, u64)> {
         let (a, b) = v.split_once('-')?;
         Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
     })
+}
+
+/// ⭐ `MGC_SCULPT_TRACE=1` — first a `thing` line per authored THING
+/// record (class/model/x/y/dis/params — the table before any pass
+/// consumes it), then one line per CAVE SCULPTOR the MC2 load
+/// settle touches (`mc2_apply_events`), tagged `ran`, `reap-unrun`
+/// (a tick-band model whose ACTION has no ported handler) or
+/// `disable-band`. A sculptor that appears in NONE of the three never
+/// became an entity at all — which is how the mc2:15 lava was traced:
+/// its `(10,84)`×10 and `(10,85)`×8 pit/hill THINGS are
+/// DISPOSITION-GATED (`dis_id` 13/26/31, not the 0xFFFF load
+/// sentinel), so the load settle never sees them, while the 77
+/// `(10,80)` chain heads and 13 `(10,82)` rooms do run
+/// (58 × `(10,81)` action 88 + 13 × `(10,82)` action 89).
+fn sculpt_trace() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_SCULPT_TRACE").is_some())
 }
 
 /// `MGC_PROBE_CELLS=<x>,<y>[;<x>,<y>…]` — plane heights at the watched
@@ -6110,7 +6164,16 @@ impl World {
                 // The (10,89) Cave-In collapse (mc2::cave, action
                 // 0x60 — sub_311E0; terrain is the weapon).
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 0x60 => {
-                    if self.g.mc2_cave_in_tick(i) {
+                    // The survival pocket is carved around every
+                    // class-3 MODEL-0 wizard — which in MC2 is the
+                    // HUMAN CARPET ALONE (rivals are (3,1), castles
+                    // (3,2)), and the carpet lives OUT OF POOL. Hand
+                    // it in the way the building tail does, on the
+                    // same mid-walk `ctx` pose and the same tick-top
+                    // liveness (`dword_38519` membership is
+                    // `life >= 0` at the tick top).
+                    let carpet = (!ctx.pdead_top).then_some((ctx.px, ctx.py, ctx.pz));
+                    if self.g.mc2_cave_in_tick(i, carpet) {
                         self.terrain_dirty = true;
                     }
                 }
@@ -7168,7 +7231,15 @@ impl World {
         if self.g.mc2_build_plot_frozen(i) {
             return;
         }
-        let human = Some((pose, self.mc2_carpet_slot, alive));
+        // The painter row is the human's `dword_0x10_16` low byte —
+        // `sub_377A0` stamps it into `byte_0x46_70` on every (10,42) it
+        // mints. See [`Player::mc2_respawn_timer`].
+        let human = Some((
+            pose,
+            self.mc2_carpet_slot,
+            alive,
+            (self.player.mc2_respawn_timer & 0xFF) as u8,
+        ));
         if self.g.mc2_building_tick(i, human) {
             self.terrain_dirty = true;
             self.entities_dirty = true;
@@ -8129,6 +8200,14 @@ impl World {
             self.kill_tally[slot as usize][0] += 1;
         }
         self.g.player_mail = [(0, 0); 6];
+        // ⭐ `dword_0x10_16 = 1200` (EF:60170) — the flat respawn timer,
+        // latched in the touchdown block beside the `actionIndex = 3`
+        // flip and the grave. The HUMAN arm of `sub_5E7C0` never counts
+        // it down (only the AI arm does), so this is a ONE-WAY latch:
+        // 0 before the first death, 1200 for the rest of the level. Its
+        // only reader is `sub_377A0`'s painter mint — see
+        // [`Player::mc2_respawn_timer`].
+        self.player.mc2_respawn_timer = 1200;
         // Retail writes lang 374 VERBATIM into the dying wizard's own
         // notification slot with countdown 100 (EF:60129-36) — no name
         // substitution on this path, unlike the rival broadcast.
@@ -12624,6 +12703,19 @@ impl World {
     /// spawn seam (misfit + optional placeholder), which keeps the
     /// authored population visible.
     fn mc2_generate_events(&mut self) {
+        if sculpt_trace() {
+            // The authored sculptor THINGS, before any pass consumes them.
+            for (i, r) in self.table.iter().enumerate().skip(1) {
+                if r.class != 0 {
+                    eprintln!(
+                        "SCULPT thing slot={i} ({},{}) x={} y={} dis={} swi_sz={} swi_id={} \
+                         parent={} child={} par3={}",
+                        r.class, r.model, r.x, r.y, r.dis_id, r.swi_sz, r.swi_id, r.parent,
+                        r.child, r.par3
+                    );
+                }
+            }
+        }
         // Passes A..G in slot order. F (:258) = buildings whose
         // BLDGPRM flags set 0x10, G (:271) = the rest; with no
         // bldgprm table (stand-in assets) F takes them all.
@@ -12675,7 +12767,7 @@ impl World {
                     // cases {0x1C,0x1D,0x1F,0x32,0x50} EV:323-336 →
                     // sub_49090): 0x1D = waterpath, 0x32 = the
                     // (10,51) ridge-beam fence, 0x1C = the road
-                    // staircase, 0x1F = the river (retail-inert),
+                    // staircase, 0x1F = the river (a (10,32) head per leg),
                     // 0x50 = the (10,81) cave tube carver
                     // (docs/traces/mc2-terrain-author-painters.md).
                     if r.class == 10 && matches!(r.model, 0x1C | 0x1D | 0x1F | 0x32 | 0x50) {
@@ -12806,6 +12898,10 @@ impl World {
                         }
                         // The one-tick stage/chain markers.
                         0x1E | 0x1F | 0x21 | 0x36 => self.g.ent[i].flags |= 0x400,
+                        // The (10,32) river head — the traveling
+                        // scorch-ring emitter behind the (10,31)
+                        // chains (the cave lava moats).
+                        0x22 => self.g.mc2_river_head_tick(i),
                         // The 30-tick build action — retail towns
                         // stand FINISHED at the fade-in.
                         // (load ctx: the pre-walk echo, as before.)
@@ -12832,13 +12928,48 @@ impl World {
                         }
                         // A tick-band model with no ported handler
                         // cannot run — reap it.
-                        _ => self.g.ent[i].flags |= 0x400,
+                        other => {
+                            if sculpt_trace() {
+                                eprintln!(
+                                    "SCULPT reap-unrun ({},{}) action={other}",
+                                    self.g.ent[i].class64, self.g.ent[i].model65,
+                                );
+                            }
+                            self.g.ent[i].flags |= 0x400
+                        }
+                    }
+                    if sculpt_trace() && matches!(self.g.ent[i].model65, 0x50..=0x55) {
+                        eprintln!(
+                            "SCULPT ran ({},{}) action={}",
+                            self.g.ent[i].class64,
+                            self.g.ent[i].model65,
+                            self.g.ent[i].tick70
+                        );
                     }
                 } else {
                     // The settle DISABLE band.
+                    if sculpt_trace() && matches!(self.g.ent[i].model65, 0x50..=0x55) {
+                        eprintln!(
+                            "SCULPT disable-band ({},{}) action={}",
+                            self.g.ent[i].class64,
+                            self.g.ent[i].model65,
+                            self.g.ent[i].tick70
+                        );
+                    }
                     self.g.ent[i].flags |= 0x400;
                 }
                 self.g.ent[i].f63 = self.g.ent[i].f63.wrapping_add(1);
+                // Retail frees a finished record RIGHT HERE, inside
+                // the sweep (`sub_57F20` after every arm, EV:439/462/
+                // 471/486/499/512/523/537/545/552) — so a later slot's
+                // spawn in the SAME sweep can re-pop it. A river head
+                // whose ring lands BELOW its own index sees that ring
+                // first tick a sweep later; deferring the free to the
+                // sweep's end shifted every such ring one sweep early
+                // and over-dug the lava-channel rims by 3-6 (round 109).
+                if self.g.ent[i].flags & 0x400 != 0 {
+                    self.free_slot(i);
+                }
             }
             if !live {
                 break;
@@ -12914,13 +13045,23 @@ impl World {
                 // (10,28) road: the sub_48400 ridge staircase
                 // (docs/traces/mc2-terrain-author-painters.md §1-2).
                 0x1C => self.g.mc2_stamp_road_leg(node.x, node.y, nx, ny),
-                // (10,31) river: INERT IN RETAIL — sub_487D0 seeds
-                // life/yaw/width on a (10,50) whose action 0x36
-                // self-destructs without reading them (same doc
-                // §3.4, OPEN-1: the carve consumer is a stub; river
-                // geometry rides the level header). The walk still
-                // consumes the chain's stage tags, faithfully.
-                0x1F => {}
+                // (10,31) river → one (10,32) river head per leg
+                // (sub_487D0 EV:5558), width from the FROM node's
+                // par3 through the EV:5329-46 remap. ⚠ NOT inert:
+                // the trace doc's §3.4 "stub" verdict read the
+                // spawn's DECIMAL `32` as hex (10,50); it is (10,32)
+                // = 0x20, action 0x22, a traveling scorch-ring
+                // emitter — the cave LAVA moats (round 109).
+                0x1F => {
+                    let width = match node.par3 {
+                        0 => 2,
+                        1 => 6,
+                        2 => 16,
+                        3 => 32,
+                        other => other,
+                    };
+                    self.mc2_stamp_river_leg(node.x, node.y, nx, ny, width as u8);
+                }
                 // (10,80) cave tunnel chain → one (10,81) tube
                 // carver per leg (sub_48930 EV:5621): packed radii
                 // f71 = FROM node's par3 (high nibble) | TO node's
@@ -12939,6 +13080,25 @@ impl World {
                 _ => {}
             }
             cur = next;
+        }
+    }
+
+    /// `sub_487D0` (EV:5558) — the (10,31) river painter: spawn one
+    /// (10,32) river head at the FROM node's tile corner, z snapped to
+    /// 32 × the floor there, yaw toward the TO corner, life = the 2-D
+    /// leg length >> 8 (tiles), width = the remapped par3. The settle
+    /// then walks it to completion (`mc2_river_head_tick`).
+    fn mc2_stamp_river_leg(&mut self, x1: u16, y1: u16, x2: u16, y2: u16, width: u8) {
+        let (fx, fy) = (x1 << 8, y1 << 8);
+        let (tx, ty) = (x2 << 8, y2 << 8);
+        let fz = 32 * self.g.t.height[features::tile(x1 as u8, y1 as u8)] as i16;
+        let yaw = Gen::angle_between(fx, fy, tx, ty);
+        let dist = crate::mc2::morph::dist2d(fx, fy, tx as i32, ty as i32) as u16;
+        if let Some(h) = self.g.mc2_spawn_river_head(fx, fy, fz) {
+            let e = &mut self.g.ent[h];
+            e.f30 = yaw;
+            e.act_life = (dist as i32) >> 8;
+            e.f71 = width;
         }
     }
 
@@ -17254,6 +17414,7 @@ impl Snap for Player {
             death_owned_blue,
             hit_flash,
             lost,
+            mc2_respawn_timer,
         } = self;
         w.put(mana);
         w.put(mana_max);
@@ -17287,6 +17448,7 @@ impl Snap for Player {
         w.put(death_owned_blue);
         w.put(hit_flash);
         w.put(lost);
+        w.put(mc2_respawn_timer);
     }
     fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
         Ok(Player {
@@ -17322,6 +17484,7 @@ impl Snap for Player {
             death_owned_blue: r.get()?,
             hit_flash: r.get()?,
             lost: r.get()?,
+            mc2_respawn_timer: r.get()?,
         })
     }
 }
@@ -30392,7 +30555,7 @@ mod tests {
         let pops = [f[f.len() - 1], f[f.len() - 2], f[f.len() - 3]];
         // Complete the build on this call.
         w.g.ent[b].act_life = 1;
-        assert!(w.g.mc2_building_tick(b, Some(((x, y, gz), human as u16, true))));
+        assert!(w.g.mc2_building_tick(b, Some(((x, y, gz), human as u16, true, 0))));
         let parents: Vec<u16> = pops.iter().map(|&p| w.g.ent[p as usize].id24).collect();
         assert_eq!(
             parents,
@@ -30409,8 +30572,178 @@ mod tests {
         let h2 = w2.g.new_event().expect("slot");
         let before = w2.g.free.len();
         w2.g.ent[b2].act_life = 1;
-        assert!(w2.g.mc2_building_tick(b2, Some(((x, y, gz), h2 as u16, false))));
+        assert!(w2.g.mc2_building_tick(b2, Some(((x, y, gz), h2 as u16, false, 0))));
         assert_eq!(w2.g.free.len(), before, "no painter for a dead human");
+    }
+
+    /// ⭐ `sub_377A0` STAMPS THE HUMAN'S `dword_0x10_16` INTO THE
+    /// PAINTER'S `byte_0x46_70` — AND ON A HUMAN THAT WORD IS THE
+    /// DEATH RESPAWN TIMER.
+    ///
+    /// The building-completion tail castle-re-paints every class-3
+    /// live-list member overlapping the finished plot, the human
+    /// carpet included, and mints a (10,42) whose `byte_0x46_70` is
+    /// that member's `dword_0x10_16`. The human's is 0 until its first
+    /// death and **1200** afterwards (EF:60170; the human arm of
+    /// `sub_5E7C0` never counts it down), so the painter's BUILD00 row
+    /// is `1200 & 0xFF` = **176**.
+    ///
+    /// The port's carpet is OUT OF POOL and so had nowhere to keep
+    /// that word: it hard-coded row 0 and published `b46` 0 against
+    /// retail's 176 (mc2l15 t=24152 slot 719, t=24184 slot 314).
+    /// [`Player::mc2_respawn_timer`] is the home now.
+    /// PLAYER-RULED 2026-09-06: *"Real port gap — model it."*
+    ///
+    /// ⚠ THIS IS A PIN, NOT A FIXTURE, BECAUSE `b46` IS NOT A GRADED
+    /// LANE (`compare_mc2_gated`) — the pair suite cannot see it. And
+    /// it deliberately does NOT recover the EXTENTS: row 176 is off
+    /// the end of a 77-row table on both sides, retail reads heap
+    /// residue there (`apitch 5504 / aroll 2944`) and the port takes
+    /// the empty row, which is the registered
+    /// `mc2-painter-oob-build-row-applied-pitch` deviation. The second
+    /// half of the test pins exactly that: the ROW moves, the EXTENTS
+    /// do not.
+    #[test]
+    fn the_human_painter_row_is_the_death_respawn_timer() {
+        use crate::engine::features::BuildDef;
+        let rig = || {
+            let mut w = mc2_flat_world();
+            w.g.assets.build_tab = vec![BuildDef { offset: 0, w: 1, h: 1 }];
+            w.g.assets.build_dat = vec![0xff, 0xff];
+            w
+        };
+        let (x, y) = mc2_pos(100, 100);
+        // One painter mint, parameterised on the human's @0x10.
+        let mint = |timer: u32| -> (u8, u16, u16) {
+            let mut w = rig();
+            let gz = w.g.ground_z(x, y) as i16;
+            let b = w.g.mc2_spawn_building(x, y, gz, 0).expect("the building");
+            let human = w.g.new_event().expect("slot");
+            w.player.mc2_respawn_timer = timer;
+            let f = w.g.free.clone();
+            let pop = f[f.len() - 1] as usize;
+            w.g.ent[b].act_life = 1;
+            let row = (w.player.mc2_respawn_timer & 0xFF) as u8;
+            assert!(w
+                .g
+                .mc2_building_tick(b, Some(((x, y, gz), human as u16, true, row))));
+            let e = &w.g.ent[pop];
+            assert_eq!((e.class64, e.model65), (10, 42), "the painter was minted");
+            (e.f71, e.f80, e.f82)
+        };
+        // Never died: @0x10 = 0, the table's own empty row.
+        let (row_alive, w0, h0) = mint(0);
+        assert_eq!(row_alive, 0, "an undead human paints with row 0");
+        // Died once: @0x10 = 1200, and the painter carries 176.
+        let (row_dead, w1, h1) = mint(1200);
+        assert_eq!(
+            row_dead, 176,
+            "the painter's BUILD00 row is the human's respawn timer low byte (1200 & 0xFF)"
+        );
+        // ⚠ AND THE EXTENTS ARE THE OUT-OF-RANGE FALLBACK, NOT
+        // RETAIL'S RESIDUE. Row 176 is off the end of the table, so
+        // `mc2_new_painter_record` takes `(0, 0)` and stamps
+        // `((0 << 8) + 1280) >> 1` = 640 on both axes. Retail instead
+        // reads heap residue there (`apitch 5504 / aroll 2944` =
+        // w 38 / h 18), which is not derivable from any shipped asset
+        // — the registered `mc2-painter-oob-build-row-applied-pitch`
+        // deviation. **This law fixes the INDEX; the residue it lands
+        // in stays deviant by construction.**
+        assert_eq!(
+            (w1, h1),
+            (640, 640),
+            "an out-of-range row takes the empty fallback, NOT retail's 5504/2944 residue"
+        );
+        // The rig's synthetic table has a 1x1 row 0 (the shipped
+        // BUILD00's row 0 is the empty w=h=0, which would also give
+        // 640) — so on THIS rig the two rows differ, and that is the
+        // proof the row is actually being read rather than ignored.
+        assert_ne!(
+            (w0, h0),
+            (w1, h1),
+            "the painter really does size itself from the row it was handed"
+        );
+    }
+
+    /// ⭐⭐⭐ THE CAVE-IN'S SURVIVAL POCKET IS CARVED AROUND THE
+    /// OUT-OF-POOL HUMAN — AND WITHOUT THAT IT IS NEVER CARVED AT ALL.
+    ///
+    /// `sub_311E0` (EF:23003-37) walks `dword_38519` — the tick-top
+    /// class-3 LIVE LIST — and, for every member with `!model`, digs a
+    /// spherical cavity around it inside the collapse: floor DOWN to
+    /// `z/32 - r`, ceiling UP to `z/32 + r`, with
+    /// `r = isqrt(0x64000 - d2) >> 5`. It is a survival pocket, not a
+    /// burial.
+    ///
+    /// **In MC2 `model == 0` is the HUMAN CARPET ALONE** — the rival
+    /// wizards are (3,1) and the castles (3,2) — and the port's carpet
+    /// lives OUT OF POOL. So the port's pool walk matched nothing on
+    /// any level, ever, and the pocket had literally never been dug.
+    ///
+    /// ⚠ THIS IS A PIN, NOT A FIXTURE, BECAUSE THE PAIR LANE CANNOT
+    /// SEE IT. `verify-deltas` re-imports the MEASURED terrain on every
+    /// pair, so a law whose whole effect is a terrain write reads
+    /// CLEAN there: the mc2l15 dig slice graded 2,200 of 2,200 pairs
+    /// conforming with this bug still in. It only shows in the FREE
+    /// RUN, where terrain accumulates — which is exactly why it
+    /// survived to round 108.
+    ///
+    /// WITNESS — mc2l15 t=35340..35346, tile (51,54), under the human
+    /// descending through a collapse (`MGC_CELL_TRACE`): retail's floor
+    /// falls 68 → 65 → 63 → 61 → 59 → 58 → 57 while the port's stays
+    /// frozen at 68. That was the take's head (`pose.z` at t=35346,
+    /// retail 2425 / port 2427) — the human standing on a floor retail
+    /// had dug out from under it. Landing this took mc2l15 from 593
+    /// segments to **3, devs=0, horizon=END: CERTIFIED**.
+    #[test]
+    fn the_cave_in_pocket_follows_the_out_of_pool_human() {
+        let cell = |w: &World, cx: u8, cy: u8| -> u8 {
+            w.g.t.height[crate::engine::features::tile(cx, cy)]
+        };
+        // A collapse centred on one tile, driven one tick from phase 0.
+        let rig = |human: Option<(u16, u16, i16)>| -> (u8, u8) {
+            let mut w = mc2_flat_world();
+            // A cave world has a CEILING plane; `mc2_flat_world`'s is
+            // empty, and the collapse writes it on every swept cell.
+            w.g.t.ceiling = vec![200; 0x10000];
+            let (cx, cy) = (100u8, 100u8);
+            let (x, y) = mc2_pos(cx as u16, cy as u16);
+            let i = w.g.new_event().expect("slot");
+            {
+                let e = &mut w.g.ent[i];
+                e.class64 = 10;
+                e.model65 = 89;
+                e.tick70 = 0x60;
+                e.max_life = 0; // rings = 3
+                e.act_life = 40;
+                e.f71 = 0; // phase 0: seed the anchors, fall through
+                e.x = x;
+                e.y = y;
+            }
+            let before = cell(&w, cx, cy);
+            w.g.mc2_cave_in_tick(i, human);
+            (before, cell(&w, cx, cy))
+        };
+        // No human on the list: the pocket loop matches nothing.
+        let (before_a, after_a) = rig(None);
+        // The human hovering low over the collapse centre.
+        let (hx, hy) = mc2_pos(100, 100);
+        let (before_b, after_b) = rig(Some((hx, hy, 32 * 20)));
+        assert_eq!(
+            before_a, before_b,
+            "both rigs start from the same flat floor"
+        );
+        assert!(
+            after_b < after_a,
+            "the human's survival pocket digs the floor DOWN              (no-human {after_a}, human {after_b}, from {before_a}) —              without the out-of-pool carpet on the list it is never dug"
+        );
+        // And the depth is retail's own arithmetic, not just "lower".
+        // The swept cell's probe point is TILE-ALIGNED (`x << 8`) while
+        // `mc2_pos` puts the carpet at the tile CENTRE (`| 128`), so at
+        // the centre tile `d2 = 2 * 128^2` = 32,768 and
+        // `r = isqrt(0x64000 - 32768) >> 5` = `613 >> 5` = 19. With
+        // `z >> 5` = 20 the floor lands at `20 - 19` = 1.
+        assert_eq!(after_b, 1, "floor driven to (z >> 5) - r");
     }
 
     /// Possession is delivered by a separate CLAIM PULSE ENTITY, not
@@ -33371,14 +33704,33 @@ mod tests {
         );
     }
 
-    /// Kind-4's "join the watched entity's fight" arm is retail-inert
-    /// (`sub_1D700` reads a stage-held creature's uninitialized
-    /// `word_0x96_150` — the `0xae02` `//fix` bandaid marks the junk;
-    /// player-replayed on mc2:04: the worms crawl along and never
-    /// join). A kind-4 holder must stay HELD even when its watched
-    /// creature has a live target standing right next to it.
+    /// ⭐⭐⭐ **KIND 4 JOINS THE WATCHED ENTITY'S FIGHT — BUT ONLY WHEN
+    /// THERE IS ONE.** `sub_1D5D0` case 4 → `sub_1D700` (EF:10037-58):
+    /// ```text
+    ///   v4 = v3x->word_0x96_150;                       // the watched entity's OWN target
+    ///   if (v4 && dist3d(me, Entities_EA3E4[v4]) <= reach) {
+    ///       a1x->word_0x96_150 = v3x->word_0x96_150;   // inherit it
+    ///       a1x->StageVar2_0x49_73 = 10; sub_1E040(a1x, a2); }
+    /// ```
+    /// ⚠ **THIS REVERSES A PRIOR READING, ON RECORDED EVIDENCE.** This
+    /// test used to assert the arm was retail-INERT, citing a player
+    /// replay of mc2:04 ("the worms crawl along and never join") and
+    /// remc2's hand-added `if (v4 == 0xae02) return;//fix` bandaid as
+    /// proof that `word_0x96_150` holds junk. mc2l15 pair 19905→19906
+    /// is a direct RECORDED counterexample: slot 4, a stage-held (5,9)
+    /// at `sv2 4` whose watch handle is slot 66, reads slot 66's own
+    /// `word_0x96_150` = 165 (the human), inherits it and releases —
+    /// `sv2 4 → 10`, `action45 79 → 74`, `target96 0 → 165`. A
+    /// RECORDING outranks a visual replay.
+    ///
+    /// The two observations RECONCILE on the `v4 &&` guard, which is
+    /// the half the old reading dropped: the arm fires only when the
+    /// watched creature actually HAS a quarry, and mc2:04's watched
+    /// worms evidently never acquire one. Both halves are pinned
+    /// below — the join, and the hold that survives a targetless
+    /// watch.
     #[test]
-    fn mc2_kind4_hold_never_joins_the_watched_fight() {
+    fn mc2_kind4_hold_joins_only_when_the_watch_has_a_quarry() {
         let planes = Planes {
             height: vec![100; 0x10000],
             tile_type: vec![5; 0x10000],
@@ -33425,8 +33777,41 @@ mod tests {
             w.tick(pose, PlayerCommand::default());
         }
         assert_eq!(
-            w.g.ent[g].site_z, 4,
-            "the kind-4 holder stays held — the join arm never fires"
+            w.g.ent[g].site_z, 10,
+            "the kind-4 holder JOINS once its watch has a quarry in reach"
+        );
+        assert_eq!(
+            w.g.ent[g].f146, a as u16,
+            "and it INHERITS that quarry (word_0x96_150 copied verbatim)"
+        );
+
+        // THE OTHER HALF — the `v4 &&` guard, which is what makes
+        // mc2:04's worms sit still: a watched creature with NO target
+        // leaves the holder held, however close it stands.
+        let mut w2 = World::new_for_game(
+            Planes {
+                height: vec![100; 0x10000],
+                tile_type: vec![5; 0x10000],
+                shading: vec![32; 0x10000],
+                angle: vec![5; 0x10000],
+                ceiling: Vec::new(),
+            },
+            &things,
+            1,
+            assets(),
+            GameId::Mc2,
+        );
+        w2.set_mc2_stagevars(&[(0, 0, 0, 0, 0), (0xC4u8 as i8, 0, 10, 0, 11)]);
+        let g2 = w2.g.mc2_spawn_m9(gx, gy, 0).unwrap();
+        w2.mc2_stagevar_attach(g2, 10);
+        let b2 = w2.g.mc2_spawn_archers(bx, by, 0).unwrap();
+        for _ in 0..40 {
+            w2.g.ent[b2].f146 = 0; // the watch has no quarry
+            w2.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(
+            w2.g.ent[g2].site_z, 4,
+            "a targetless watch leaves the kind-4 holder HELD (the `v4 &&` guard)"
         );
     }
 
@@ -41838,7 +42223,7 @@ mod tests {
         // instead — so the release is a constant of the experiment
         // and only the MODEL varies. Kind 15 is `sub_1D5D0`'s default
         // arm, which does nothing at all.
-        let release = |model: u8, kind: i16| -> (u8, u8) {
+        let release = |model: u8, kind: i16| -> (u8, u8, i16, u32) {
             let mut w = mc2_flat_world();
             let (x, y) = mc2_pos(60, 60);
             let i = match model {
@@ -41873,13 +42258,18 @@ mod tests {
                 w.mc2_held_tick(i, &ctx),
                 "m{model} kind {kind} must take the stage-held seam"
             );
-            (w.g.ent[i].tick70, w.g.ent[i].f71)
+            (
+                w.g.ent[i].tick70,
+                w.g.ent[i].f71,
+                w.g.ent[i].f26,
+                w.g.ent[i].rand,
+            )
         };
 
         for model in [17u8, 19, 20, 28] {
             let base = model.wrapping_mul(8);
             // RELEASED — the wrapper's tail sees `8m+2` and fires.
-            let (action, sub) = release(model, 10);
+            let (action, sub, _, _) = release(model, 10);
             assert_eq!(
                 action,
                 base.wrapping_add(2),
@@ -41890,7 +42280,7 @@ mod tests {
             // sub-state must SURVIVE. Without this arm the assertion
             // above would pass just as well for an unconditional zero
             // anywhere on the held seam.
-            let (action, sub) = release(model, 15);
+            let (action, sub, _, _) = release(model, 15);
             assert_eq!(
                 action,
                 base.wrapping_add(7),
@@ -41899,19 +42289,44 @@ mod tests {
             assert_eq!(sub, STALE, "a still-held m{model} keeps its sub-state");
         }
 
-        // THE SCOPE CONTROL. m18 takes the identical release and has
-        // no such wrapper tail, so its sub-state must survive — this
-        // is the arm that fails if the reset is ever hung off the
-        // RELEASE rather than off the four per-model wrappers.
-        let (action, sub) = release(18, 10);
+        // THE SCOPE CONTROL — m18 zeroes its sub-state too, but
+        // through a DIFFERENT tail, and the difference is the point.
+        // `sub_25550` (EF:16247-56) ends `if (actionIndex == 146)
+        // sub_253B0(a1x, 2u, 0);`, and `sub_253B0`'s (2,0) arm
+        // (EF:16205-13) is `rand = 9377*rand + 9439;
+        // dword_0x10_16 = rand % 200 + 200; byte_0x46_70 = a4;
+        // actionIndex = 146;` — so the zero arrives as the `a4`
+        // argument of an ATTACK-TIMER ENTRY that also DRAWS, not as
+        // the four wrappers' bare `byte_0x46_70 = 0`.
+        //
+        // ⚠ This arm previously asserted `sub == STALE` — "m18 has no
+        // phase-7 reset" — which was only ever true because
+        // `sub_25550`'s tail was unported. It was a PASSING TEST
+        // ENCODING AN INVENTED LAW, and the mc2l15 pair 14444→14445
+        // witness (retail draws `rand 40649 → 17736` and writes
+        // `scratch10 = 336`, the port drew nothing) is what exposed
+        // it. The control still does its job: a bare zero hung off
+        // the RELEASE would satisfy the sub-state assertion but leave
+        // the timer and the LCG untouched, and both are checked here.
+        let (action, sub, timer, rand) = release(18, 10);
         assert_eq!(
             action,
             18u8.wrapping_mul(8).wrapping_add(2),
             "m18 releases exactly the same way"
         );
         assert_eq!(
-            sub, STALE,
-            "m18 has no phase-7 sub-state reset — its stale sub-state survives"
+            sub, 0,
+            "m18's sub-state is zeroed as sub_253B0's `a4`, not by a bare store"
+        );
+        assert!(
+            (200..=399).contains(&timer),
+            "m18's release ARMS the attack timer (rand % 200 + 200), got {timer}"
+        );
+        let fresh = mc2_flat_world();
+        assert_ne!(
+            rand,
+            fresh.g.ent[1].rand,
+            "m18's release also SPENDS an entity LCG draw"
         );
     }
 

@@ -48,6 +48,10 @@ corpus).** Landed shape:
   replays from the recording anyway). Shading/angle/ceiling are
   captured-but-not-yet-installed (banked: install once a real take
   shows whether pristine bakes drift).
+- Harness: `terrain-check` — THE NAKED TRUTH: one verdict line per take, is the
+  port's GENERATED terrain bit-identical to record 0 (port settled by the
+  recorder's phase: MC2 6 ticks, MC1 0)? Exit 1 on any differing plane;
+  `terrain-diff [--settle n] [--out dir]` gives the cell-level view.
 
 Original plan below for the remaining steps' context.
 
