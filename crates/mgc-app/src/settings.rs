@@ -1931,6 +1931,34 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc1_fix_dragon_tail",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc1_fix_dragon_tail",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc1_fix_dragon_tail.on(),
+                faithful: false,
+            },
+            desc: "The MC1 dragon's tail stays in formation at any range. Retail \
+                   only keeps body segments behind their head within 24 tiles of \
+                   you; further out the tail piles onto the head and snaps back \
+                   when you approach - visible with the port's long view. This \
+                   fixes the tail without raising the awake range, which would \
+                   wake every creature on the map.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc1_fix_dragon_tail = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Distant tails collapse onto the head, as retail.",
+                    "Tails trail their head everywhere (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2139,8 +2167,8 @@ mod tests {
         // ruling — the mine's trigger is retail's, so the whole
         // detonation column is unconditional too (DEVIATIONS.md).
         // ball_owner_recolor added 2026-09-06 (presentation-only),
-        // no_spell_loss 2026-09-07.
-        assert_eq!(patches, 10, "ten of the eleven patches ship on");
+        // no_spell_loss + mc1_fix_dragon_tail 2026-09-07.
+        assert_eq!(patches, 11, "eleven of the twelve patches ship on");
     }
 
     #[test]

@@ -956,6 +956,14 @@ pub struct GameplayPatches {
     /// jars while the spells stay yours; only MC2's undead wraith
     /// steal — the one designed loss — still takes a spell.
     pub no_spell_loss: PatchArm,
+    /// The MC1 dragon's tail follows its head everywhere. Retail only
+    /// keeps a body segment in formation while it is awake (within 24
+    /// tiles of you); further out the tail collapses onto the head
+    /// every few ticks and "snaps" back when you approach. With the
+    /// port's long view that lag is visible, and raising the awake
+    /// range to hide it wakes every creature on the map instead.
+    /// `patched` (default): segments trail properly at any range.
+    pub mc1_fix_dragon_tail: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -974,6 +982,7 @@ impl Default for GameplayPatches {
             win2_movie_score: PatchArm::Patched,
             castle_latch_bug: PatchArm::Patched,
             no_spell_loss: PatchArm::Patched,
+            mc1_fix_dragon_tail: PatchArm::Patched,
         }
     }
 }
@@ -994,6 +1003,7 @@ impl GameplayPatches {
             win2_movie_score: PatchArm::Retail,
             castle_latch_bug: PatchArm::Retail,
             no_spell_loss: PatchArm::Retail,
+            mc1_fix_dragon_tail: PatchArm::Retail,
         }
     }
 
@@ -1011,6 +1021,7 @@ impl GameplayPatches {
             mc2_dweller_invisibility: PatchArm::Retail,
             ball_owner_recolor: PatchArm::Retail,
             no_spell_loss: PatchArm::Retail,
+            mc1_fix_dragon_tail: PatchArm::Retail,
             ..Self::default()
         }
     }

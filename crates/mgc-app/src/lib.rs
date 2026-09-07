@@ -9159,6 +9159,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         mc2_downgrade_overflow: p.mc2_downgrade_overflow.on(),
         castle_latch_bug: p.castle_latch_bug.on(),
         no_spell_loss: p.no_spell_loss.on(),
+        mc1_fix_dragon_tail: p.mc1_fix_dragon_tail.on(),
     }
 }
 

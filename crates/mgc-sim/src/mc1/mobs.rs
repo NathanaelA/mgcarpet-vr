@@ -3694,7 +3694,16 @@ impl Gen {
     /// awake segments sit at distance +56 behind their leader along
     /// the exact bearing (position derived from the leader every
     /// tick); asleep ones collapse onto it every 4th tick.
-    fn segment_follow(&mut self, i: usize) {
+    ///
+    /// Patch option `mc1_fix_dragon_tail` (`follow_asleep`, player-
+    /// ruled 2026-09-07): the rigid follow runs whether or not the
+    /// segment is awake, so a distant dragon's tail trails its head
+    /// instead of collapsing onto it — retail's every-4th-tick
+    /// collapse is a period CPU save behind the 24-tile awake radius,
+    /// and it is the only reason anyone raises `awake_range` (which
+    /// wakes the whole ecology). The damage intake stays awake-gated:
+    /// asleep creatures do not take mail damage.
+    fn segment_follow(&mut self, i: usize, follow_asleep: bool) {
         let l = self.ent[i].f52 as usize;
         // Orphan (:21116-17): a leader no longer class 5 flags the
         // segment dead (sub_41E80 = 0x400) and FALLS THROUGH — the
@@ -3704,7 +3713,8 @@ impl Gen {
             self.ent[i].flags |= 0x400;
         }
         let (lx, ly, lz) = (self.ent[l].x, self.ent[l].y, self.ent[l].z);
-        if self.ent[i].f58 != 0 {
+        let awake = self.ent[i].f58 != 0;
+        if awake || follow_asleep {
             let e = &self.ent[i];
             let yaw = Self::angle_between(e.x, e.y, lx, ly);
             // Vertical bearing sub_42180 (:52644).
@@ -3720,7 +3730,9 @@ impl Gen {
             // ch0 and latch the attacker in +40 ALONE — or CLEAR the
             // latch on a quiet tick (the head's chain walk inherits
             // +40; +38 is the lethal branch's alone).
-            if self.ent[i].mail[0].1 != 0 {
+            if !awake {
+                // (the patched asleep follow: no intake, as retail)
+            } else if self.ent[i].mail[0].1 != 0 {
                 let (amt, src) = self.ent[i].mail[0];
                 self.ent[i].act_life -= amt as i32;
                 self.ent[i].mail[0].1 = 0;
@@ -4058,7 +4070,7 @@ impl Gen {
     pub(crate) fn creature_tick(&mut self, i: usize, ctx: &MobCtx) {
         let s = self.ent[i].tick70;
         if s == 120 {
-            return self.segment_follow(i);
+            return self.segment_follow(i, ctx.patches.mc1_fix_dragon_tail && !ctx.strict);
         }
         if s > 101 {
             return; // parked states (data10 = 0)

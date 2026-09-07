@@ -44,6 +44,7 @@
       "castle_recast_cost": "retail",
       "jar_ground_snap": "patched",
       "map_wide_ball_rolling": "patched",
+      "mc1_fix_dragon_tail": "patched",
       "mc2_downgrade_overflow": "patched",
       "mc2_dweller_invisibility": "patched",
       "no_spell_loss": "patched",

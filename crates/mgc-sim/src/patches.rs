@@ -120,6 +120,17 @@ pub struct WorldPatches {
     /// picked up. The wraith steal is untouched — it is the one
     /// explicit, designed inventory writer.
     pub no_spell_loss: bool,
+    /// MC1 body segments (the dragon's 16-piece tail, the sea
+    /// serpent's, the two-piece m6) keep their rigid follow while
+    /// ASLEEP. Retail's `sub_19550` (:21107) only walks an awake
+    /// segment to `+56` behind its leader; an asleep one collapses
+    /// onto the leader every 4th tick — a period CPU save behind the
+    /// 24-tile awake radius that reads as "the tail lags in strange
+    /// ways" once the port's fog shows distant dragons. This is the
+    /// only reason anyone raised `awake_range`, which also wakes the
+    /// whole ecology (player-ruled 2026-09-07, DEFAULT ON). The
+    /// damage intake stays awake-gated.
+    pub mc1_fix_dragon_tail: bool,
 }
 
 impl WorldPatches {
@@ -135,6 +146,7 @@ impl WorldPatches {
         mc2_downgrade_overflow: false,
         castle_latch_bug: false,
         no_spell_loss: false,
+        mc1_fix_dragon_tail: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -151,5 +163,6 @@ impl WorldPatches {
         mc2_downgrade_overflow: true,
         castle_latch_bug: true,
         no_spell_loss: false,
+        mc1_fix_dragon_tail: false,
     };
 }

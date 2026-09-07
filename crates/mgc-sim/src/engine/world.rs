@@ -27138,6 +27138,71 @@ mod tests {
         );
     }
 
+    /// `mc1_fix_dragon_tail`: a dragon far outside the awake radius
+    /// (asleep, `f58 == 0`) keeps its tail in formation — the first
+    /// segment sits `f56` behind the head — where retail's asleep arm
+    /// collapses it onto the head every 4th tick.
+    #[test]
+    fn mc1_fix_dragon_tail_trails_a_distant_head() {
+        for patched in [false, true] {
+            let mut w = flat_world();
+            w.set_patches(crate::patches::WorldPatches {
+                mc1_fix_dragon_tail: patched,
+                ..crate::patches::WorldPatches::RETAIL
+            });
+            let (hx, hy) = ((120u16) << 8, (120u16) << 8);
+            let gz = w.g.ground_z(hx, hy) as i16;
+            let head = w.g.spawn_creature(0, hx, hy, gz + 512).expect("a dragon");
+            let seg = w.g.ent[head].f54 as usize;
+            assert_eq!(w.g.ent[seg].tick70, 120, "the first tail segment");
+            let spacing = w.g.ent[seg].f56 as i32;
+            // Park the chain asleep and walk the head east by hand, the
+            // way an idle distant head wanders; the segments only ever
+            // see their leader's position.
+            let mut n = head;
+            while n != 0 {
+                w.g.ent[n].f58 = 0;
+                w.g.ent[n].f59 = 0;
+                n = w.g.ent[n].f54 as usize;
+            }
+            let mut min_gap = i32::MAX;
+            let mut max_gap = 0;
+            for k in 0..64u16 {
+                let (x, y, z) = {
+                    let e = &w.g.ent[head];
+                    (e.x.wrapping_add(48), e.y, e.z)
+                };
+                w.g.move_relink(head, x, y, z);
+                w.tick(away(), PlayerCommand::default());
+                assert_eq!(w.g.ent[seg].f58, 0, "the segment stays asleep far away");
+                if k >= 8 {
+                    let dx = (w.g.ent[head].x as i32 - w.g.ent[seg].x as i32).abs();
+                    let dy = (w.g.ent[head].y as i32 - w.g.ent[seg].y as i32).abs();
+                    let dz = (w.g.ent[head].z as i32 - w.g.ent[seg].z as i32).abs();
+                    // The rigid follow is a 3-D polar step of `f56`
+                    // along the segment→leader bearing.
+                    let gap = ((dx * dx + dy * dy + dz * dz) as f64).sqrt() as i32;
+                    min_gap = min_gap.min(gap);
+                    max_gap = max_gap.max(gap);
+                }
+            }
+            if patched {
+                assert!(
+                    (min_gap - spacing).abs() <= 8 && (max_gap - spacing).abs() <= 8,
+                    "patched: the segment trails {spacing} behind every tick (gap {min_gap}..{max_gap})"
+                );
+            } else {
+                // Retail: dropped ONTO the head every 4th tick (gap 0)
+                // and left standing in between while the head walks
+                // on — the lag runs past the formation distance.
+                assert!(
+                    min_gap == 0 && max_gap > spacing,
+                    "retail: the asleep segment collapses onto the head and lags between (gap {min_gap}..{max_gap})"
+                );
+            }
+        }
+    }
+
     /// The MC2 arm of `map_wide_ball_rolling` (player-ruled both games
     /// 2026-09-06): `mc2_awake_pass`'s sphere leg re-arms a settled
     /// sphere far outside the 24-tile radius, and the shared moving
