@@ -647,7 +647,15 @@ fn mc2_map_dots(
                     by_owner(p.team)
                 }
             }
-            (10, 0x27..=0x39) => linked_blink(p.team),
+            // ⚠ 39 and 57 ONLY (:1269-70 `v34 <= 0x27` and :1298
+            // `v34 <= 0x39` — each an EXACT hit after the strict
+            // `<` above it). The models between, 40..=56 bar the
+            // house, `goto LABEL_56`: the plain owner arm. The port
+            // read the nested tests as one 0x27..=0x39 span, so the
+            // (10,40) wizard grave drew in the mana colour
+            // (player-reported 2026-09-07); retail draws it in
+            // UNPOSSESSED_BUILDING2 pink like a wild dwelling.
+            (10, 0x27 | 0x39) => linked_blink(p.team),
             (10, 0x4E) => {
                 if !p.player_owned {
                     continue;
@@ -2685,6 +2693,14 @@ mod tests {
         assert_eq!(dots(pose(10, 45, false, 0), 0)[0].color, 4);
         assert_eq!(dots(pose(10, 45, true, 0), 3)[0].color, MC2_TEAM_NIGHT[0].0);
         assert_eq!(dots(pose(10, 45, true, 0), 0)[0].color, MC2_TEAM_NIGHT[0].1);
+        // The (10,40) wizard grave is NOT a mana blip: 40..=56 fall to
+        // LABEL_56 (:1271-72), so an unowned grave is the same
+        // UNPOSSESSED_BUILDING2 magenta as a wild dwelling — never the
+        // mana colour v91 (0xE8) that 39/57 take at LABEL_173.
+        assert_eq!(dots(pose(10, 40, false, 0), 0)[0].color, 4);
+        assert_ne!(dots(pose(10, 39, false, 0), 0)[0].color, 4);
+        assert_eq!(dots(pose(10, 39, false, 0), 0)[0].color, 0xE8);
+        assert_eq!(dots(pose(10, 57, false, 0), 0)[0].color, 0xE8);
         // Spells = SPELLS red (:1396-1402).
         assert_eq!(dots(pose(12, 0, false, 0), 0)[0].color, 2);
         // The marker stone blinks phase 3 on/off (:1163-70).
