@@ -1902,6 +1902,35 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "no_spell_loss",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.no_spell_loss",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.no_spell_loss.on(),
+                faithful: false,
+            },
+            desc: "Spells you hold stay yours for the whole level (both games). \
+                   Retail's abandoned death-scatter mechanism can silently \
+                   drop a spell when the entity pool is full, and a stale \
+                   handle (the volcano's plume) can destroy a held spell's \
+                   token while you are alive - after which no dropped jar of \
+                   that spell can be picked up again. Only MC2's undead \
+                   wraith, the one designed theft, still takes a spell.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.no_spell_loss = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Death and stale handles can eat spells, as retail.",
+                    "The spellbook is permanent; death drops cosmetic jars (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2109,8 +2138,9 @@ mod tests {
         // mc2_magic_mine retired 2026-09-04 (session 97) on a player
         // ruling — the mine's trigger is retail's, so the whole
         // detonation column is unconditional too (DEVIATIONS.md).
-        // ball_owner_recolor added 2026-09-06 (presentation-only).
-        assert_eq!(patches, 9, "nine of the ten patches ship on");
+        // ball_owner_recolor added 2026-09-06 (presentation-only),
+        // no_spell_loss 2026-09-07.
+        assert_eq!(patches, 10, "ten of the eleven patches ship on");
     }
 
     #[test]

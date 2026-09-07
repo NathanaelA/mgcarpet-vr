@@ -90,6 +90,36 @@ pub struct WorldPatches {
     /// samples where you are) and the landing always re-scans
     /// (failure displaces the site one step back).
     pub castle_latch_bug: bool,
+    /// **THE HUMAN'S SPELLBOOK IS PERMANENT** (player-ruled
+    /// 2026-09-07, an unfaithful patch, DEFAULT ON, both games).
+    /// Retail can lose a spell the wizard already holds, and the
+    /// design never earns it back: MC1 has no legitimate way to lose
+    /// a spell, MC2 exactly one — the undead wraith's steal
+    /// (`mc2_spell_steal`), which drops the jar for re-collection.
+    /// Everything else is the abandoned death-scatter mechanism and
+    /// its fallout, witnessed on mc1l49: ⑴ the respawn re-mint is
+    /// one-shot and a starved mint zeroes the bank entry (:54917 /
+    /// EF:59402); ⑵ WITHOUT a death, a stale entity handle kills the
+    /// owned token — mc1l49 t=17809: the volcano's plume register
+    /// still named slot 235, which the last respawn had re-minted as
+    /// the wall-of-fire token, so the next eruption soft-killed it
+    /// (`combat.rs` volcano arm, retail law), the exhausted pool
+    /// recycled the slot into one of the wizard's own fires a tick
+    /// later, the blind list read registered a second fireball, and
+    /// with the 24-entry list FULL of stale slots every wall-of-fire
+    /// jar the rivals dropped for the rest of the level was refused
+    /// (:64841) — "a map littered with jars I could not pick up".
+    ///
+    /// Patched: the death scatter throws COSMETIC decaying jars and
+    /// leaves the tokens in the book (so nothing is re-minted on
+    /// respawn either); a soft-kill of a live human token is refused
+    /// at `World::free_slot` (the tick-top reap and the MC2 in-loop
+    /// free) and the token is scrubbed off the sacrifice stack; a
+    /// stale MC1 list entry that no longer names a class-12 record
+    /// is cleared by the per-tick rebuild so a re-dropped jar can be
+    /// picked up. The wraith steal is untouched — it is the one
+    /// explicit, designed inventory writer.
+    pub no_spell_loss: bool,
 }
 
 impl WorldPatches {
@@ -104,6 +134,7 @@ impl WorldPatches {
         possessed_footprint: false,
         mc2_downgrade_overflow: false,
         castle_latch_bug: false,
+        no_spell_loss: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -119,5 +150,6 @@ impl WorldPatches {
         possessed_footprint: true,
         mc2_downgrade_overflow: true,
         castle_latch_bug: true,
+        no_spell_loss: false,
     };
 }

@@ -4277,12 +4277,21 @@ impl World {
         } else {
             0
         };
+        // Patch option `no_spell_loss` (docs/DEVIATIONS.md): the
+        // scatter is COSMETIC — a fresh decaying (15,M) pickup jar per
+        // owned spell on the same draws, while the book keeps naming
+        // its live tokens (so `mc2_player_respawn` re-mints nothing).
+        // The token tick's book gate refuses to re-collect a spell
+        // the wizard holds, so the cosmetic jar just expires.
+        let keep = self.patches.no_spell_loss && !self.strict_retail;
         for spell in 0..26usize {
             let m = self.mc2_book.ent[spell] as usize;
             if m == 0 {
                 continue;
             }
-            self.mc2_book.ent[spell] = 1; // the boolean "still known" marker
+            if !keep {
+                self.mc2_book.ent[spell] = 1; // the boolean "still known" marker
+            }
             // ⚠ SIXTEEN-BIT STEPS. `rand_0x14_20` is a `uint16_t`
             // (global_types.h:331), so every store truncates — and
             // while `& 0x1FF` cannot tell the widths apart, `% 0x5A`
@@ -4299,6 +4308,15 @@ impl World {
             let x = p.x.wrapping_add((r1 & 0x1FF) as u16).wrapping_sub(256);
             let y = p.y.wrapping_add((r2 & 0x1FF) as u16).wrapping_sub(256);
             let life = (draw() % 0x5A + 200) as i32;
+            if keep {
+                if let Some(j) = self.mc2_new_spell_token(spell as u8, x, y, p.z) {
+                    let e = &mut self.g.ent[j];
+                    e.tick70 = (spell as u8).wrapping_mul(3).wrapping_add(1);
+                    e.act_life = life;
+                    e.f26 = 0;
+                }
+                continue;
+            }
             {
                 let e = &mut self.g.ent[m];
                 e.tick70 = (spell as u8).wrapping_mul(3).wrapping_add(1);
@@ -4311,7 +4329,9 @@ impl World {
         if cs != 0 && cs < self.g.ent.len() {
             self.g.ent[cs].rand = carpet_rand;
         }
-        self.g.mc2_spell_tokens.0 = 0;
+        if !keep {
+            self.g.mc2_spell_tokens.0 = 0;
+        }
     }
 }
 

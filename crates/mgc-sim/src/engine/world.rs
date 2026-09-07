@@ -5153,6 +5153,10 @@ impl World {
         // then vanishes before the next dispatch. Strict-scoped for
         // MC2: native keeps the in-loop free until the sweep-law
         // port settles its timing (the dome summit-column trap).
+        // Patch option `no_spell_loss`: the reap below refuses the
+        // human's live tokens (`free_slot`); the sacrifice stack must
+        // not hold them either.
+        self.scrub_spell_tokens_off_recycle();
         if matches!(self.game, GameId::Mc1 | GameId::Mc1Hw)
             || (self.game == GameId::Mc2 && self.strict_retail)
         {
@@ -7803,6 +7807,33 @@ impl World {
         let strict = self.strict_retail;
         let cs = self.mc1_carpet_slot as usize;
         let cs = (cs != 0 && cs < self.g.ent.len()).then_some(cs);
+        // The landing armed the sacrifice stack above; under
+        // `no_spell_loss` the tokens stay off it.
+        self.scrub_spell_tokens_off_recycle();
+        // Patch option `no_spell_loss` (docs/DEVIATIONS.md): the
+        // scatter is COSMETIC — one decaying ground jar per owned
+        // spell, thrown with the same three private-stream draws, while
+        // the tokens, the list and the owned map stay exactly as they
+        // are (nothing is banked, so the respawn re-mints nothing).
+        // A thrown jar of a spell the wizard still holds is refused by
+        // `try_pickup`'s owned test and simply expires.
+        if self.patches.no_spell_loss && !strict {
+            for m in self.human_spell_tokens() {
+                let s = self.g.ent[m].model65 as usize;
+                let (d1, d2, d3) = {
+                    let r = match cs {
+                        Some(c) => &mut self.g.ent[c].rand,
+                        None => &mut self.g.rand,
+                    };
+                    (features::lcg32(r), features::lcg32(r), features::lcg32(r))
+                };
+                let x = player.x.wrapping_add(((d1 & 0x1FF) as i32 - 256) as u16);
+                let y = player.y.wrapping_add(((d2 & 0x1FF) as i32 - 256) as u16);
+                if let Some(j) = self.spawn_spell_jar(s, DROPPED_JAR, x, y, player.z) {
+                    self.g.ent[j].f26 = (d3 % 90 + 200) as i16;
+                }
+            }
+        }
         // Native robustness only: a world whose list was never
         // populated (a pre-list save) seeds it from the owned map in
         // ascending spell id before the walk, so nothing is silently
@@ -7827,6 +7858,9 @@ impl World {
         // them in SLOT form (the stale-17 alias) and dropped their
         // three private-stream draws, desyncing every jar after them.
         for idx in 0..SPELL_COUNT {
+            if self.patches.no_spell_loss && !strict {
+                break; // the cosmetic scatter above stood in for this walk
+            }
             let entry = self.mc1_acq[idx];
             if entry <= 0 || entry as usize >= self.g.ent.len() {
                 // (the bounds arm is memory safety only)
@@ -8043,7 +8077,17 @@ impl World {
         // stay out in the world until they expire. Hand equips
         // survive death untouched (the original never clears
         // var_940/944 on respawn).
-        self.death_regrant(Some(seat));
+        if self.patches.no_spell_loss && !self.strict_retail {
+            // `no_spell_loss`: the tokens never left the book — seat
+            // them where retail lays its re-mints (:54894) and keep
+            // them off the sacrifice stack the entry above re-armed.
+            self.scrub_spell_tokens_off_recycle();
+            for m in self.human_spell_tokens() {
+                self.g.move_relink(m, seat.0, seat.1, seat.2);
+            }
+        } else {
+            self.death_regrant(Some(seat));
+        }
         // :55034 — the respawn's own `sub_47DD0` call on the bound
         // castle: the FRESH Create-Castle token leaves the respawn
         // wearing the ladder price, not the ctor row. The castle
@@ -8498,7 +8542,16 @@ impl World {
         // NEW position (mc2l3 t=15315 puts all 26 on the castle's
         // exact x/y/z, slots 99..133 = the rebuilt stack's lowest
         // free slots in spell order).
-        self.mc2_remint_book(dest);
+        if self.patches.no_spell_loss && !self.strict_retail {
+            // `no_spell_loss`: nothing was scattered out of the book,
+            // so nothing is re-minted — the live tokens are seated at
+            // the respawn point like retail's fresh ones.
+            for m in self.human_spell_tokens() {
+                self.g.move_relink(m, dest.0, dest.1, dest.2);
+            }
+        } else {
+            self.mc2_remint_book(dest);
+        }
         self.player.mana = self.player.mana_max;
         // The recycle stack is emptied outright (EF:43857).
         self.g.mc2_recycle.stack.clear();
@@ -8657,6 +8710,16 @@ impl World {
                 continue;
             }
             if let Some(r) = self.g.ent.get(e as usize) {
+                // `no_spell_loss`: an entry that no longer names a
+                // class-12 record is STALE (its token was overwritten
+                // by something the guard did not see) — clear it, so
+                // the blind read cannot register a stranger's model
+                // and the list cannot fill with dead slots and refuse
+                // every later pickup (mc1l49's unpickable jars).
+                if self.patches.no_spell_loss && !self.strict_retail && r.class64 != 12 {
+                    self.mc1_acq[k] = 0;
+                    continue;
+                }
                 let m = r.model65 as usize;
                 if m < SPELL_COUNT {
                     self.player.owned[m] = e as u16;
@@ -15398,6 +15461,17 @@ impl World {
     }
 
     pub(crate) fn free_slot(&mut self, i: usize) {
+        // Patch option `no_spell_loss`: the human's live spell token
+        // is never reaped — the kill bit is dropped and the record
+        // stays exactly as it was (a soft kill touches nothing else).
+        // mc1l49 t=17809: the volcano's stale plume register
+        // soft-killed the re-minted wall-of-fire token at slot 235;
+        // retail's tick-top reap freed it and the wizard's own next
+        // cast recycled the slot (docs/DEVIATIONS.md `no_spell_loss`).
+        if self.spell_token_protected(i) {
+            self.g.ent[i].flags &= !0x400;
+            return;
+        }
         if drawable(
             self.game,
             self.g.ent[i].class64 as u16,
@@ -15407,6 +15481,79 @@ impl World {
             self.entities_dirty = true; // a drawable/overlay entity left
         }
         self.g.free_entity(i);
+    }
+
+    /// `no_spell_loss` (docs/DEVIATIONS.md): is pool record `i` the
+    /// HUMAN's live spell token — the thing the patch refuses to lose?
+    /// MC1/HW: a class-12 manifestation (state `MANIFEST_BASE + spell`)
+    /// tagged `f144 == PLAYER_TARGET` and named by the acquisition
+    /// list. MC2: a class-15 manifestation (state `3·model`) whose
+    /// book entry names this very slot — a stolen jar has left the
+    /// book and wears action 78, so the wraith's steal passes
+    /// through untouched. Always false on the retail arm and under
+    /// strict retail.
+    fn spell_token_protected(&self, i: usize) -> bool {
+        if !self.patches.no_spell_loss || self.strict_retail {
+            return false;
+        }
+        let Some(e) = self.g.ent.get(i) else {
+            return false;
+        };
+        match self.game {
+            GameId::Mc2 => {
+                e.class64 == 15
+                    && e.tick70 == e.model65.wrapping_mul(3)
+                    && self
+                        .mc2_book
+                        .ent
+                        .get(e.model65 as usize)
+                        .is_some_and(|&b| b as usize == i)
+            }
+            _ => {
+                e.class64 == 12
+                    && (e.model65 as usize) < SPELL_COUNT
+                    && e.tick70 >= MANIFEST_BASE
+                    && e.f144 == PLAYER_TARGET
+                    && self.mc1_acq.contains(&(i as i32))
+            }
+        }
+    }
+
+    /// `no_spell_loss`: take the human's live spell tokens off the
+    /// sacrifice stack, so an exhausted pool's allocator (`new_event`'s
+    /// recycle arm) can never overwrite one. A token only ever lands
+    /// there wearing a kill bit the guard in [`Self::free_slot`] is
+    /// about to drop; runs at the tick top and after every
+    /// World-level stack rebuild.
+    fn scrub_spell_tokens_off_recycle(&mut self) {
+        if !self.patches.no_spell_loss || self.strict_retail {
+            return;
+        }
+        let stack = std::mem::take(&mut self.g.mc2_recycle.stack);
+        let kept: Vec<u16> = stack
+            .into_iter()
+            .filter(|&s| !self.spell_token_protected(s as usize))
+            .collect();
+        self.g.mc2_recycle.stack = kept;
+    }
+
+    /// `no_spell_loss`: the human's live spell tokens, in acquisition
+    /// order (MC1) / book order (MC2) — the set the patched death
+    /// path keeps and re-seats.
+    fn human_spell_tokens(&self) -> Vec<usize> {
+        match self.game {
+            GameId::Mc2 => (0..crate::mc2::rivals::MC2_SPELLS)
+                .map(|s| self.mc2_book.ent[s] as usize)
+                .filter(|&m| m > 1 && self.spell_token_protected(m))
+                .collect(),
+            _ => self
+                .mc1_acq
+                .iter()
+                .filter(|&&e| e > 0)
+                .map(|&e| e as usize)
+                .filter(|&m| self.spell_token_protected(m))
+                .collect(),
+        }
     }
 
     // ---- class-11 trigger ticking (str_256038, :4921) ---------------------
@@ -26866,6 +27013,129 @@ mod tests {
         }
         assert_eq!(w.g.ent[b].type86, own, "retail: approaching recolours it");
         assert_eq!(pose(&w).owner_type_index, None);
+    }
+
+    /// `no_spell_loss` ⑵: the mc1l49 t=17809 shape — a stale handle
+    /// soft-kills a held spell's token while the wizard is alive.
+    /// Retail's tick-top reap frees it and the spell is gone; the
+    /// patched arm drops the kill bit and the token, the list and the
+    /// owned map are untouched.
+    #[test]
+    fn no_spell_loss_revives_a_soft_killed_mc1_token() {
+        for patched in [false, true] {
+            let mut w = flat_world();
+            w.set_patches(crate::patches::WorldPatches {
+                no_spell_loss: patched,
+                ..crate::patches::WorldPatches::RETAIL
+            });
+            let m = w.grant_spell(SpellId(20)).expect("wall of fire granted");
+            w.tick(away(), PlayerCommand::default());
+            assert_eq!(w.player.owned[20], m as u16);
+            // The volcano's stale plume register, verbatim
+            // (`combat.rs` eruption arm): `flags |= 0x400` on
+            // whatever the slot holds now.
+            w.g.ent[m].flags |= 0x400;
+            w.tick(away(), PlayerCommand::default());
+            if patched {
+                assert_eq!(w.g.ent[m].class64, 12, "patched: the token survives the reap");
+                assert_eq!(w.g.ent[m].flags & 0x400, 0, "…with the kill bit dropped");
+                assert_eq!(w.player.owned[20], m as u16, "…and stays owned");
+                assert!(w.mc1_acq.contains(&(m as i32)));
+            } else {
+                assert_eq!(w.g.ent[m].class64, 0, "retail: the reap frees the token");
+                // …and the blind rebuild keeps naming the dead slot
+                // off its stale model byte until the allocator hands
+                // it to something else (mc1l49: a (10,0) fire, one
+                // tick later — from then on `owned[0]` names it).
+                assert_eq!(w.player.owned[20], m as u16, "retail: a dangling owned entry");
+                w.g.ent[m].class64 = 10;
+                w.g.ent[m].model65 = 0;
+                w.tick(away(), PlayerCommand::default());
+                assert_eq!(w.player.owned[20], 0, "retail: the spell is gone");
+                assert_eq!(w.player.owned[0], m as u16, "retail: a phantom fireball instead");
+            }
+        }
+    }
+
+    /// `no_spell_loss` ⑷: a list entry left naming a slot another
+    /// record has taken (the mc1l49 fire in slot 235) is cleared by
+    /// the rebuild instead of registering the stranger's model, so a
+    /// re-dropped jar of the lost spell can be picked up again.
+    #[test]
+    fn no_spell_loss_clears_a_stale_mc1_list_entry() {
+        let mut w = flat_world();
+        w.set_patches(crate::patches::WorldPatches {
+            no_spell_loss: true,
+            ..crate::patches::WorldPatches::RETAIL
+        });
+        let m = w.grant_spell(SpellId(20)).unwrap();
+        // The slot is overwritten behind the list's back by a (10,0)
+        // fire — what retail's allocator did at t=17810.
+        w.g.ent[m].class64 = 10;
+        w.g.ent[m].model65 = 0;
+        w.tick(away(), PlayerCommand::default());
+        assert!(!w.mc1_acq.contains(&(m as i32)), "the stale entry is cleared");
+        assert_eq!(w.player.owned[0], 0, "no fireball registered off the stranger");
+    }
+
+    /// `no_spell_loss` ⑴, MC1: death throws cosmetic jars and keeps
+    /// every token in the book; the respawn re-mints nothing.
+    #[test]
+    fn no_spell_loss_death_keeps_the_mc1_book() {
+        let mut w = bare_creature_world(2);
+        w.set_patches(crate::patches::WorldPatches {
+            no_spell_loss: true,
+            ..crate::patches::WorldPatches::RETAIL
+        });
+        w.set_dev_spells(true);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let c = w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..60 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        let tokens_before = w.human_spell_tokens();
+        let owned_before = w.player.owned;
+        let acq_before = w.mc1_acq;
+        assert!(tokens_before.len() >= 24, "the dev book is full");
+        let jars = |w: &World| {
+            w.g.ent
+                .iter()
+                .filter(|e| e.class64 == 12 && e.tick70 == DROPPED_JAR && e.flags & 0x400 == 0)
+                .count()
+        };
+        assert_eq!(jars(&w), 0);
+
+        w.player.grace = 0;
+        hit_player(&mut w, 30000, 1);
+        w.tick(firing_line(), PlayerCommand::default());
+        w.tick(grounded_line(), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Dead);
+        assert_eq!(w.player.owned, owned_before, "the owned map rides through death");
+        assert_eq!(w.mc1_acq, acq_before, "the acquisition list is untouched");
+        assert!(!w.player.death_owned.iter().any(|&b| b), "nothing is banked");
+        assert_eq!(jars(&w), tokens_before.len(), "one cosmetic jar per held spell");
+        for &m in &tokens_before {
+            assert!(w.g.ent[m].tick70 >= MANIFEST_BASE, "the token stays a manifestation");
+        }
+
+        w.tick(
+            grounded_line(),
+            PlayerCommand {
+                respawn: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(w.vitals().state, LifeState::Alive);
+        assert_eq!(w.mc1_acq, acq_before, "the respawn re-mints nothing");
+        assert_eq!(w.human_spell_tokens(), tokens_before, "the same tokens, no duplicates");
+        let (cx, cy) = (w.g.ent[c].x, w.g.ent[c].y);
+        assert_eq!(
+            (w.g.ent[tokens_before[0]].x, w.g.ent[tokens_before[0]].y),
+            (cx, cy),
+            "the tokens are re-seated at the respawn point"
+        );
     }
 
     /// The MC2 arm of `map_wide_ball_rolling` (player-ruled both games
@@ -41955,6 +42225,71 @@ mod tests {
         }
         w.g.link(c, x, y, 1536);
         c
+    }
+
+    /// `no_spell_loss` ⑴, MC2: the landing throws cosmetic (15,M)
+    /// pickup jars, the book keeps naming its live tokens, and the
+    /// reset re-mints nothing. The undead steal is the one writer the
+    /// patch leaves alone (`mc2_spell_steal` — its own tests).
+    #[test]
+    fn no_spell_loss_death_keeps_the_mc2_book() {
+        let mut w = mc2_flat_world();
+        w.set_patches(crate::patches::WorldPatches {
+            no_spell_loss: true,
+            ..crate::patches::WorldPatches::RETAIL
+        });
+        w.player.grace = 0;
+        let (cx, cy) = mc2_pos(60, 60);
+        let _castle = mc2_give_castle(&mut w, cx, cy);
+        let owned: Vec<usize> = (0..26).filter(|&s| w.mc2_book.ent[s] != 0).collect();
+        assert!(owned.len() >= 2, "the MC2 level build seeds a book");
+        let before: Vec<u16> = owned.iter().map(|&s| w.mc2_book.ent[s]).collect();
+        let jars = |w: &World| {
+            w.g.ent
+                .iter()
+                .filter(|e| {
+                    e.class64 == 15
+                        && e.tick70 == e.model65.wrapping_mul(3).wrapping_add(1)
+                        && e.flags & 0x400 == 0
+                })
+                .count()
+        };
+        let jars_before = jars(&w);
+
+        let (px, py) = mc2_pos(80, 80);
+        let ground = w.g.ground_z(px, py) as i16;
+        w.player.life = -3060;
+        w.player.state = LifeState::Falling;
+        w.player.fall_speed = 0;
+        w.player.killer = 0;
+        let floor = ground + w.mc2_carpet_row().clearance;
+        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Dead, "the fall lands");
+        for (&s, &m) in owned.iter().zip(&before) {
+            assert_eq!(w.mc2_book.ent[s], m, "the book still names its live token");
+            assert_eq!(w.g.ent[m as usize].tick70, (s as u8) * 3, "…which stays a manifestation");
+        }
+        assert_eq!(jars(&w), jars_before + owned.len(), "one cosmetic jar per held spell");
+
+        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        w.tick(
+            PlayerPose::level(cx, cy, 1792, 0),
+            PlayerCommand {
+                respawn: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(w.vitals().state, LifeState::Alive, "the reset");
+        for (&s, &m) in owned.iter().zip(&before) {
+            assert_eq!(w.mc2_book.ent[s], m, "the reset re-mints nothing");
+        }
+        let live = w
+            .g
+            .ent
+            .iter()
+            .filter(|e| e.class64 == 15 && e.tick70 == e.model65.wrapping_mul(3) && e.id24 == PLAYER_TARGET)
+            .count();
+        assert_eq!(live, owned.len(), "no duplicate manifestations");
     }
 
     /// **DEATH DOES NOT COST THE MC2 SPELLBOOK, AND THE RESET'S MANA

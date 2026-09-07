@@ -9158,6 +9158,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         possessed_footprint: p.possessed_footprint.on(),
         mc2_downgrade_overflow: p.mc2_downgrade_overflow.on(),
         castle_latch_bug: p.castle_latch_bug.on(),
+        no_spell_loss: p.no_spell_loss.on(),
     }
 }
 

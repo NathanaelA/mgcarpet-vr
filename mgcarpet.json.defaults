@@ -46,6 +46,7 @@
       "map_wide_ball_rolling": "patched",
       "mc2_downgrade_overflow": "patched",
       "mc2_dweller_invisibility": "patched",
+      "no_spell_loss": "patched",
       "possessed_footprint": "patched",
       "win2_movie_score": "patched"
     }

@@ -945,6 +945,17 @@ pub struct GameplayPatches {
     /// `patched` (default): the scan anchors at the carpet and the
     /// landing always re-checks.
     pub castle_latch_bug: PatchArm,
+    /// The spellbook is permanent (both games). Retail can lose a
+    /// spell you already hold and never gives it back: the death
+    /// scatter's re-mint is one-shot and silently drops a spell when
+    /// the entity pool is exhausted, and a stale entity handle (the
+    /// volcano's plume register, witnessed on mc1l49) can kill a
+    /// held spell's token while you are alive — after which the
+    /// full acquisition list refuses every jar of that spell the
+    /// rivals drop. `patched` (default): the scatter throws cosmetic
+    /// jars while the spells stay yours; only MC2's undead wraith
+    /// steal — the one designed loss — still takes a spell.
+    pub no_spell_loss: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -962,6 +973,7 @@ impl Default for GameplayPatches {
             mc2_dweller_invisibility: PatchArm::Patched,
             win2_movie_score: PatchArm::Patched,
             castle_latch_bug: PatchArm::Patched,
+            no_spell_loss: PatchArm::Patched,
         }
     }
 }
@@ -981,6 +993,7 @@ impl GameplayPatches {
             mc2_dweller_invisibility: PatchArm::Retail,
             win2_movie_score: PatchArm::Retail,
             castle_latch_bug: PatchArm::Retail,
+            no_spell_loss: PatchArm::Retail,
         }
     }
 
@@ -997,6 +1010,7 @@ impl GameplayPatches {
             // plainly, balls wore the sim's row.
             mc2_dweller_invisibility: PatchArm::Retail,
             ball_owner_recolor: PatchArm::Retail,
+            no_spell_loss: PatchArm::Retail,
             ..Self::default()
         }
     }
