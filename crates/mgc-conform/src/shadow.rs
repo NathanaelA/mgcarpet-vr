@@ -422,6 +422,48 @@ impl Shadow {
                     v
                 }
             };
+            // ⭐⭐ MIRROR THE IMPORTER'S RE-HOMES OR THE LANE IS A LIE.
+            // `import_ent` (crates/mgc-sim/src/engine/world/
+            // conformance.rs:5580-99) does NOT carry three retail
+            // fields straight across, so the port's field and the
+            // recording's same-named field are different quantities:
+            //   * a class-12 token's burst/refire counter lives at
+            //     retail +48 and the port keeps it in `f26` (retail's
+            //     own +26 is the spell LEVEL there);
+            //   * the same token's OWNER carpet slot lives at retail
+            //     +42 with +144 ALWAYS 0, and the port stamps it into
+            //     `f144`;
+            //   * a (10,41) castle leveler's "current rung" moves from
+            //     retail +48 into the port's `f28`.
+            // Comparing the port's re-homed field against the RAW
+            // recording lane fires on every such record on every tick:
+            // 4,548 of 4,839 entity rows — 94% — of a 23-tick mc1l49
+            // raw-shadow report were exactly this, and the noise HID
+            // the +48 lane the shadow exists to watch (no "f48" pair
+            // is listed below because the port has no `f48` at all).
+            // `MGC_RAW_SHADOW_RAW_LANES=1` restores the pre-2026-09-07
+            // raw comparison.
+            let (rf26, rf28, rf144) = if std::env::var_os("MGC_RAW_SHADOW_RAW_LANES").is_some() {
+                (w.f26 as i64, w.f28 as i64, w.f144 as i64)
+            } else {
+                (
+                    if w.class64 == 12 {
+                        w.f48 as i64
+                    } else {
+                        w.f26 as i64
+                    },
+                    if w.class64 == 10 && w.model65 == 41 {
+                        w.f48 as i64
+                    } else {
+                        w.f28 as i64
+                    },
+                    if w.class64 == 12 && w.f144 == 0 {
+                        w.f42 as i64
+                    } else {
+                        w.f144 as i64
+                    },
+                )
+            };
             let mut hits: Vec<(&'static str, i64, i64)> = vec![
                 ("f70", w.f70 as i64, g.f70 as i64),
                 ("f71", w.f71 as i64, g.f71 as i64),
@@ -433,8 +475,8 @@ impl Shadow {
                 // honest; the sign question is its own lead.
                 ("f58", w.f58 as i64 & 0xFF, g.f58 as i64 & 0xFF),
                 ("f44", w.f44 as i64, g.f44 as i64),
-                ("f26", w.f26 as i64, g.f26 as i64),
-                ("f28", w.f28 as i64, g.f28 as i64),
+                ("f26", rf26, g.f26 as i64),
+                ("f28", rf28, g.f28 as i64),
                 ("f36", w.f36 as i64, g.f36 as i64),
                 ("f38", w.f38 as i64, untr(g.f38 as i64)),
                 ("f40", w.f40 as i64, untr(g.f40 as i64)),
@@ -456,7 +498,7 @@ impl Shadow {
                 ("frames89", w.frames89 as i64, g.frames89 as i64),
                 ("f128", w.f128 as i64, g.f128 as i64),
                 ("f130", w.f130 as i64, g.f130 as i64),
-                ("f144", w.f144 as i64, untr(g.f144 as i64)),
+                ("f144", rf144, untr(g.f144 as i64)),
                 ("dest_x", w.dest_x as i64, g.dest_x as i64),
                 ("dest_y", w.dest_y as i64, g.dest_y as i64),
                 ("site_z", w.site_z as i64, g.site_z as i64),

@@ -43,6 +43,20 @@ use std::fmt::Write as _;
 /// `MGC_NO_POSE_PAIR=1` restores the old single-sample walk (the A/B
 /// arm; `--pin-pose` then chooses which sample, as before). Under the
 /// pair, `--pin-pose` steers only the alt probe.
+/// `MGC_MC1_CRT_TRACE=1` — the CRT-phase instrument's harness half.
+/// The sim prints one `[crt]` line per Watcom draw the rival picker
+/// spends; this prints the matching `[cast]` line, RETAIL's own AI
+/// recast-cooldown rises across the pair. Together they are the
+/// draw-index/outcome table `dig/crt_obs.py` fits the phase on.
+///
+/// ⚠ Trace with `--no-pose-alt --no-roster`: the pose-phase pass
+/// RE-RUNS a dirty pair, and its second tick spends draws of its own,
+/// so the trace's draw indices stop being retail's.
+pub(crate) fn crt_trace() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_MC1_CRT_TRACE").is_some())
+}
+
 pub(crate) fn pose_pair() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_POSE_PAIR").is_none())
@@ -328,6 +342,32 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     // Stamp the pair tick for the sim-side probes
                     // (MGC_WRITE_TRACE prints it as its `t=`).
                     mgc_sim::DEBUG_TICK.store(pt, std::sync::atomic::Ordering::Relaxed);
+                    // `MGC_MC1_CRT_TRACE=1` companion: RETAIL's own
+                    // cast ledger for this pair. A rival's AI recast
+                    // cooldown only ever RISES on the tick it fires
+                    // (`AI_RECAST[s]`), so a `cd[s]` rise across
+                    // pst→st names the spell wizard `w` cast at
+                    // pt+1 — the decision the picker took at pt.
+                    if crt_trace() {
+                        for (w, (a, b)) in
+                            pst.wizards.iter().zip(&st.wizards).enumerate().take(8)
+                        {
+                            for s in 0..24 {
+                                if b.cooldown[s] > a.cooldown[s] {
+                                    eprintln!(
+                                        "[cast] t={pt} wiz={w} ent={} spell={s} cd={}->{} chg={}->{} pov={}->{}",
+                                        a.play_index,
+                                        a.cooldown[s],
+                                        b.cooldown[s],
+                                        a.charge,
+                                        b.charge,
+                                        a.poverty,
+                                        b.poverty,
+                                    );
+                                }
+                            }
+                        }
+                    }
                     if pose_pair() {
                         let pre = carpet_pose(&pst.ents[report.human_slot as usize]);
                         world.tick_pose_pair(pre, pose, pcmd);

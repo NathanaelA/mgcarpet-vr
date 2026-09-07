@@ -585,9 +585,14 @@ triage the CLUSTER count, not the reset count.
 signals a level restart (`World::take_restart` — the castle-less
 death), the reload boundary that follows is ungradable by construction:
 retail rebuilds the level from inputs outside the recording (MC1
-re-runs LoadLevel + GenerateFeatures with its own reseed over its own
-heap residue; MC2 re-reads a pre-capture disk checkpoint —
-docs/DEVIATIONS.md, the permadeath entries). The runner re-anchors any
+re-reads the level, `sub_408D0` :51596, OVER ITS OWN LIVE HEAP RESIDUE;
+MC2 re-reads a pre-capture disk checkpoint — docs/DEVIATIONS.md, the
+permadeath entries). ⛔ The older wording here said MC1 "re-runs
+LoadLevel + GenerateFeatures with its own RESEED"; round 116 disproved
+it — there is no `srand` in `sub_408D0_40C10` and none in the shipped
+binary, so the reload regenerates MID-STREAM and the port reaches the
+seam bit-exact including rng. What the capture does not hold is the
+RESIDUE, which is an input to the reload all the same. The runner re-anchors any
 boundary within a short window behind the signal as a `restart` segment
 (`SegOpen::Restart`): counted beside gap-forced, never a deviation,
 never a fixture candidate, skipped by `--classify`. The brief line
@@ -598,6 +603,87 @@ segments, 2 restart-forced, every graded boundary clean). The re-anchor
 also restores the THING table (`World::reload_thing_table`) — the one
 piece of port-side level state retail's reload resets that the entity
 import cannot see.
+
+**`--resync-restarts` — the permadeath resync in a PLAIN free run**
+(player-ruled 2026-09-07). `--segmented` takes the restart lane
+unconditionally; a plain free run does not, because its horizon is the
+honest number and a WILD post-horizon port can trip `take_restart` on
+state retail never held. But that purity has a price: on a take with an
+in-band permadeath the plain run's horizon is the SEAM, not a port
+failure, and everything downstream of it is noise. `--resync-restarts`
+lets the plain run cross the seam by re-importing retail's own closure
+there, exactly as `--segmented` does. mc1l48:
+
+    replay                      horizon 8,591  first 8,592  sig=pose:pose.x,…
+    replay --resync-restarts    horizon 9,785  first 9,786  sig=(5,16)slot616:z
+    replay --segmented          horizon 9,785  first 9,786  sig=(5,16)slot616:z
+
+⭐ The seam was never a port failure. With retail's closure re-imported
+the port free-runs the WHOLE post-permadeath life bit-exact —
+t=8591..9180, 588 of 588 graded boundaries clean — and the take's first
+real divergence becomes the castle painter at 9,786, the same head
+`--segmented` has always reported. The two instruments now agree on what
+stops mc1l48.
+
+⚠ **The resync is gated on PRE-DIVERGENCE, and that gate is
+load-bearing.** Before the first divergence the port is running retail's
+own state, so it permadeaths where retail permadeathed and the restart
+signal is corroborated. After it the port is wild and a `take_restart`
+is evidence of nothing — resyncing there would launder the port's own
+noise back into retail's state. Ungated, mc1l48 books **8** restart
+segments against retail's 5 and a meaningless hybrid `clean=13466`;
+gated, it books the **2** real seams that precede its horizon
+(`segments=3 restarts=2 clean=9783`) and the tail runs wild like any
+plain run's. `--segmented` needs no such gate — it re-anchors at EVERY
+break, so its restarts are never load-bearing. The mode field still
+reads `world+resync-restarts` so a baseline diff can never book these
+numbers as a pure free run's.
+
+⭐ It is also what unblocks an **MC2 permadeath recording**. MC2's
+reload restores a pre-capture disk checkpoint, which no amount of native
+level init can reconstruct — re-importing retail's closure sidesteps the
+question entirely, so the arm is deliberately not MC1-only.
+
+**In the app** (`--replay` / `--replay-check`) the resync is not
+optional: a retail take that hits a castle-less death re-anchors on the
+recording instead of calling `App::restart_level`. A pristine rebuild
+there is the wrong world — the port's own native level init, which the
+replay otherwise never exercises (`replay` imports pool AND terrain, so
+native init is graded nowhere else). mc1l48 at its own phase: port 942
+live / 22 families against retail's 943 / 40, the human's `(12,x)`
+spell-book tokens missing entirely. A PORT take still restarts the
+ordinary way; that is exactly what it recorded.
+
+The app resync is UNGATED, deliberately: the app is a viewer, not a
+certification instrument, and staying as close to retail as the capture
+allows is the whole point of watching a take. `--replay-check` on
+mc1l48 goes from
+
+    68091 tick(s) in 1 segment(s), 8590 clean; DIVERGED since t=8592 (pose.x)
+
+to
+
+    68083 tick(s) in 9 segment(s), 12298 clean, 8 permadeath resync(es); DIVERGED since t=12301 (pose.z)
+
+⚠ Note the app grades the POSE lane only, so its head is not the conform
+run's: the painter wound at 9,786 is a wyvern's `z`, which the carpet
+does not feel until t=12,301. **Two instruments, two horizons — quote
+which one.**
+
+⭐⭐ **THE POLL LIVES IN `ReplayDriver::next`, AND THAT IS THE FIX TO A
+SPEED-DEPENDENT BUG.** `next` is called exactly once per sim step, so
+polling `World::take_restart` there is per STEP for every caller for
+free. The app's interactive loop runs **N sim steps per rendered FRAME**
+at game speed N (the F3 multiplier scales the accumulator), and the
+first cut of this polled after the whole burst: at 1x that was the very
+next boundary and the resync landed in time, but above 1x the rest of
+the burst kept feeding recorded input into the un-restarted world, and
+`ReplayDriver::grade` latches the first divergence FOREVER. The symptom
+was a replay that held clean through mc1l48's permadeath at normal speed
+and reported `DIVERGED since t=8592` sped up — same take, same build.
+Player-witnessed. The headless `replay_check` loop happened to poll per
+step and never showed it, which is exactly why the poll must not live in
+either loop. Pinned by `next_consumes_the_restart_signal_itself`.
 
 ### The known-deviation roster in `replay` (player-ruled 2026-09-04)
 
@@ -712,6 +798,29 @@ construction). `EntObsMc1` carries 22 fields, `RetailEntMc1` carries
 importer RESTORES and the graded diff can never see. It started as
 `+70`/`+71`/`+58`/`+44` — each of which paid for itself — and is now
 all of `+26`…`site_z`, the six damage mailboxes and the tile links.
+
+⚠⚠ **THREE LANES ARE INVISIBLE TO BOTH GRADED CHANNELS, MEASURED IN
+ROUND 119** — they cost three digs real time each, so check this list
+before concluding "the pair lane says the port is clean":
+
+- **`f42`** (the owner/parent handle) IS projected by `dump-state` but is
+  **NOT in `verify-deltas`' lane list** — the walk in `world.rs` jumps
+  `f40 → f44`. Live example: mc1l49 slot 840 from t=17803, where retail
+  keeps `f42 = 750` on a reverted jar and **the port zeroes it**. An
+  ungraded port bug that nothing in the harness can currently see.
+- **`+48`** (a class-12 token's charge/burst counter) is not a field of
+  `EntObsMc1`, so the recorder never projects it. ⚠ The port re-homes it
+  into `Ent::f26`, which is why `dump-state` prints `f48` differences on a
+  record whose every other lane agrees.
+- **`+144`** (the owner tag) is not in `EntObsMc1` at all — the schema's
+  `owner_ptr` is `+160`. **No recording fixture can ever pin an owner-tag
+  law**, and the pair channel re-imports `+144` at every anchor, so such a
+  bug heals before it can be graded and surfaces only as an INHERITED head
+  with a fully conforming pair under it (mc1l49 t=39095's `player.mana_max`
+  is the worked example).
+
+`MGC_RAW_SHADOW` is the instrument for all three; reach for it whenever a
+head classifies INHERITED.
 
 Run it in both modes, because they answer different questions:
 

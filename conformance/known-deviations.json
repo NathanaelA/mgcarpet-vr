@@ -1,6 +1,190 @@
 {
- "_doc": "The KNOWN-DEVIATION ROSTER (docs/CONFORMANCE.md). Every rule cites its docs/CONFORMANCE-FINDINGS.md entry; status: capture = recording-closure limitation, deviation = DEVIATIONS.md-registered behavior, open = ledger-tracked port lead awaiting its fix. Rules match first-hit in order \u2014 keep specific rules above general ones. The runner prints per-rule hit counts every run: a rule whose count jumps an order of magnitude is a signal, not a mask.",
+ "_doc": "The KNOWN-DEVIATION ROSTER (docs/CONFORMANCE.md). Every rule cites its docs/CONFORMANCE-FINDINGS.md entry; status: capture = recording-closure limitation, deviation = DEVIATIONS.md-registered behavior, open = ledger-tracked port lead awaiting its fix. Rules match first-hit in order — keep specific rules above general ones. The runner prints per-rule hit counts every run: a rule whose count jumps an order of magnitude is a signal, not a mask.",
  "rules": [
+  {
+   "id": "mc1l48-nodeath-build-row7-dat-damage-ground-reads",
+   "status": "deviation",
+   "note": "⚖ PLAYER-RULED 2026-09-08 (wave 121): RE-RULED FROM `open` PORT DEFECT TO `deviation` RETAIL-SIDE DAMAGE, after four independent digs converged and two of the owner's stated evidence gaps were closed. THE FAMILY: retail's IN-MEMORY BUILD row 7 is damaged during play, so its castle painter and its castle-demolish walk raze/raise cells the shipped BUILD?-0.DAT does not name. Entities standing on those cells then read the wrong ground -- which is why this family is overwhelmingly a `z` family across a dozen unrelated classes: the movers are FAITHFUL and the TERRAIN is wrong. THE FOUR CONVERGING PROOFS: (1) dig D1 byte-verified the port's painter FILL and APPLY end to end against CARPET.EXE (sub_285C0 = file 0x40db8; classify 0x410b5, arms 0x410da/0x41117; apply sweep 0x4124c/0x41290/0x412a9 -- no angle test, no protection test, no per-cell guard) and verified the ASSET by cross-checking the bake against the UNCOMPRESSED shipped BUILD1-0.DAT; (2) dig D3 byte-verified the collapse walker sub_28FE0 (file 0x417d8) and CRC-verified build.dat.bin against the RNC header's declared unpacked CRC 0x6522, then showed retail's in-memory row 7 reads NONZERO at dat 6521-6525 and 6571-6575 where the shipped file is all zeros; (3) dig D4 DERIVED THE DAMAGED BYTE LIST BLIND from a different reader (the collapse un-stamp, not the painter) and got 6568-6570 / 6572-6575 / 6586-6587 / 7969-7970, matching the list player-ruled in round 118; (4) dig D14 CLOSED D1'S 'LOGICALLY IMPOSSIBLE' WALL -- (25,102)/(25,103)/(25,104) are dat 6537 / 6587 / 6637, THREE DIFFERENT BYTES each 0x65, so D1's 'identical inputs' premise was the false fact and only the middle byte is damaged. ⭐⭐⭐ THE TWO PROOFS THAT SETTLED IT, both from D14: (a) THE CONTROL TAKE -- mc1l0-bigcastle has a level-7 castle where the port matches retail BIT-EXACTLY over all 2,304 footprint cells across 4 planes with ZERO drift, including the disputed bytes, so the shipped row 7 is correct and RETAIL ITSELF OBEYS IT IN ANOTHER RUN; and mc1l49 runs 231 collapses with 0 draw-count mismatches (18 row-5, 9 row-6, 10 row-7) against the LCG oracle. (b) THE CONSTRUCTIVE PROOF -- substituting five bytes for this ONE castle site (7,117) makes every height drift in the 48x48 footprint vanish, bit-exact on height AND tile type AND angle. ⭐ And the clinching argument that it cannot be port code: mc1l6's 2 draw-count mismatches are at ONE SITE while mc1l49 runs 18 row-5 collapses exactly -- A CODE DEFECT CANNOT BE SITE-SELECTIVE; PER-PROCESS DATA DAMAGE CAN. SCOPE, and why these exact ticks: the tick list is not a guess or a window. Each entry is a PAIR START (head-1) whose divergence DEMONSTRABLY VANISHES when this site's damage is emulated (MGC_BUILD_DAT_DAMAGE, dig D14's instrument): measured 58 devs -> 33 with the substitution, and these are exactly the 28 heads present in the un-emulated run and absent from the emulated one. Rows span classes (10,39)/(5,15)/(10,0)/(9,13)/(10,34)/(3,3)/(10,6)/(9,1)/(5,7) -- hence NO class gate: the defining property is the TICK and the terrain-derived FIELD SET, not the entity. ⚠ HONEST RESIDUAL: the substitution also introduces 3 heads of its own (13856, 14513, 23381), because the byte VALUES are a best fit and not unique -- D14's collapse lands at 1222 draws against retail's 1221. The 28 are evidence about THIS site's damage; the 3 are evidence that the reconstruction is approximate. ⚠ AND THIS IS ONE SITE OF SEVERAL: mc1l48-nodeath has 27 row-7 and 13 row-5 collapses and only this one castle was reconstructed, so the remaining devs presumably include further damaged sites (D4's t=19591 castle at x0=168 y0=40 is the next). See also mc1l48-port-repaints-razed-build-course, whose note carries the full four-dig history.",
+   "takes": [
+    "mc1l48-nodeath"
+   ],
+   "kind": "field",
+   "fields": [
+    "z",
+    "heading",
+    "flags",
+    "life",
+    "x",
+    "y"
+   ],
+   "ticks": [
+    12394,
+    13853,
+    14365,
+    17423,
+    18204,
+    20515,
+    20516,
+    20517,
+    20518,
+    20519,
+    23378,
+    23926,
+    24199,
+    24200,
+    24201,
+    24202,
+    24203,
+    24204,
+    24325,
+    24849,
+    25295,
+    25297,
+    26671,
+    26673,
+    27164,
+    37390,
+    46607,
+    47157
+   ]
+  },
+  {
+   "id": "mc1l48-port-repaints-razed-build-course",
+   "status": "deviation",
+   "note": "⏭⏭ PLAYER-RULED 2026-09-08 (round 120, dig W120-6): REGISTERED AS A TRACKED LEAD, BUT **THIS WANTS A MORE FOCUSED DIG** and should get one once the rest of the corpus is certified. It is a genuine PORT DEFECT, not a retail wound and not a capture limit - registered `open` (a ledger-tracked port lead awaiting its fix), NOT `deviation`. THE MECHANISM, measured: both engines build the wall identically at level init (cell (161,61): t=1..12, h 5->16, ty 22), retail then RAZES it at t=9716-9740 to h=0 ty=1, and THE PORT RE-RAISES IT (h 0->16 at +1/tick, ty->22) at t=9861-9876 and again after every segment reset - 8 runs, 137 drift ticks (9861, 11023, 12619, 13487, 13610, 14114, 14936, ...). Second witness cell (25,103): retail ERODES it (ty 6->76, h 91->62) while the port stamps h=78 ty=22 at t=12222-12260. SUSPECT SITES: Gen::tick_building (crates/mgc-sim/src/engine/features.rs, retail sub_27D30 :29993) -> paint_build_row -> set_type_2x2 (retail sub_33AE0 :41094); the likely culprit is the protected/razed gate (recompute_protected vs recompute_unprotected). HOW IT SURFACES: the m15 castle guard's wander vote reads the candidate cell's type plane, so a drifted cell flips the vote - retail takes the REVERSAL candidate (k=2, weight 10, score <= 11) while the port keeps heading 0 (k=0, weight 7000), giving the signature `heading: retail 1024 / port 0`. ⚠ THE GUARD CODE IS FAITHFUL: the 2026-08-15 weight-table closure is intact (CARPET.EXE file 0x38738 = 58 1b 58 1b 0a 00 58 1b = [7000,7000,10,7000]) and sub_20480 has exactly ONE caller in the whole EXE (VA 0x20094), so the port's single grid_walk call site covers every call path; the other three vote candidates at each head measure byte-identical to truth. The same wound drives the (5,15) +/-192 z rows through ground_z - 1 height byte = 32 units, so +/-192 is SIX HEIGHT BYTES, NOT the 'two-valued altitude branch' the family looked like. ⚖ IT ALSO TOUCHES A REGISTERED CELL: mc1l48-reload-painter-dat-damage-top-wall's rect [142,59.5,163,62.5] contains (161,61), and that cell reproduces the same retail-0/port-16 split HERE with restarts=0, so the x=161 member has a live cause that is not reload damage. PLAYER-RULED 2026-09-08: the painter rect is LEFT UNCHANGED for now and x=161 is re-judged when this dig lands. (Not challenged: the x=143..149 cells or the -pose twin, which show no init disagreement on the clean take.) ⚠⚠ SCOPE, AND WHAT THIS RULE DOES AND DOES NOT DO. `open` shapes ONLY the verify-deltas report and its CSV (roster.rs:15) - `replay` excuses a boundary only for `status: deviation` (replay.rs:183/198), whose documented meaning is PLAYER-RULED RETAIL behaviour that 'does not count against certification'. This is a PORT BUG, so calling it a `deviation` would let a port defect pass certification and is deliberately NOT done. Consequence: THIS RULE DOES NOT MOVE mc1l48-nodeath's HORIZON, which stays at 10,580 with head t=10581 (5,15)slot539:y,heading until the dig lands. The rule therefore covers only what the PAIR CENSUS can see: the seven EXACT +/-192 z rows (t=20458 slots 768/984, 22278 slot 663, 23926 slot 598, 24537 slot 893, 25342 slots 451/734), which are ground_z read on the drifted cells. ⛔ IT CANNOT COVER THE THREE HEADING HEADS (pair starts 10580/17423/46607, slots 539/987/90): those pairs are BIT-EXACT one-tick - the port reproduces t from t-1 exactly - so they are INHERITED breaks that no pair rule can match, which is itself the evidence that the cause is upstream terrain state and not the guard. ⚠ ALSO NOT COVERED, and possibly a DIFFERENT law: the two odd (5,15) z rows at t=20804 slot 744 (Δ−12) and t=36309 slot 932 (Δ−27), which are not the +/-192 step.\n\n=== WAVE 121 RE-CAUSATION (2026-09-08, digs D1 + D3, PLAYER-RULED: register the re-causation but KEEP status `open` -- bank the lead, excuse NOTHING) === THREE INDEPENDENT DIGS NOW TRIANGULATE ON CELL (25,103) AND POINT AT RETAIL-SIDE HEAP DAMAGE, NOT A PORT DEFECT. (1) Dig D1 byte-verified the port's castle-painter FILL and APPLY against the shipped binary end to end -- sub_285C0 = CARPET.EXE file 0x40db8; byte classify 0x410b5 `cmp $0xf,%cl`, the <0xF arm 0x410da and the 0xF? arm 0x41117; the apply sweep 0x4124c `cmpw $0x0,(%esi)` / 0x41290 `movswl (%esi),%edx ... idiv %ecx` (signed, truncating) / the 8-bit store at 0x412a9+0x412b1 -- and found NO angle test, NO protection test, NO entity test and NO per-cell guard of any kind. It also proved the build asset correct by cross-checking the bake against the UNCOMPRESSED shipped BUILD1-0.DAT (mc1-arctic), which agrees byte-for-byte over rows 1..45; cell (25,103)'s row-7 byte is 0x65 => goal 4*4+58 = 74, exactly like its neighbours. D1 then hit a WALL it could not pass: with h=58, goal=74, d=16 and divisor=15 IDENTICAL for (25,102), (25,103) and (25,104), retail raises the first and third and NOT the middle one -- 'logically impossible under the code I disassembled', and D1 said one of its three independently-confirmed facts had to be false. (2) Dig D3 supplies the missing fact: retail's IN-MEMORY build row 7 reads NONZERO at dat offsets 6521-6525 and 6571-6575 where the shipped DAT is all zeros -- main session verified the shipped bytes are zeros there -- so the byte retail actually applies for that cell is NOT the 0x65 D1 triple-confirmed on disk. D3 measured the consequence: the terrain diverges ONLY on castle-demolish ticks, retail razes 10 cells the port does not (course rows y=102/103, x=9..13), and because the wall arm draws rand*9377+9439 per razed cell (CARPET.EXE 0x41af3 `imul $0x24a1` / 0x41b02 `add $0x24df`, verified in the main session) those 10 extra draws displace the whole downstream LCG stream -- which is why errors appear in BOTH signs. D3 also byte-verified the collapse walker sub_28FE0 (file 0x417d8) faithful and CRC-verified build.dat.bin against the RNC header's declared unpacked CRC (0x6522). (3) Round 120's own second witness cell (25,103) already recorded retail ending at type 76 while the port stamps type 22 -- the SAME cell and the SAME direction both later digs found independently. SCOPE: the damaged byte range OVERLAPS the already-registered mc1l48-reload-painter-dat-damage-top-wall at 6572-6575, but THIS witness is mc1l48-nodeath with restarts = 0, so the '-reload-' cause in those rules' names is doubtful for the same reason round 120 had to correct mc1l48-search-ring-heap-damage from 'reload damage' to 'ordinary play'. terrain-check mc1l48-nodeath is IDENTICAL (4 planes x 65,536 cells), so retail's build table is CLEAN AT INIT and acquires the damage during play. SCALE: 45 of mc1l48-nodeath's 62 live deviations are z-ONLY (73%, gating 15,141 ticks) and 32 of mc1l48's 51 (63%). STILL OPEN, and why this stays `open` rather than becoming `deviation`: D1's impossibility is RESOLVED by D3's damaged bytes but was not independently closed (nobody reconstructed retail's damaged in-memory row byte-by-byte), and D3 had NO mc1l49 control -- no take without the damage to show a clean level-7 demolish razing only the shipped cells. Excusing 45 boundaries on this would let a port defect pass certification if the read is wrong, so NOTHING is excused: this registration moves no horizon and no dev count. It banks the re-causation for the focused dig this rule already calls for.\n\n=== FOURTH INDEPENDENT CONFIRMATION (wave 121, dig D4) — STILL `open`, STILL EXCUSING NOTHING, per the same player ruling === Dig D4 approached this wound from a DIFFERENT READER entirely — not the (10,42) painter sub_285C0 but the CASTLE-COLLAPSE un-stamp sub_28FE0 (VA 0x28FE0 = CARPET.EXE file 0x417D8), called synchronously from the leveler's teardown sub_47A70 (VA 0x47A70 = file 0x60268) on the SCRATCH slot — and DERIVED THE DAMAGED BYTE LIST BLIND, BEFORE READING THIS REGISTRATION. Using `angle & 0x80` clearing as the painted-cell oracle, the port's and retail's paint sets are IDENTICAL on 46 of the 48 footprint rows and part on rows 10 and 38 only, mapping to dat offsets 6568-6570 / 6572-6575 / 6586-6587 and 7969-7970 — which MATCHES the byte list already player-ruled in mc1l48-reload-painter-dat-damage-top-wall ('6569-70, 6572-75, 6587 from reload 1; 7969-70 added by reload 2') essentially exactly. D4 also proved the port's height and type planes BIT-IDENTICAL to retail's at t=40503 (0 of 65,536 cells differ in each), reconstructed retail's own recorded SCRATCH slot 0 inputs (+71 = 7, x = 8704, y = 24064, z = 1216, LCG seed 260,705,800) and solved retail's exact draw count in the collapse (1,228). AND IT FOUND THE SAME DISAGREEMENT AT THE SAME DAT OFFSETS IN mc1l48-nodeath, a take with ZERO reloads (nodeath t=19591, a different castle at footprint x0=168 y0=40). ⭐ D4's structural argument for the damage being RETAIL's: the port's shipped bytes form a CONTINUOUS VERTICAL KEEP COLUMN at x-offsets 23..25 across footprint rows 8..13 and 24..25 across rows 34..39, whereas retail's row 10 alone jogs 4 tiles right and its row 38 alone is empty. A castle template has no one-row jog. ⭐ It also explains the BOTH-SIGNS observation that defeated every constant-offset/rate/rounding theory: the two sides paint DIFFERENT CELLS IN BOTH DIRECTIONS, so no single-signed law could ever fit. ⭐ And it maps THIS rule's own witness cell (161,61) to x-offset 42 / footprint row 10 = dat 6587 — one of the damaged bytes — which is the direct argument that round 120's `open` port-defect attribution is mis-attributed. ⚠ CLAIM CHECKED AND REFUTED BY THE MAIN SESSION: D4 reported that re-ruling this entry `deviation` 'would put nodeath's 10,580 horizon back in play'. IT WOULD NOT. Measured directly by flipping the status and re-running --segmented --brief: mc1l48-nodeath stays at horizon 10,580 / 229 seg / 61 devs, because this rule covers only `z` at ticks 20458/22278/23926/24537/25342 while the horizon head t=10581 is (5,15)slot539 `y,heading` and is INHERITED. Do not repeat that claim. ⚖ D4 additionally PROPOSED two new `deviation` rules for the collapse reader at mc1l48 t=40503 (a (10,6) z family over rect [10,70,58,118] plus its pose.eff_pitch twin), worth mc1l48 devs 51 -> 50. NOT LANDED: the player ruled this whole family excuses nothing pending the focused dig. The proposal is preserved at $TMPDIR/wave121/D4/LAW.diff and should be revisited with this rule. ⚠ D4 also found a latent UNWITNESSED port infidelity in passing: retail's sub_47A70 builds the collapse scratch's position from castle +150/+152/+154 (`lea 0x96(%ebx)` + movsl/movsw, disassembled), but Gen::castle_downgrade (features.rs:6600) uses the LIVE e.x/e.y and models no site_x/site_y. Benign at this head (retail's +150/+152 == +72/+74) — do not dig blind. || ⚖ RE-RULED `open` -> `deviation` 2026-09-08 (wave 121, player ruling) on the four-dig evidence recorded above: the port-defect attribution is refuted by mc1l0-bigcastle (a level-7 castle the port paints bit-exactly, 2,304 cells, 4 planes, 0 drift) and by mc1l49's 231 collapses with 0 mismatches. Companion rule: mc1l48-nodeath-build-row7-dat-damage-ground-reads.",
+   "takes": [
+    "mc1l48-nodeath"
+   ],
+   "kind": "field",
+   "class": 5,
+   "model": 15,
+   "fields": [
+    "z"
+   ],
+   "ticks": [
+    20458,
+    22278,
+    23926,
+    24537,
+    25342
+   ],
+   "slots": [
+    768,
+    984,
+    663,
+    598,
+    893,
+    451,
+    734
+   ]
+  },
+  {
+   "id": "mc1l48-reload-painter-dat-damage-top-wall",
+   "status": "deviation",
+   "note": "PLAYER-RULED 2026-09-08 (ROUND 118, DEVIATIONS.md 'World::player_respawn (MC1/HW permadeath)' judged head; docs/CONFORMANCE-FINDINGS.md ROUND 118): after each permadeath reload retail's (10,42) painter for Vodor's authored level-7 castle at (143,75) reads build row 7 with ~8 bytes DAMAGED IN MEMORY (dat 6569-70, 6572-75, 6587 from reload 1; 7969-70 added by reload 2; stable through reloads 3-5), so the top wall y=61 x=143..149,161 and the bottom gate (143..144,89) settle to retail heights 24/24/36/56/56/56/0 and 24/24 where the shipped bytes give 16/16/32/24/24/32/16 and 16/16. The same shipped 65 55 pair paints correctly at x=124/125 and 162 of the same row, at the level's own init (terrain-check IDENTICAL, take t=2 clean) and on mc1l49's L7, so the values are not derivable from any asset. Port painter sub_285C0 byte-verified faithful (round 116). Every row here is a class-5 record standing on those cells reading the ground (z), or its ground-following motion knock-on (x/y/heading/rand). Ticks are PAIR STARTS (head-1). TOP WALL rect (x 142..163, y 59.5..62.5, the interpolation footprint of cells (143..149,61) and (161,61)). Heads: 9786 s616, 13892 s618, 14440 s72, 14638 s614, 15308 s616, 33369 s668, 40024/26/28/30/32/34/36 s199. || ⚠ CAUSE CAVEAT ADDED 2026-09-08 (wave 121, digs D1 + D3; PLAYER-RULED to bank as a lead, NOT to re-scope): the '-reload-' in this rule's NAME and its 'after each permadeath reload' cause are DOUBTFUL. mc1l48-nodeath is the same level with restarts = 0 and it carries build-row-7 damage in the SAME byte neighbourhood (retail's in-memory row 7 nonzero at dat 6521-6525 and 6571-6575 where the shipped DAT is zeros; overlap with this rule's 6572-6575), and terrain-check on that take is IDENTICAL, so the table is clean at init and the damage is acquired IN ORDINARY PLAY. This is the same correction round 120 had to make to mc1l48-search-ring-heap-damage, which was also registered as reload damage and turned out to fire in ordinary play. ⛔ STATUS, TAKES, TICKS AND SLOTS ARE DELIBERATELY UNCHANGED -- this note excuses nothing new and moves no number; re-scoping to mc1l48-nodeath would excuse boundaries the player has ruled must stay unexcused until the focused dig lands. See mc1l48-port-repaints-razed-build-course for the full evidence.",
+   "takes": [
+    "mc1l48"
+   ],
+   "kind": "field",
+   "class": 5,
+   "fields": [
+    "z",
+    "x",
+    "y",
+    "heading",
+    "rand"
+   ],
+   "slots": [
+    616,
+    618,
+    72,
+    614,
+    668,
+    199
+   ],
+   "ticks": [
+    9785,
+    13891,
+    14439,
+    14637,
+    15307,
+    33368,
+    40023,
+    40025,
+    40027,
+    40029,
+    40031,
+    40033,
+    40035
+   ],
+   "rect": [
+    142.0,
+    59.5,
+    163.0,
+    62.5
+   ]
+  },
+  {
+   "id": "mc1l48-reload-painter-dat-damage-top-wall-pose",
+   "status": "deviation",
+   "note": "PLAYER-RULED 2026-09-08 (round 120 open; found by round 119, dig W119-8) - THE SAME WOUND AS mc1l48-reload-painter-dat-damage-top-wall, SEEN THROUGH THE HUMAN'S OWN POSE CHANNEL. After the t=12424 permadeath reload the port re-paints Vodor's authored level-7 castle from the SHIPPED build bytes while retail keeps its damaged in-memory row 7, so cells (143,61) and (144,61) read port height 16 against retail 24 (MGC_CELL_TRACE=143,61;144,61:12400:12860 - the drift opens at t=12435 during the reload settle and persists until the re-anchor heals it at t=12849). At boundary t=12848 the carpet (class 3 model 0, slot 681) is at tile (143.95,61.57), i.e. standing on those two cells, so sub_455D0's two GROUND-DERIVED lanes part: the unconditional z-floor ground+128 (:55103-05) gives pose.z retail 1446 port 1444, and the climb-authority operand v5 = z - ground - 1024 (:55151-57) gives pose.eff_pitch retail 21 port 16. THE MOVER IS FAITHFUL: verify-deltas' one-tick pair 12847->12848, which steps the same mc1_move over the MEASURED (retail) ground plane, is BIT-EXACT - as are all 16 pose-carrying replay heads on this take (61,511 of 61,547 stepped pairs exact across the whole 68,086-tick run). Identical in class to the class-5 rows the player ruled in ROUND 118; the pose channel simply had no way to be scoped until roster_excuse learned that the player is a pool record like any other (MGC_NO_POSE_ROSTER_EXCUSE=1 restores the old blanket refusal). CONFIRMED BY THE NATURAL EXPERIMENT (round 120): mc1l48-nodeath is the same level replayed with ZERO permadeaths - terrain-check says its record-0 terrain is IDENTICAL to the port's generated planes, exactly as mc1l48's is - and its pose channel is 45,686 of 45,686 stepped pairs BIT-EXACT with no roster excusals of any kind. An undamaged retail build table produces a bit-exact painter and a bit-exact pose channel; the damage, and these rows, exist only behind a reload. Tick is the PAIR START (boundary 12848). || ⚠ CAUSE CAVEAT ADDED 2026-09-08 (wave 121, digs D1 + D3; PLAYER-RULED to bank as a lead, NOT to re-scope): the '-reload-' in this rule's NAME and its 'after each permadeath reload' cause are DOUBTFUL. mc1l48-nodeath is the same level with restarts = 0 and it carries build-row-7 damage in the SAME byte neighbourhood (retail's in-memory row 7 nonzero at dat 6521-6525 and 6571-6575 where the shipped DAT is zeros; overlap with this rule's 6572-6575), and terrain-check on that take is IDENTICAL, so the table is clean at init and the damage is acquired IN ORDINARY PLAY. This is the same correction round 120 had to make to mc1l48-search-ring-heap-damage, which was also registered as reload damage and turned out to fire in ordinary play. ⛔ STATUS, TAKES, TICKS AND SLOTS ARE DELIBERATELY UNCHANGED -- this note excuses nothing new and moves no number; re-scoping to mc1l48-nodeath would excuse boundaries the player has ruled must stay unexcused until the focused dig lands. See mc1l48-port-repaints-razed-build-course for the full evidence.",
+   "takes": [
+    "mc1l48"
+   ],
+   "kind": "pose",
+   "class": 3,
+   "model": 0,
+   "fields": [
+    "pose.z",
+    "pose.eff_pitch"
+   ],
+   "slots": [
+    681
+   ],
+   "ticks": [
+    12847
+   ],
+   "rect": [
+    142.0,
+    59.5,
+    163.0,
+    62.5
+   ]
+  },
+  {
+   "id": "mc1l48-reload-painter-dat-damage-bottom-gate",
+   "status": "deviation",
+   "note": "PLAYER-RULED 2026-09-08 (ROUND 118, DEVIATIONS.md 'World::player_respawn (MC1/HW permadeath)' judged head; docs/CONFORMANCE-FINDINGS.md ROUND 118): after each permadeath reload retail's (10,42) painter for Vodor's authored level-7 castle at (143,75) reads build row 7 with ~8 bytes DAMAGED IN MEMORY (dat 6569-70, 6572-75, 6587 from reload 1; 7969-70 added by reload 2; stable through reloads 3-5), so the top wall y=61 x=143..149,161 and the bottom gate (143..144,89) settle to retail heights 24/24/36/56/56/56/0 and 24/24 where the shipped bytes give 16/16/32/24/24/32/16 and 16/16. The same shipped 65 55 pair paints correctly at x=124/125 and 162 of the same row, at the level's own init (terrain-check IDENTICAL, take t=2 clean) and on mc1l49's L7, so the values are not derivable from any asset. Port painter sub_285C0 byte-verified faithful (round 116). Every row here is a class-5 record standing on those cells reading the ground (z), or its ground-following motion knock-on (x/y/heading/rand). Ticks are PAIR STARTS (head-1). BOTTOM GATE rect (x 142..146, y 87.5..90.5, cells (143..144,89), wounded from reload 2 on). Heads: 30307 s23, 30309 s23, 30324 s53, 31416 s978. || ⚠ CAUSE CAVEAT ADDED 2026-09-08 (wave 121, digs D1 + D3; PLAYER-RULED to bank as a lead, NOT to re-scope): the '-reload-' in this rule's NAME and its 'after each permadeath reload' cause are DOUBTFUL. mc1l48-nodeath is the same level with restarts = 0 and it carries build-row-7 damage in the SAME byte neighbourhood (retail's in-memory row 7 nonzero at dat 6521-6525 and 6571-6575 where the shipped DAT is zeros; overlap with this rule's 6572-6575), and terrain-check on that take is IDENTICAL, so the table is clean at init and the damage is acquired IN ORDINARY PLAY. This is the same correction round 120 had to make to mc1l48-search-ring-heap-damage, which was also registered as reload damage and turned out to fire in ordinary play. ⛔ STATUS, TAKES, TICKS AND SLOTS ARE DELIBERATELY UNCHANGED -- this note excuses nothing new and moves no number; re-scoping to mc1l48-nodeath would excuse boundaries the player has ruled must stay unexcused until the focused dig lands. See mc1l48-port-repaints-razed-build-course for the full evidence.",
+   "takes": [
+    "mc1l48"
+   ],
+   "kind": "field",
+   "class": 5,
+   "fields": [
+    "z",
+    "x",
+    "y",
+    "heading",
+    "rand"
+   ],
+   "slots": [
+    23,
+    53,
+    978
+   ],
+   "ticks": [
+    30306,
+    30308,
+    30323,
+    31415
+   ],
+   "rect": [
+    142.0,
+    87.5,
+    146.0,
+    90.5
+   ]
+  },
   {
    "id": "mc2-painter-oob-build-row-applied-pitch",
    "status": "deviation",
@@ -22,7 +206,7 @@
   {
    "id": "mc2l24-ball-terrain-roll",
    "status": "capture",
-   "note": "Resolved 'MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL' (2026-08-02) item 4 + UPDATED 2026-08-04 (fountain dig): the fountain spawner is BYTE-EXACT (3 births/tick, LCG-proven); the 'over-spawn' was retail merge DEATHS the port under-reproduced \u2014 ring-walk partner search + MC2 hard-free donor LANDED (native, cave golden re-pinned). Residual extras = summit merges the pristine terrain cannot host (retail deaths cluster on the doomsday mound z 2400-3300; the port ball hovers ~60 units up, never grounds, so the merge arm never runs) + one-snapshot decay-expiry linger; 12 missing = within-ring visit order (bitmaps_E9980x, DEVIATIONS combat.rs). Ball laws byte-exact (TTL/arc/bounce/friction).",
+   "note": "Resolved 'MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL' (2026-08-02) item 4 + UPDATED 2026-08-04 (fountain dig): the fountain spawner is BYTE-EXACT (3 births/tick, LCG-proven); the 'over-spawn' was retail merge DEATHS the port under-reproduced — ring-walk partner search + MC2 hard-free donor LANDED (native, cave golden re-pinned). Residual extras = summit merges the pristine terrain cannot host (retail deaths cluster on the doomsday mound z 2400-3300; the port ball hovers ~60 units up, never grounds, so the merge arm never runs) + one-snapshot decay-expiry linger; 12 missing = within-ring visit order (bitmaps_E9980x, DEVIATIONS combat.rs). Ball laws byte-exact (TTL/arc/bounce/friction).",
    "takes": [
     "mc2l24"
    ],
@@ -32,7 +216,7 @@
   {
    "id": "mc2l24-static-terrain-z",
    "status": "capture",
-   "note": "RECONSTRUCTED 2026-08-04 (landing round, ledger Resolved prop-z inversion): mc2/probes.rs inverts the class-2 statics' own terrain samples at import (the meteor-fire scorches that dug their ground are lost by construction, but the props ARE terrain samplers). Family 2400\u21920 mid/late windows, 1512\u219212 at the t=23411 onset. \u26a0 The arm recovers the very field this rule grades \u2014 the count is NOT independent evidence; the rule survives ONLY as a regression sensor for the inversion (a jump = the arm stopped firing).",
+   "note": "RECONSTRUCTED 2026-08-04 (landing round, ledger Resolved prop-z inversion): mc2/probes.rs inverts the class-2 statics' own terrain samples at import (the meteor-fire scorches that dug their ground are lost by construction, but the props ARE terrain samplers). Family 2400→0 mid/late windows, 1512→12 at the t=23411 onset. ⚠ The arm recovers the very field this rule grades — the count is NOT independent evidence; the rule survives ONLY as a regression sensor for the inversion (a jump = the arm stopped firing).",
    "takes": [
     "mc2l24"
    ],
@@ -43,7 +227,7 @@
   {
    "id": "mc2l24-hydra-residual",
    "status": "capture",
-   "note": "Resolved 'MC2 HYDRA (5,27) - FOUR IMPORT FIELD-HOME BUGS' (2026-08-02) ruled-out list: post-fix residual = terrain-crater z on the ground-walking bodies (x/y match, z tracks cratered-vs-pristine planes), and mass spawn/death-tick free-stack slot desync (t=40565). \u26a0 AMENDED 2026-09-04 (round 99, digs 99-11 / 99-17): the '64-tick body-brain wander phase drift (chaotic amplification class)' clause was WRONG and was absorbing one real bug plus one genuine uninitialised read. (a) sub_29A90's v34 ([ebp-0x10]) is FUNCTION-scope with ONE writer (NETHERW.EXE 0x4E351) and NO initialiser (83 ec 10 at 0x4E296 reserves 16 bytes; the only store before the chain loop is 30 d2 / 88 55 fc = v37 = 0 at 0x4E2CA), so it CARRIES down the branch chain - remc2's //fix at EF:19783 re-seeded it per branch AND made it odd, permanently suppressing one mc2_rand per branch per phase beat. FIXED: MGC_NO_M27_V34_CARRY. (b) What remains is NOT drift and NOT amplification: it is retail reading that uninitialised slot on every tick where no branch of the chain is in sub-state 1. Its != 0 and > 4 bits are STABLE (byte_0x46_70 = 4 at all 27 witnessed sites), but its LOW BIT is not - mc2l22 has retail SKIPPING the wander draw (odd) at t=53912/53922/53944/53954/53976/54038/54910/54912/54914/54946/54974/54978/55006/55010/55038/55042/55070/55074/55089 and TAKING it (even) at t=53168/53848/53857/53858/53880/53889/54882/54942, each verified as an exact +-1 step of the 9377/9439 LCG on the branch's own rand, flipping within four ticks. NO constant seed can be right; MGC_M27_V34_SEED picks the least-bad parity (even, 18 mc2l22 heads vs odd's 20). REGISTERED-DEVIATION class (uninitialised read - see DEVIATIONS.md 'RETAIL'S OWN OUT-OF-BOUNDS READS'), a permanent floor of ~18 mc2l22 segments. A hit-count jump here is still a hydra law regression signal.",
+   "note": "Resolved 'MC2 HYDRA (5,27) - FOUR IMPORT FIELD-HOME BUGS' (2026-08-02) ruled-out list: post-fix residual = terrain-crater z on the ground-walking bodies (x/y match, z tracks cratered-vs-pristine planes), and mass spawn/death-tick free-stack slot desync (t=40565). ⚠ AMENDED 2026-09-04 (round 99, digs 99-11 / 99-17): the '64-tick body-brain wander phase drift (chaotic amplification class)' clause was WRONG and was absorbing one real bug plus one genuine uninitialised read. (a) sub_29A90's v34 ([ebp-0x10]) is FUNCTION-scope with ONE writer (NETHERW.EXE 0x4E351) and NO initialiser (83 ec 10 at 0x4E296 reserves 16 bytes; the only store before the chain loop is 30 d2 / 88 55 fc = v37 = 0 at 0x4E2CA), so it CARRIES down the branch chain - remc2's //fix at EF:19783 re-seeded it per branch AND made it odd, permanently suppressing one mc2_rand per branch per phase beat. FIXED: MGC_NO_M27_V34_CARRY. (b) What remains is NOT drift and NOT amplification: it is retail reading that uninitialised slot on every tick where no branch of the chain is in sub-state 1. Its != 0 and > 4 bits are STABLE (byte_0x46_70 = 4 at all 27 witnessed sites), but its LOW BIT is not - mc2l22 has retail SKIPPING the wander draw (odd) at t=53912/53922/53944/53954/53976/54038/54910/54912/54914/54946/54974/54978/55006/55010/55038/55042/55070/55074/55089 and TAKING it (even) at t=53168/53848/53857/53858/53880/53889/54882/54942, each verified as an exact +-1 step of the 9377/9439 LCG on the branch's own rand, flipping within four ticks. NO constant seed can be right; MGC_M27_V34_SEED picks the least-bad parity (even, 18 mc2l22 heads vs odd's 20). REGISTERED-DEVIATION class (uninitialised read - see DEVIATIONS.md 'RETAIL'S OWN OUT-OF-BOUNDS READS'), a permanent floor of ~18 mc2l22 segments. A hit-count jump here is still a hydra law regression signal.",
    "takes": [
     "mc2l24"
    ],
@@ -63,7 +247,7 @@
   {
    "id": "mc2l24-player-life-regen",
    "status": "capture",
-   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): player.life = same wizext regen-derivation class - retail holds post-damage life ~16 ticks then +5/tick (lifeRegen_0x163_355, EF:5427-49); port regens one quantum early, transient 9900-vs-9905 heals at cap. \u26a0\u26a0 RE-AUDIT OWED 2026-09-04: this rule was HIDING A LAW. Session 96 found MC2's area writers have NO player arm at all (`sub_116A0` = NETHERW.EXE 0x35EA0..0x360F7 reaches every victim through the tile grid `mapEntityIndex_15B4E0`; the port's `Gen::area_write` carried an invented `mc2 ||` that skipped the window gate). At mc2l24 t=134 that billed the wizard 1,200 phantom damage from a (10,9) dome whose window ends one tile short of the wizard's link tile \u2014 and THIS RULE, whose note claims a 'transient 9900-vs-9905 heals at cap' regen quantum, was absorbing it. A whole-field capture swallowed a 1,200-point hit labelled 'regen'. The law landed (mc2l24 horizon 133 -> 1,024) and the count fell 35 -> 30; THE SURVIVING 30 ROWS HAVE NOT BEEN RE-TRIAGED and must not be assumed to be the regen story.",
+   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): player.life = same wizext regen-derivation class - retail holds post-damage life ~16 ticks then +5/tick (lifeRegen_0x163_355, EF:5427-49); port regens one quantum early, transient 9900-vs-9905 heals at cap. ⚠⚠ RE-AUDIT OWED 2026-09-04: this rule was HIDING A LAW. Session 96 found MC2's area writers have NO player arm at all (`sub_116A0` = NETHERW.EXE 0x35EA0..0x360F7 reaches every victim through the tile grid `mapEntityIndex_15B4E0`; the port's `Gen::area_write` carried an invented `mc2 ||` that skipped the window gate). At mc2l24 t=134 that billed the wizard 1,200 phantom damage from a (10,9) dome whose window ends one tile short of the wizard's link tile — and THIS RULE, whose note claims a 'transient 9900-vs-9905 heals at cap' regen quantum, was absorbing it. A whole-field capture swallowed a 1,200-point hit labelled 'regen'. The law landed (mc2l24 horizon 133 -> 1,024) and the count fell 35 -> 30; THE SURVIVING 30 ROWS HAVE NOT BEEN RE-TRIAGED and must not be assumed to be the regen story.",
    "takes": [
     "mc2l24"
    ],
@@ -85,7 +269,7 @@
   {
    "id": "mc2l24-wizard-life-regen",
    "status": "capture",
-   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): the (3,0) wizard entity's life lane, twin of player.life - retail holds post-damage ~16 ticks then +5/tick from the un-recorded wizext lifeRegen; port regens one quantum early, heals at cap. \u26a0\u26a0 RE-AUDIT OWED 2026-09-04: this rule was HIDING A LAW. Session 96 found MC2's area writers have NO player arm at all (`sub_116A0` = NETHERW.EXE 0x35EA0..0x360F7 reaches every victim through the tile grid `mapEntityIndex_15B4E0`; the port's `Gen::area_write` carried an invented `mc2 ||` that skipped the window gate). At mc2l24 t=134 that billed the wizard 1,200 phantom damage from a (10,9) dome whose window ends one tile short of the wizard's link tile \u2014 and THIS RULE, whose note claims a 'transient 9900-vs-9905 heals at cap' regen quantum, was absorbing it. A whole-field capture swallowed a 1,200-point hit labelled 'regen'. The law landed (mc2l24 horizon 133 -> 1,024) and the count fell 35 -> 30; THE SURVIVING 30 ROWS HAVE NOT BEEN RE-TRIAGED and must not be assumed to be the regen story.",
+   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): the (3,0) wizard entity's life lane, twin of player.life - retail holds post-damage ~16 ticks then +5/tick from the un-recorded wizext lifeRegen; port regens one quantum early, heals at cap. ⚠⚠ RE-AUDIT OWED 2026-09-04: this rule was HIDING A LAW. Session 96 found MC2's area writers have NO player arm at all (`sub_116A0` = NETHERW.EXE 0x35EA0..0x360F7 reaches every victim through the tile grid `mapEntityIndex_15B4E0`; the port's `Gen::area_write` carried an invented `mc2 ||` that skipped the window gate). At mc2l24 t=134 that billed the wizard 1,200 phantom damage from a (10,9) dome whose window ends one tile short of the wizard's link tile — and THIS RULE, whose note claims a 'transient 9900-vs-9905 heals at cap' regen quantum, was absorbing it. A whole-field capture swallowed a 1,200-point hit labelled 'regen'. The law landed (mc2l24 horizon 133 -> 1,024) and the count fell 35 -> 30; THE SURVIVING 30 ROWS HAVE NOT BEEN RE-TRIAGED and must not be assumed to be the regen story.",
    "takes": [
     "mc2l24"
    ],
@@ -97,7 +281,7 @@
   {
    "id": "mc2l24-castle-piece-terrain-z",
    "status": "capture",
-   "note": "Resolved '(10,79) CASTLE DEFENDER PIECE' (2026-08-03 dig B): after the eleven import field-home fixes (recoil f68<-@0x44 etc.), residual z = terrain closure - the piece's z-law recomputes ground_z+levelOffset every tick on terraformed ground the pristine replay lacks. RE-NOTED 2026-08-04: the BUILD00 pad replay collapsed this 367k\u2192804 rows (post-replay residual only). Hit-count jump = piece-law OR pad-replay regression signal.",
+   "note": "Resolved '(10,79) CASTLE DEFENDER PIECE' (2026-08-03 dig B): after the eleven import field-home fixes (recoil f68<-@0x44 etc.), residual z = terrain closure - the piece's z-law recomputes ground_z+levelOffset every tick on terraformed ground the pristine replay lacks. RE-NOTED 2026-08-04: the BUILD00 pad replay collapsed this 367k→804 rows (post-replay residual only). Hit-count jump = piece-law OR pad-replay regression signal.",
    "takes": [
     "mc2l24"
    ],
@@ -121,7 +305,7 @@
   {
    "id": "mc2-terraform-houses",
    "status": "capture",
-   "note": "\u00a7terraform: village growth regrades the hill; (10,45) house z ground-snaps both sides. WAS pristine-plane closure; the BUILD00 village-terrace replay (ledger Resolved 'BUILD00 PAD REPLAYS', 2026-08-04) now rebuilds the terrace at import \u2014 residue 1 row corpus-wide. REGRESSION SENSOR: a hit-count jump means the terrace replay stopped firing.",
+   "note": "§terraform: village growth regrades the hill; (10,45) house z ground-snaps both sides. WAS pristine-plane closure; the BUILD00 village-terrace replay (ledger Resolved 'BUILD00 PAD REPLAYS', 2026-08-04) now rebuilds the terrace at import — residue 1 row corpus-wide. REGRESSION SENSOR: a hit-count jump means the terrace replay stopped firing.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -136,7 +320,7 @@
   {
    "id": "mc2-guard-terrain",
    "status": "capture",
-   "note": "\u00a7l4-guard-terrain: (5,15) castle guards walk runtime-terraformed ground the pristine replay lacks \u2014 z tracks the missing ramp, the tile type trips the die-gate (action), the early return freezes rand; port laws verified line-by-line (ledger mc2l4+mc2l30 triage). NARROWED to mc2l24 (2026-08-04 housekeeping): the BUILD00 pad replay ENDED the castle-mound family everywhere (1.81M corpus rows \u2192 1,199, all l24); the residue clusters on DOOMSDAY/volcano ground (the static-terrain-z family, not the mound) \u2014 re-triage owed post prop-inversion. Hit-count jump = pad-replay regression signal.",
+   "note": "§l4-guard-terrain: (5,15) castle guards walk runtime-terraformed ground the pristine replay lacks — z tracks the missing ramp, the tile type trips the die-gate (action), the early return freezes rand; port laws verified line-by-line (ledger mc2l4+mc2l30 triage). NARROWED to mc2l24 (2026-08-04 housekeeping): the BUILD00 pad replay ENDED the castle-mound family everywhere (1.81M corpus rows → 1,199, all l24); the residue clusters on DOOMSDAY/volcano ground (the static-terrain-z family, not the mound) — re-triage owed post prop-inversion. Hit-count jump = pad-replay regression signal.",
    "takes": [
     "mc2l24"
    ],
@@ -146,7 +330,7 @@
   {
    "id": "mc2l30-plateau-markers",
    "status": "capture",
-   "note": "\u00a7l30-terrain: the (14,x) markers sit on the retail 2176 plateau the port heightfield lacks (12 of 14 exactly -1664). Load-time-vs-runtime check still owed \u2014 flip to open if the load-time raise proves portable.",
+   "note": "§l30-terrain: the (14,x) markers sit on the retail 2176 plateau the port heightfield lacks (12 of 14 exactly -1664). Load-time-vs-runtime check still owed — flip to open if the load-time raise proves portable.",
    "takes": [
     "mc2l30"
    ],
@@ -157,7 +341,7 @@
   {
    "id": "mc2-archer-ground-z",
    "status": "open",
-   "note": "(5,4) archers ground-snap to a pristine plane that reads a different datum than retail's (l4: constant -192 from t=0). The LOAD-TIME terrain-edit check is the owed verdict (ledger (14,5) entry, l4 face). \u26a0 GENERATE-AXIS CAUSE FOUND AND FIXED 2026-09-06 (round 111): the -192 was the (127,62) authored (10,11) scorch ring dug one -3 disc-tick too deep because the port minted no (10,30) waterpath records ahead of the ring in pass 1, so the ring sat 8 slots lower and its slot-seeded f63%3 radius cadence differed; terrain-check mc2l4 height 1,357 -> 9. The replay rows this rule grades are UNCHANGED by construction (replay imports the take's terrain every pair) - the rule survives as their register; a hit-count change now = a replay-side regression.",
+   "note": "(5,4) archers ground-snap to a pristine plane that reads a different datum than retail's (l4: constant -192 from t=0). The LOAD-TIME terrain-edit check is the owed verdict (ledger (14,5) entry, l4 face). ⚠ GENERATE-AXIS CAUSE FOUND AND FIXED 2026-09-06 (round 111): the -192 was the (127,62) authored (10,11) scorch ring dug one -3 disc-tick too deep because the port minted no (10,30) waterpath records ahead of the ring in pass 1, so the ring sat 8 slots lower and its slot-seeded f63%3 radius cadence differed; terrain-check mc2l4 height 1,357 -> 9. The replay rows this rule grades are UNCHANGED by construction (replay imports the take's terrain every pair) - the rule survives as their register; a hit-count change now = a replay-side regression.",
    "takes": [
     "mc2l4",
     "mc2l30"
@@ -170,7 +354,7 @@
   {
    "id": "mc2-token-fall-z",
    "status": "capture",
-   "note": "(15,19) token falls to retail's excavated 288 while the port clamps at its pristine 1296 floor (ledger \u00a7l30-terrain).",
+   "note": "(15,19) token falls to retail's excavated 288 while the port clamps at its pristine 1296 floor (ledger §l30-terrain).",
    "takes": [
     "mc2l4",
     "mc2l30"
@@ -183,7 +367,7 @@
   {
    "id": "mc2-rival-terrain-z",
    "status": "capture",
-   "note": "SPLIT from mc2-rival-ai-lanes per the session-9 re-attribution (ledger 'RIVAL AI-LANE MAP DECODED'): ~80% of the post-decode (3,1) remainder is the rival hovering its OWN castle pad \u2014 z tracks the runtime-terraformed pad the pristine replay lacks (the guard-terrain root). l30 dropped from scope: only mc2l4 has rival wizards (session-9 corpus fact).",
+   "note": "SPLIT from mc2-rival-ai-lanes per the session-9 re-attribution (ledger 'RIVAL AI-LANE MAP DECODED'): ~80% of the post-decode (3,1) remainder is the rival hovering its OWN castle pad — z tracks the runtime-terraformed pad the pristine replay lacks (the guard-terrain root). l30 dropped from scope: only mc2l4 has rival wizards (session-9 corpus fact).",
    "takes": [
     "mc2l4"
    ],
@@ -195,7 +379,7 @@
   {
    "id": "mc2-rival-mana-mirror",
    "status": "open",
-   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~14%): retail keeps wizard mana ON THE ENTITY (f140/f136, +regen at castle EF:5423); the port keeps it in Mc2Rival, so the obs mana lane freezes at its import value. One mirror closes the family but MOVES GOLDENS (native) \u2014 PLAYER DECISION OWED (ledger session-9 item 4\u2460).",
+   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~14%): retail keeps wizard mana ON THE ENTITY (f140/f136, +regen at castle EF:5423); the port keeps it in Mc2Rival, so the obs mana lane freezes at its import value. One mirror closes the family but MOVES GOLDENS (native) — PLAYER DECISION OWED (ledger session-9 item 4①).",
    "takes": [
     "mc2l4"
    ],
@@ -207,7 +391,7 @@
   {
    "id": "mc2-rival-ai-residual",
    "status": "open",
-   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~11%): genuine decision divergence surviving the wizard-ext AI-lane decode+import (reanchor_mc2_rival_ai, rivals.rs:671) \u2014 state/target choices drift where hate/war inputs diverge mid-take. l30 dropped: only mc2l4 has rivals.",
+   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~11%): genuine decision divergence surviving the wizard-ext AI-lane decode+import (reanchor_mc2_rival_ai, rivals.rs:671) — state/target choices drift where hate/war inputs diverge mid-take. l30 dropped: only mc2l4 has rivals.",
    "takes": [
     "mc2l4"
    ],
@@ -232,7 +416,7 @@
   {
    "id": "mc2-fire-smoke-churn",
    "status": "capture",
-   "note": "\u00a7effects RULED capture (KINEMATICS ROUND): fire/smoke laws verified byte-exact; residue = newborn stale-slot seeds, RNG-stream flicker (rand%0x41-32), slot substitution, late-run drift. Models 0/6/13/14 all lanes. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
+   "note": "§effects RULED capture (KINEMATICS ROUND): fire/smoke laws verified byte-exact; residue = newborn stale-slot seeds, RNG-stream flicker (rand%0x41-32), slot substitution, late-run drift. Models 0/6/13/14 all lanes. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -245,7 +429,7 @@
   {
    "id": "mc2-fire-churn-m13",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn \u2014 the (10,13) emitter face. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
+   "note": "See mc2-fire-smoke-churn — the (10,13) emitter face. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -259,7 +443,7 @@
   {
    "id": "mc2-fire-churn-m0",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn \u2014 the (10,0) fire face (flicker band + substitution). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
+   "note": "See mc2-fire-smoke-churn — the (10,0) fire face (flicker band + substitution). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -273,7 +457,7 @@
   {
    "id": "mc2-fire-churn-m6",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn \u2014 the (10,6) standing-fire face (z = f44 + terrain, recomputed; divergence is upstream terrain/init). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
+   "note": "See mc2-fire-smoke-churn — the (10,6) standing-fire face (z = f44 + terrain, recomputed; divergence is upstream terrain/init). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -300,7 +484,7 @@
   {
    "id": "mc2-cast-timing-missing",
    "status": "capture",
-   "note": "Class-9 projectiles missing-in-port: the human's replayed cast fires a pair off retail's. RE-SCOPED 2026-08-05 (ledger 'THE PORT FIRED EVERY MC2 CAST ONE TICK EARLY'): the launch-PHASE family is FIXED (arm at the carpet slot, launch at the manifestation's own slot in the same walk) \u2014 this rule now carries only genuine press-reconstruction skew; the l24 40k residue (24 (9,0) rows) is the RAPID FIREBALL STREAM, a separate un-dug story. One-sided growth here = a real bug hiding again (see the -extra twin's symmetry warning).",
+   "note": "Class-9 projectiles missing-in-port: the human's replayed cast fires a pair off retail's. RE-SCOPED 2026-08-05 (ledger 'THE PORT FIRED EVERY MC2 CAST ONE TICK EARLY'): the launch-PHASE family is FIXED (arm at the carpet slot, launch at the manifestation's own slot in the same walk) — this rule now carries only genuine press-reconstruction skew; the l24 40k residue (24 (9,0) rows) is the RAPID FIREBALL STREAM, a separate un-dug story. One-sided growth here = a real bug hiding again (see the -extra twin's symmetry warning).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -313,7 +497,7 @@
   {
    "id": "mc2-cast-timing-extra",
    "status": "capture",
-   "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse. mc2l24: also carries the possession fresh-arm input-reconstruction extras (session-4 ruling; the hydra (9,9) under-fire since FIXED, session-7 f136<-d88 \u2014 residual is beam geometry/terrain). \u26a0 RE-NOTED 2026-08-04: check SYMMETRY before trusting this rule \u2014 the (9,17) possession re-fire bug (452 extra vs 0 missing) AND the one-tick launch-phase bug (24 extra vs 0 missing, fixed 2026-08-05 manifestation-slot order) both hid under it; balanced \u00b1 = latency skew, ONE-SIDED counts = a real port bug hiding here.",
+   "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse. mc2l24: also carries the possession fresh-arm input-reconstruction extras (session-4 ruling; the hydra (9,9) under-fire since FIXED, session-7 f136<-d88 — residual is beam geometry/terrain). ⚠ RE-NOTED 2026-08-04: check SYMMETRY before trusting this rule — the (9,17) possession re-fire bug (452 extra vs 0 missing) AND the one-tick launch-phase bug (24 extra vs 0 missing, fixed 2026-08-05 manifestation-slot order) both hid under it; balanced ± = latency skew, ONE-SIDED counts = a real port bug hiding here.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -326,7 +510,7 @@
   {
    "id": "mc2-lightning-blast-churn",
    "status": "capture",
-   "note": "(10,23) lightning blasts ride the cast-timing skew (ledger \u00a7lightning residual).",
+   "note": "(10,23) lightning blasts ride the cast-timing skew (ledger §lightning residual).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -339,7 +523,7 @@
   {
    "id": "mc1l0-cast-impacts",
    "status": "capture",
-   "note": "Ledger entry 4: the impact cluster around casts \u2014 class-9 missing/extra + (10,12) hit-flash churn = input latency + unreconstructed aim; partially mitigated by --input-delay 2.",
+   "note": "Ledger entry 4: the impact cluster around casts — class-9 missing/extra + (10,12) hit-flash churn = input latency + unreconstructed aim; partially mitigated by --input-delay 2.",
    "takes": [
     "mc1l0"
    ],
@@ -349,7 +533,7 @@
   {
    "id": "mc1l0-cast-impacts-extra",
    "status": "capture",
-   "note": "See mc1l0-cast-impacts \u2014 the extra-in-port side.",
+   "note": "See mc1l0-cast-impacts — the extra-in-port side.",
    "takes": [
     "mc1l0"
    ],
@@ -359,7 +543,7 @@
   {
    "id": "mc1l0-hit-flash",
    "status": "capture",
-   "note": "See mc1l0-cast-impacts \u2014 the (10,12) hit-flash slot-mismatch face.",
+   "note": "See mc1l0-cast-impacts — the (10,12) hit-flash slot-mismatch face.",
    "takes": [
     "mc1l0"
    ],
@@ -369,7 +553,7 @@
   {
    "id": "mc1hwl0-terrain-z",
    "status": "capture",
-   "note": "TERRAIN CLOSURE, HW face (ledger MC1HW section): the castle-mound region raised ~+1000 by late-run puts z rows on ~every pair by construction; the ground-audit instrument proved the pristine plane exact at t=0. Whole-take z rule \u2014 HW progress reads from the other lanes.",
+   "note": "TERRAIN CLOSURE, HW face (ledger MC1HW section): the castle-mound region raised ~+1000 by late-run puts z rows on ~every pair by construction; the ground-audit instrument proved the pristine plane exact at t=0. Whole-take z rule — HW progress reads from the other lanes.",
    "takes": [
     "mc1hwl0"
    ],
@@ -379,7 +563,7 @@
   {
    "id": "mc2l0-static-75-218",
    "status": "capture",
-   "note": "One (2,1) static (slot 126) at site (75.5,218.5): constant z -113 from onset t=1821 to end of take \u2014 the terrain-closure diagnostic shape (constant per-entity offset from an edit onset).",
+   "note": "One (2,1) static (slot 126) at site (75.5,218.5): constant z -113 from onset t=1821 to end of take — the terrain-closure diagnostic shape (constant per-entity offset from an edit onset).",
    "takes": [
     "mc2l0"
    ],
@@ -398,7 +582,7 @@
   {
    "id": "mc2l0-castle-z",
    "status": "open",
-   "note": "Ledger \u00a7castle (mc2l0 open lead): the (3,2) castle's z datum + sphere-owner lane drift late in the run; undug.",
+   "note": "Ledger §castle (mc2l0 open lead): the (3,2) castle's z datum + sphere-owner lane drift late in the run; undug.",
    "takes": [
     "mc2l0"
    ],
@@ -423,7 +607,7 @@
   {
    "id": "mc2-flyer-drift-m3",
    "status": "capture",
-   "note": "Session-7 scout RULING: no M3 altitude source exists \u2014 retail heads clamp to ground+v_12 EVERY tick (free-descent 0%, sub_1B8C0:8804 servo args + MoveEntity pitch literal 0 at :8805; row 74 v_12=0 so head z==ground_z), m3 has no bob state, m0 bob sub_1F040 ported byte-equivalent. ~93% of z rows carry same-tick x/y (wander capture drift sampling terrain, |dz| monotone in |dpos|); byte-identical-position residue = pristine-plane terrain datum gap (same family as mc2-walker-ground-z / mc2-guard-terrain).",
+   "note": "Session-7 scout RULING: no M3 altitude source exists — retail heads clamp to ground+v_12 EVERY tick (free-descent 0%, sub_1B8C0:8804 servo args + MoveEntity pitch literal 0 at :8805; row 74 v_12=0 so head z==ground_z), m3 has no bob state, m0 bob sub_1F040 ported byte-equivalent. ~93% of z rows carry same-tick x/y (wander capture drift sampling terrain, |dz| monotone in |dpos|); byte-identical-position residue = pristine-plane terrain datum gap (same family as mc2-walker-ground-z / mc2-guard-terrain).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -435,7 +619,7 @@
   {
    "id": "mc2-flyer-drift-m0",
    "status": "capture",
-   "note": "See mc2-flyer-drift-m3 \u2014 the (5,0) worm-chain face. Its 1-4-tick z bursts are the sub_1F040 bounce (gate ground+256) firing a tick apart across the terrain datum gap, not an altitude law.",
+   "note": "See mc2-flyer-drift-m3 — the (5,0) worm-chain face. Its 1-4-tick z bursts are the sub_1F040 bounce (gate ground+256) firing a tick apart across the terrain datum gap, not an altitude law.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -470,7 +654,7 @@
   {
    "id": "mc2-castle-pad-z",
    "status": "capture",
-   "note": "(3,2) castle z: WAS the terraformed-mound closure (\u00a7l4-guard-terrain); the BUILD00 castle-mound replay (ledger Resolved 'BUILD00 PAD REPLAYS', 2026-08-04) now rebuilds player-built mounds at import \u2014 l24 residue 17 rows (off-footprint fence edges) = REGRESSION SENSOR for the replay. l4 carries 166 further rows (2026-08-05 close): RIVAL authored-castle pads, which BUILD00 replay does not cover \u2014 genuine remaining terrain closure, keyframe-channel territory.",
+   "note": "(3,2) castle z: WAS the terraformed-mound closure (§l4-guard-terrain); the BUILD00 castle-mound replay (ledger Resolved 'BUILD00 PAD REPLAYS', 2026-08-04) now rebuilds player-built mounds at import — l24 residue 17 rows (off-footprint fence edges) = REGRESSION SENSOR for the replay. l4 carries 166 further rows (2026-08-05 close): RIVAL authored-castle pads, which BUILD00 replay does not cover — genuine remaining terrain closure, keyframe-channel territory.",
    "takes": [
     "mc2l4",
     "mc2l30",
@@ -484,7 +668,7 @@
   {
    "id": "mc2-walker-ground-z",
    "status": "capture",
-   "note": "Class-5 walker z ground-snap on terraformed sites (the guard/mound/regrade roots) \u2014 placed after the specific class-5 rules; x/y/heading knock-on stays unexplained.",
+   "note": "Class-5 walker z ground-snap on terraformed sites (the guard/mound/regrade roots) — placed after the specific class-5 rules; x/y/heading knock-on stays unexplained.",
    "takes": [
     "mc2l4",
     "mc2l30",
@@ -497,7 +681,7 @@
   {
    "id": "mc2-claim-census-player",
    "status": "open",
-   "note": "player.mana_max claim-census-within-tick (ledger mc2l0 open lead / \u00a7castle follow-up (d)).",
+   "note": "player.mana_max claim-census-within-tick (ledger mc2l0 open lead / §castle follow-up (d)).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -509,7 +693,7 @@
   {
    "id": "mc2-claim-census-wizard",
    "status": "open",
-   "note": "Wizard-body mana_max rows \u2014 the same claim-census lead.",
+   "note": "Wizard-body mana_max rows — the same claim-census lead.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -523,7 +707,7 @@
   {
    "id": "mc2-claim-census-manifest",
    "status": "open",
-   "note": "(15,2) possession-manifestation mana lanes \u2014 census/upkeep within-tick (undug).",
+   "note": "(15,2) possession-manifestation mana lanes — census/upkeep within-tick (undug).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -561,7 +745,7 @@
   {
    "id": "mc1-guard-terrain",
    "status": "capture",
-   "note": "RESOLVED 2026-08-15 (\u2018THE WEIGHT TABLE AT 1FF40\u2019): the residual family after the terrain channel was NOT terrain \u2014 sub_20480's 4-way vote weights live at the code/data alias *(_DWORD*)sub_1FF40, EXTRACTED from CARPET.EXE (obj1 VA 0x1FF40, file 0x38738: 58 1b 58 1b 0a 00 58 1b = [7000, 7000, 10, 7000]) \u2014 the uniform [16,16,16,16] stand-in kept the draw count but flipped the CHOICE (reversal capped at 11 vs 17 under uniform): mc1l0 t=2541 guard 500 = the 2542 free-run wall. mc1l0 hits now ZERO \u2014 any hit here = grid_walk/weight regression signal. (Historic note 2026-08-01: pre-terrain-channel the family was graded as pad-tile closure; that half was real and the measured channel absorbed it.)",
+   "note": "RESOLVED 2026-08-15 (‘THE WEIGHT TABLE AT 1FF40’): the residual family after the terrain channel was NOT terrain — sub_20480's 4-way vote weights live at the code/data alias *(_DWORD*)sub_1FF40, EXTRACTED from CARPET.EXE (obj1 VA 0x1FF40, file 0x38738: 58 1b 58 1b 0a 00 58 1b = [7000, 7000, 10, 7000]) — the uniform [16,16,16,16] stand-in kept the draw count but flipped the CHOICE (reversal capped at 11 vs 17 under uniform): mc1l0 t=2541 guard 500 = the 2542 free-run wall. mc1l0 hits now ZERO — any hit here = grid_walk/weight regression signal. (Historic note 2026-08-01: pre-terrain-channel the family was graded as pad-tile closure; that half was real and the measured channel absorbed it.)",
    "takes": [
     "mc1l0"
    ],
@@ -603,7 +787,7 @@
   {
    "id": "mc1hw-lightning-node-life",
    "status": "capture",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan \u2014 every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan — every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
    "takes": [
     "mc1hwl0"
    ],
@@ -615,7 +799,7 @@
   {
    "id": "mc1hw-lightning-node-maxlife",
    "status": "capture",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan \u2014 every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan — every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
    "takes": [
     "mc1hwl0"
    ],
@@ -627,7 +811,7 @@
   {
    "id": "mc1hw-lightning-node-x",
    "status": "capture",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan \u2014 every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan — every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
    "takes": [
     "mc1hwl0"
    ],
@@ -639,7 +823,7 @@
   {
    "id": "mc1hw-lightning-node-y",
    "status": "capture",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan \u2014 every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan — every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
    "takes": [
     "mc1hwl0"
    ],
@@ -651,7 +835,7 @@
   {
    "id": "mc1hw-fire-churn-heading",
    "status": "capture",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) \u2014 same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) — same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
    "takes": [
     "mc1hwl0",
     "mc1l0"
@@ -664,7 +848,7 @@
   {
    "id": "mc1hw-fire-churn-x",
    "status": "open",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) \u2014 same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) — same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
    "takes": [
     "mc1hwl0",
     "mc1l0"
@@ -677,7 +861,7 @@
   {
    "id": "mc1hw-fire-churn-y",
    "status": "open",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) \u2014 same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) — same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
    "takes": [
     "mc1hwl0",
     "mc1l0"
@@ -690,7 +874,7 @@
   {
    "id": "mc1hw-fire-churn-rand",
    "status": "open",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06), RE-ATTRIBUTED 2026-08-13 (player challenge, measured): the original 'a DIFFERENT fire occupies the slot' story fits ZERO current mc1l0 rows \u2014 of 148 masked pairs, none carries x/y rows (the different-fire shape); 130 ride WITH an mc1l0-terrain-z sibling and 18 stand alone. The measured mechanism (t=1768 slot 555, seed-stepped): SAME fire, SAME position, retail draws 2 per-entity LCG steps on the latch tick where the port draws 1 \u2014 the SCORCH GATE (:28095-98, `z - ground <= 128` + tile-type + angle + water) flips on the terrain closure's divergent ground sample, dropping/adding the scorch draw (the flicker draw then lands on a different stream position). Draw-count parity is per-entity (no global-stream cascade), but the flipped scorch ALSO skips/adds a dig_scorch terrain write, feeding the terrain closure forward in free run. Parent = the terrain closure (mid-tick terraform blind spot), plus the 2026-08-06 spawn-cadence lead for any future different-fire rows. Classified OPEN: dies with the terrain-phase dig, not a fire-code bug (the port's draw structure matches :28085-28118 line-for-line). RE-ESCALATED 2026-08-13 (player, measured live at pair 1768\u21921769 via examples/scorch_gate_probe_mc1.rs): from an identical truth-matching pair start, the port's scorch-dig CHAIN writes different terrain than retail within one tick \u2014 cell (131,88): retail h33\u219230 ty3\u21921 vs port h33\u219232 ty3\u219251; cell (135,90): retail ty\u219250 vs port ty\u219248, h 30 vs 29. A LAW divergence (dig depth/count, burnt-type stamp, or the angle-nibble gate input \u2014 angle has NO recorded truth channel), not free-run drift. This chain is the census driver behind the replay castle-3 rescue and shares the t=563 replay-wall family. Fix target: retail :28085-28118 scorch tail + sub_40D30 dig vs port dig_scorch/dig_cell + type/angle bake. LANDED 2026-08-13 (same session): dig_scorch cell ROUNDING (+128, both chassis: :51705-06 / EF:39722-23) + MC1 fire gate rounded cell + the `if (v5)` type-0 wrapper \u2014 mc1l0 148\u2192139 rows (1768-era 14\u21923), every MC1 take improved, mc2_cave/mc2_slice goldens re-pinned attributably. REMAINING rows = the pair-harness ANGLE-IMPORT gap: install_measured_terrain keeps the pristine angle plane (angle unrecorded), so retail's accumulated scorch latches (angle&7==1) are absent at import and the port re-scorches previously-latched cells (564-era castle-1 window). Instrument limitation, not sim law \u2014 free run evolves angle correctly. Also feeds the burnt-TYPE rebake residue.",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06), RE-ATTRIBUTED 2026-08-13 (player challenge, measured): the original 'a DIFFERENT fire occupies the slot' story fits ZERO current mc1l0 rows — of 148 masked pairs, none carries x/y rows (the different-fire shape); 130 ride WITH an mc1l0-terrain-z sibling and 18 stand alone. The measured mechanism (t=1768 slot 555, seed-stepped): SAME fire, SAME position, retail draws 2 per-entity LCG steps on the latch tick where the port draws 1 — the SCORCH GATE (:28095-98, `z - ground <= 128` + tile-type + angle + water) flips on the terrain closure's divergent ground sample, dropping/adding the scorch draw (the flicker draw then lands on a different stream position). Draw-count parity is per-entity (no global-stream cascade), but the flipped scorch ALSO skips/adds a dig_scorch terrain write, feeding the terrain closure forward in free run. Parent = the terrain closure (mid-tick terraform blind spot), plus the 2026-08-06 spawn-cadence lead for any future different-fire rows. Classified OPEN: dies with the terrain-phase dig, not a fire-code bug (the port's draw structure matches :28085-28118 line-for-line). RE-ESCALATED 2026-08-13 (player, measured live at pair 1768→1769 via examples/scorch_gate_probe_mc1.rs): from an identical truth-matching pair start, the port's scorch-dig CHAIN writes different terrain than retail within one tick — cell (131,88): retail h33→30 ty3→1 vs port h33→32 ty3→51; cell (135,90): retail ty→50 vs port ty→48, h 30 vs 29. A LAW divergence (dig depth/count, burnt-type stamp, or the angle-nibble gate input — angle has NO recorded truth channel), not free-run drift. This chain is the census driver behind the replay castle-3 rescue and shares the t=563 replay-wall family. Fix target: retail :28085-28118 scorch tail + sub_40D30 dig vs port dig_scorch/dig_cell + type/angle bake. LANDED 2026-08-13 (same session): dig_scorch cell ROUNDING (+128, both chassis: :51705-06 / EF:39722-23) + MC1 fire gate rounded cell + the `if (v5)` type-0 wrapper — mc1l0 148→139 rows (1768-era 14→3), every MC1 take improved, mc2_cave/mc2_slice goldens re-pinned attributably. REMAINING rows = the pair-harness ANGLE-IMPORT gap: install_measured_terrain keeps the pristine angle plane (angle unrecorded), so retail's accumulated scorch latches (angle&7==1) are absent at import and the port re-scorches previously-latched cells (564-era castle-1 window). Instrument limitation, not sim law — free run evolves angle correctly. Also feeds the burnt-TYPE rebake residue.",
    "takes": [
     "mc1hwl0",
     "mc1l0"
@@ -703,7 +887,7 @@
   {
    "id": "mc1-smoke-puff-fields",
    "status": "capture",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06), extended by the VISUAL-ONLY doctrine: the (10,13) rising smoke puff is a FULLY VISUAL entity \u2014 smoke_puff_tick rises, drifts its first 16 ticks, steps the sprite row and dies; no damage, no gameplay writes, nothing scans it. ALL field rows on it are slot/lifecycle identity noise. Missing/extra stay unexplained (spawn cadence is real signal).",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06), extended by the VISUAL-ONLY doctrine: the (10,13) rising smoke puff is a FULLY VISUAL entity — smoke_puff_tick rises, drifts its first 16 ticks, steps the sprite row and dies; no damage, no gameplay writes, nothing scans it. ALL field rows on it are slot/lifecycle identity noise. Missing/extra stay unexplained (spawn cadence is real signal).",
    "takes": [
     "mc1hwl0",
     "mc1l0"
@@ -715,7 +899,7 @@
   {
    "id": "mc1hw-standing-fire-churn-x",
    "status": "open",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (10,6) standing fires DAMAGE (area_write) but never move in x/y \u2014 same-slot x/y mismatch = a DIFFERENT fire in the slot, knock-on of the ambient spawn-cadence divergence (weather-churn lead, same parent as mc1hw-fire-churn-x/y). OPEN: the cadence dig is the fix.",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (10,6) standing fires DAMAGE (area_write) but never move in x/y — same-slot x/y mismatch = a DIFFERENT fire in the slot, knock-on of the ambient spawn-cadence divergence (weather-churn lead, same parent as mc1hw-fire-churn-x/y). OPEN: the cadence dig is the fix.",
    "takes": [
     "mc1hwl0"
    ],
@@ -727,7 +911,7 @@
   {
    "id": "mc1hw-standing-fire-churn-y",
    "status": "open",
-   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (10,6) standing fires DAMAGE (area_write) but never move in x/y \u2014 same-slot x/y mismatch = a DIFFERENT fire in the slot, knock-on of the ambient spawn-cadence divergence (weather-churn lead, same parent as mc1hw-fire-churn-x/y). OPEN: the cadence dig is the fix.",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (10,6) standing fires DAMAGE (area_write) but never move in x/y — same-slot x/y mismatch = a DIFFERENT fire in the slot, knock-on of the ambient spawn-cadence divergence (weather-churn lead, same parent as mc1hw-fire-churn-x/y). OPEN: the cadence dig is the fix.",
    "takes": [
     "mc1hwl0"
    ],
@@ -819,6 +1003,25 @@
     55073,
     55088
    ]
+  },
+  {
+   "id": "mc1l48-search-ring-heap-damage",
+   "status": "deviation",
+   "note": "PLAYER-RULED 2026-09-08 (round 119, dig W119-1); CAUSE CORRECTED AND RE-SCOPED 2026-09-08 (round 120, digs W120-2 + W120-2b, player-ruled). **THE REGISTERED CAUSE WAS WRONG: THIS IS NOT RELOAD DAMAGE.** mc1l48-nodeath is the same level played to completion with restarts=0 and it carries the SAME wound - the same 28-byte lattice, the same {dword 0, dword 0, dword -6} payload - so the writer fires in ORDINARY PLAY; reloads only make it far worse (3 damaged entries there vs 41-47 here). Retail's IN-MEMORY SEARCH.DAT ring-CELL array (built by sub_11540, CARPET.EXE 0x29D38; walked by sub_11410/sub_114B0/sub_11490 at 0x29C08/0x29CA8/0x29C88) is progressively overwritten by a foreign 28-byte-record array whose 12-byte payload is {dword 0, dword 0, dword -6}, so the (10,17) eruption blast-ring sub_25CE0 (0x3E4D8) reads wrong (dx,dy) for 47 of ~385 live cells and lays its (10,0) fires at x = ent.x - 96 + 160*dx + rand%0x81 - 64 on the WRONG cell. Damaged reads include (0,0) TWICE in ring 8 - geometrically IMPOSSIBLE from any 32x32 grid scan, which emits each cell once per ring and yields (0,0) only at the origin - plus (83,88), (-57,-51), (-21,-15); none derivable from any shipped asset. The PORT IS FAITHFUL: sub_25CE0 and the ring builder/iterator were byte-verified against CARPET.EXE operand for operand (life test, flags |= 0x10002, snd 30, 768r/4 scale, f44/max_life, the single pre-loop LCG draw, rand = 9377*rand + 9439 with div 0x81, the child stamps, and the f26 = (f26+2) % 11 tail). CONTROLS, all reconstructed with the same inverter: mc1l32 (CERTIFIED, 52,140 ticks, 384 cells) 0 damaged; mc1l49 (no restarts, 65,166 ticks, 370 cells) 0; mc1l48 before its first reload (t<=8590, 264 cells) 0; mc1l48 after reloads 1-2 15; after all five (8591/9180/12424/13274/14702) 47. Census: 0 (10,0) dirt rows before t=8591, 14,958 after - and mc1l48 is the ONLY take in the 28-take corpus that carries restarts= at all. z is downstream (z = parent.z + f46 ground-clamped, f46 = (lcg32(global+slot) % 65) - 32). The reconstructor that must be re-run if this is ever reopened is $TMPDIR/w1/ring_recon2.py + dmap.py; its noise floor is calibrated on mc1l32 (34 single-tick artifacts, 0 persistent), so only rows with >=20 hits are evidence. Ticks are PAIR STARTS. First head 10173 (pair 10172) slot 781. ROUND 120 EVIDENCE (W120-2b, an INDEPENDENT decoder that inverts against the port's own TRACED (k, j1, j2) rather than a reconstruction, landing on the same entries): (1) THE PORT'S GRID IS RETAIL'S SHIPPED ASSET - MC1 SEARCH.DAT is game.gog ISO CARPET/DATA/SEARCH.DAT;1 LBA 1285, RNC1 header claiming unpacked CRC 0xDE8D, and crc16(0xA001) of baked/assets/mc1-temperate/search.bin IS 0xDE8D; MC2's copy is byte-identical (md5 140d0248f35f84835d6879516c14cc2e), so the six identical search.bin files are correct, not a baker collision. (2) RETAIL'S VALUES ARE ARITHMETICALLY IMPOSSIBLE FOR ITS OWN BUILDER - sub_11540 latches the centre at the first ring-0 cell (029dd8/029ddd), writes dx = x - cx0 (029de2/029de4/029de8) with x,y in 0..31 (029e19 `66 3d 20 00`, 029e20 `66 83 f9 20`) and cx0=cy0=15, so every writable entry lies in [-15,+16]; retail read (116,121), (122,93), (-123,-52), (83,88) and 3,641x (0,0) on rings 8/9/10. (3) NOTHING IN THE EXE WRITES THE POINTER'S TARGET THROUGH THAT SYMBOL - of six occurrences of the literal 0x1e3f4, only two are instructions (029d7b `8b 15` and 029dd2 `3b 15`), BOTH READS; the rest are LE fixup records and the resource-table slot at 0x9eb2c. The block is the 4096-byte heap allocation named *SearchD (DS 0x9318, file 0x9EB10; slot 0x9EB2C, size 0x9EB34 = 0x1000), malloc 0x5AD38 / free 0x5AED8 - the same heap the 28-byte-record module at 0x294D0 uses (0x29501 `6b c0 1c` = imul x28). (4) THE ARRAY IS BUILT ONCE - sub_11540 has ZERO e8 call sites; the asset init TAIL-JUMPS into it (0x4d2f8 `68 18 93 00 00` pushing the 0x9318 resource list, 0x4d333 `e9 00 ca fd ff`). (5) THE DECISIVE EXPERIMENT - all 173 decodable divergent rows solve EXACTLY ((want - px + 96 - j) % 160 == 0 on BOTH axes) using the port's OWN traced jitter draws at that same child index k, so retail and the port drew identical numbers and only the TABLE ENTRY differed; that refutes every radius-cycle-phase and LCG-phase hypothesis (46 of 47 children of the t=11748 r=8 event are bit-exact, only k=45 differs). (6) CONTROLS - 326,753 blast-ring cell reads across mc1l32 (110,109), mc1l49 (105,297), mc1l37 (110,204) and mc1l0-spells-galore (1,143) with ZERO table divergences. mc1l48-nodeath: 2,416 blast events, 87,844 ring-cell reads, 174 wrong children from EXACTLY 3 of 804 entries (flat 204/253/316); its FIRST eruption walks all 11 rings and all 381 cells INCLUDING those three with zero divergences, and the first bad read is the 17th blast event at t=11748 - onset bracketed to t in (393, 11744] with no reload in the take. mc1l48: 373,732 reads, 41 damaged entries, EVERY one at byte-offset residue 0/20/24 (mod 28) - residue 20 -> (0,0) 1943/1943, residue 24 -> (0,0) 1698/1698, residue 0 -> (-6,-1) 2135/2579. THE PORT IS RE-VERIFIED FAITHFUL operand-for-operand at engine/features.rs:211-232 (parse), engine/features.rs:3346 (ring_cells, incl. the drop-last off-by-one) and mc1/combat.rs:6710-6767 (blast_ring_tick). Effect of the scope extension: mc1l48-nodeath devs 232 -> 65, horizon UNMOVED at 473.",
+   "takes": [
+    "mc1l48",
+    "mc1l48-nodeath"
+   ],
+   "kind": "field",
+   "class": 10,
+   "model": 0,
+   "fields": [
+    "x",
+    "y",
+    "z",
+    "rand"
+   ],
+   "t_min": 8591
   }
  ]
 }

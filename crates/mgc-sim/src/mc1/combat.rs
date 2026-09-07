@@ -27,7 +27,10 @@
 //! - Mana-shield reflection (+17 bit 7) is ported but nothing sets the
 //!   flag yet (OPEN: wizard shields are the spell track).
 
-use crate::engine::features::{Ent, Gen, lcg32, tile};
+use crate::engine::features::{
+    Ent, Gen, lcg32, no_mc1_castle_ball_stepback_moves_ball,
+    no_mc1_eruption_counter_reread, tile,
+};
 use crate::mc1::behavior::BEHAVIOR;
 use crate::mc1::mobs::{MC1_MISS_STAMP, MobCtx, PLAYER_TARGET};
 use crate::mc1::sprite_stats::SPRITE_STATS;
@@ -42,6 +45,23 @@ use crate::verbs::{CorpseVerb, TargetingVerb, VerbKind};
 fn no_ball_merge_fix() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_BALL_MERGE_FIX").is_some())
+}
+
+/// `MGC_NO_PARTNER_SOFTKILL_FIX=1` restores the port's invented
+/// `flags & 0x400 == 0` clause in [`Gen::ball_merge_candidates`]'
+/// tile-ring walk. Retail's `sub_11D10` has NO reap test: an
+/// exhaustive scan of `CARPET.EXE 0x2A508..0x2A63D` finds no
+/// `test`/`cmp` against the flags word (`+16`/`+17`) anywhere in the
+/// per-node loop, whose whole predicate is the seeker's `+66`/`+67`
+/// membership, the `+24` id self-exclusion and the `sub_11950` AABB.
+/// A soft kill is therefore not a free HERE either — the same law the
+/// `sub_46CA0` balloon pick, MC1 `castle_absorb`, MC2
+/// `mc2_castle_absorb` and `mc2_aura_tick` already carry. A law on one
+/// call path is not landed. The MC2 twin `sub_10A50` (`NETHERW.EXE`
+/// `0x352D9..0x3532B`) is byte-for-byte the same shape.
+fn no_partner_softkill_fix() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_PARTNER_SOFTKILL_FIX").is_some())
 }
 
 /// `MGC_NO_M57_MERGE=1` restores the pre-dig (10,57) arm: the fool's
@@ -89,6 +109,26 @@ pub(crate) fn no_m57_merge() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_M57_MERGE").is_some())
 }
 
+/// ⭐⭐⭐ THE VOLCANO'S PLUME HANDOVER LIVES INSIDE THE NEW PLUME'S
+/// NULL GUARD. `sub_25EC0` (:28782-93) spawns the replacement
+/// `(10,19)` FIRST and only then, `if (v8)`, stamps its owner,
+/// soft-kills the record named by the old `+38` register and
+/// publishes the new one. When the free stack is dry and
+/// `sub_373F0_377B0` refuses, retail reap-flags NOBODY and the `+38`
+/// register KEEPS its stale slot — it is never zeroed. The port ran
+/// the blind kill unconditionally and then wrote `plume = 0` on a
+/// refusal, so an exhausted pool made the volcano soft-kill a live
+/// bystander (mc1l49 t=14798: free stack 39 → 0, the new volcano at
+/// slot 956 reap-flagged slot 235, a `(10,0)` fire with `act_life 3`
+/// that retail burns for seven more ticks) and then forgot its plume.
+/// This is the same fork `proj_m12_tick` documents for the storm
+/// cloud's bloom — the kill is INSIDE the guard, not beside it.
+/// `MGC_NO_MC1_PLUME_SPAWN_GUARD=1` restores the pre-dig order.
+pub(crate) fn plume_handover_is_guarded() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_PLUME_SPAWN_GUARD").is_none())
+}
+
 /// A/B toggle for the MC2 BALL-MERGE OWNER LADDER: set
 /// `MGC_NO_MC2_BALL_OWNER_LADDER` to restore the pre-dig
 /// approximation, in which two OWNED spheres resolved the survivor's
@@ -127,6 +167,21 @@ pub(crate) fn no_m57_reclaim_bit() -> bool {
 pub(crate) fn no_m57_trap_fallthrough() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_M57_TRAP_FALLTHROUGH").is_some())
+}
+
+/// `MGC_NO_MC1_CH4_AMOUNT_KEEP=1` restores the pre-dig MC1 ch4 intake,
+/// which cleared the WHOLE `mail[4]` pair. Retail MC1's `sub_27030`
+/// clears the SOURCE word `+118` only — shipped `CARPET.EXE`
+/// `0x3f900` (VA `0x27108`): `66 89 7b 76  mov %di,0x76(%ebx)` with
+/// `%di = 0`, and NOTHING in `0x27076..0x27116` touches `+114`
+/// (`0x72`). Its ch1 twin two blocks up DOES clear both
+/// (`0x27069: 66 c7 43 64 00 00 movw $0x0,0x64(%ebx)` = source `+100`,
+/// then `0x2706f: c7 43 60 00 00 00 00 movl $0x0,0x60(%ebx)` = amount
+/// `+96`), so the asymmetry is deliberate and per-channel, exactly
+/// like the MC2 twin EF:26109 the port already models.
+fn no_mc1_ch4_amount_keep() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CH4_AMOUNT_KEEP").is_some())
 }
 
 /// `MGC_NO_M57_TICK_RESIZE=1` restores the pre-dig (10,57) tail, which
@@ -208,12 +263,33 @@ fn no_probe_window_player() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_PROBE_WINDOW_PLAYER").is_some())
 }
 
+/// `MGC_NO_PLAYER_CHAIN_SEAT=1` restores the pre-dig placement of the
+/// out-of-pool human INSIDE his own tile chain — the flat
+/// `MGC_NO_PLAYER_CELL_TAIL` head/tail choice, where he was pinned to
+/// one END of the chain instead of holding the SEAT retail's linked
+/// carpet actually occupies (see
+/// [`crate::engine::features::PlayerChain`]). MC1 column only. A/B
+/// arm only.
+fn no_player_chain_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_PLAYER_CHAIN_SEAT").is_some())
+}
+
 /// `MGC_NO_M8_ACQUIRE=1` restores the pre-dig [`Gen::proj_m8_tick`]
 /// head: no `sub_54520` acquire fork for an untargeted steal seeker
 /// and the `.clamp(-2, 2)` speed servo. A/B arm only.
 fn no_m8_acquire() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_M8_ACQUIRE").is_some())
+}
+
+/// `MGC_NO_ACQUIRE_HUMAN_BUCKET0=1` restores the pre-dig
+/// [`Gen::aim_assist_mc1_cone2`] head: the out-of-pool human is a
+/// class-3 acquire candidate on every tick, alive or not. A/B arm
+/// only. See the `ctx.pdead_top` term at the Scan-A gate.
+fn no_acquire_human_bucket0() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_ACQUIRE_HUMAN_BUCKET0").is_some())
 }
 
 /// The player carpet's half-extents (sprite 44 stats halves — the
@@ -1451,7 +1527,31 @@ impl Gen {
         // camping wizard (mc1hwl0 slot 522, chase=522). The
         // out-of-pool human goes first (the Scan-A tie-break ruling),
         // cloak-gated on spell 12's mirror (:65689-90).
+        // ⭐⭐⭐ AND THE HUMAN IS ON BUCKET[0] ONLY WHILE HE IS ALIVE.
+        // Retail's human wizard IS a pool class-3 record (mc1l49 slot
+        // 569), so his membership is decided by the SAME tick-top
+        // sweep as every other carpet: `sub_41780_41AC0`'s case-3 arm
+        // (:52253-62) links a record onto `var_u32_36462[0]` only when
+        // `actLife >= 0 && (+16 & 0x10) == 0`. VERIFIED in the shipped
+        // bytes — CARPET.EXE 0x5A151 `83 78 0c 00` `cmpl $0,0xc(eax)`
+        // / `7c 24` `jl` / `f6 40 10 10` `testb $0x10,0x10(eax)` /
+        // `75 1e` `jne`, then `89 83 6e 8e 00 00` writes the head at
+        // `+0x8e6e` (= 36462) — and the acquire's own walk reads that
+        // very head (`mov 0x8e6e(%ebx),%ebx`, CARPET.EXE 0x6CEB9 in
+        // `sub_54520`'s case-0/3/4 arm). Ours is out of pool, so his
+        // seat rides the TICK-TOP latch `ctx.pdead_top`, never the
+        // live `pdead` — exactly as [`Gen::nearest_wizard_target`]
+        // already does for the same list.
+        //
+        // Without it a fireball cast after the human fell locked onto
+        // his corpse and bent 23/34 off the muzzle bearing for the
+        // rest of its flight: mc1l49 pair 34531→34532 (the human died
+        // at t=34530, `actLife` −970) — slot 981 `chase` retail 0 port
+        // 569, `heading` 260 vs 283, `target_yaw` 260 vs 283 — and
+        // pair 35089→35090, slot 949 `heading` 921 vs 887. Between
+        // them they gated 2,581 ticks of mc1l49.
         if own != PLAYER_TARGET
+            && (!ctx.pdead_top || no_acquire_human_bucket0())
             && !self.player_invisible
             && Self::dist3d(px, py, pz, ctx.px, ctx.py, ctx.pz) <= sig_gate
         {
@@ -1810,16 +1910,59 @@ impl Gen {
         // that flew into the human's tile after he settled there is
         // walked BEFORE him.
         let player_cell_tail = !crate::mc2::mobs::no_player_cell_tail();
+        // ⭐⭐⭐ AND NEITHER END IS THE LAW: THE HUMAN HOLDS A SEAT.
+        // Head-insertion orders a chain most-recently-entered FIRST,
+        // so retail's linked carpet sits wherever his last tile entry
+        // put him — AHEAD of everything parked in the tile since
+        // before he arrived, BEHIND everything that flew in after.
+        // `Gen::player_chain` carries that seat for the out-of-pool
+        // human (see [`crate::engine::features::PlayerChain`]).
+        //
+        // mc1l48 t=6593→6594 is the witness both END rules fail on.
+        // The rival's homing fireball at slot 255 steps into cell
+        // (26,138), whose chain runs 319 → 307 → **681 (the human)**
+        // → 306 → … → 708 → 874 (his castle). The bolt's +66/+67 is
+        // (3, −1), so only class-3 members are candidates: the human,
+        // the (3,3) balloon 708 and the castle 874. Retail's
+        // `sub_11980` returns the human — he is the first class-3 in
+        // walk order — and detonates on his carpet at (6714, 35439,
+        // 2929+100). The TAIL rule walked past him to the castle and
+        // teleported the bolt onto (6656, 35328, 2912) instead, which
+        // is where the SAME tick's other fireball (slot 318, one tile
+        // further out and 234 units off the human in y) legitimately
+        // lands. The seat gets both right in one walk.
+        //
+        // MC1 COLUMN ONLY. An imported MC2 world keeps its carpet as
+        // a LIVE pool record (`import_ent_mc2` does not hole it out),
+        // so the human is already in the chain there and the tail
+        // rule is what keeps the redundant player arm behind him —
+        // a seat would double-represent him.
+        let seat_law = !no_player_chain_seat()
+            && !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
         for &t in &cells {
             let player_here = player_ordered
                 && t == ptile
                 && id != PLAYER_TARGET
                 && Self::filter_admits(f66, f67, 3, 0);
-            if player_here && !player_cell_tail && self.player_overlap(i, ctx) {
+            let seat_here = seat_law && player_here && self.player_chain.cell == t;
+            if player_here && !seat_here && !player_cell_tail && self.player_overlap(i, ctx) {
                 return Some(MailTarget::Player);
             }
             let mut j = self.map_entity[t] as usize;
-            while j != 0 {
+            loop {
+                // The seat is the GAP before his successor (0 = the
+                // chain tail, so this fires on the terminating j == 0
+                // pass). A seat that no longer names a member of this
+                // chain falls through to the tail arm below.
+                if seat_here
+                    && j == self.player_chain.next as usize
+                    && self.player_overlap(i, ctx)
+                {
+                    return Some(MailTarget::Player);
+                }
+                if j == 0 {
+                    break;
+                }
                 let c = &self.ent[j];
                 // Class-14 map objects (MC2 XP scrolls, mouth/
                 // checkpoint markers) are OBSERVABLE pass-through
@@ -1857,7 +2000,10 @@ impl Gen {
                 }
                 j = c.next20 as usize;
             }
-            if player_here && player_cell_tail && self.player_overlap(i, ctx) {
+            if player_here
+                && (seat_here || player_cell_tail)
+                && self.player_overlap(i, ctx)
+            {
                 return Some(MailTarget::Player);
             }
         }
@@ -2291,6 +2437,20 @@ impl Gen {
             // `sub_41E80` (:212A70 dispatch, the soft-kill bit), NO
             // handler, and NO `+63` tick, because retail's phase
             // increment (:52406) sits INSIDE the dispatched branch.
+            //
+            // ⭐⭐⭐ `sub_41E80_421C0` (:52508-11) IS RETAIL'S SOLE
+            // WRITER OF THE REAP BIT, settled in the shipped bytes:
+            // CARPET.EXE 0x5A678 and HIDDEN.EXE 0x5ABB8 are the same
+            // five-instruction leaf, `8b 44 24 04 / 80 48 11 04 /
+            // c3` — `mov eax,[esp+4]; or byte [eax+0x11],4; ret`,
+            // i.e. `+17 |= 4` = our `flags |= 0x400`. The opcode
+            // sequence `80 48 11 04` occurs EXACTLY ONCE in each
+            // binary, with 99 direct `call rel32` sites (the
+            // decompile lists 106 calls across 84 functions), and the
+            // bit is NEVER cleared — the only `byte[1]` clears in
+            // either listing are `&= 0xFCu` (bits 8/9). ⚠ a grep for
+            // `*(_BYTE *)(x + 17)` will NOT find it: the decompile
+            // spells the write `var_29811_16.byte[1] |= 4u`.
             // The port's shared walk increments +63 after this
             // returns, so the un-dispatched tick compensates here to
             // keep the lane at retail's frozen value.
@@ -3117,12 +3277,41 @@ impl Gen {
             };
             if displace {
                 let back = yaw.wrapping_add(0x400) & 0x7FF;
-                let mut t = (bx, by, 0i16);
+                // ⭐ THE STEP-BACK MOVES THE BALL ITSELF, AND ITS z IS
+                // SEEDED LIVE. `sub_53B50_53E90`'s tripwire branch
+                // (CARPET.EXE `0x6C531` `cmp BYTE [esp+4],0` / `74 42`)
+                // re-seeds the scratch axis from the ball's OWN
+                // `+72/+76` — `0x6C53D lea esi,[ebx+0x48]` then
+                // `0x6C540 a5` (x,y) AND `0x6C541 66 a5` (**z**) —
+                // polar-steps it with `yaw+0x400` (`0x6C553 add ah,4`
+                // / `0x6C556 and ah,7`), the LIVE pitch
+                // (`0x6C54A mov ax,[ebx+0x20]`) and the live speed
+                // (`0x6C543 movsx eax,[ebx+0x7e]`), then writes it back
+                // THROUGH THE BALL: `0x6C571 53` = `push ebx` into
+                // `0x6C572 e8 f1 de fe ff` → `sub_41C70_41FB0` (move +
+                // relink). Only THEN does the ctor run, and it reads
+                // the ball's own axis (`0x6C584 lea eax,[ebx+0x48]` →
+                // `0x6C588` → `sub_373F0_377B0`) — so the castle is
+                // built at the ball's NEW position and the ball's last
+                // recorded x/y/z are the stepped-back ones. The port
+                // kept the result in locals for `spawn_castle` only and
+                // seeded z with 0, so the ball's z never took the
+                // second (downward) pitch component. WITNESS
+                // mc1l48-nodeath t=473→474 slot 972 (yaw 527, pitch 31,
+                // speed 458): retail (1388,29804,3466) → (1387,29805,
+                // 3380); the port stopped at the FORWARD step
+                // (1842,29825,3423), and 3423 − 43 = 3380 — the pitch's
+                // vertical component taken once instead of twice.
+                // Decompile :63598-611. MC2 keeps the flat step.
+                let mut t = (bx, by, if mc1 { self.ent[i].z } else { 0 });
                 // The step back carries the live pitch (:63601-04);
                 // pre-arm MC2 keeps the flat step.
                 Self::polar_step(&mut t, back, if mc1 { pitch } else { 0 }, speed);
                 bx = t.0;
                 by = t.1;
+                if mc1 && !no_mc1_castle_ball_stepback_moves_ball() {
+                    self.move_relink(i, t.0, t.1, t.2);
+                }
             }
             if let Some(c) = self.spawn_castle(bx, by) {
                 self.ent[c].id24 = own;
@@ -4091,6 +4280,20 @@ impl Gen {
             }
         };
         if detonate {
+            // ⭐ THE REAP IS GATED ON THE CHILD. `sub_52770`'s explode
+            // block (:62757-72) is `v19 = sub_373F0_377B0(a1+72,
+            // a1->+68, a1->+69); if (v19) { … sub_41E80_421C0(a1); }`
+            // — the soft kill is the LAST statement INSIDE the null
+            // check, so a detonation whose child allocation FAILS
+            // leaves the bolt alive and it retries on the next tick.
+            // WITNESS mc1l49 t=54341: the pool is dry (free 0 /
+            // recycle 0 for three ticks), the human's volcano lob at
+            // slot 857 parks on rival castle 940 at (0, 16384, 6048)
+            // and retail leaves `flags 0x2006` standing through 54341
+            // AND 54342, raising `0x400` only at t=54343 — the first
+            // tick a slot frees, where the `(10,9)` hill is minted at
+            // slot 363. The port reaped on the parking tick.
+            // `MGC_NO_MC1_PAYLOAD_CHILD_REAP_GATE=1` restores it.
             // NO damage mail. Retail's payload strike writes nothing
             // to the victim: sub_52770's whole victim arm (:62705-55)
             // only parks the bolt, and the one call it makes past the
@@ -4101,8 +4304,10 @@ impl Gen {
             // 1104 through t=1620, then takes the (10,9) child's
             // 1000/tick from t=1621 (1104 -> 104 -> -896). Our mail
             // spent that 1000 a tick early and then again per child.
-            self.spell_payload(i, hit);
-            self.ent[i].flags |= 0x400;
+            let minted = self.spell_payload(i, hit);
+            if minted || crate::engine::features::no_mc1_payload_child_reap_gate() {
+                self.ent[i].flags |= 0x400;
+            }
         }
         false
     }
@@ -4112,7 +4317,16 @@ impl Gen {
     /// `hit` is the detonation's own victim probe — the generic
     /// explode stamps it into the child's `+146` unguarded, so it
     /// rides down here too (see the crater arm).
-    fn spell_payload(&mut self, i: usize, hit: Option<MailTarget>) {
+    /// Returns whether the bolt may now be reaped — i.e. whether the
+    /// child the arm attempts was actually minted. `sub_52770`'s
+    /// explode is ONE call, `sub_373F0_377B0(a1+72, a1->+68, a1->+69)`
+    /// (:62757), and every stamp AND the closing `sub_41E80_421C0(a1)`
+    /// soft kill (:62772) sit INSIDE its `if (result)` — see
+    /// [`crate::engine::features::no_mc1_payload_child_reap_gate`]. An
+    /// arm that attempts no spawn (the duel dart's miss, :63208-09, and
+    /// the models with no child at all) returns `true`: retail kills
+    /// those unconditionally.
+    fn spell_payload(&mut self, i: usize, hit: Option<MailTarget>) -> bool {
         let (x, y, z, model) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.model65)
@@ -4134,7 +4348,10 @@ impl Gen {
                     let e = &self.ent[i];
                     (e.f30, e.f32, e.f44)
                 };
-                if let Some(w) = self.spawn_creator(15, x, y, z) {
+                let Some(w) = self.spawn_creator(15, x, y, z) else {
+                    return false;
+                };
+                {
                     let e = &mut self.ent[w];
                     e.id24 = own;
                     e.f30 = yaw;
@@ -4157,7 +4374,10 @@ impl Gen {
                     let e = &self.ent[i];
                     (e.f30, e.f32, e.f44)
                 };
-                if let Some(h) = self.spawn_creator(9, x, y, z) {
+                let Some(h) = self.spawn_creator(9, x, y, z) else {
+                    return false;
+                };
+                {
                     let e = &mut self.ent[h];
                     e.id24 = own;
                     e.f30 = yaw;
@@ -4210,7 +4430,10 @@ impl Gen {
                 // clean in pair mode for the whole campaign and only
                 // ever broke the free run.
                 let bolt_f44 = self.ent[i].f44;
-                if let Some(c) = self.spawn_creator(11, x, y, z) {
+                let Some(c) = self.spawn_creator(11, x, y, z) else {
+                    return false;
+                };
+                {
                     let e = &mut self.ent[c];
                     e.id24 = own;
                     e.f30 = yaw;
@@ -4223,10 +4446,76 @@ impl Gen {
                     };
                 }
             }
-            // Duel to the Death (:65620 → (10,26) ctor :47116): the
-            // tether follows the homed wizard and broadcasts the ch4
-            // grip 200/tick (sub_263C0 :28949). No wizard target →
-            // the bolt ends in a hit flash.
+            // Duel to the Death — the DART's own detonation tail,
+            // `sub_530C0_53400` :63186-63210. remc1's class-9 table
+            // row 0x0007 (:4846) is `sub_530B0` (:63042), a one-line
+            // `return sub_530C0_53400(a1)` — state 7 IS state 8, the
+            // steal ball's handler (see [`Gen::proj_payload_tick`]'s
+            // banked note), and this is its LABEL_25_26 fork:
+            //
+            // ```c
+            // if (v6 && v6->class == 3 && v6->model <= 1) {   // :63188
+            //   v19 = spawn(a1+72, a1->+68, a1->+69);         // (10,26)
+            //   if (v19) { sub_526C0(a1, v6, ..);
+            //     v19[12] = a1->+24; v19[15] = a1->+30;       // :63198-99
+            //     v19[16] = a1->+32; v19[73] = victim_slot;   // :63200-01
+            //     v19[22] = a1->+44; kill(a1); }              // :63202-03
+            // } else { sub_526C0(a1, 0, ..); kill(a1); }      // :63208-09
+            // ```
+            //
+            // ⭐⭐ THREE DEPARTURES, ALL IN THOSE TEN LINES.
+            // (1) **The test is on the entity STRUCK THIS TICK** —
+            //     `v6` is `sub_11980`'s probe result (:63105), not the
+            //     homing lock `+146`. A dart locked onto a wizard that
+            //     stops on a creature or on the ground is a MISS.
+            // (2) **The miss arm spawns NOTHING.** `sub_526C0_52A00(a1,
+            //     0, ..)` then `sub_41E80` — there is no `+68/+69`
+            //     call on that branch, so the port's `(10,23)` hit
+            //     flash was an entity retail never mints (mc1l48
+            //     t=62999 records the port's extra one, slot 630).
+            //     Its MC2 twin is traced identically in
+            //     docs/spell-audit/duel.md ("a duel dart that misses,
+            //     expires or stops on terrain leaves nothing at all").
+            // (3) The child takes the DART's `+30`/`+32`/`+146`/`+44`
+            //     — the ctor's 200 is overwritten by `v19[22]`.
+            //     mc1l48 t=59118 slot 20 records `f30 1469, f32 71,
+            //     f146 712, f44 100` on the tether's birth tick, and
+            //     100 is the dart's own `+44`.
+            7 if !crate::engine::world::mc1_duel_dart_exact_off() => {
+                let struck = match hit {
+                    Some(MailTarget::Pool(j)) => Some(j as u16),
+                    // The out-of-pool carpet: retail's `v6` is his
+                    // class-3 model-0 record, so he passes :63188.
+                    Some(MailTarget::Player) => Some(crate::mc1::mobs::PLAYER_TARGET),
+                    None => None,
+                };
+                let is_wizard = match hit {
+                    Some(MailTarget::Pool(j)) => {
+                        self.ent[j].class64 == 3 && self.ent[j].model65 <= 1
+                    }
+                    Some(MailTarget::Player) => true,
+                    None => false,
+                };
+                if is_wizard {
+                    let (yaw, pitch, bolt_f44) = {
+                        let e = &self.ent[i];
+                        (e.f30, e.f32, e.f44)
+                    };
+                    let Some(t) = self.spawn_effect(26, x, y, z) else {
+                        return false;
+                    };
+                    {
+                        let e = &mut self.ent[t];
+                        e.id24 = own;
+                        e.f30 = yaw;
+                        e.f32 = pitch;
+                        e.f146 = struck.unwrap_or(0);
+                        e.f44 = bolt_f44;
+                    }
+                }
+            }
+            // The pre-dig arm, kept under
+            // `MGC_NO_MC1_DUEL_DART_EXACT=1`.
             7 => {
                 let victim = self.ent[i].f146;
                 let is_wizard = victim == crate::mc1::mobs::PLAYER_TARGET
@@ -4262,7 +4551,10 @@ impl Gen {
                     let e = &self.ent[i];
                     (e.f30, e.f32, e.f44)
                 };
-                if let Some(s) = self.spawn_effect(36, x, y, z) {
+                let Some(s) = self.spawn_effect(36, x, y, z) else {
+                    return false;
+                };
+                {
                     let e = &mut self.ent[s];
                     e.id24 = own;
                     e.f30 = yaw;
@@ -4277,6 +4569,7 @@ impl Gen {
             }
             _ => {}
         }
+        true
     }
 
     /// sub_26E90 (:29353), class-10 state 38 — the UNDEAD ARMY.
@@ -4464,18 +4757,37 @@ impl Gen {
                     self.ent[prev].f26 = 250;
                 }
                 self.erupting = i as u16;
-                let pl = self.plume as usize;
-                if pl != 0 && pl < self.ent.len() {
-                    self.ent[pl].flags |= 0x400;
-                }
                 let g = self.ground_z(x, y) as i16;
-                self.plume = match self.spawn_effect(19, x, y, g) {
-                    Some(p) => {
+                if plume_handover_is_guarded() {
+                    // ⭐⭐⭐ :28782-93 — THE HANDOVER IS INSIDE THE
+                    // SPAWN'S NULL GUARD. Retail mints the new
+                    // `(10,19)` first and only `if (v8)` does it stamp
+                    // `+24`, soft-kill the old `+38` and publish the
+                    // new one. A refusal (free stack AND recycle stack
+                    // dry) therefore kills NOBODY and leaves `+38`
+                    // naming the old slot — the register is never
+                    // zeroed. See [`plume_handover_is_guarded`].
+                    if let Some(p) = self.spawn_effect(19, x, y, g) {
                         self.ent[p].id24 = own;
-                        p as u16
+                        let pl = self.plume as usize;
+                        if pl != 0 && pl < self.ent.len() {
+                            self.ent[pl].flags |= 0x400;
+                        }
+                        self.plume = p as u16;
                     }
-                    None => 0,
-                };
+                } else {
+                    let pl = self.plume as usize;
+                    if pl != 0 && pl < self.ent.len() {
+                        self.ent[pl].flags |= 0x400;
+                    }
+                    self.plume = match self.spawn_effect(19, x, y, g) {
+                        Some(p) => {
+                            self.ent[p].id24 = own;
+                            p as u16
+                        }
+                        None => 0,
+                    };
+                }
             }
             // One ballistic lava bomb per activation (:28795-802):
             // the ctor's own three draws ride the BOMB's fresh LCG,
@@ -4489,6 +4801,30 @@ impl Gen {
             }
             // Heading advances 0x500 per activation (:28804).
             self.ent[i].f30 = self.ent[i].f30.wrapping_add(0x500);
+            // ⭐ RETAIL RE-READS `+26` FROM MEMORY HERE, IT DOES NOT
+            // REUSE THE ENTRY VALUE (:28803 `v13 = *(a1+26)`;
+            // CARPET.EXE `0x3E88A: 66 8b 7b 1a` = `mov 0x1a(%ebx),%di`,
+            // then `0x3E891 test %di,%di` / `0x3E894 75 77 jne 0x3E90D`
+            // — the blast is SKIPPED straight to the death check).
+            // It matters because the eruption-start block's register
+            // kick `*(prev+26) = 250` (`0x3E7B6: 66 c7 42 1a fa 00`) is
+            // guarded ONLY by `slot != 0` (`0x3E7B4: 76 06`), so when
+            // the stale global `erupting` register names the very pool
+            // slot just recycled into THIS driver, retail SELF-KICKS
+            // its own `+26` to 250 — and then mints no blast, reaps
+            // itself on its first tick, and clears the register it set
+            // two instructions earlier. WITNESS mc1l49 t=29062:
+            // `erupting=968` is a long-stale reap-flagged (10,6)
+            // (`act_life −2`); the pool recycles 968 into the new
+            // (10,18) driver and retail records `f26 0 → 251`,
+            // `flags → 1024`, popping ONE slot all tick. The port
+            // cached `c` at entry, minted a spurious (9,0), and pushed
+            // retail's (10,13) from slot 168 to 169.
+            let c = if no_mc1_eruption_counter_reread() {
+                c
+            } else {
+                self.ent[i].f26
+            };
             if c == 0 {
                 // The eruption-start blast fireball (:28805-23):
                 // owner, the driver's heading (high byte & 7), pitch
@@ -4518,6 +4854,9 @@ impl Gen {
                     e.site_z = dg;
                 }
             }
+            // :28825 / `0x3E90D: 66 83 7b 1a 7f` = `cmpw $0x7f,
+            // 0x1a(%ebx)` — a FRESH memory read, not the cached entry
+            // value (`c` above is already the re-read).
             if c >= 127 {
                 self.erupting = 0; // the clean death (:28825-29)
                 self.ent[i].flags |= 0x400;
@@ -4526,7 +4865,13 @@ impl Gen {
                 // records `+26` one higher.
             }
         }
-        self.ent[i].f26 = c.wrapping_add(1);
+        // :28831 `++*(a1+26)` / `0x3E928: 66 ff 43 1a` = `incw
+        // 0x1a(%ebx)` — an IN-MEMORY increment, not `entry_c + 1`.
+        self.ent[i].f26 = if no_mc1_eruption_counter_reread() {
+            c.wrapping_add(1)
+        } else {
+            self.ent[i].f26.wrapping_add(1)
+        };
         false
     }
 
@@ -5427,8 +5772,16 @@ impl Gen {
                 self.refill_life(s);
                 self.set_sprite(s, 244);
             }
-            // (10,26) ctor (:47116): the duel tether — life 8,
-            // sprite row 284, +44 = the 200/tick ch4 grip amount.
+            // (10,26) ctor `sub_3AF80` (:47116-32): the duel tether —
+            // life 8, sprite row 284, `+44` = 200 (the explode tail
+            // overwrites it with the DART's), and ⭐ **THE 512/512
+            // EXTENTS**: the ctor's last line is
+            // `sub_37130_374F0(v2, 512, 512)` (:47132), the plain
+            // setter `+80 = +82 = a2; +84 = a3` (:43790-95) — NOT the
+            // doubling `sub_370A0_37460`. The port bound sprite 284's
+            // own halves (150/150/75) and stopped, so the ch4 grip box
+            // was a THIRD of retail's 4-tile reach. mc1l48 t=59118
+            // slot 20 records 512/512/512 on the birth tick.
             26 => {
                 let e = &mut self.ent[s];
                 e.tick70 = 26;
@@ -5438,6 +5791,9 @@ impl Gen {
                 self.link(s, x, y, z);
                 self.refill_life(s);
                 self.set_sprite(s, 284);
+                if !crate::engine::world::mc1_tether_static_off() {
+                    self.extents(s, 512, 512);
+                }
             }
             // sub_3AC70 (:46935): the invisible fire-ring blast driver.
             // sub_3AC70 (:46935): the eruption blast fire-field —
@@ -5859,10 +6215,16 @@ impl Gen {
         }
     }
 
-    /// sub_263C0 (:28949), class-10 state 26 — the DUEL TETHER:
-    /// life-- per tick, follows the victim, broadcasts the ch4 grip
-    /// (+44 = 200) into it each tick. The victim's intake latches
-    /// the CASTER-side pull (:55663-82).
+    /// sub_263C0 (:28949-62), class-10 state 26 — the DUEL TETHER: a
+    /// STATIONARY 8-tick, 4-tile grip box planted where the dart
+    /// struck. `+26++`, `life--`, reap below zero, else the anim step
+    /// and one ch4 AREA write of its own `+44` over the ctor's
+    /// 512/512 extents. Its `+44` is the DART's, not the ctor's 200
+    /// — the explode tail overwrites it (`v19[22]`, :63202). The
+    /// victim's intake latches the CASTER-side pull (:55663-82), and
+    /// `sub_120B0` names the caster through the letter's source, the
+    /// writer's own `+24` (:17309/:17381). See
+    /// [`crate::engine::world::mc1_tether_static_off`].
     fn duel_tether_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         // :28956-58 — the life test reads the PRE-decrement value: the
         // whole class-10 effect family is pre-decrement in retail (the
@@ -5877,26 +6239,43 @@ impl Gen {
             self.ent[i].flags |= 0x400;
             return false;
         }
-        // :28959 — the anim step. (The victim-tracking transport below
-        // is OURS: retail's sub_263C0 simply broadcasts ch4 over the
-        // tether's own extents and never moves it. See ROADMAP.)
+        // :28959 — the anim step, then the ch4 AREA write. That is
+        // the whole handler.
         self.anim_advance(i);
-        let victim = self.ent[i].f146;
         let amt = self.ent[i].f44 as u32;
-        if victim == crate::mc1::mobs::PLAYER_TARGET {
-            // The human victim (AI-cast duel — unreachable today:
-            // no AI selector emits spell 11).
-            let (x, y, z) = (ctx.px, ctx.py, ctx.pz);
-            self.move_relink(i, x, y, z);
-        } else if victim != 0 {
-            let v = &self.ent[victim as usize];
-            if v.flags & 0x400 != 0 || v.act_life < 0 {
-                self.ent[i].flags |= 0x400;
-                return false;
+        if !crate::engine::world::mc1_tether_static_off() {
+            // ⭐⭐ **THE TETHER NEVER MOVES AND NEVER NAMES A VICTIM.**
+            // `sub_263C0` (:28949-62, and it carries remc1's
+            // `//SYNCHRONIZED WITH REMC1` marker) is twelve lines:
+            // `+26++`, `life--`, reap below zero, else `sub_42510`
+            // (the anim step) and `sub_120B0(a1x, 4u, +44)` — the
+            // plain channel-4 AREA write over the tether's own
+            // extents, which its ctor `sub_3AF80` (:47116) sets to
+            // 512/512 via `sub_37130_374F0(v2, 512, 512)`. There is
+            // no position write, no `+146` read and no victim-death
+            // test anywhere in it. The pre-dig transport followed the
+            // victim with `move_relink` and mailed him directly, so a
+            // duelled wizard stayed gripped however far he flew, and
+            // the tether's whole pose lane was ours rather than
+            // retail's (mc1l48 t=59119-59127 records slot 20 parked
+            // at (10575, 30298, 2096) for its entire eight-tick life
+            // while the port walked it after rival 712).
+            self.area_write(i, 4, amt, ctx, false, false);
+        } else {
+            let victim = self.ent[i].f146;
+            if victim == crate::mc1::mobs::PLAYER_TARGET {
+                let (x, y, z) = (ctx.px, ctx.py, ctx.pz);
+                self.move_relink(i, x, y, z);
+            } else if victim != 0 {
+                let v = &self.ent[victim as usize];
+                if v.flags & 0x400 != 0 || v.act_life < 0 {
+                    self.ent[i].flags |= 0x400;
+                    return false;
+                }
+                let (x, y, z) = (v.x, v.y, v.z);
+                self.mail_write(MailTarget::Pool(victim as usize), 4, amt, i as u16);
+                self.move_relink(i, x, y, z);
             }
-            let (x, y, z) = (v.x, v.y, v.z);
-            self.mail_write(MailTarget::Pool(victim as usize), 4, amt, i as u16);
-            self.move_relink(i, x, y, z);
         }
         false
     }
@@ -6870,7 +7249,40 @@ impl Gen {
             while j != 0 {
                 let c = &self.ent[j];
                 let next = c.next20 as usize;
-                if j != i && admits(c) && c.flags & 0x400 == 0 {
+                // ⭐ NO REAP TEST. Retail's `sub_11D10` per-node
+                // predicate is exactly three clauses — the SEEKER's own
+                // `+66`/`+67` membership with `-1` wildcards
+                // (`CARPET.EXE 0x2A598: 0f be 46 42` /
+                // `0x2A59C: 83 f8 ff` / `0x2A5A4: 3a 43 40`), the id
+                // self-exclusion (`0x2A5C2: 66 8b 46 18` /
+                // `0x2A5C6: 66 3b 43 18`) and the AABB
+                // `sub_11950` (`0x2A5CC`) — and an exhaustive scan of
+                // `0x2A508..0x2A63D` finds NO test against the flags
+                // word anywhere in the loop. So "a soft kill is not a
+                // free" reaches the merge partner search too: a ball a
+                // castle drank earlier in the same pool walk
+                // (`castle_absorb`/`sub_46DB0`, whose only mark is
+                // `flags |= 0x400`, the hard reclaim `sub_41E90`
+                // running at the NEXT tick's top) keeps its class,
+                // model, tile links and `+140`, and a ball landing at a
+                // HIGHER pool slot still finds it, banks its mana,
+                // adopts its extents and hard-frees it — retail banks
+                // the same ball TWICE in one tick.
+                // WITNESS mc1l48-nodeath t=19822: castle 772 drinks
+                // ball 744's 12,784 (`+140` 252,374 → 265,158), then
+                // ball 944 absorbs the SAME 744 — `+140` 14 → 12,798,
+                // `type86` 113 → 119, extents 25/30/30/25 →
+                // 175/107/107/87, `next20` 744 → 0 — and frees it
+                // (free stack 697 → 698). The port's invented
+                // exclusion left 744 alive-but-flagged and 944 on 14.
+                // ⭐ PREDICTED AND BANKED before a corpus row existed:
+                // `docs/CONFORMANCE-FINDINGS.md` "Kept port-only:
+                // `ball_merge_candidates`' 0x400 exclusion … would DUPE
+                // the mana … undug, no corpus row." The row has
+                // arrived. The MC2 twin `sub_10A50` (`NETHERW.EXE`
+                // `0x352D9..0x3532B`) has no flags test either.
+                if j != i && admits(c) && (!no_partner_softkill_fix() || c.flags & 0x400 == 0)
+                {
                     out.push(j);
                 }
                 j = next;
@@ -7053,14 +7465,27 @@ impl Gen {
         if self.ent[i].mail[4].1 != 0 {
             let (amt, m) = self.ent[i].mail[4];
             let m = m as usize;
-            if mc2 {
-                // EF:26109 (ball) / EF:26383 (m57): retail clears ONLY
-                // the SOURCE `word_0x7A_122`; the AMOUNT `word_0x76_118`
-                // stays on the record (mc2l22 t=8291 slot 484: retail
-                // still reads w76 = 42 after the intake).
-                self.ent[i].mail[4].1 = 0;
-            } else {
+            // ⭐ BOTH GAMES CLEAR THE SOURCE ONLY. EF:26109 (ball) /
+            // EF:26383 (m57) for MC2; and MC1's `sub_27030` is the
+            // same shape — shipped `CARPET.EXE` `0x3f900`
+            // (VA `0x27108`) is `66 89 7b 76  mov %di,0x76(%ebx)`
+            // with `%di` zeroed at `0x270cb`, and an exhaustive read
+            // of the whole intake `0x27076..0x27116` finds NO write to
+            // `+114` (`0x72`), the ch4 AMOUNT. The ch1 intake right
+            // above it clears BOTH halves (`0x27069` source `+100`,
+            // `0x2706f` amount `+96` as a dword), so the port's
+            // "MC1 clears the pair" arm was reading one channel's law
+            // onto another. Raw shadow: every magnet-pulled MC1 ball
+            // carries `mail4.amt = 100` for the rest of its life in
+            // retail (mc1l48-nodeath t=20517 slot 771, t=23379 slot
+            // 920, t=24123 slot 634 — retail 100, port 0) while the
+            // port zeroed it on the intake tick. MC1 reads the amount
+            // nowhere, so this moves no graded lane; it is a raw-lane
+            // fidelity law only (`+114` is absent from `EntObsMc1`).
+            if no_mc1_ch4_amount_keep() && !mc2 {
                 self.ent[i].mail[4] = (0, 0);
+            } else {
+                self.ent[i].mail[4].1 = 0;
             }
             // Retail MC2's ch4 intake (w7A, EF:26097-110) forces one
             // moving tick even on a settled sphere (the v35 latch).

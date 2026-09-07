@@ -1144,14 +1144,36 @@ impl Gen {
 
         // The human wizard (bucket[0]'s out-of-pool member). The
         // rebuild gate applies to him like any other class-3 body:
-        // a wizard whose `actLife` has gone negative is NOT in
-        // bucket[0] (:52254), so from the fatal hit onward no scan
-        // can acquire him — retail's creatures lose the corpse the
-        // tick it dies, they do not mob it. Our human lives outside
-        // the pool, so the liveness rides the ctx (`pdead` covers
-        // both the death fall and the dead hold, which is exactly
-        // `actLife < 0`).
-        if !ctx.pdead && !self.player_invisible && owner != PLAYER_TARGET {
+        // bucket[0] admits a class-3 record only if `actLife >= 0 &&
+        // !(flags & 0x10)` (:52254 — CARPET.EXE VA `0x41959:
+        // 83 78 0c 00` = `cmp DWORD [eax+0xc],0` / `0x4195D: 7c 24`
+        // jl / `0x4195F: f6 40 10 10` = `test BYTE [eax+0x10],0x10`,
+        // then `0x41973: 89 83 6e 8e 00 00` publishes the head).
+        // ⭐ BUT THAT GATE RUNS AT THE TICK TOP, ONCE, AND THE SCAN
+        // ONLY WALKS THE RESULT. `sub_1FF60`'s loop
+        // (VA `0x200F1..0x2018A`) re-tests the owner tag, the 3-D
+        // range, the cloak bit (`0x20129: f6 43 10 20` — the ONLY
+        // per-node flag test) and the cone; an exhaustive scan of
+        // that range finds NO reference to `actLife` (`+0xc`) at
+        // all. So a wizard who dies DURING a tick stays acquirable
+        // by every creature processed later in that same tick, and
+        // membership must be sampled with `pdead_top`, never the
+        // live `pdead` (which `World` republishes mid-walk at the
+        // carpet's slot). WITNESS mc1l48-nodeath t=4892: the human
+        // (slot 681) takes a fatal `(9,0)` from id 641 at the tick
+        // TOP (`act_life 380 → −20`); five guards correctly break
+        // their chases on the live read (746/832/903/905/943,
+        // `f70 92→91`) and guard 829 ACQUIRES HIM ANYWAY
+        // (`f146 0→681`, `f126 30→0`, `type86 0→1`), where the port
+        // left it wandering. ⚠ The comment this replaces asserted
+        // the opposite — "from the fatal hit onward no scan can
+        // acquire him" — a passing doc comment encoding a false
+        // claim (round 115's law). It is true from the NEXT tick on.
+        // The five other MC1 `ctx.pdead` reads (:1379, :1748, :2119,
+        // :2388, :3940) are chase TARGET-LOSS tests, which retail
+        // does read live off the victim record; they stay as they
+        // are.
+        if !ctx.pdead_top && !self.player_invisible && owner != PLAYER_TARGET {
             let d2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py) as u32;
             if d2 <= r2 && Self::angdist(ef30, Self::angle_between(ex, ey, ctx.px, ctx.py)) < cone {
                 best = Some(PLAYER_TARGET);

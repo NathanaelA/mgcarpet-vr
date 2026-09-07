@@ -212,6 +212,15 @@ struct CampaignRun {
 /// fresh start: silently starting over would overwrite it on the
 /// first level completion.
 #[allow(clippy::type_complexity)]
+/// `MGC_NO_REQUEST_TIME_LISTENER=1` restores the pre-fix drain-time
+/// listener: sound requests are attenuated against the pose the sim
+/// step ENDED at, so a portal warp's own entry sound (id 22) is
+/// measured from the destination and culled past 12288 units.
+fn request_time_listener() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*V.get_or_init(|| std::env::var_os("MGC_NO_REQUEST_TIME_LISTENER").is_some())
+}
+
 fn campaign_record(
     tag: &str,
     slot: usize,
@@ -652,6 +661,16 @@ struct LoadedLevel {
     /// The per-game audio bundle directory (`assets/mc1-audio` /
     /// `mc2-audio`), when baked.
     audio_dir: Option<PathBuf>,
+    /// ⭐ THE SAMPLE BANK, BY MAP TYPE. `LevelInit.cpp:23/29/37`
+    /// calls `LoadSounds_84300(0/1/2)` for Day/Night/Cave: MC2's
+    /// CAVE bank is the only one that carries the drip samples
+    /// 65-69 (`baked/assets/mc2-audio/sounds.json`: banks 0 and 1
+    /// stop at 64). The app used to hardcode bank 0, so every
+    /// `EntitySounds` drip request `mc2/cave.rs` made on a cave
+    /// level reached the mixer, took its request slot and then
+    /// found NO SAMPLE — silent. MC1 has one gameplay bank (0; its
+    /// 1-13 are the cutscene banks the movie player selects).
+    audio_bank: u32,
     /// The level-music pick: MC2 = ONE looping XMI by MapType
     /// (mc2-night/day/cave — docs/traces/mc2-music-law.md); MC1
     /// stays the INTERIM cgame1-3 level cycle until its
@@ -1191,6 +1210,18 @@ fn load_level(
             .join(format!("{audio_game}-audio"));
         d.is_dir().then_some(d)
     };
+    // The sample bank rides the SAME MapType switch as the music
+    // (LevelInit.cpp:16-38): Day 0 / Night 1 / Cave 2. MC1 is always
+    // bank 0.
+    let audio_bank = if audio_game == "mc2" {
+        match package.header.as_ref().map(|h| h.map_type) {
+            Some(mgc_formats::MapType::Night) => 1,
+            Some(mgc_formats::MapType::Cave) => 2,
+            _ => 0,
+        }
+    } else {
+        0
+    };
     let music_track = Some(if audio_game == "mc2" {
         match package.header.as_ref().map(|h| h.map_type) {
             Some(mgc_formats::MapType::Night) => "mc2-night".to_string(),
@@ -1359,6 +1390,7 @@ fn load_level(
         plausible_book_mc2,
         ui: ui_assets,
         audio_dir,
+        audio_bank,
         music_track,
         level_number: package.meta.level,
         bundle_variant: variant.to_string(),
@@ -1982,6 +2014,7 @@ impl App {
             if is_mc2 {
                 a.set_mc2_danger_ramp();
             }
+            let audio_bank = level.as_ref().map_or(0, |l| l.audio_bank);
             let audio_dir = match &level {
                 Some(l) => l.audio_dir.clone(),
                 None => {
@@ -1994,7 +2027,7 @@ impl App {
                 }
             };
             if let Some(dir) = &audio_dir {
-                if let Err(e) = a.load_bundle(dir, 0) {
+                if let Err(e) = a.load_bundle(dir, audio_bank) {
                     eprintln!("note: audio bundle: {e}");
                 }
             } else {
@@ -3118,7 +3151,7 @@ impl App {
 
     /// Per-sim-tick audio: drain the world's sound requests into the
     /// faithful mixer, feed the ambient rule, run the flush.
-    fn audio_tick(&mut self) {
+    fn audio_tick(&mut self, requested_at: Option<mgc_sim::engine::world::PlayerPose>) {
         let Some(audio) = &mut self.audio else { return };
         let Some(sess) = self.session.as_deref_mut() else {
             return;
@@ -3126,9 +3159,25 @@ impl App {
         let f = &sess.sim.flyer;
         let pose =
             mgc_sim::engine::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
+        // ⭐ THE REQUEST-TIME LISTENER. `sub_55370_558A0` (CARPET.EXE
+        // @0x6db68 = VA 0x55370) computes a request's volume and pan
+        // THE INSTANT the sim asks for it, off the LOCAL wizard's live
+        // entity axis (`mov 0x3415(%ebx,%eax,1),%ax` — pool record
+        // `2049*var_u16_8 + 13333`, entity +72), and culls beyond
+        // 12288^2 (`cmp $0x9000000,%eax; jg`). The port instead
+        // computes it at DRAIN time, after the whole sim step — and
+        // the step is where a PORTAL WARP moves the listener. The
+        // vortex (`sub_26A60`, CARPET.EXE @0x3f397) requests sound 22
+        // BEFORE `sub_41C70` copies the destination onto the carpet
+        // (@0x3f3a7), so retail hears it at zero distance; the port
+        // heard it from the far side of the map and the 12288-unit
+        // cull threw it away (92 of MC1's 113 authored portals warp
+        // further than that). Use the pose the step STARTED from —
+        // sub-tile for every other emitter, the whole map for a warp.
+        let listener_pose = requested_at.unwrap_or(pose);
         let listener = mgc_audio::Listener {
-            pos: (pose.x, pose.y, pose.z),
-            yaw: pose.heading,
+            pos: (listener_pose.x, listener_pose.y, listener_pose.z),
+            yaw: listener_pose.heading,
         };
         if let Some(w) = &mut sess.sim.world {
             let frame = w.take_audio(pose);
@@ -5838,6 +5887,17 @@ impl App {
             } else {
                 None
             };
+            // The request-time listener (see `audio_tick`): the pose
+            // this step STARTED from, captured before the step can
+            // teleport it.
+            let requested_at = if request_time_listener() {
+                let f = &sess!(self).sim.flyer;
+                Some(mgc_sim::engine::world::PlayerPose::from_tiles(
+                    f.x, f.y, f.z, f.yaw, f.pitch, 0.0,
+                ))
+            } else {
+                None
+            };
             sess!(self).sim.step(&input);
             if let Some(d) = self.replay.as_mut() {
                 d.grade(&sess!(self).sim);
@@ -5878,7 +5938,7 @@ impl App {
             }
             // The mixer flush is per-tick like the original's
             // (fade ramps are tick-denominated).
-            self.audio_tick();
+            self.audio_tick(requested_at);
             ran += 1;
             if ran >= max_ticks {
                 self.accumulator = 0.0;
@@ -5958,7 +6018,26 @@ impl App {
             .as_mut()
             .is_some_and(|w| w.take_restart())
         {
-            self.restart_level();
+            // ⭐ THE PERMADEATH RESYNC (player-ruled 2026-09-07).
+            // Under a RETAIL take, a pristine rebuild is the wrong
+            // world: retail's reload re-reads the level over its own
+            // live heap residue with the RNG continuing mid-stream,
+            // and the port's native level init lands somewhere else
+            // entirely (mc1l48 at its own phase: 942 live / 22
+            // families against retail's 943 / 40). Re-anchor on the
+            // recording instead — the driver imports retail's own
+            // closure at the next boundary. A PORT take restarts the
+            // ordinary way; that is exactly what it recorded.
+            //
+            // ⚠ A retail replay never reaches here: the driver polls
+            // `take_restart` itself, at the top of `next`, which is
+            // per STEP rather than per FRAME (see there — polling
+            // after this loop was a speed-dependent bug). This poll
+            // is the LIVE path's.
+            match self.replay.as_mut().filter(|d| d.is_retail()) {
+                Some(d) => d.arm_resync(),
+                None => self.restart_level(),
+            }
         }
 
         let alpha = self.accumulator / TICK_DT;

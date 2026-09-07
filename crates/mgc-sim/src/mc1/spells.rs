@@ -87,8 +87,10 @@ pub struct SpellDef {
     /// a8 → `+132`: required CASTLE STORED MANA — the spell-unlock
     /// ladder (sub_55DD0 :64917-19: nonzero → the caster must own a
     /// castle holding at least this much). 0 = castle-free spell.
-    /// Magic Bomb's 199488 is the frozen `&loc_30D40` decompile
-    /// artifact (retail value needs the binary) — kept verbatim.
+    /// Magic Bomb's row decompiles as `(int)&loc_30D40`; **the binary
+    /// settles it at 200000** (see the table note below) — the
+    /// long-standing 199488 was a mis-conversion of `0x30D40`
+    /// (199488 is `0x30B40`).
     pub castle_req: u32,
     /// a9 → `+44`: damage/potency. Utility rows carry a vestigial 100
     /// here (shared-constructor filler; meaning unclear on those rows).
@@ -97,8 +99,17 @@ pub struct SpellDef {
 
 /// `off_987DE` thunk arguments, row = internal spell id. Quirk rows,
 /// preserved verbatim pending the emission-behavior port:
-/// - Magic Bomb's a8 decompiles as `(int)&loc_30D40` (= 199488), a
-///   code address frozen into a literal; treated as the constant.
+/// - Magic Bomb's a8 decompiles as `(int)&loc_30D40`, a code address
+///   frozen into a literal; treated as the constant. ⚠ **IT IS
+///   200000, NOT 199488** — `0x30D40` = 200000 and the tree carried a
+///   mis-converted `0x30B40` for a year. THE SHIPPED EXE SETTLES IT:
+///   `CARPET.EXE` file offset **0x54C4D** holds `68 40 0D 03 00`
+///   (`push 0x30D40`), and 199488 appears nowhere in the image.
+///   mc1l49 corroborates from the other side — the human's Magic Bomb
+///   token (pool slot 87) reads `+132 = 200000` on every tick of the
+///   take. Corrected 2026-09-07 (wave 115 / D17); vacuous on the whole
+///   corpus (457/457 fixtures and 16 MC1 takes byte-identical), it
+///   only bites when a castle store sits in [199488, 200000).
 /// - Fire Storm's damage 24464 is anomalously large — whatever it
 ///   does, it isn't a plain 24464-damage hit.
 pub const SPELLS: [SpellDef; SPELL_COUNT] = [
@@ -146,8 +157,8 @@ pub const SPELLS: [SpellDef; SPELL_COUNT] = [
     def(5000, 51, true, false, 12000, 24464),
     // 21 Accelerate Backwards (sub_3C420 :48146) — toggle pair with 2
     def(1000, 251, false, false, 0, 100),
-    // 22 Magic Bomb (sub_3C450 :48152)
-    def(75000, 101, true, false, 199488, 7000),
+    // 22 Magic Bomb (sub_3C450 :48152) — a8 = `(int)&loc_30D40` = 200000
+    def(75000, 101, true, false, 200000, 7000),
     // 23 Repeat Fireballs (sub_3C480 :48158) — the dev fireball donor
     def(600, 3, false, false, 50000, 50),
 ];

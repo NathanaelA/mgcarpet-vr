@@ -314,8 +314,24 @@ pub struct ReplayDriver {
     /// capture-clean, gradeable).
     pending: Option<bool>,
     anchored_flag: bool,
+    /// ⭐ THE PERMADEATH RESYNC (player-ruled 2026-09-07). The port
+    /// signalled a level restart, so the next retail boundary
+    /// re-anchors on the RECORDING instead of rebuilding a pristine
+    /// world. Retail's reload runs machinery whose inputs are not in
+    /// the capture — MC1 re-reads the level over its own live heap
+    /// residue (`sub_408D0` :51596, RNG continuing MID-STREAM: there
+    /// is no `srand` in the binary), MC2 restores a PRE-CAPTURE disk
+    /// checkpoint (SaveLevel slot 1, EF:39894-921) — so no amount of
+    /// native init can reproduce it. Re-importing retail's own
+    /// closure sidesteps the whole question, which is what lets an
+    /// MC2 take carry a permadeath at all.
+    force_anchor: bool,
     // Tallies.
     segments: u64,
+    /// Anchors that were FORCED by a restart rather than opened by a
+    /// capture gap — reported separately so a resync can never be
+    /// mistaken for a clean run.
+    resyncs: u64,
     steps: u64,
     graded: u64,
     /// Clean boundaries BEFORE the first divergence — i.e. the horizon,
@@ -383,7 +399,9 @@ impl ReplayDriver {
             human_slot: 0,
             pending: None,
             anchored_flag: false,
+            force_anchor: false,
             segments: 0,
+            resyncs: 0,
             steps: 0,
             graded: 0,
             clean: 0,
@@ -409,6 +427,29 @@ impl ReplayDriver {
     /// `None` = the take ended (or a fatal record error) — the caller
     /// hands control back to the player.
     pub fn next(&mut self, sim: &mut Simulation) -> Option<FlightInput> {
+        // ⭐⭐ THE PERMADEATH POLL LIVES HERE, AND THAT PLACEMENT IS
+        // THE FIX TO A SPEED-DEPENDENT BUG. `next` is called exactly
+        // once per sim step, so polling here is per STEP for every
+        // caller for free. The app's interactive loop runs N steps
+        // per rendered FRAME at game speed N, and it used to poll
+        // after the whole burst: at 1x that was the very next
+        // boundary and the resync landed in time, but above 1x the
+        // rest of the burst kept feeding recorded input into the
+        // UN-RESTARTED world, and `grade` latches the first
+        // divergence FOREVER — so mc1l48 read "DIVERGED since
+        // t=8592" (the reload seam) sped up and ran clean through it
+        // at normal speed. Player-witnessed. The headless
+        // `replay_check` loop happened to poll per step, so it never
+        // showed the bug, which is exactly why the poll must not
+        // live in either loop.
+        //
+        // Retail only: a PORT take replays its own restart, so the
+        // app must still route it to `restart_level`.
+        if matches!(self.source, ReplaySource::Retail)
+            && sim.world.as_mut().is_some_and(|w| w.take_restart())
+        {
+            self.force_anchor = true;
+        }
         let input = match self.source {
             ReplaySource::Port => self.next_port(sim),
             ReplaySource::Retail => self.next_retail(sim),
@@ -435,6 +476,28 @@ impl ReplayDriver {
         std::mem::take(&mut self.anchored_flag)
     }
 
+    /// Arm the permadeath resync: the next retail boundary re-anchors
+    /// on the recording (see [`ReplayDriver::force_anchor`]). The app
+    /// calls this INSTEAD of `restart_level` while a retail take is
+    /// driving — a pristine rebuild would replace retail's world with
+    /// the port's own native level init, which is a different world
+    /// (mc1l48 at its own phase: port 942 live / 22 families against
+    /// retail's 943 / 40) and detonates the run on the spot.
+    ///
+    /// A port take needs none of this: it re-runs the port's own
+    /// restart, which is exactly what it recorded.
+    pub fn arm_resync(&mut self) {
+        if matches!(self.source, ReplaySource::Retail) {
+            self.force_anchor = true;
+        }
+    }
+
+    /// Is a retail take driving? (`--replay` of a port take restarts
+    /// the level the ordinary way.)
+    pub fn is_retail(&self) -> bool {
+        matches!(self.source, ReplaySource::Retail)
+    }
+
     fn finish_stream(&mut self) {
         self.finished = true;
         println!("replay: {}", self.summary());
@@ -450,8 +513,16 @@ impl ReplayDriver {
         } else {
             String::new()
         };
+        // A permadeath resync is a re-import of retail's closure, so
+        // it MUST be visible: the clean count downstream of one was
+        // not earned by free-running from the seed.
+        let resyncs = if self.resyncs > 0 {
+            format!(", {} permadeath resync(es)", self.resyncs)
+        } else {
+            String::new()
+        };
         let base = format!(
-            "{} tick(s) in {} segment(s), {} graded ({} capture-skipped{paused}), {} clean",
+            "{} tick(s) in {} segment(s), {} graded ({} capture-skipped{paused}), {} clean{resyncs}",
             self.steps, self.segments, self.graded, self.skipped, self.clean
         );
         match &self.diverged {
@@ -611,9 +682,20 @@ impl ReplayDriver {
         tick: &mgcr::TickRecord,
         st: RetailMc1,
     ) -> Result<Option<FlightInput>, String> {
-        let anchor = !matches!(&self.prev, Some((pt, RetailPrev::Mc1(_))) if tick.t == pt + 1);
+        let forced = std::mem::take(&mut self.force_anchor);
+        let anchor =
+            forced || !matches!(&self.prev, Some((pt, RetailPrev::Mc1(_))) if tick.t == pt + 1);
         if anchor {
             let w = sim.world.as_mut().ok_or("no world")?;
+            if forced {
+                // Retail's reload RE-READ the level: un-consume every
+                // one-shot disposition the previous life fired. The
+                // entity import restores the pool, but the THING
+                // table is port-side state (the conform twin does the
+                // same at its restart re-anchor).
+                w.reload_thing_table();
+                self.resyncs += 1;
+            }
             w.restore_planes(self.pristine.as_ref().expect("retail install"));
             let report = w
                 .retail_import_mc1(&st)
@@ -723,8 +805,16 @@ impl ReplayDriver {
         // The respawn witness folds EVERY state-bearing record in
         // stream order (dating law in mgc_formats::recover).
         let respawn = self.witness.observe(tick.input.as_ref());
-        let anchor = !matches!(&self.prev, Some((pt, RetailPrev::Mc2(_))) if tick.t == pt + 1);
+        let forced = std::mem::take(&mut self.force_anchor);
+        let anchor =
+            forced || !matches!(&self.prev, Some((pt, RetailPrev::Mc2(_))) if tick.t == pt + 1);
         if anchor {
+            if forced {
+                // No `reload_thing_table` twin here: the MC2 anchor
+                // already restores the PRISTINE table below, which is
+                // the reload's own semantics.
+                self.resyncs += 1;
+            }
             let w = sim.world.as_mut().ok_or("no world")?;
             w.restore_planes(self.pristine.as_ref().expect("retail install"));
             w.restore_thing_table(self.things.as_ref().expect("mc2 install"));
@@ -1347,7 +1437,14 @@ mod tests {
         // A header-only .mgcr: the driver never pulls from it here
         // (the test calls `retail_tick_mc1` directly), but `Recording`
         // is only constructible from a stream.
-        let path = std::env::temp_dir().join("mgcapp-paused-stub.mgcr");
+        // ⚠ UNIQUE PER CALL. This was a fixed filename until the
+        // resync pins landed; with four tests sharing one path,
+        // `Recording::open` can read a file another thread is still
+        // writing. A shared temp path is a race that only shows up
+        // once a second test uses the helper.
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("mgcapp-paused-stub-{n}.mgcr"));
         std::fs::write(
             &path,
             b"{\"format\":2,\"game\":\"mc1\",\"source\":\"retail\",\"tick_hz\":25,\
@@ -1414,7 +1511,9 @@ mod tests {
             human_slot: 0,
             pending: None,
             anchored_flag: false,
+            force_anchor: false,
             segments: 1,
+            resyncs: 0,
             steps: 0,
             graded: 0,
             clean: 0,
@@ -1532,6 +1631,155 @@ mod tests {
             before.1,
             "but the world DID take its paused turn — the global LCG \
              draw is the one thing sub_41780 does before the jump"
+        );
+    }
+
+    /// ⭐ THE PERMADEATH RESYNC (player-ruled 2026-09-07): an ARMED
+    /// restart turns the very next boundary into an ANCHOR, even
+    /// though the stream is unbroken (`t == pt + 1`).
+    ///
+    /// The pin is the control flow, because the alternative is
+    /// silent and catastrophic: before this, a castle-less death
+    /// under `--replay` ran `App::restart_level`, which throws
+    /// retail's imported world away and builds the PORT's own native
+    /// level init in its place — a different world (mc1l48 at its own
+    /// phase: 942 live / 22 families against retail's 943 / 40). The
+    /// take detonated on the spot: mc1l48's app horizon was 8,591,
+    /// the reload seam, and everything past it was noise. With the
+    /// resync the conform twin free-runs t=8591..9180 at 588 of 588
+    /// graded boundaries CLEAN, and the take's first real divergence
+    /// becomes the castle painter at 9,786 — the same head
+    /// `--segmented` has always reported.
+    ///
+    /// The flag is ONE-SHOT: it must not turn the rest of the take
+    /// into a re-anchoring segmented run behind the player's back.
+    #[test]
+    fn an_armed_restart_anchors_the_next_boundary() {
+        let (mut d, mut sim, pst) = paused_stub_driver();
+        d.pristine = Some(sim.world.as_ref().expect("stub world").planes_clone());
+        // The import needs a real human CARPET (class 3) at the
+        // wizard's `play_index`; the paused-turn stub never anchors,
+        // so it leaves the index at 0 and grows no carpet.
+        let mut pst = pst;
+        // ...and a full 8-wizard table: the import seats every rival
+        // slot (`rival_ents`/`castle_reg`), where the paused-turn
+        // stub only ever needed the local one.
+        pst.wizards
+            .resize(8, mgcr::RetailWizardMc1::default());
+        pst.ents[3].class64 = 3;
+        pst.ents[3].model65 = 0;
+        pst.ents[3].f63 = 7;
+        pst.wizards[0].play_index = 3;
+        d.prev = Some((100, RetailPrev::Mc1(Box::new(pst.clone()))));
+        // A pair that would otherwise STEP (the negative control's
+        // own perturbed phase byte), so the anchor cannot be
+        // confused with the paused-turn arm.
+        let tick = mgcr::TickRecord {
+            t: 101,
+            obs: Some(stub_obs(&pst, true)),
+            ..mgcr::TickRecord::default()
+        };
+        let mut st = pst.clone();
+        st.ents[1].f63 = 8;
+        let (segs, steps) = (d.segments, d.steps);
+
+        d.arm_resync();
+        let out = d
+            .retail_tick_mc1(&mut sim, &tick, st.clone())
+            .expect("armed resync anchors");
+        assert!(
+            out.is_none(),
+            "⚠ REVERSION PROBE: an armed restart must ANCHOR, not step —              stepping here is the old `restart_level` detonation in a              different costume"
+        );
+        assert_eq!(d.segments, segs + 1, "the anchor opens a segment");
+        assert_eq!(d.resyncs, 1, "and books itself as a permadeath resync");
+        assert_eq!(d.steps, steps, "an anchor is not a step");
+        assert!(
+            d.take_anchored(),
+            "the app is told, so it re-syncs its own view of the world"
+        );
+
+        // ONE-SHOT: the next unbroken boundary steps again.
+        let tick2 = mgcr::TickRecord {
+            t: 102,
+            obs: Some(stub_obs(&st, true)),
+            ..mgcr::TickRecord::default()
+        };
+        let mut st2 = st.clone();
+        st2.ents[1].f63 = 9;
+        let out2 = d
+            .retail_tick_mc1(&mut sim, &tick2, st2)
+            .expect("ordinary boundary");
+        assert!(
+            out2.is_some(),
+            "the resync is ONE-SHOT — a plain run must not silently              become a re-anchoring segmented one"
+        );
+        assert_eq!(d.resyncs, 1, "and it books exactly one resync");
+    }
+
+    /// ⭐⭐ THE SPEED-DEPENDENT REGRESSION PIN (player-witnessed
+    /// 2026-09-07). `next` must consume the world's restart signal
+    /// ITSELF, because it is the only thing called exactly once per
+    /// sim step. When the poll lived in the app's frame loop instead,
+    /// a replay at 1x held through mc1l48's permadeath and the SAME
+    /// replay sped up reported "DIVERGED since t=8592" — the frame
+    /// ran N steps, the restart fired mid-burst, and the rest of the
+    /// burst fed recorded input into an un-restarted world.
+    ///
+    /// The pin is that a restart raised by the PREVIOUS step is
+    /// already armed by the time this boundary is dispatched.
+    #[test]
+    fn next_consumes_the_restart_signal_itself() {
+        let (mut d, mut sim, _pst) = paused_stub_driver();
+        assert!(!d.force_anchor, "nothing armed to begin with");
+        sim.world
+            .as_mut()
+            .expect("stub world")
+            .debug_signal_restart();
+
+        // `next` pulls no record here (the stub's stream is empty),
+        // but the poll must have happened on the way in.
+        let _ = d.next(&mut sim);
+        assert!(
+            d.force_anchor,
+            "⚠ REVERSION PROBE: moving this poll back into a caller's              loop makes the resync land a whole FRAME late at game              speeds above 1x — the exact shape of the t=8592 bug"
+        );
+        assert!(
+            !sim.world
+                .as_mut()
+                .expect("stub world")
+                .take_restart(),
+            "and it CONSUMED the signal — a second arm would re-anchor              a boundary that already resynced"
+        );
+    }
+
+    /// A PORT take records the port's own restart, so replaying it
+    /// must go back through `restart_level` — arming the resync on
+    /// one would import a retail closure the take does not have.
+    #[test]
+    fn a_port_take_never_arms_the_resync() {
+        let (mut d, mut sim, _pst) = paused_stub_driver();
+        d.source = ReplaySource::Port;
+        d.arm_resync();
+        assert!(
+            !d.force_anchor,
+            "only a RETAIL take has a closure to re-anchor on"
+        );
+        assert!(!d.is_retail(), "and the app routes it to restart_level");
+
+        // ...and `next` must leave the signal STANDING for it, or the
+        // app's own poll never sees it and the level never restarts.
+        sim.world
+            .as_mut()
+            .expect("stub world")
+            .debug_signal_restart();
+        let _ = d.next(&mut sim);
+        assert!(
+            sim.world
+                .as_mut()
+                .expect("stub world")
+                .take_restart(),
+            "a port take's restart belongs to `App::restart_level`"
         );
     }
 

@@ -181,6 +181,17 @@ fn usage() -> ! {
                              hidden: the deviating value propagates, so\n\
                              the run past it is retail's state, not the\n\
                              port's own\n\
+           --resync-restarts\n\
+                             RE-ANCHOR at the PERMADEATH reload seam in a\n\
+                             plain free run. Retail's reload re-reads the\n\
+                             level from inputs the capture does not hold\n\
+                             (MC1 over its own heap residue, RNG running\n\
+                             mid-stream; MC2 from a pre-capture disk\n\
+                             checkpoint), so native init can never land\n\
+                             there. --segmented already re-anchors at the\n\
+                             seam; this is what lets a PLAIN run cross one.\n\
+                             Reported as resync=<n>, never hidden — the run\n\
+                             past a seam is retail's state, not the port's\n\
            --no-roster       replay/verify-deltas: skip the roster\n\
                              entirely (raw, unclassified)\n\
            --start <t>       anchor the replay at tick t instead of the\n\
@@ -276,6 +287,23 @@ pub struct Args {
     /// terrain) — so this re-imports retail's state at that boundary
     /// and says so, rather than pretending the run stayed bit-exact.
     pub resync_deviations: bool,
+    /// replay: RE-ANCHOR at the PERMADEATH reload seam in a plain free
+    /// run (player-ruled 2026-09-07). `--segmented` already does this
+    /// unconditionally — `SegOpen::Restart` — because retail's reload
+    /// runs machinery whose inputs are not in the capture: MC1
+    /// re-reads the level over its own live heap residue with the RNG
+    /// continuing MID-STREAM (there is no `srand` in the binary), MC2
+    /// restores a PRE-CAPTURE disk checkpoint. Neither is reachable
+    /// from native level init, so the only sound way to keep
+    /// measuring past a permadeath is to re-import retail's own
+    /// closure.
+    ///
+    /// ⚠ It is a FLAG, not the default, for one reason: a plain free
+    /// run's horizon is the honest number, and a WILD post-horizon
+    /// port can trip `take_restart` on state retail never held. Under
+    /// this flag the run past a resync is retail's state, not the
+    /// port's — the report says so.
+    pub resync_restarts: bool,
 }
 
 fn parse_args() -> Args {
@@ -296,6 +324,7 @@ fn parse_args() -> Args {
         sample_every: 10,
         no_roster: false,
         resync_deviations: false,
+        resync_restarts: false,
         no_pose_alt: false,
         no_slot_desync: false,
         no_terrain: false,
@@ -341,6 +370,7 @@ fn parse_args() -> Args {
             "--segmented" => a.segmented = true,
             "--stop-at-divergence" => a.stop_at_div = true,
             "--resync-deviations" => a.resync_deviations = true,
+            "--resync-restarts" => a.resync_restarts = true,
             "--classify" => a.classify = true,
             "--brief" => a.brief = true,
             "--port" => a.dump_port = true,

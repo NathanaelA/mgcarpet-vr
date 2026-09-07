@@ -1,36 +1,156 @@
 {
- "dir": "fixtures/mc1l49",
- "pin_pose": "n1",
- "fixtures": [
-  {
-   "t": 2787,
-   "file": "the-rival-anti-rebound-plan-roll-burns-the-watco.mgcr",
-   "source": "mc1l49",
-   "note": "THE RIVAL ANTI-REBOUND PLAN ROLL BURNS THE WATCOM CRT rand() STREAM, NOT THE WIZARD'S ENTITY LCG: :19507-08 `rand() % 255 < acc` \u2014 watcomrand (EventsFunctions.cpp:413) is the global _RWD_randnext stream, x\u00b71103515245+12345, (x>>16)&0x7FFF. Burning ent_rand for the roll stole a graded-lane draw and shattered every later rand comparison on the 8-wizard board (mc1l49 t=2788). Gen::crt_rand is deliberately HASH-SILENT (phase unrecoverable at import). Ledger SESSION 61 law 4."
-  },
-  {
-   "t": 3058,
-   "file": "the-wyvern-chase-drops-a-dead-target-at-tick-top.mgcr",
-   "source": "mc1l49",
-   "note": "THE WYVERN CHASE DROPS A DEAD TARGET (the pdead family): retail's wyvern_chase target check (:26152) reads the victim's life at the chase dispatch, so a wizard dying mid-swarm is dropped as a chase target that tick - the port kept the latched target and t=3059's extra(10,0)x3 was the wyverns still FIRING AT THE CORPSE (the banked 'keeps +146=472' was the port's own behavior read backwards). Ledger SESSION 65 law 5."
-  },
-  {
-   "t": 3559,
-   "file": "the-anti-rebound-notice-is-a-live-token-read.mgcr",
-   "source": "mc1l49",
-   "note": "THE ANTI-REBOUND NOTICE IS A LIVE TOKEN READ AT THE CASTER'S OWN DISPATCH: sub_16000 (:19449-56) reads the TARGET's spell-14 token record's +48 (pool[wizext+676+2*14], `+48 > 0`), not the carpet's 0x8000 mirror. Walk order is the law: a token arming BELOW the reader is seen the same tick (t=3560, token 600 < reader 620); the owner-slot mirror refresh missed a token above its owner (t=4003, token 704 > owner 698). The port's cached rebound bools replaced with ent[owned[14]].f26 > 0. Ledger SESSION 65 law 6."
-  },
-  {
-   "t": 54743,
-   "file": "the-seizure-blanks-every-roster-and-the-stack-im.mgcr",
-   "source": "mc1l49",
-   "note": "THE MC1 SEIZURE FAMILY, POOL-DRY ARM: three laws in one pair. (1) retail_import_mc1 imports the RECYCLE STACK (mgcr +4593/+4597) - the old 'sacrifice set alone, never reached' rationale is refuted: the death LANDING's rebuild (:55487) arms the stack and never disarms it (~3,750 corpus seizures); (2) MC1's free path (sub_41E90 :52512-20) never touches the stack - every recorded stack is strictly descending (14,178/14,178 snapshots), so Gen::free_entity's sub_57F20 swap-remove is MC2-gated; (3) the seizure BLANKS every tick-top roster (:43885-91: str_36382x memset + var_u32_36462[1]/[2]/[0]/[3] nulled) before the victim unlinks - consumers after the seizing slot see EMPTY lists, not a severed chain. Witness: mc1l49 t=54744 - free 7->0, then SEVEN seizures ascending 6,7,8,9,11,20,21; pre-law the pair read 104 unexplained rows (port allocations in the wrong slots: slot 6 model 13-vs-16 etc.), post-law it conforms. The NEXT pair (54744->54745) carries a separate BANKED residual: the respawn re-grant starves its first entry (retail mints (12,0) via seizure at slot 11, the port's one-shot zeroes it) - the DEVIATIONS.md death_regrant 'no corpus witness yet' starving-respawn, now witnessed."
-  },
-  {
-   "t": 4654,
-   "file": "the-m15-chase-hit-mailbox-aborts-on-death-only.mgcr",
-   "source": "mc1l49",
-   "note": "THE CASTLE GUARD'S CHASE IS NOT ON THE SHARED DAMAGE PROLOGUE: m15 state 92 (sub_201D0, remc1/sub_main.cpp:25820-34) carries its OWN inline mailbox and it aborts on DEATH ONLY - `if (v2 > 1) { a1x->var_u8_29865_70 = 94; goto LABEL_25; }` - so a NON-LETHAL hit falls straight through to the re-bear and the bolt, and there is NO retarget arm anywhere in the function: `v8 = pool + 164 * a1x->var_u16_29941_146;` then `if ((a1x->var_u8_29858_63 & 3) == 0) a1x->var_u16_29829_34 = sub_42150_42490(..., v8 + 72);` STILL RUNS. The freeze is PER-HANDLER, not per-family - m15's WANDER slot sub_1FF60 (:25718-27) really does freeze on ANY mail (`if (v1) { if (v1 > 1) {...} ... }`), and that contrast is what makes this a law. WITNESS mc1l49 t=4654->4655, guard slot 114 (5,15) f70=92: act_life 1000 -> 200, f34 1256 -> 1259, f40 0 -> 331, f58 2 -> 1, f63 12 -> 13, mail0.src 331 -> 0 - the guard takes 800 damage on a tick whose +63 is 12 (&3 == 0, i.e. a re-bear tick) and retail STILL re-bears, keeping +146 = 907. The port's Inbox::Hit arm ended in a blanket return, so target_yaw stuck at 1256. NON-VACUITY: MGC_NO_M15_CHASE_HIT_FALLTHROUGH=1 regresses this pair (slot 114 target_yaw: retail 1259 port 1256). Worth +1,033 horizon and -712 census rows on mc1l49. Ledger SESSION 96."
-  }
- ]
+  "dir": "fixtures/mc1l49",
+  "pin_pose": "n1",
+  "fixtures": [
+    {
+      "t": 2787,
+      "file": "the-rival-anti-rebound-plan-roll-burns-the-watco.mgcr",
+      "source": "mc1l49",
+      "note": "THE RIVAL ANTI-REBOUND PLAN ROLL BURNS THE WATCOM CRT rand() STREAM, NOT THE WIZARD'S ENTITY LCG: :19507-08 `rand() % 255 < acc` — watcomrand (EventsFunctions.cpp:413) is the global _RWD_randnext stream, x·1103515245+12345, (x>>16)&0x7FFF. Burning ent_rand for the roll stole a graded-lane draw and shattered every later rand comparison on the 8-wizard board (mc1l49 t=2788). Gen::crt_rand is deliberately HASH-SILENT (phase unrecoverable at import). Ledger SESSION 61 law 4."
+    },
+    {
+      "t": 3058,
+      "file": "the-wyvern-chase-drops-a-dead-target-at-tick-top.mgcr",
+      "source": "mc1l49",
+      "note": "THE WYVERN CHASE DROPS A DEAD TARGET (the pdead family): retail's wyvern_chase target check (:26152) reads the victim's life at the chase dispatch, so a wizard dying mid-swarm is dropped as a chase target that tick - the port kept the latched target and t=3059's extra(10,0)x3 was the wyverns still FIRING AT THE CORPSE (the banked 'keeps +146=472' was the port's own behavior read backwards). Ledger SESSION 65 law 5."
+    },
+    {
+      "t": 3559,
+      "file": "the-anti-rebound-notice-is-a-live-token-read.mgcr",
+      "source": "mc1l49",
+      "note": "THE ANTI-REBOUND NOTICE IS A LIVE TOKEN READ AT THE CASTER'S OWN DISPATCH: sub_16000 (:19449-56) reads the TARGET's spell-14 token record's +48 (pool[wizext+676+2*14], `+48 > 0`), not the carpet's 0x8000 mirror. Walk order is the law: a token arming BELOW the reader is seen the same tick (t=3560, token 600 < reader 620); the owner-slot mirror refresh missed a token above its owner (t=4003, token 704 > owner 698). The port's cached rebound bools replaced with ent[owned[14]].f26 > 0. Ledger SESSION 65 law 6."
+    },
+    {
+      "t": 4654,
+      "file": "the-m15-chase-hit-mailbox-aborts-on-death-only.mgcr",
+      "source": "mc1l49",
+      "note": "THE CASTLE GUARD'S CHASE IS NOT ON THE SHARED DAMAGE PROLOGUE: m15 state 92 (sub_201D0, remc1/sub_main.cpp:25820-34) carries its OWN inline mailbox and it aborts on DEATH ONLY - `if (v2 > 1) { a1x->var_u8_29865_70 = 94; goto LABEL_25; }` - so a NON-LETHAL hit falls straight through to the re-bear and the bolt, and there is NO retarget arm anywhere in the function: `v8 = pool + 164 * a1x->var_u16_29941_146;` then `if ((a1x->var_u8_29858_63 & 3) == 0) a1x->var_u16_29829_34 = sub_42150_42490(..., v8 + 72);` STILL RUNS. The freeze is PER-HANDLER, not per-family - m15's WANDER slot sub_1FF60 (:25718-27) really does freeze on ANY mail (`if (v1) { if (v1 > 1) {...} ... }`), and that contrast is what makes this a law. WITNESS mc1l49 t=4654->4655, guard slot 114 (5,15) f70=92: act_life 1000 -> 200, f34 1256 -> 1259, f40 0 -> 331, f58 2 -> 1, f63 12 -> 13, mail0.src 331 -> 0 - the guard takes 800 damage on a tick whose +63 is 12 (&3 == 0, i.e. a re-bear tick) and retail STILL re-bears, keeping +146 = 907. The port's Inbox::Hit arm ended in a blanket return, so target_yaw stuck at 1256. NON-VACUITY: MGC_NO_M15_CHASE_HIT_FALLTHROUGH=1 regresses this pair (slot 114 target_yaw: retail 1259 port 1256). Worth +1,033 horizon and -712 census rows on mc1l49. Ledger SESSION 96."
+    },
+    {
+      "t": 9646,
+      "file": "the-token-gate-is-per-tick-not-per-arm.mgcr",
+      "source": "mc1l49",
+      "note": "THE TOKEN GATE IS PER TICK, NOT PER ARM (sub_55DD0_56300 runs on every tick a launcher/skeleton burst is live, :64977 / :65273-85 / :66244-59 and 19 twins; nothing guards it on +48 == +50). The human's castle 353 takes its fatal hit at t=9645 and DOWNGRADES 6 -> 5, dropping its store 271488 -> 160000, under the 200000 his live Magic Bomb token (slot 87, +132) requires - so retail cancels the burst that tick (+48 47 -> 1 -> 0) and, because the cancel path returns BEFORE sub_55E80_563B0, the mid-burst regen pin never runs and the wizard's pending +132 (1452 = f136/200) lands on his own step: mana 135162 -> 136614. The port only tested the gate on the arm tick, so the burst ran on (f26 47 -> 46) and pinned the regen, leaving the human 1452 short for the rest of the take. The RIVAL half of this law was already landed (rival_manifestation_tick / rival_token_gate); the HUMAN half never was. Kill switch MGC_NO_MC1_TOKEN_GATE_PER_TICK. Wave 115 dig D17."
+    },
+    {
+      "t": 14797,
+      "file": "a-dry-pool-plume-handover-flags-nobody.mgcr",
+      "source": "mc1l49",
+      "note": "THE VOLCANO'S PLUME HANDOVER LIVES INSIDE THE NEW PLUME'S NULL GUARD: on an exhausted pool retail reap-flags NOBODY and keeps its stale +38, where the port flagged the outgoing plume before it knew whether a replacement existed. WITNESS mc1l49 t=14797->14798: the pool is dry, the volcano's `plume` register is unchanged across the tick, and slot 235 goes UNFLAGGED. NON-VACUITY: MGC_NO_MC1_PLUME_SPAWN_GUARD=1 regresses this pair on (10,0) flags. This is the likely upstream cause of the no_spell_loss t=17809 symptom already in the register - a soft-killed re-minted token. `mc1/combat.rs` has no test module, so this recording pair is the law's only pin. Wave 115 dig D14."
+    },
+    {
+      "t": 14821,
+      "file": "a-shaking-castle-finishes-its-ground-leveler.mgcr",
+      "source": "mc1l49",
+      "note": "A SHAKING CASTLE **ENDS** ITS GROUND LEVELER - the else arm is the FINISH, not a pause (+50 is the BLAST SHAKE countdown, not `rebuild-pending`). The neighbouring painter's twin guard sits AFTER its decrement and merely returns; that asymmetry is retail's own. WITNESS mc1l49 t=14821->14822: the leveler FINISHES on a shaking castle. NON-VACUITY: MGC_NO_MC1_LEVELER_SHAKE_GATE=1 regresses this pair on (10,41) f26 and flags. Companion to the unit test a_shaking_castle_aborts_its_ground_leveler. Wave 115 dig D20."
+    },
+    {
+      "t": 15551,
+      "file": "the-castle-token-bills-before-it-asks-the-pool.mgcr",
+      "source": "mc1l49",
+      "note": "THE CREATE-CASTLE TOKEN BILLS BEFORE IT ASKS THE POOL: the `if (v3)` null guard at :65880-81 covers only the ball and its in-transit +48 pin, so a rival firing into an EXHAUSTED pool pays the full ladder price and gets nothing. Its debit reads the TOKEN's live +136, which the ladder-EVENT law (D6) made a per-level-event value rather than a derivable one. ⭐ This is the plume guard's shape INVERTED - do not pattern-match one onto the other. WITNESS mc1l49 t=15551->15552: the rival's purse goes 40100 -> 100, the +48 still reads 101, and there is no (9,10) ball anywhere on the board. NON-VACUITY: MGC_NO_MC1_CASTLE_BALL_DEBIT_ORDER=1 restores the spawn-then-bill order and regresses this pair on (12,2) f26 and (3,1) mana. Companion to the unit test a_dry_pool_castle_cast_is_billed_in_full. Wave 115 dig D23."
+    },
+    {
+      "t": 18525,
+      "source": "mc1l49",
+      "note": "A FULL ACQUISITION LIST REFUSES THE GRANT. Retail's jar poll sub_55A40_55F70 (:64818-41) walks wizext+532 once and keeps TWO results: v25 (the list already holds a class-12 record of this spell) and v24, the index of the FIRST EMPTY seat, initialised to -1; :64841 refuses the whole grant on `v25 || v24 == -1`, because v24 is both the seat the pool slot goes into (+532 + 4*v24) and the value stamped into the LEFT hand (+940 = v24). The port enforced only v25. THE LIST CAN BE FULL WITH THE SPELL STILL UNOWNED: a seat holds a raw pool slot with no liveness test, so a recycled slot leaves a zombie seat that is neither empty (slot != 0) nor a match (class64 != 12). WITNESS (mc1l49 t=18525, read from state.struct_b64): wizard 0's +532 is 24/24 non-zero, seat 20 holds pool slot 235 whose class64 is 0, and +676[20] is 0 - spell 20 reads UNOWNED. The decaying (12,20) phase-1 jar at slot 693 (+70=61, actLife 113, flags 4, +42=672) lies under the carpet and retail's every-4th-tick poll NEVER grants it. The port granted on every poll (flags 5, +70=60, +42=569) and re-equipped the left hand to spell 20 where retail keeps 22. Free-run mc1l49 167 -> 129 segments. Kill switch MGC_NO_MC1_ACQ_LIST_FULL.",
+      "file": "a-full-acquisition-list-refuses-the-grant-retail.mgcr"
+    },
+    {
+      "t": 19557,
+      "file": "the-token-gate-reads-the-owners-live-purse-word.mgcr",
+      "source": "mc1l49",
+      "note": "THE RIVAL TOKEN GATE READS THE OWNER RECORD'S OWN LIVE +140, NOT A CACHED PURSE: sub_55DD0 (CARPET.EXE 0x6E5C8) loads the owner's purse word with `mov 0x8c(%ecx),%eax` (0x55E2F: 8b 81 8c 00 00 00) and compares it SIGNED against the TOKEN's live +136 (0x55E35: 3b 82 88 00 00 00 / 7c 12 = jl); it also refuses outright on a NEGATIVE purse (0x55DDA: 83 b9 8c 00 00 00 00 + 0f 8c 7a 00 00 00), a leg sitting AHEAD of the mid-burst escape at 0x55E4F that the port lacked entirely. RivalState::mana is only a MIRROR, re-synced at the owner's own dispatch, but combat debits +140 DIRECTLY and MID-TICK (the Rebound deflection quarter sub_52B30 :62884, the shield quarter sub_46540 :55703), so a class-12 token dispatched after its owner's brain but before the tick ends saw a purse retail had already emptied. Here rival 724 (3,1) holds a full-strength Shield burst (token slot 632 (12,4), +136=2000); a deflection debits 60000>>2=15000 onto 724.+140 leaving 1603, so retail reads 1603 < 2000 -> REFUSE -> +48=1; -- -> 0. The port read the stale mirror 16603 -> admit -> 16603-15000-2000 = -397 -> clamp(0,..) = 0, and +48=250. Landed on all THREE call paths (round 104: a law on one call path is not landed) - rival_token_gate, rival_castle_token_tick's inlined twin, and rival_heal_token_tick's sub_56270 afford leg. MC2 landed the same law already (mc2::cast::no_mc2_wiz_purse_is_entity). Switch MGC_NO_MC1_RIVAL_TOKEN_GATE_LIVE_PURSE=1. Round 120 dig W120-5."
+    },
+    {
+      "t": 20527,
+      "file": "a-tokens-caster-is-its-own-owner-tag.mgcr",
+      "source": "mc1l49",
+      "note": "A CLASS-12 TOKEN'S CASTER IS THE TOKEN'S OWN +42, NOT THE WIZARD REGISTER THAT NAMES IT. Retail runs ONE machine per token with no human/AI fork: sub_57800 (VA 0x57800 = CARPET.EXE file 0x6FFF8) opens `66 83 7d 30 00` cmpw $0,0x30(ebp) / `0f 8e` jle (token +48 <= 0 -> return), then `66 8b 45 2a` MOV 0x2a(EBP),AX -- the token's own +42 -- resolves it through the lea/add/lea/add/lea x164 chain and `add $0x7463` pool base, `39 c3` cmp / `0f 86` jbe (owner 0 -> bare decrement), and pushes THAT entity to the cast gate sub_55DD0 (file 0x6E5C8). All disassembled. The port instead forked on `player.owned[spell] == i`, and that register GOES STALE: retail's wizext +676 is 'spells ever acquired' and nothing rewrites it when the slot it names is recycled into somebody else's token. WITNESS mc1l49 pair 20527->20528: pool slot 235 is a (12,17) Undead Army token whose +42 = 724 (rival wizard 6's carpet), and BOTH wizard 0's and wizard 6's +676[17] name slot 235. Rival 6 arms it at t=20527 (+48 0 -> 13, the only nonzero tick in 20300-20700). Retail runs it against caster 724: rival 6's castle 502 stores 57,476 against the token's +132 = 150,000, so the gate's castle leg refuses at 0x6e61e `cmp 0x74ef(ebx,eax,4),edi / jg` -> +48 = 1, decrement, 0 at t=20528. No bolt, no debit. The port ran the same token as the HUMAN's, against castle 353 (stored 1,306,127) and the human's purse: it debited 13,000 and minted a phantom (9,11) lob from the human's muzzle. That ONE extra new_event shifted every later LIFO pop by one, which is the entire slot 741 / slot 995 row set -- the mana delta 188,830 vs 175,830 is a CONSEQUENCE, not a cause. ⭐ THE BRIEF'S 'retail seizes LIVE records' PREMISE IS REFUTED: NewEvent_372C0 (file 0x4FAB8) has exactly two arms -- free-stack pop (index +40, cells +593) then recycle victim (index +4593, cells +4597) -- and NULL; retail's free stack at t=20528 is t=20527's minus exactly its top element (344), so 741/651/995 were freed by their own dying occupants inside the tick and re-popped LIFO. Round 104's 'THE ALLOCATOR IS BIT-EXACT' stands unqualified. Both class-12 dispatch forks patched (round 104's one-call-path law). mc1l49 12 seg/11 devs -> 11/10. Corpus 17 identical / 0 regressed. Kill switch MGC_NO_MC1_TOKEN_OWNER_TAG. Wave 121 dig D9."
+    },
+    {
+      "t": 21961,
+      "file": "the-rivals-v14-kill-latch-has-an-import-seat.mgcr",
+      "source": "mc1l49",
+      "note": "THE RIVAL'S v_14 KILL LATCH HAS AN IMPORT SEAT, ONE FIELD ABOVE THE v_12 THE IMPORT ALREADY TOOK: sub_56380_568B0's head (remc1/sub_main.cpp:65141-51) opens the speed token with `if (!sub_55DD0_56300(a1, owner) || *(_WORD *)(*(_DWORD *)(v1 + 160) + 14)) { if (*(_WORD *)(*(_DWORD *)(v1 + 160) + 14)) *(_WORD *)(a1 + 48) = 1; }` - `v1 + 160` is the OWNER wizard's Type_160 control block, so `+14` is the very v_14 the recorder decodes for all eight wizards and `+12` the v_12 the import seats as RivalState::vdes. A standing latch force-ends the burst and the shared decrement (:65190) zeroes the counter that same tick; the sustain arm - and with it sub_55E80's mid-burst regen pin - never runs. sub_15470 clears the latch at its head (:19057) and re-arms it on the arrival stop (:19075-76) and the plain throttle (:19089-91). rival_speed_token_tick has modelled the READ since the mc1l4/mc1l5 dig, but a RIVAL's latch defaulted to false on every import, so no imported pair could take the kill arm; the human's twin was seated (`self.mc1_v14 = wiz.v14 != 0`) and the rival's was simply left out. WITNESS mc1l49 t=21961->21962, rival 3 (ent 646, class 3 model 1) and his (12,2) speed token slot 154: at 21961 the AI ARRIVES and wizext v_14 goes 0 -> 1 with v_12 160 -> 0; on 21962 retail's token pass (slot 154 walks BELOW its owner 646) snaps +48 106 -> 0, the expiry snap restores +126 160 -> 80, and the skipped regen pin lets the purse take +100, +140 1100 -> 1200. Unseated the port decremented +48 to 105, held +126 at 160 and pinned the regen: all five rows of the pair (646 x/y/speed/mana, 154 f26). The RIVAL half only - the human cast-site accelerate veto stays retired (MGC_NO_MC1_ACCEL_CAST_VETO_RETIRE, mc1l48 t=4899): retail's trigger arms unconditionally and the brake IS this two-phase v_14 kill one tick later. Kill switch MGC_NO_MC1_RIVAL_V14_SEAT."
+    },
+    {
+      "t": 22192,
+      "file": "a-sound-driver-byte-gates-the-row-0-smoother.mgcr",
+      "source": "mc1l49",
+      "note": "A SOUND-DRIVER BYTE DECIDES WHETHER A ROW-0 CELL SMOOTHS, AND ONE OF THEM IS BOTH OF mc1l49'S LOCALLY-ROOTED z HEADS: retail's sub_360C0 (remc1/sub_main.cpp:42912-19) gates a cell on mapTerrainType_CC1E0[(u16)a1 - 257] and [(u16)a1 - 256] with SIGNED int indices, so a row-0 cell reads two bytes BELOW the type plane (the CC0DF..CC1DF HMI block). Gen::OOB_TYPE_SHIM models those 257 bytes; this pin adds {119} (VA CC156, inside the weak dword_CC154). WITNESS mc1l49 t=22192->22193, the castle perimeter epilogue smooth_perimeter(cx=128, cy=0, half_h=half_w=10, thick=3): its left column strip x=115..118 walks row 0 first and retail smooths (115,0) 136->134, (116,0) 130->127, (117,0) 120->117 - each the exact 3x3 average - then leaves (118,0) at 103 where the average is 975/9 = 108. (117,0) smoothing pins shim {117,118} plain, so {119} is forced. One byte is both heads: the port's spurious (118,0)=108 lifts the SAME pass's (117,1) to 1057/9 = 117 (retail 1052/9 = 116) and (118,1) to 874/8 = 109 (retail 868/8 = 108), and the (10,6) standing fire at (118.05,1.69), which rides ground_z + f46 every tick (sub_252D0 :28199), reads z 3499 where retail reads 3491. NON-VACUITY: MGC_NO_MC1_ROW0_SHIM_119=1 regresses this pair (slot 947 z: retail 3491 port 3499). The take's second local z head, t=22291 slot 900 (retail 3632 port 3640), is the same byte one eruption cycle later; its OTHER 25 z-only heads (t=17478 included) are pair-CLEAN and inherited, so the 27-head z family was never one servo."
+    },
+    {
+      "t": 24926,
+      "source": "mc1l49",
+      "file": "a-full-list-orphans-the-rival-s-new-token-retail.mgcr",
+      "note": "A FULL ACQUISITION LIST ORPHANS THE RIVAL'S NEW TOKEN. Retail's rival learn-timer expiry (sub_15EC0 :19415-31) conjures the manifestation FIRST - off_987DE[spell](wizard.pos) takes the pool slot and builds the record - and only THEN walks that wizard's wizext+532 for the first EMPTY seat: `v6=0; while(*(v5+532)){++v6; v5+=4; if(v6>=24) goto LABEL_12;}`. LABEL_12 is the loop's CONTINUE, past ALL THREE registration writes - `+16 |= 1` (:19428), `+42 = the wizard's slot` (:19429) and `+532[v6] = the pool slot` (:19430) - so with 24/24 seats taken the newborn is born ORPHANED: flags 4, +42 = 0, in nobody's book. It is then never polled (+70 = 3*spell is the spell's own manifest dispatch row in str_2563D8 :4957-5028, never sub_56250/sub_56260 -> sub_55A40) and never freed (actLife 0): over the take's remaining 40,240 ticks only its +20 list link and its +63 clock ever change, and retail declines all 9,942 of its due already-known polls. WITNESS mc1l49 t=24927 pool slot 230 (12,16) +70=48, +63=230 (the allocator's slot stamp, :43882), actLife 0, minted by the wizard at carpet slot 594: retail flags 4 / +42 0 against the port's flags 5 / +42 594. Sibling witness t=25321 slot 123, same shape. SAME v24 == -1 refusal as MGC_NO_MC1_ACQ_LIST_FULL, THIRD call path - here retail lets the record be born and withholds only the registration. NOTE +42 is projected but UNGRADED in verify-deltas' lane list, so only the flags half of this pair was visible. Kill switch MGC_NO_MC1_RIVAL_LEARN_SEAT."
+    },
+    {
+      "t": 26529,
+      "file": "the-owned-token-register-is-an-unguarded-slot-index.mgcr",
+      "source": "mc1l49",
+      "note": "THE OWNED-TOKEN REGISTER IS A RAW SLOT INDEX AND RETAIL NEVER CHECKS WHAT LIVES THERE. sub_14E60 (VA 0x14E60 = CARPET.EXE file 0x2D658) resolves a wizard's owned-token register wizext+676+2*spell as a SIGNED index -- VERIFIED in the shipped bytes: `0f bf 94 42 a4 02 00 00` movswl 0x2a4(edx,eax,2),edx, then lea/add/lea/add/lea building 164*idx (the entity stride), add the pool base, and `39 d0` cmp / `76` jbe against that base. That bounds check is the ONLY guard: no class, no flags, no liveness. Its caller sub_14120 (file 0x2C971) then runs `66 83 78 30 00` cmpw $0,0x30(eax) / `0f 85` jne -- the +48 word of WHATEVER RECORD NOW OCCUPIES THE SLOT. The port homes retail's +48 in Ent::f26 only while the record is a live class-12 manifestation; on any other class f26 is retail's +26, a different word entirely. WITNESS mc1l49 t=26530: wizard 1's owned[16] = 26, and slot 26 has been recycled into a (9,16) bolt whose +26 = 16 and whose +48 = 0. Retail passes the gate and promotes the rival RaidCastle -> Upgrade (brain 7 -> 1, +146 933 -> 619, +148 1084 -> 980); the port read 16, refused, and stayed on the raid -- the sole pair row was `slot 594 chase: retail 619 port 933`. This EXTENDS MGC_NO_MC1_FREED_TOKEN_BURST (which already covers a FREED slot, class64 == 0) to the slot RE-TAKEN by a live record of another class, where that import seat cannot fire without clobbering the new record's own +26. The class64 == 0 arm is load-bearing and measured: without it mc1l49 loses this head but grows a new one at t=35374. New lane Ent::raw48 is hash-silent by construction (empty Hash impl, like Lease2e) and off the snapshot wire, so goldens and SNAPSHOT_VERSION do not move. mc1l49 15 seg/14 devs -> 14/13 alone (12/11 with the wave's D5); the 6,002 and 5,531 tick segments merge into one 11,533-tick bit-exact run. Corpus 17 identical / 1 improved / 0 regressed. Kill switch MGC_NO_MC1_TOKEN_RAW48. Wave 121 dig D2."
+    },
+    {
+      "t": 26653,
+      "file": "a-banked-zero-re-mints-fireball-at-the-respawn.mgcr",
+      "source": "mc1l49",
+      "note": "A BANKED 0 IS FIREBALL, NOT AN EMPTY SEAT: the respawn re-grant walk (sub_45C10_45F50, remc1/sub_main.cpp:54893-922) tests each wizext+532 entry ONLY for `< 0` - `if (var_532[v9x] < 0) var_532[v9x] = 0; else { v11x = sub_373F0_377B0(&v2x->+72, 12, var_532[v9x]); ... }` - so a dead-form 0 mints a (12,0) token like any other model, even when index 0 already minted one. The port had an INVENTED disambiguator (`entry == 0 && !death_owned[0] => skip`) which made its block ONE TOKEN SHORT and shifted every later member up a free slot. WITNESS mc1l49 t=26653->26654, the human's respawn: +532 reads [0,3,2,16,1,14,4,12,6,9,7,8,15,18,17,19,13,5,11,10,0,21,22,23] (seat 20's spell was lost to a slot recycle well before t=18525 - the sibling fixture a-full-acquisition-list-refuses-the-grant reads that seat holding pool slot 235 with class64 = 0 - so every death walk since has banked that recycled record's model65 = 0); retail lays 24 tokens - slot 345 (12,0) mana 40 / mana_max 200, and +676[0] ends at 345, ORPHANING the index-0 mint at slot 113 - where the port laid 23 and put model 21 at 345, 22 at 346, 23 at 347, leaving slot 352 missing. The same pair shape repeats at 11 more respawns in this take (30633, 31201, 34563, 35135, 40380, 42103, 52104, 54417, 54745, 59738, 61336), all off the same permanently holed list. Free-run mc1l49 85 -> 74 segments. Kill switch MGC_NO_MC1_REGRANT_ZERO_ENTRY. Wave 119 dig W119-4."
+    },
+    {
+      "t": 29061,
+      "file": "the-eruption-driver-re-reads-its-own-counter.mgcr",
+      "source": "mc1l49",
+      "note": "THE ERUPTION DRIVER RE-READS +26 FROM MEMORY, AND THE START BLOCK'S REGISTER KICK CAN LAND ON ITS OWN SLOT. sub_25EC0 re-reads +26 at all three points after the eruption-start block: :28803 (v13 = *(a1+26); CARPET.EXE 0x3E88A `66 8b 7b 1a` = `mov 0x1a(%ebx),%di`, then 0x3E891 `test %di,%di` / 0x3E894 `75 77 jne 0x3E90D` - the blast is SKIPPED straight to the death check), :28825 (0x3E90D `66 83 7b 1a 7f` = `cmpw $0x7f,0x1a(%ebx)`) and :28831 (0x3E928 `66 ff 43 1a` = `incw 0x1a(%ebx)`, an in-memory ++). It matters because the start block's kick *(prev+26)=250 (0x3E7B6 `66 c7 42 1a fa 00`) is a BLIND write guarded ONLY by slot != 0 (0x3E7B4 `76 06`), so when the stale global `erupting` register names the very pool slot just recycled into THIS driver, retail SELF-KICKS its own +26 to 250 - and then mints NO eruption-start blast (250 != 0), reap-flags itself on its first tick (250 >= 127), clears the register it set two instructions earlier, and ends recording +26 = 251. WITNESS t=29061: erupting=968 with slot 968 a long-stale reap-flagged (10,6) (act_life -2); the pool recycles 968 into the new (10,18) driver and retail records f26 0 -> 251, flags 132100 -> 1024, f30 0 -> 1280, popping ONE slot all tick (free stack 262 -> 261, next-pop 168 -> 169) for a (10,13) at 168. The port cached c at entry, minted a spurious (9,0) blast at 168 (sclass/smodel 255 is new_event's default +66=+67=0xFF, :43879 - a fresh blast fireball, NOT a record missing its source) and pushed retail's (10,13) to 169; because the blast consumes a free-stack slot the defect surfaces as an ENTITY-SET divergence. The register-block gate (:28778 / 0x3E779) is deliberately left on the entry value - retail re-reads there too, but only the pure ground query sub_11F50 runs between, so the two are provably identical. mc1l49 pair 29061->29062 becomes bit-exact. Switch MGC_NO_MC1_ERUPTION_COUNTER_REREAD=1. Round 120 dig W120-4."
+    },
+    {
+      "t": 33081,
+      "file": "the-castle-commit-resolves-its-token-by-index.mgcr",
+      "source": "mc1l49",
+      "note": "THE CASTLE COMMIT RESOLVES ITS TOKEN BY INDEX, NOT BY OWNER: sub_14E60 (:18769-77) is `POOL + 164*wizext[676+2*spell]`, null only when that index is 0 - no class, model, state or +42 owner test - and sub_155F0 case 0x10 (:19191-93) gates on nothing but `!v6`, `v6->+48` and `+140 < v6->+136`. Rival 1 (ent 594) sits arrived over its own castle 619 in Upgrade with owned[16] = slot 26, a live (12,16) token whose +42 reads 646, ANOTHER wizard's entity; retail fires (wiz 1 cooldown[16] 0 -> 40) and sub_13800's `if (sub_155F0(a1,0x10)) return 0;` (:18121) leaves before the z-hover, so z stays at the housekeeping clamp's ground+v_12 = 5604. The port's owner-checked rival_token refused and hovered -v_14 = +4 to 5608. MGC_NO_MC1_CASTLE_TOKEN_INDEX=1."
+    },
+    {
+      "t": 34531,
+      "file": "the-class-3-acquire-drops-the-dead-human.mgcr",
+      "source": "mc1l49",
+      "note": "THE CLASS-3 ACQUIRE DROPS THE DEAD HUMAN AT TICK TOP. Retail's human wizard IS an ordinary pool class-3 record (mc1l49 slot 569), so his candidacy for a projectile's acquire is decided by the SAME tick-top roster sweep as every rival carpet: sub_41780_41AC0's case-3 arm (:52253-62) links a record onto bucket[0] (var_u32_36462[0]) only when `actLife >= 0 && (+16 & 0x10) == 0` -- VERIFIED in the shipped bytes at CARPET.EXE 0x5A151 `83 78 0c 00` cmpl $0,0xc(eax) / `7c 24` jl / `f6 40 10 10` testb $0x10,0x10(eax) / `75 1e` jne, then `89 83 6e 8e 00 00` writes the head at +0x8e6e (= 36462). And sub_54520's case-0/3/4 arm walks THAT VERY HEAD (CARPET.EXE 0x6CEB9 `8b 9b 6e 8e 00 00` mov 0x8e6e(ebx),ebx). The port's Gen::aim_assist_mc1_cone2 injected the out-of-pool human as a Scan-A candidate with NO liveness test at all, so once the human fell (mc1l49 t=34530, actLife -970) every fireball cast afterwards locked his CORPSE and bent 23-34 units of yaw off the muzzle bearing for the rest of its flight. Our human is out of pool, so his seat rides the TICK-TOP latch ctx.pdead_top, never the live pdead -- exactly as Gen::nearest_wizard_target (mobs.rs:1176) and Gen::first_wizard_with_mana (mobs.rs:2084) already do for the same list; the acquire was the one call path that did not. WITNESS pair 34531->34532: slot 981 chase retail 0 port 569, heading 260/283, target_yaw 260/283; slot 90 heading 260/283, pitch 1954/1958. With pair 35089->35090 it gated 2,581 ticks. mc1l49 15 seg/14 devs -> 13/12; corpus 18 identical / 0 regressed. Kill switch MGC_NO_ACQUIRE_HUMAN_BUCKET0. Wave 121 dig D5."
+    },
+    {
+      "t": 41371,
+      "file": "the-dig-abort-is-the-cells-return-not-the-protect-flag.mgcr",
+      "source": "mc1l49",
+      "note": "THE DIG ABORT IS THE CELL'S RETURN, NOT THE `protect` FLAG. `sub_40D30_41070` (:51711-16, CARPET.EXE 0x595a9 `test al,al / je <next cell>`) walks the ring template and returns 1 on ANY nonzero cell result; the `a5` argument it was handed is only FORWARDED, never tested there. The callee `sub_40A10_40D50` (:51621-90, EXE 0x59208) has two truthy paths: the protect abort (`a4 && angle < 0`, :51645) and the SATURATION LATCH -- `v8 = 1` when the new height clamps at 200 or at 0 AND `!a1 && !a2`, i.e. the literal map origin cell (:51634/51641, EXE 0x59242/0x59263). The port ANDed the abort with `protect`, so the latch was unreachable for the two non-protect diggers (`Gen::tick_hill` = `sub_25470` byte70 9, `Gen::tick_ridge_head`), and `dig_cell`'s own doc comment inherited the false claim that the latch is 'dead in practice'. It is not: mc1l49's hills sit AT tile (0,0). WITNESS t=41372 slot 776 `(10,9)` at x=y=0 -- retail takes `sub_25470`'s finish arm (the -40 levelling dig, a `(10,18)` child stamped with `+24`, and `sub_41E80`'s `flags |= 0x400`) while the port held `flags 0` with `actLife` still positive. Kill switch MGC_NO_MC1_DIG_ABORT_LATCH. Wave 119 dig W119-5."
+    },
+    {
+      "t": 43541,
+      "file": "the-dig-centre-and-ring-deltas-are-signed.mgcr",
+      "source": "mc1l49",
+      "note": "THE DIG CENTRE AND THE RING DELTAS ARE SIGNED. `sub_40D30_41070` reads the event position with `movsx` and shifts arithmetically (CARPET.EXE 0x59536/0x5953a `movsx esi, WORD PTR [edx+0x48]` ... `add 0x80` / `sar 8`), and the ring iterator `sub_114B0` sign-extends its template BYTES (EXE 0x29ccc/0x29cd8 `movsx ebx, BYTE PTR [edx]`). The port widened both as UNSIGNED. The tile INDEX is unaffected (same low byte either way), but `sub_40A10_40D50`'s origin latch compares the FULL i16 sum, so the unsigned reading hides the latch for every event sitting on the map wrap seam. WITNESS t=43542 slot 996 `(10,9)`: `x 317, y 65295` is centre (1, -1) signed and (1, 255) unsigned; with `+26 11->12` the radius is 2 and ring 2's `(-1, +1)` delta lands on (0, 0) -- retail latches, soft-freezes (`flags 0 -> 1024`) and spawns the `(10,18)` at slot 758, the port did neither. Same kill switch as the abort law (a mis-addressed latch is an absent latch): MGC_NO_MC1_DIG_ABORT_LATCH. Wave 119 dig W119-5."
+    },
+    {
+      "t": 47356,
+      "file": "the-invisibility-notice-is-a-live-token-read.mgcr",
+      "source": "mc1l49",
+      "note": "THE WIZARD PICK'S INVISIBILITY SKIP IS A LIVE TOKEN READ AT THE CALLER'S OWN DISPATCH: sub_145B0 :18558 skips a candidate on !sub_16000(i, 0xC), and sub_16000 (:19449-56) is `v = sub_14E60(i, s); v && *(__int16 *)(v + 48) > 0` - a SIGNED read of the TARGET's spell-12 manifestation record's +48, taken when the ATTACKER's selector runs, not a cached planner flag. World::rival_refresh_buffs refreshes RivalMc1::invisible at the TARGET's own dispatch and runs BEFORE that rival's cast arm, so a wizard who cloaks on tick T stayed visible to every reader until T+1. WITNESS mc1l49 t=47357: rival 646 casts Invisibility (its (12,12) token 113 goes +48 0 -> 251, purse 23657 -> 22657) and rival 672's selector, running afterwards at slot 672, DROPS it - retail's +146 goes 646 -> 569, abandoning the nearer 646 (d2 3,145,090) for the human at d2 4,098,505. The token walks below both carpets (113 < 646 < 672), so walk order makes the same-tick arm visible, exactly as for the spell-14 Rebound notice. Kill switch MGC_NO_MC1_INVIS_LIVE_TOKEN."
+    },
+    {
+      "t": 54340,
+      "file": "a-payload-detonation-the-allocator-refuses-does-.mgcr",
+      "source": "mc1l49",
+      "note": "A PAYLOAD DETONATION THE ALLOCATOR REFUSES DOES NOT REAP THE BOLT: sub_52770's explode tail (:62757-72) is `v19 = sub_373F0_377B0(a1+72, a1->+68, a1->+69); if (v19) { sub_526C0; five child stamps; sub_41E80_421C0(a1); }` - the soft kill is the LAST statement INSIDE the null check, so a detonation whose child allocation fails leaves the bolt alive, parked on its victim, retrying every tick. With the pool DRY (free 0 / recycle 0 at t=54340/41/42, zero births at 54342) the human's (9,4) volcano lob at slot 857 parks on rival castle 940 at (0,16384,6048) and retail holds flags 0x2006 through 54341 AND 54342, raising 0x400 only at t=54343 where the (10,9) hill is minted into slot 363; the port reaped on the parking tick (0x2406). MGC_NO_MC1_PAYLOAD_CHILD_REAP_GATE=1 restores the unconditional kill. Wave 119 dig W119-14."
+    },
+    {
+      "t": 54743,
+      "file": "the-seizure-blanks-every-roster-and-the-stack-im.mgcr",
+      "source": "mc1l49",
+      "note": "THE MC1 SEIZURE FAMILY, POOL-DRY ARM: three laws in one pair. (1) retail_import_mc1 imports the RECYCLE STACK (mgcr +4593/+4597) - the old 'sacrifice set alone, never reached' rationale is refuted: the death LANDING's rebuild (:55487) arms the stack and never disarms it (~3,750 corpus seizures); (2) MC1's free path (sub_41E90 :52512-20) never touches the stack - every recorded stack is strictly descending (14,178/14,178 snapshots), so Gen::free_entity's sub_57F20 swap-remove is MC2-gated; (3) the seizure BLANKS every tick-top roster (:43885-91: str_36382x memset + var_u32_36462[1]/[2]/[0]/[3] nulled) before the victim unlinks - consumers after the seizing slot see EMPTY lists, not a severed chain. Witness: mc1l49 t=54744 - free 7->0, then SEVEN seizures ascending 6,7,8,9,11,20,21; pre-law the pair read 104 unexplained rows (port allocations in the wrong slots: slot 6 model 13-vs-16 etc.), post-law it conforms. The NEXT pair (54744->54745) carried a separate residual which round 119 proved was NOT a starve: it is MGC_NO_MC1_REGRANT_ZERO_ENTRY - the port's INVENTED `entry == 0 && !death_owned[0]` skip made the re-grant block one token short. The pool never ran dry. The DEVIATIONS.md death_regrant starving-respawn therefore still has NO corpus witness."
+    },
+    {
+      "t": 55127,
+      "file": "the-castle-upgrade-request-survives-a-full-pool.mgcr",
+      "source": "mc1l49",
+      "note": "THE CASTLE UPGRADE REQUEST SURVIVES A FULL POOL. Retail's `+48` machine (`sub_46F10_47250` case 0, :56053-72) leaves exactly three things outside the commit guard -- the house pre-clear `sub_12C50`, the space gate `sub_12D10`, and the one-time team stamp -- and spends the request bit `+16 & 0x40` on only TWO paths: the space REJECT (:56070 `+16 = v2 & 0xBF`, with `+48 = 2`) and, inside `sub_47960_47CA0`'s `if (v1)` (:56475), the successful commit. `v1` is `sub_3B7B0_3BB30(+150)` (:47567-86), a bare `NewEvent_372C0_37680()` that returns 0 ONLY when the pool is exhausted -- and then the whole commit is skipped and case 0 retries next tick with the request STILL SET. The port cleared the bit at the TOP of sub-state 0, so a pool-full tick ate the request. WITNESS castle 940 `(3,2)`, owner 750, level 4: retail arms at t=55127 (`+70 4->5`, `flags 14->78`) and holds `flags 78` with `+26 = 4` / `+48 = 0` through t=55132 -- six ticks of a full pool -- then commits at t=55133 (`flags 78->14`, `+26 4->5`, `+48 0->4`, `+136 80000->160000`). The port dropped to 14 on the first state-5 tick, so the pairs anchored at t=55127..55131 all read flags retail 78 / port 14 (five heads, the whole `(3,2) flags` bucket). Kill switch MGC_NO_MC1_CASTLE_UPGRADE_LATCH. Wave 119 dig W119-5."
+    }
+  ]
 }

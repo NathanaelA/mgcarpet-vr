@@ -588,6 +588,33 @@ impl World {
             }
         }
 
+        // ⭐⭐⭐ THE HUMAN'S SEAT IN HIS OWN CELL CHAIN. He is spliced
+        // OUT of the rebuild above (out-of-pool), but retail's carpet
+        // is an ordinary member and `sub_11980`'s first-match probe
+        // reads his RANK — so carry it: his successor is the recorded
+        // `+20`, hopped past anything the port could not link, and
+        // accepted only when it really shares his tile. 0 = tail.
+        // See [`crate::engine::features::PlayerChain`].
+        {
+            let cell = crate::engine::features::tile(
+                (carpet.x >> 8) as u8,
+                (carpet.y >> 8) as u8,
+            );
+            let succ = hop(carpet.next20 as usize, false);
+            let next = if succ != 0
+                && succ < n
+                && crate::engine::features::tile(
+                    (st.ents[succ].x >> 8) as u8,
+                    (st.ents[succ].y >> 8) as u8,
+                ) == cell
+            {
+                succ as u16
+            } else {
+                0
+            };
+            self.g.player_chain = crate::engine::features::PlayerChain { cell, next };
+        }
+
         // Free stack: the LIVE recorded order, so port-side spawns land
         // on the same slots the recording's do. Fall back to the
         // load-rebuild scan (999→1) only when the recorded stack is
@@ -763,6 +790,15 @@ impl World {
             let w = &st.wizards[self.rivals[ri].slot as usize];
             let r = &mut self.rivals[ri];
             r.ent = w.play_index;
+            // ⭐ THE HUSK-WATCH GATE (`var_u8_13332_9`, +9). A
+            // per-level constant EXCEPT for the death scatter's
+            // `var_916[39]` overflow (MC1 `Rival::human_driven`), so
+            // it has to be READ, not derived: mc1l49's player 2
+            // carries 0 from t=39094 on and its husk watches its
+            // killer every tick for the rest of the take. Set before
+            // the eliminated early-out — the state-3 else arm runs
+            // whether or not the row still owns a carpet.
+            r.human_driven = w.ai_flag != 1;
             r.eliminated = w.play_index == 0;
             if r.eliminated {
                 continue;
@@ -780,6 +816,36 @@ impl World {
             // ceiling.
             r.mana_delta = e.f132;
             r.vdes = w.cmd_speed;
+            // ⭐ THE RIVAL'S v_14 KILL LATCH (Type_160 +14), the
+            // register that sits ONE FIELD ABOVE the v_12 imported on
+            // the line above and was the only half of the pair left
+            // unseated. `sub_56380_568B0` (:65146-50) opens its speed
+            // token with `if (!sub_55DD0_56300(...) ||
+            // *(_WORD *)(*(_DWORD *)(v1 + 160) + 14)) { if
+            // (*(_WORD *)(... + 14)) *(_WORD *)(a1 + 48) = 1; }` — a
+            // standing latch on the OWNER's control block force-ends
+            // the burst, and the shared decrement below zeroes the
+            // counter that same tick. The port already models the
+            // read ([`World::rival_speed_token_tick`]) and the human
+            // half is imported below (`self.mc1_v14`), but a RIVAL's
+            // latch defaulted to `false` on every import, so no
+            // imported pair could ever take the kill arm.
+            //
+            // The latch is sampled POST-tick at N, which is exactly
+            // what a token walking BELOW its owner's pool slot reads
+            // during pair N→N+1 (a token above its owner is re-served
+            // by the port's own `sub_15470` head before it runs) —
+            // the same seat rationale as the human's.
+            //
+            // mc1l49 t=21961: rival 3 (ent 646) ARRIVES (:19075-76
+            // stamps `v_12 = 0, v_14 = 1`), and on 21962 retail's
+            // token slot 154 snaps `+48` 106 → 0, the expiry snap
+            // restores `+126` 160 → 80, and — the sustain arm having
+            // been skipped — `sub_55E80`'s mid-burst regen pin never
+            // runs, so the wizard's purse takes its +100 (1100 →
+            // 1200). Unseated, the port decremented to 105, held 160
+            // and pinned the regen: all five rows of that pair.
+            r.v14 = w.v14 != 0 && !crate::engine::world::mc1_rival_v14_seat_off();
             r.jink = w.strafe;
             // The pending knock impulse (Type_160 +24/+22). A live
             // rival never spends it, so a mid-life import carries a
@@ -816,6 +882,57 @@ impl World {
                 st.ents[w.play_index as usize].f148,
             );
         }
+
+        // ⭐⭐⭐ THE BURST LANE OF A **FREED** TOKEN.
+        //
+        // `import_ent` re-homes retail `+48` into the port's `f26`
+        // for class 12 alone (the port has ONE field where retail has
+        // two: `+26` is the spell LEVEL on a token, `+48` the burst
+        // counter). But `Gen::free_entity` only writes `class64 = 0`
+        // — the port's `f26` SURVIVES a free exactly as retail's
+        // `+48` does — so a record that WAS a token and is now on the
+        // free stack still wears its burst natively, and the
+        // class-gated import threw it away. The lane's meaning is
+        // decided by the record's LAST OCCUPANT, not its current
+        // class.
+        //
+        // It matters because every `wizext+676` reader is a RAW
+        // register read with no liveness test whatever: `sub_14E60`
+        // (`reference/remc1/sub_main.cpp:18769-77`) is
+        // `pool + 164 * wizext->var_676[s]`, guarded only against
+        // slot 0. So a stale register naming a RECYCLED slot hands
+        // the caller that slot's live bytes, and `sub_14120`'s
+        // castle-upgrade gate refuses outright on `+48 != 0`
+        // (:18420-21).
+        //
+        // WITNESS (mc1l49 t=35404, read from `state.struct_b64`):
+        // wiz 1's `owned[16]` is 26; pool slot 26 is `class64 = 0`,
+        // `model65 = 16`, `+42 = 646` — wizard 3's Create-Castle
+        // token, freed and not yet re-taken — and it still holds
+        // `+48 = 101`. Retail refuses the upgrade and rival 594 falls
+        // through the cascade to HuntMana (brain byte 13, chase 822,
+        // a class-5 creature); the port imported `f26 = +26 = 0`,
+        // admitted the upgrade (state 1) and chased its own castle
+        // 619. The head repeats every 5 ticks — the wizard's whole
+        // think cadence — for the rest of the take.
+        //
+        // ⚰ THE IMPORT SEAT THAT USED TO SIT HERE WAS RETIRED
+        // 2026-09-08 (wave 121, digs D2 + D13; player-ruled). It
+        // wrote `f26 = +48` on every FREED slot a `+676` register
+        // named, to feed the owned-token readers. That is no longer
+        // needed and was actively unfaithful: `Ent::raw48` now
+        // carries retail's `+48` RAW FOR EVERY CLASS (set from
+        // `r.f48` in the MC1 import arm below, and carried across the
+        // `f26` -> `raw48` seam natively by `Gen::free_entity`), so
+        // the readers take the word from there and `f26` is left
+        // holding retail's `+26` — which is what a freed non-token
+        // actually has. Measured before removal: with the seat
+        // disabled the whole fixture corpus ran 484 pass / 0
+        // regressions, i.e. it had become behaviourally INERT.
+        // ⭐ This is the round-98 IMPORT-SEAT hazard closed rather
+        // than merely documented: an import-only compensation makes
+        // the graded lane green while the NATIVE game stays wrong,
+        // and a passing test then encodes an invented law.
 
         // Hands: the raw +940/+944 bytes index the ACQUISITION list,
         // not the spell table — resolve through the manifestation.
@@ -1015,9 +1132,31 @@ impl World {
             // throw — retail's five jars leapt to the death point
             // with fresh ttls and ours sat where they were (mc1l42
             // t=17343, 25 rows across flags/life/x/y/z).
-            owned: match carpet.f70 {
-                3 => [0u16; SPELL_COUNT],
-                _ => wiz.owned_slots,
+            // ⚠ NO STATE-3 BLANK. `+676` has exactly TWO writers in
+            // CARPET.EXE and both sit inside `sub_45C10_45F50`
+            // (`memset(wizext+676, 0, 48)` at file 0x5e41a, the
+            // indexed `mov [ebx+ecx*2+0x2A4], dx` at 0x5e466); every
+            // other reference to offset 0x2A4 in the shipped binary is
+            // a READ, and HIDDEN.EXE is byte-identical (0x5e9a6). The
+            // landing rewrites the `+532` ACQUISITION list and NOTHING
+            // else (:55516-49), and the class-3 dispatch table stops
+            // calling `sub_45C10` once `+70` leaves the live arms — so
+            // a husk's book FREEZES at what its last live tick
+            // published and the recording carries it verbatim.
+            // WITNESS (mc1l49 34550..35134, the human's husk window):
+            // 1,112 raw-shadow rows across 23 indices, retail naming a
+            // live jar slot against the port's zero. Retiring this
+            // blank alone takes them to 54 — the rest belong to the
+            // landing's own clear in [`World::player_land`], gated by
+            // the same switch on the strict arm, which takes them to
+            // 8. `MGC_NO_MC1_OWNED_SCATTER_KEEP=1` restores both.
+            owned: if crate::mc1::rivals::owned_survives_scatter() {
+                wiz.owned_slots
+            } else {
+                match carpet.f70 {
+                    3 => [0u16; SPELL_COUNT],
+                    _ => wiz.owned_slots,
+                }
             },
             grace: wiz.grace,
             // The 16-tick post-hit life-regen stall (u32_383,
@@ -1081,7 +1220,20 @@ impl World {
         self.pending_teleport = None;
         self.pending_respawn = None;
         self.pending_restart = false;
-        self.duel = None;
+        // ⭐ THE DUEL LOCK IS IMPORTED STATE, NOT A TICK MAILBOX.
+        // `Type_160` +314/+316/+318 (victim / counter / hold distance)
+        // survive across ticks for up to 800 of them, and the mover's
+        // tail (:55228-50) servos the caster's HEADING and steps him
+        // toward the victim on every one — so wiping it handed every
+        // imported pair, and every `--segmented` reset, a carpet that
+        // retail was still dragging. mc1l48's duel on rival 712
+        // (t=59119..59839, `duel_count` 200 -> 681) is 720 of that
+        // slice's 2,230 pose pairs.
+        self.duel = if crate::engine::world::mc1_duel_yaw_drag_off() || wiz.duel_victim == 0 {
+            None
+        } else {
+            Some((wiz.duel_victim, wiz.duel_count, wiz.duel_hold))
+        };
         self.won = false;
         self.completed = false;
         self.win_streak = 0;
@@ -4511,6 +4663,8 @@ pub(crate) fn import_ent_mc2(
         // `MGC_NO_SUMMON_LEASE_FIELD` the lane is inert and the `f26`
         // arms below pick one word exactly as they did before.
         lease2e: crate::engine::features::Lease2e(r.f2e),
+        // MC1-only lane (the ungated `sub_14E60` token read).
+        raw48: crate::engine::features::Raw48(0),
         rand: r.rand as u32,
         // Bit-preserving: retail's lightning trail stamps a node's
         // maxLife to -1 (sub_66750 EF:58336-43) and the port's own
@@ -5515,6 +5669,12 @@ fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
     Ent {
         // MC1 has no @0x2E charm lane (dig 98-Q20's field is MC2-only).
         lease2e: crate::engine::features::Lease2e(0),
+        // ⭐ Retail's `+48`, RAW, for every class — `sub_14E60`
+        // (CARPET.EXE 0x2D658) has no class guard, so its callers read
+        // this word off whatever record now sits in a wizard's stale
+        // owned-token slot. `f26` above only homes it while the record
+        // is still a class-12 manifestation.
+        raw48: crate::engine::features::Raw48(r.f48),
         rand: r.rand,
         max_life: r.max_life,
         act_life: r.act_life,

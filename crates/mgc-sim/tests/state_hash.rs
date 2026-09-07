@@ -933,12 +933,22 @@ fn level_005_golden_state_hashes() {
         // moves at exactly D/E too (below) and that is the CORRECT
         // signal: the ball's billboard row IS the behavior this law
         // fixes.
-        0x018d2010d9b38aa0, // post-init
-        0xd0106aff56c316fb, // A
-        0x3e7c352ebcd0d7fe, // B
-        0xbed151642b91ccb6, // C
-        0xbe5ab9f6ee8b8d9e, // D: 64 ticks of two-hand fireball combat
-        0x264e723af9f15f15, // E: 100 aftermath ticks
+        // ⭐ RE-PINNED, LAYOUT-ONLY, for THE HUSK-WATCH GATE: `Rival`
+        // gained `human_driven` — MC1's roster byte `var_u8_13332_9`
+        // (`sub_46480` :55605), which decides whether a state-3
+        // wizard takes the AI respawn arm or the human's killer-watch
+        // arm. `rivals.hash()` feeds this digest, so ALL SIX move by
+        // construction. OBSERVABLE holds byte-for-byte at all six
+        // (below) and the digest is identical with the law's kill
+        // switch on and off (`MGC_NO_HUSK_WATCH=1`) — level 005 has
+        // no rival death scatter in the window, so nothing in this
+        // level's behaviour moved.
+        0x6734887e2cc75de8, // post-init
+        0x9c9a5c3e9d8522c1, // A
+        0x9371760b47f68326, // B
+        0x50673dde9dced8f2, // C
+        0x96a45cff88bb8f2c, // D: 64 ticks of two-hand fireball combat
+        0x7ea72c6c42806165, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

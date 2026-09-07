@@ -204,6 +204,65 @@ the STATE hashes byte-identical (2 jars drawn until the all-spells cheat
 arms, 0 after).
 ---
 
+## MC1 rival spell repertoire — APPROX (five spells mint no projectile)
+
+**Original.** MC1's class-12 token machines in `str_2563D8`
+(remc1 `sub_main.cpp:4957-5033`, state = 3 x spell) are ONE set of
+functions serving the human and the AI alike. Every wizard's earthquake
+`sub_567A0`, crater `sub_56CA0`, storm `sub_579D0`, mana magnet
+`sub_57B80` and global death `sub_580A0` mint a real class-9
+projectile ((9,2)/(9,·)/(9,12)/(9,17)/(9,18)).
+
+**Port.** `Rival::rival_emit`'s spawner match (`mgc-sim mc1/rivals.rs`)
+returns `None` for spells 6, 9, 18, 19 and 22, so a RIVAL that reaches
+the emit arm for any of them mints nothing at all. The rival still pays
+the spell (the arm runs, the charge meter banks per
+`MGC_NO_MC1_RIVAL_CHARGE_FAMILY`) — only the projectile is missing. The
+human's arms are unaffected.
+
+**Verified.** Found 2026-09-08 (round 119, dig W119-6) while landing the
+charge-bank family across all fourteen banking machines; the five
+`None` arms were read straight out of the match. NOT measured against a
+recording — no corpus take witnesses a rival casting one of these five,
+which is why the gap survived this long.
+
+**Deviations & interims.** Unported, not deliberate. It is a genuine
+gameplay gap: rival wizards cannot use five of their spells. Porting the
+five spawners is the fix; each needs its own witness before it can be
+called conformant.
+
+---
+
+## MC1 AI owned-book overflow write — APPROX (modelled window only)
+
+**Original.** `sub_45C10_45F50` :55310-19 (CARPET.EXE `0x5E466`) rebuilds
+a wizard's owned book with an UNBOUNDED, UNFILTERED indexed write:
+`movsx` the record's model byte then `mov [wizext + 676 + 2*model], slot`.
+`+676` is 24 entries wide, `+628` (learn) sits immediately before it and
+`+724` (the AI recast-cooldown table) immediately after, so a recycled
+acquisition entry writes a pool slot into a neighbouring array — and
+since the rebuild re-runs at the top of every dispatch, the value it
+lands on is pinned for the rest of the level. See
+`MGC_NO_MC1_OWNED_REBUILD_OVERFLOW`.
+
+**Port.** The stray write is reproduced only where the port models the
+neighbour: byte offsets 628..674 land in `learn[]` and 724..770 in
+`cooldown[]`. Anything further out is dropped, because the port has no
+object there to corrupt.
+
+**Verified.** Round 119, dig W119-3. Witness mc1l49 t=36793 wizard 1
+(`acq[3]` names a recycled `(10,39)`, `676 + 2*39 = 754 = cooldown[15]`,
+pinned at 26 to the end of the take). Corpus scan: mc1l49 has one stray
+and it is inside the window; mc1l48's six strays all land in-range on
+`owned[]` itself. Pinned by
+`the_owned_rebuild_writes_past_the_book_into_the_recast_table`.
+
+**Deviations & interims.** The modelled window is a floor, not a claim
+of completeness — a take whose stray lands outside 628..770 would
+diverge and nothing yet witnesses one. Widen the window when one appears.
+
+---
+
 ## Vertical projection (crosshair/pitch feel) — APPROX, player-ruled
 
 **Original.** Retail renders pitch as an affine horizon SHEAR: the

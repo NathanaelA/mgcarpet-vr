@@ -1527,6 +1527,25 @@ pub struct ObjectiveTarget {
     pub yellow: bool,
 }
 
+/// `MGC_NO_MC2_MINE_CLANG=1` restores the silent magic-mine swallow:
+/// `sub_68AC0`'s `PrepareEventSound_6E450(shot, -1, 26)` (EF:55437)
+/// stays unrequested. ⚠ THIS ONE MOVES `Gen::sounds`, which is inside
+/// `World::state_hash` — the conformance lanes never read it, but a
+/// port-written recording pin does.
+pub(crate) fn no_mc2_mine_clang() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MINE_CLANG").is_some())
+}
+
+/// `MGC_NO_MC2_CAVE_DRIPS=1` restores the silent cave: the drip
+/// ambience (`EntitySounds` 65-69) that `World::take_audio` now reads
+/// off the global LCG on cave levels stays unrequested, as it was
+/// before wave 121's D15.
+pub(crate) fn no_mc2_cave_drips() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CAVE_DRIPS").is_some())
+}
+
 /// `MGC_NO_MANIFESTATION_ORDER=1` collapses the MC2 cast back into one
 /// pre-mover block at the caster's pool slot — the pre-dig behaviour,
 /// kept so one binary can be A/B'd. See
@@ -1589,6 +1608,16 @@ pub(crate) fn mc2_teleport_regen_off() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TELEPORT_REGEN").is_some())
 }
 
+/// `MGC_NO_MC1_TELEPORT_MAIL_SEAT=1` — the A/B arm for the MC1
+/// teleport MAILBOX seat: restore the pre-dig behaviour where
+/// `player_mail_block` (`sub_46540`'s drain, :55345-80) read the
+/// carpet's PRE-warp position, so the knockback bearing armed on the
+/// warp's own tick pointed at where the wizard USED to be.
+pub(crate) fn mc1_teleport_mail_seat_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TELEPORT_MAIL_SEAT").is_some())
+}
+
 /// `MGC_NO_MC2_TELEPORT_SAVE_AXIS=1` — the A/B arm for the T1
 /// save/return SEAT law: restore the pre-dig behaviour where the
 /// Teleport-II toggle parked the saved position in the port-side
@@ -1598,6 +1627,275 @@ pub(crate) fn mc2_teleport_regen_off() -> bool {
 pub(crate) fn mc2_teleport_save_axis_off() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TELEPORT_SAVE_AXIS").is_some())
+}
+
+/// `MGC_NO_MC1_TELEPORT_SAVE_AXIS=1` — the A/B arm for the MC1 TWIN of
+/// the law above (`sub_56E50_57380`, CARPET.EXE 0x6F648): restore the
+/// pre-dig behaviour where the Castle-Portal save/return toggle parked
+/// the saved axis in the port-side `Player::teleport_return` register
+/// instead of the manifestation record's own `+150/+152/+154`
+/// (`Ent::dest_x/dest_y/site_z`), whose `+154 != 0` IS retail's armed
+/// bit. Witness: mc1l48 t=34723 (token slot 213).
+pub(crate) fn mc1_teleport_save_axis_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TELEPORT_SAVE_AXIS").is_some())
+}
+
+/// `MGC_NO_MC1_ACCEL_CAST_VETO_RETIRE=1` — restores the pre-dig
+/// cast-site brake veto on MC1 Accelerate (2/21): a resisting thrust
+/// input in the same tick refused the arm outright, so the token was
+/// never re-pinned, never paid and never wrote the speed columns.
+///
+/// ⭐⭐ THE VETO IS AN INVENTED GUARD, AND IT IS THE LAST RESIDUE OF THE
+/// RETIRED `thrust_cancel` DEVIATION (DEVIATIONS.md :115). Retail's own
+/// trigger `sub_46B00_46E40` (:55850-919) tests exactly two things for
+/// a speed token — the model fork that force-clears the OPPOSITE
+/// token's `+48` (:55871-72/:55914-15) and the purse against `+136`
+/// (:55873/:55916) — and then LABEL_32 pins `var_48 = var_50`
+/// unconditionally (:55892-93). No thrust, no `word_0xe_14`, no brake;
+/// and the two trigger calls sit at the TAIL of `sub_46840`
+/// (:55825-33), the very routine that just ran the bounds-tested speed
+/// step, with nothing between them that reads its result.
+/// Neither does the command-issue site (:20621-27), whose held re-arm
+/// condition is the burst counter `+48 > 0`, not the stick. The brake
+/// is the v_14 two-phase the port already models: the resisting press
+/// MOVES the boosted target inside `sub_5F380`'s ±80 bounds test and
+/// the token ends the burst on its NEXT pass (:65146-50) — cancelling
+/// at the cast site instead pre-empted the whole event.
+pub(crate) fn mc1_accel_cast_veto_on() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ACCEL_CAST_VETO_RETIRE").is_some())
+}
+
+/// `MGC_NO_MC1_SPEED_TOKEN_CAST_POSE=1` restores the pre-dig cast
+/// pose: the speed token's write to the carpet's `+126` was visible
+/// only through the MAIL the carpet's own dispatch consumes, so a
+/// spell token at a LATER walk slot in the SAME tick still measured
+/// its launch boost from last tick's settled speed. A/B arm only.
+///
+/// ⭐ Retail's `sub_56380_568B0` writes the wizard RECORD, not a
+/// mailbox: `*(_WORD *)(v5 + 12) = v4; *(_WORD *)(v1 + 126) =
+/// *(_WORD *)(*(_DWORD *)(v1 + 160) + 12);` on the sustain arm
+/// (:65167-78) and `*(_WORD *)(*(_DWORD *)(v1 + 160) + 12) =
+/// *(_WORD *)(v1 + 128); *(_WORD *)(v1 + 126) = ...` on the burst
+/// END (:65192-96), and `sub_56510`'s launch line reads `+126` LIVE
+/// off that record (:65529-30). So every token below the writer sees
+/// the new value the same tick.
+pub(crate) fn mc1_no_speed_token_cast_pose() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SPEED_TOKEN_CAST_POSE").is_some())
+}
+
+/// `MGC_NO_MC1_RIVAL_V14_SEAT=1` — restores the pre-dig import, where
+/// a RIVAL's v_14 kill latch (Type_160 +14) had NO IMPORT SEAT and
+/// every imported pair started it `false`.
+///
+/// ⭐⭐ THE LATCH IS RETAIL STATE, ONE FIELD ABOVE AN ALREADY-SEATED
+/// ONE. `sub_56380_568B0`'s head (:65141-51) is
+/// `if (!sub_55DD0_56300(a1, owner) || *(_WORD *)(*(_DWORD *)(v1 +
+/// 160) + 14)) { if (*(_WORD *)(*(_DWORD *)(v1 + 160) + 14))
+/// *(_WORD *)(a1 + 48) = 1; }` — `v1 + 160` is the owner wizard's
+/// control block (`Type_160`), so `+14` is the same v_14 the recorder
+/// already decodes for all EIGHT wizards (`RetailWizardMc1::v14`) and
+/// `+12` the v_12 the import seats as `RivalState::vdes`. The travel
+/// helper `sub_15470` clears it at its head (:19057) and re-arms it
+/// on the arrival stop (:19075-76) and the plain throttle (:19089-91);
+/// [`World::rival_speed_token_tick`] has modelled the READ since the
+/// mc1l4/mc1l5 dig, but with no seat the read could only ever be
+/// false in pair mode.
+///
+/// ⚠ This is the RIVAL half only. The human's cast-site accelerate
+/// veto stays RETIRED (`MGC_NO_MC1_ACCEL_CAST_VETO_RETIRE`): retail's
+/// trigger arms unconditionally and the brake is this same two-phase
+/// v_14 kill, one tick later — seating the rival latch is that law's
+/// missing import, not a re-instatement of the veto.
+///
+/// mc1l49 t=21961→21962 is the witness: rival 3 (ent 646) arrives,
+/// wizext v_14 goes 0 → 1, and retail's next token pass (slot 154)
+/// snaps `+48` 106 → 0, restores `+126` 160 → 80 and lets the skipped
+/// regen pin pay the purse 1100 → 1200.
+pub(crate) fn mc1_rival_v14_seat_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_V14_SEAT").is_some())
+}
+
+/// `MGC_NO_MC1_DUEL_YAW_DRAG=1` restores the pre-dig duel grip, which
+/// pulled the caster's POSITION toward his victim but never touched
+/// his heading. Retail's lock tail (`sub_455D0` :55229-50) does both
+/// in the same block, and the heading servo
+/// (`sub_422A0_425E0(+30, bearing, 5, 0x82u)`, :55244) is the half the
+/// port never had.
+/// `MGC_NO_MC1_TOKEN_GATE_PER_TICK=1` restores the pre-dig gate phase:
+/// `sub_55DD0_56300` evaluated ONLY on a launcher/skeleton token's arm
+/// tick (`+48 == +50`), so a burst that armed affordably ran its whole
+/// countdown no matter what happened to the caster or his castle
+/// store. Retail runs it on every tick the burst is live and cancels
+/// (`+48 = 1`, zeroed by the shared decrement) the moment a hard leg
+/// fails. See [`World::mc1_token_gate_hard`].
+pub(crate) fn mc1_token_gate_per_tick_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TOKEN_GATE_PER_TICK").is_some())
+}
+
+/// `MGC_NO_MC1_BEYOND_SIGHT_TOKEN=1` restores the pre-dig arm, where
+/// the HUMAN's spell-5 (Beyond Sight) manifestation was inert: the
+/// `+48` countdown never ran and a live burst never pinned the
+/// caster's regen delta, so the wizard regenerated straight through
+/// his own Beyond Sight.
+///
+/// `sub_56730` (:65292, dispatch row 0x0F = 3*5+0) is the bare
+/// skeleton every sibling uses — `if (+48 > 0) { gate
+/// sub_55DD0_56300 ? sub_55E80_563B0 : +48 = 1; --(+48); }` — with no
+/// emit and no owner bit at all. `sub_55E80_563B0` (:64936) is the
+/// half that shows: the FULL tick (`+48 == +50`) stamps the whole
+/// `+136` cost negative on the caster's `+132`, and every mid-burst
+/// tick (`+48` neither `+50` nor 0) PINS a positive `+132` to 0, so a
+/// live burst freezes the caster's mana regen for its whole count.
+/// The doc note that stood here said spell 5 had no witness in the
+/// corpus and must not ride spell 12's evidence. IT HAS ONE NOW:
+/// mc1l48 t=64292-64396 is a complete, isolated 101-tick Beyond Sight
+/// burst on the HUMAN's token (pool slot 106, `(12,5)` f70=15, +136 =
+/// 3000, +50 = 101).
+pub(crate) fn mc1_beyond_sight_token_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_BEYOND_SIGHT_TOKEN").is_some())
+}
+
+/// ⭐⭐⭐ A TOKEN'S CASTER IS ITS OWN `+42`, NOT THE REGISTER THAT NAMES IT.
+///
+/// Every class-12 machine in retail is ONE function per spell with no
+/// human/AI fork at all: `sub_57800` (Undead Army, VERIFIED in the
+/// shipped `CARPET.EXE` at VA 0x57800 = file 0x6FFF8) opens
+///
+/// ```text
+///   70003  cmpw  $0x0,0x30(%ebp)      ; token +48 <= 0 -> return
+///   70010  mov   0x2a(%ebp),%ax       ; <-- the TOKEN's own +42
+///   70014..70032                      ; *164 + pool base -> %ebx = the CASTER
+///   70039  cmp   %eax,%ebx / jbe      ; owner 0 -> bare decrement
+///   70041  push %ebx / push %ebp
+///          call  0x6e5c8              ; sub_55DD0 gate, a2 = THAT caster
+///   7004d  je    0x701b5              ; fail: movw $0x1,0x30(%ebp), decw
+///   70053  mov 0x30(%ebp),%ax / cmp 0x32(%ebp),%ax   ; +48 == +50
+///   70061  push $0xb / push $0x9 / lea 0x48(%ebx),%eax
+///          call  0x4fbe8              ; sub_373F0(&CASTER.pos, 9, 11)
+/// ```
+///
+/// — the gate legs, the mana debit and the bolt's spawn point all read
+/// the entity at `+42`. The port instead forked on the HUMAN'S OWN
+/// `owned[]` register, and that register goes STALE: retail's `+676`
+/// is "spells ever acquired" and nothing rewrites it when the slot it
+/// names is recycled into somebody else's token.
+///
+/// WITNESS mc1l49 t=20527 (the take's `t=20528` head, gating 2,723
+/// ticks). Pool slot 235 is a `(12,17)` Undead Army token whose `+42`
+/// is **724** — rival wizard 6's carpet — and BOTH wizard 0's and
+/// wizard 6's `+676[17]` name it. Rival 6 arms it (`+48` 0 -> 13);
+/// retail runs `sub_57800` against caster 724, whose castle (entity
+/// 502) stores 57,476 against the token's `+132` = 150,000, so the
+/// gate's castle leg (`0x6e61e cmp 0x74ef(%ebx,%eax,4),%edi / jg`)
+/// refuses: `+48 = 1`, decrement, **0 at t=20528** — no bolt, no
+/// debit, and the recorded human purse never moves off 188,830.
+/// The port ran the very same token as the HUMAN'S, against castle 353
+/// (stored 1,306,127) and the human's purse: it debited 13,000 and
+/// minted a `(9,11)` lob from the human's muzzle. That ONE extra
+/// `new_event` is the whole head — retail's free stack goes 336 -> 335
+/// over the tick and the port's 336 -> 334, so the LIFO hands the two
+/// sides different slots for the same spawns (retail lays the `(10,53)`
+/// napalm at 995 and a `(10,0)` at 741; the port lays the napalm at 741
+/// and the phantom lob at 995).
+///
+/// The test is deliberately conservative: the human's arm only steps
+/// aside when the token's owner tag names an ACTUAL entry of
+/// [`World::rivals`] — i.e. exactly when the rival fork below would
+/// pick the token up — so no token can fall between the two arms and
+/// go unticked. `MGC_NO_MC1_TOKEN_OWNER_TAG=1` restores the
+/// register-only fork.
+pub(crate) fn mc1_token_owner_tag_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TOKEN_OWNER_TAG").is_some())
+}
+
+pub(crate) fn mc1_duel_yaw_drag_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DUEL_YAW_DRAG").is_some())
+}
+
+/// `MGC_NO_MC1_DUEL_GRIP_EXACT=1` restores the pre-dig duel
+/// TRANSLATION: the tick-head block that pushed a one-sided, 2-D,
+/// pitch-0 pull down the KNOCK channel. Retail's lock tail
+/// (`sub_455D0` :55226-48) is one block in the mover, and the port's
+/// copy of it carried eight departures — a `clamp(0, ..)` on a rate
+/// retail leaves SIGNED (inside the hold distance retail shoves the
+/// caster AWAY, :55238-42), a cap of 80 where retail's is
+/// `3 * +128 / 2 = 120`, the live `+126` where retail reads `+128`
+/// with an invented `.max(16)`, a 2-D distance where
+/// `sub_42340_42680` is 3-D, pitch 0 where retail carries the
+/// published aim `+32` (:55247), a counter armed at 0 where the
+/// intake writes 200 (:55672) so the grip ran 1000 ticks instead of
+/// 800, an `is_none()` guard on a re-arm retail does
+/// UNCONDITIONALLY, and a release test carrying `flags & 0x400` and
+/// `tick70 != 1` where retail tests `act_life < 0` alone — and then
+/// SKIPPED the release tick's pull, which retail applies by falling
+/// through (:55232-48).
+/// ⭐ The fall-through is visible in the recording: `mc1l48` t=59840
+/// releases to `+314 = 0` with `+316 = 1`, i.e. the zeroed counter
+/// took its `++` at :55248 on the way out.
+pub(crate) fn mc1_duel_grip_exact_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DUEL_GRIP_EXACT").is_some())
+}
+
+/// `MGC_NO_MC1_DUEL_DART_EXACT=1` restores the pre-dig MC1 duel dart:
+/// a launch boost the duel does not take, a `+44` of 200 borrowed from
+/// the TETHER's ctor, and an unwritten `+150`/`+154` aim point.
+///
+/// ⭐⭐ **EXACTLY ONE OF THE SIXTEEN CLASS-9 EMIT ARMS OMITS THE LAUNCH
+/// BOOST, AND IT IS THE DUEL.** `sub_57040_57570`
+/// (`reference/remc1/sub_main.cpp:65620-72`, twin `remc1hw:61841-91`,
+/// byte-identical) stamps `+68`=10, `+69`=26, `+44` = **the TOKEN's
+/// `+44`** (:65653/:65656), `+24`, `+76 += caster.+84`, `+140`,
+/// `+150`/`+154` = the caster's raw position projected **10240** along
+/// the caster's live `(+30, +32)` (:65660-62), then `+30`/`+32` — and
+/// it never reads `caster.+126` at all. Every sibling arm
+/// (:65061-62 fireball, :65236-37 possess, :65346-47 quake,
+/// :65405-06 meteor, :65463-64 volcano, :65524-25 crater,
+/// :65744-45 steal, :65836-37 bolt, :65886-87 castle, :65955-56
+/// undead, :66020-21 storm, :66081-82 magnet, :66142-43 firewall,
+/// :66267-68 bomb, :66328-29 rapid fireball) carries the two-line
+/// `v = caster.+126; bolt.+126 += v;` pair. The duel does not.
+/// The recording settles it: `mc1l48` t=59114 slot 937 is born with
+/// `+126 = +128 = 384` — the bare `sub_373F0_377B0` base — while the
+/// caster's `+126` is 80.
+///
+/// The `+44 = 200` was the **(10,26) TETHER's** ctor value (:47116)
+/// written onto the DART; retail copies the token's `+44`, which is
+/// `SPELLS[11].damage = 100` (recorded: 100).
+pub(crate) fn mc1_duel_dart_exact_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DUEL_DART_EXACT").is_some())
+}
+
+/// `MGC_NO_MC1_TETHER_STATIC=1` restores the pre-dig MC1 duel tether
+/// transport: a `move_relink` onto the victim every tick plus a direct
+/// `mail_write` at him, with an invented early free when he dies.
+///
+/// ⭐⭐ **RETAIL'S TETHER NEVER MOVES.** `sub_263C0`
+/// (`reference/remc1/sub_main.cpp:28949-62`, carrying remc1's own
+/// `//SYNCHRONIZED WITH REMC1` marker) is twelve lines: `+26++`,
+/// `life--`, reap below zero, else `sub_42510_42850` (the anim step)
+/// and `sub_120B0(a1x, 4u, +44)` — the plain channel-4 AREA write over
+/// the tether's own extents, which its ctor `sub_3AF80` (:47116) sets
+/// to 512/512 (`sub_37130_374F0(v2, 512, 512)`). There is no position
+/// write, no `+146` read and no victim-death test in it at all, and
+/// `sub_120B0` stamps the letter's source as the WRITER's `+24`
+/// (:17309/:17381), which the explode tail copied off the dart.
+/// The MC1 duel is therefore an 8-tick STATIONARY 4-tile grip box at
+/// the point of impact, not a leash that follows its victim — the
+/// same shape `docs/spell-audit/duel.md` traces for MC2's marker.
+/// mc1l48 slot 20 sits at (10575, 30298, 2096) for its entire life.
+pub(crate) fn mc1_tether_static_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TETHER_STATIC").is_some())
 }
 
 /// `MGC_NO_HUMAN_PAYOUT_VICTIM_POP=1` restores the pre-dig human death
@@ -1789,6 +2087,14 @@ pub(crate) fn mc2_castle_purge_inline_off() -> bool {
 pub(crate) fn mc1_jar_ctor_off() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_JAR_CTOR").is_some())
+}
+
+/// Kill switch for [`World::tick_inner`]'s MC1 castle LADDER STAMP
+/// gate: set `MGC_NO_MC1_CASTLE_LADDER_EVENT=1` to restore the old
+/// unconditional per-tick stamp (wave 115 / dig D5).
+pub(crate) fn mc1_castle_ladder_per_tick() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_LADDER_EVENT").is_some())
 }
 
 /// ⭐ HANDLER ATTRIBUTION (`MGC_WRITE_TRACE=<slot>[:<field>]`) — the
@@ -3931,28 +4237,46 @@ impl World {
         // stamps delta 100 → −1000, republishes 0x8000; the port kept
         // the purse). The bank had attributed those rows to the
         // deflection quarter — measurement says they are the CAST's.
-        if matches!(
-            id,
-            0 | 1
-                | 3
-                | 4
-                | 6
-                | 7
-                | 8
-                | 9
-                | 10
-                | 11
-                | 13
-                | 14
-                | 15
-                | 16
-                | 17
-                | 18
-                | 19
-                | 20
-                | 22
-                | 23
-        ) {
+        // ⭐ 5 BEYOND SIGHT IS ONE OF THEM. The same `+65` test as
+        // heal/shield/rebound/lightning — 5 is `< 0x10`, neither 2 nor
+        // 16 nor 21, so `sub_46B00_46E40` takes LABEL_20's bare
+        // arm-only flow (silent `+140 < +136` gate :55890, the
+        // `var_48 = var_50` reload :55893, the hand restamp :55894-95,
+        // the cloak break :55896) and writes NO mana anywhere. The
+        // cost is `sub_56730`'s (:65292 → `sub_55E80_563B0` :64936),
+        // paid on the token's FULL tick. The legacy `cast_spell` arm
+        // paid it here instead, which read clean in a free run —
+        // the wizard step applies a command-site delta on the NEXT
+        // tick, the same frame retail's token lands its own — but the
+        // PAIR lane, which re-seeds `+132` from retail at every
+        // boundary, saw the port skip the 3,000 entirely (mc1l48
+        // pair 64293→64294: retail 4,100,109, port 4,103,109).
+        // Gated by [`mc1_beyond_sight_token_off`] with the token
+        // wiring it belongs to — the two halves are one law.
+        if (id == 5 && !mc1_beyond_sight_token_off())
+            || matches!(
+                id,
+                0 | 1
+                    | 3
+                    | 4
+                    | 6
+                    | 7
+                    | 8
+                    | 9
+                    | 10
+                    | 11
+                    | 13
+                    | 14
+                    | 15
+                    | 16
+                    | 17
+                    | 18
+                    | 19
+                    | 20
+                    | 22
+                    | 23
+            )
+        {
             // The held re-issue (the +60==0 input law) is a LEVEL,
             // not an edge, for 15 and 23: every held tick re-arms the
             // burst. The strict lane's dw_0 bits already re-emit per
@@ -4026,6 +4350,40 @@ impl World {
         self.player.mana >= self.spell_cast_cost(id)
     }
 
+    /// `sub_55DD0_56300`'s **HARD LEGS ONLY** — the three tests that
+    /// send it to `LABEL_11` regardless of where the burst counter
+    /// stands (:64913-25): caster purse SIGNED-negative (`a2[35] < 0`),
+    /// caster `actLife < 0` (`a2[3] < 0`), and the token's live castle
+    /// requirement `+132` against the BOUND castle's store
+    /// (`if (v2) { if (!wizext->var_50 || v2 > pool[var_50].+140) }`).
+    /// The full-price leg (`a2[35] >= token+136`) is the FOURTH test
+    /// and it is the only one gated on `+48 == +50`; `if (+48 != +50)
+    /// return 1` (:64927-28) lets every mid-burst tick through on the
+    /// hard legs alone.
+    ///
+    /// ⭐ THIS IS WHAT CANCELS A LIVE BURST. Every one of the 22
+    /// class-12 machines calls `sub_55DD0_56300` on EVERY tick its
+    /// `+48 > 0` — see [`World::manifestation_tick`] — so a castle
+    /// DOWNGRADE that drops the store below the token's `+132` kills
+    /// the burst in flight.
+    fn mc1_token_gate_hard(&self, id: usize) -> bool {
+        if self.dev_spells {
+            return true;
+        }
+        if self.player.state != LifeState::Alive || (self.player.mana as i32) < 0 {
+            return false;
+        }
+        let req = self.spell_castle_req(id);
+        if req > 0
+            && !self
+                .player_castle_bound()
+                .is_some_and(|c| self.g.ent[c].f140.max(0) as u32 >= req)
+        {
+            return false;
+        }
+        true
+    }
+
     /// The human carpet's own dispatch arms, run AT the walk slot
     /// under [`Self::tick_flight`]: the mover (sub_455D0 — its ground
     /// probe reads the SAME-tick terrain the lower-slot painters just
@@ -4034,6 +4392,28 @@ impl World {
     /// carpet-dispatch siblings in retail. Input, knock and the accel
     /// override were sampled by the driver at the tick head; only the
     /// terrain-coupled integration moves in here.
+    /// The pose the wizard RECORD holds at this point of the walk: a
+    /// teleport warp armed by a lower walk slot has already rewritten
+    /// retail's `+72/+74/+76` (`sub_41C70` :29214), so every reader
+    /// seated after it — the regen probe's `ctx` peek and the mailbox
+    /// drain alike — sees the DESTINATION. See
+    /// [`mc1_teleport_mail_seat_off`].
+    fn warp_peek_pose(&self, player: PlayerPose) -> PlayerPose {
+        if mc1_teleport_mail_seat_off() {
+            return player;
+        }
+        let Some((tx, ty, alt)) = self.pending_teleport else {
+            return player;
+        };
+        let mut p = player;
+        p.x = (tx.rem_euclid(256.0) * 256.0) as u16;
+        p.y = (ty.rem_euclid(256.0) * 256.0) as u16;
+        if let Some(a) = alt {
+            p.z = (a * 256.0) as i16;
+        }
+        p
+    }
+
     /// The wizard tick's MAILBOX BLOCK (sub_45C90 :55344-78): the
     /// at-castle redirect, the invincible/grace/intake fork and the
     /// cast-charge meter. In retail this is the middle of the class-3
@@ -4731,17 +5111,95 @@ impl World {
         // silently no-ops for the other reads as "the port is clean
         // here" (the conform trace block's own rule).
         let probe_pre = (d.s.x, d.s.y, d.s.z);
+        // ⭐ THE DUEL GRIP'S TRANSLATION, IN ITS OWN SEAT
+        // (`sub_455D0` :55226-48 — see `mc1_duel_grip_exact_off`).
+        // Retail's lock tail is ONE block inside the mover: it reads
+        // the 3-D separation `sub_42340_42680`, releases on
+        // `dist >= 5120 || victim.act_life < 0 || +316 == 1000`, then
+        // FALLS THROUGH and steps the scratch along the bearing at
+        // the published aim pitch `+32` at the SIGNED closing rate
+        // `(dist - +318) / (1024 / (3·+128/2))` clamped to ±120,
+        // servoes `+30`, and bumps `+316`. The port ran a one-sided
+        // 2-D pitch-0 pull down the KNOCK channel at the tick head
+        // instead — wrong seat, wrong transport (the knock mailbox
+        // carries a ±128 clamp and a −4/tick decay retail's grip has
+        // no part of, and the write clobbered any real buffet).
+        // Both operands are the PRE-move positions.
+        let mut duel_grip = None;
+        if !mc1_duel_grip_exact_off() {
+            if let Some((victim, count, hold)) = self.duel {
+                if victim == 0 || victim as usize >= self.g.ent.len() {
+                    // `v20 > pool` (:55227) — slot 0 is no victim.
+                    self.duel = None;
+                } else {
+                    let ve = &self.g.ent[victim as usize];
+                    let vpos = (ve.x, ve.y, ve.z);
+                    // :55232 — `act_life < 0` ALONE. No flag bit, no
+                    // chain-membership byte: the invented-liveness
+                    // class (wave-115 L2/L3) once more.
+                    let dead = ve.act_life < 0;
+                    let dist = crate::flight::mc1_duel_dist(probe_pre, vpos);
+                    self.duel = if dist >= 5120 || dead || count == 1000 {
+                        None
+                    } else {
+                        Some((victim, count.wrapping_add(1), hold))
+                    };
+                    duel_grip = Some(crate::flight::Mc1DuelGrip {
+                        vpos,
+                        hold,
+                        // `+128`, which the class-3 dispatch re-stamps
+                        // from `dword_93A90` every tick (:55343).
+                        max_speed: crate::flight::MC1_WIZ_SPEED_CAP,
+                        yaw_drag: !mc1_duel_yaw_drag_off(),
+                    });
+                }
+            }
+        }
         let moved = {
             let w: &Self = self;
-            crate::flight::mc1_move(
+            crate::flight::mc1_move_duel(
                 d.s,
                 &d.inp,
                 d.over,
                 knock,
+                duel_grip,
                 &|x, y| w.ground_z_engine(x, y),
                 &|cur, prop| w.player_wall_gate_fixed(cur, prop),
             )
         };
+        // ⭐ THE DUEL GRIP DRAGS THE CASTER'S HEADING, not only his
+        // position. `sub_455D0`'s lock tail (:55229-50) runs INSIDE
+        // the mover, after every polar step and before the wall gate:
+        //     v24 = bearing(self+72, victim+72)
+        //     v25 = +30 + sub_422A0_425E0(+30, v24, 5, 0x82u)
+        //     HIBYTE(v25) &= 7u;  +30 = v25            (:55244-46)
+        // The write lands on the ENTITY, not the scratch, so the gate
+        // can never refuse it; and it sits BELOW the main polar step,
+        // so this tick's translation still uses the pre-drag yaw —
+        // which is exactly the order here (post-`mc1_move`).
+        // The port modelled the lock's TRANSLATION only (the tick-head
+        // block above, routed through the knock channel) and left the
+        // heading to the stick, so a duelled carpet under a held stick
+        // kept turning where retail's servo pins it on the bearing.
+        // mc1l48 t=59119: the first pose divergence of the whole take
+        // is EXACTLY 130 = the 0x82 cap.
+        // (The servo now rides `mc1_move_duel`'s grip block above, in
+        // retail's own seat. This post-move copy is the kill-switch
+        // arm only: under `MGC_NO_MC1_DUEL_GRIP_EXACT=1` the grip is
+        // back on the knock channel at the tick head and the heading
+        // half has to be re-applied here, as D12 landed it.)
+        if mc1_duel_grip_exact_off() && !mc1_duel_yaw_drag_off() {
+            if let Some((victim, _, _)) = self.duel {
+                let ve = &self.g.ent[victim as usize];
+                d.s.yaw = crate::flight::mc1_duel_turn(
+                    d.s.yaw,
+                    probe_pre.0,
+                    probe_pre.1,
+                    ve.x,
+                    ve.y,
+                );
+            }
+        }
         // Publish retail's v_14 (:55780) for the token passes — the
         // walk order gives the read its retail phase for free (a
         // token below the carpet reads LAST dispatch's latch, one
@@ -4801,6 +5259,15 @@ impl World {
             ..*ctx
         };
         self.human_pose = (player.x, player.y, player.z);
+        // ⭐ AND THE TILE MAP. Retail's carpet is an ordinary linked
+        // record: the same `sub_41C70` (:52442) that lands this pose
+        // re-heads it in the destination tile's chain, and
+        // `sub_11980`'s first-match probe reads that rank. Our human
+        // is out of pool, so his seat rides `Gen::player_chain` —
+        // seeded HERE, at the carpet's own walk slot, which is where
+        // retail's relink happens (see [`crate::engine::features::
+        // PlayerChain`]).
+        self.g.player_relink(player.x, player.y);
     }
 
     /// One PAUSED game turn — retail's `sub_41780_41AC0` (:52197) run
@@ -5426,12 +5893,13 @@ impl World {
             self.mc1_fall_entry_z = player.z;
         }
 
-        // The duel pull on the CASTER (:55228-48): while latched,
-        // drag the human toward the victim; release at 1000 ticks,
-        // 5120 distance, or victim death. Applied through the knock
-        // channel (deliberate: magnitude formula traced, transport
-        // ours).
-        if let Some((victim, count, hold)) = self.duel {
+        // The duel pull on the CASTER — THE PRE-D18 BLOCK, kept only
+        // as `MGC_NO_MC1_DUEL_GRIP_EXACT=1`'s arm. Retail has no
+        // tick-head grip at all: the lock tail lives inside
+        // `sub_455D0` and is applied from `step_player_flight`.
+        if mc1_duel_grip_exact_off()
+            && let Some((victim, count, hold)) = self.duel
+        {
             let ve = &self.g.ent[victim as usize];
             let dead = ve.flags & 0x400 != 0 || ve.act_life < 0 || ve.tick70 != 1;
             let (vx, vy) = (ve.x, ve.y);
@@ -5931,7 +6399,19 @@ impl World {
                     }
                 }
                 let (at_castle, at_dolmen) = self.regen_boost(&ctx);
-                self.player_mail_block(player, at_castle);
+                // ⭐ THE SAME PEEK IS OWED TO THE MAILBOX. The drain
+                // (`sub_46540` :55345-80) arms the knockback bearing
+                // `angle_between(src, WIZARD +72/+74)` off the wizard
+                // RECORD, which the lower-slot token already warped —
+                // so on the warp's own tick retail points the shove
+                // at the DESTINATION, not at where the carpet was.
+                // The port read the stale tick-head pose and armed a
+                // bearing up to a quadrant out; the mover consumes it
+                // three statements later, in the same dispatch, so
+                // the whole error lands on the pose. (The `ctx` peek
+                // above already established that the record is warped
+                // here — this is the second reader of it.)
+                self.player_mail_block(self.warp_peek_pose(player), at_castle);
                 // The carpet's LIFE is a mid-walk observable on the
                 // MC1 column too (:21658-61 — the chase reads
                 // `+12 < 0 || +17 & 4` off the pool record LIVE, and
@@ -6547,10 +7027,55 @@ impl World {
                     self.g.mc2_balloon_tick(i)
                 }
                 3 if self.g.ent[i].model65 == 2 => {
-                    let (pre59, pre50, pre70) = {
+                    let (pre59, pre50, pre70, pre26, pre_flags) = {
                         let e = &self.g.ent[i];
-                        (e.f59, e.f50, e.tick70)
+                        (e.f59, e.f50, e.tick70, e.f26, e.flags)
                     };
+                    // ⭐⭐⭐ THE ACTION-6 TOKEN PIN LIVES INSIDE THE
+                    // LEVELER'S POOL GUARD. `sub_470E0` (:56142) is
+                    //   `if (sub_37710_37AD0()) { sub_47A70_47DB0(a1);
+                    //      a1+70 = 4; … } else { a1+70 = 4; }`
+                    // and the pin/release pair is inside
+                    // `sub_47A70_47DB0` (:56529 pin, :56533 release) —
+                    // NOT in `sub_470E0`'s body. So on an EXHAUSTED
+                    // free stack retail's action-6 pass parks `+70`
+                    // back to 4 and leaves the owner's Create-Castle
+                    // token's `+48` exactly where it was. The port ran
+                    // `castle_tick`'s downgrade behind that gate
+                    // already ([`Gen::castle_tick`],
+                    // `MGC_NO_MC1_LEVELER_POOL_GATE`) but stamped the
+                    // token OUTSIDE it, so a besieged castle in a
+                    // starved world re-armed its owner's castle token
+                    // to 100 on every other tick.
+                    //
+                    // mc1l49 t=17810 is the witness, read from
+                    // `state.struct_b64`: rival 672's castle 953 is
+                    // fatally hit at t=17809 and oscillates `+70`
+                    // 4→6→4 through t=17813 while retail's own free
+                    // stack reads EMPTY at every between-tick snapshot
+                    // from 17805 to 17815 (`str_AE400_AE3F0->
+                    // var_u32_40 = −1`; `sub_37710_37AD0` returns
+                    // `+40 + 1` = 0). Its leveler therefore runs no
+                    // teardown at all: the castle's rung stays at 2
+                    // AND token 676 holds `+48 = 0` for the whole
+                    // window. The pin lands only at t=17814, the tick
+                    // whose top-of-frame reap leaves the leveler a
+                    // record to spend, and the rung finally drops
+                    // 2 → 1. (The discriminating read is MID-tick,
+                    // after the tick-top reap — exactly where
+                    // `castle_tick` takes it.)
+                    // The ungated port pinned at t=17810, which shut
+                    // `sub_14120`'s `token+48 == 0` term and cost the
+                    // rival its Upgrade arm on ticks 17811/17813 —
+                    // `+146` 953 vs the port's 569, three of mc1l49's
+                    // segment heads.
+                    //
+                    // ⚠ MC2's twin arm above is ALREADY gated
+                    // (`6 if downgraded`); only the MC1 arm was not.
+                    // Kill switch `MGC_NO_MC1_LEVELER_PIN_GATE=1`.
+                    let leveler_ran = !self.g.free.is_empty()
+                        || crate::engine::features::mc1_no_leveler_pool_gate()
+                        || crate::engine::features::mc1_no_leveler_pin_gate();
                     self.g.castle_tick(i, self.patches);
                     // sub_46D20_47060 (:55949): the castle machine
                     // PINS (+48 = +50 − 1 = 100) or RELEASES (0) its
@@ -6573,7 +7098,8 @@ impl World {
                         // The deferred downgrade tick: teardown pins
                         // (:56529); a level-0 death releases instead
                         // (:56533 — flags 0x400 set by the arm).
-                        6 => {
+                        // Gated on the leveler having actually run.
+                        6 if leveler_ran => {
                             if self.g.ent[i].flags & 0x400 != 0 {
                                 Some(0)
                             } else {
@@ -6651,7 +7177,60 @@ impl World {
                             own != 0 && own < self.g.ent.len() && self.g.ent[own].tick70 <= 1
                         }
                     };
-                    if self.g.ent[i].f26 > 0
+                    // ⭐⭐⭐ THE LADDER STAMP IS EVENT-DRIVEN, NOT
+                    // PER-TICK (wave 115 / D5). `sub_47C60_47FA0`
+                    // (:56572) has exactly THREE callers in both
+                    // binaries — the level-up commit (:56481), the
+                    // teardown (:56528) and the level/castle setup
+                    // (:54996) — and `sub_47DD0_48110` (:56617) has
+                    // exactly ONE, the respawn (:55036). NOTHING
+                    // calls either from the per-tick wizard walk, so
+                    // a standing castle at a stable level re-prices
+                    // its owner's Create-Castle token NEVER.
+                    //
+                    // The port ran the stamp unconditionally at the
+                    // castle's own pass, which is idempotent — and
+                    // therefore invisible — right up until TWO
+                    // wizards' `+676[16]` name the SAME token slot.
+                    // Retail's owned register is REBUILT EVERY TICK
+                    // from the +532 acquisition list with a BLIND
+                    // model read (`sub_45C10` :55310-19), so a
+                    // recycled pool slot lands in two books at once:
+                    // mc1l49 t=32741 has BOTH wiz 1 (ent 594, castle
+                    // 619 at level 4) and wiz 3 (ent 646, castle 814
+                    // at level 1) holding `owned[16] = 26`, and both
+                    // carry 26 in their acq lists. Under the per-tick
+                    // stamp, 594's level-4 castle re-priced 646's
+                    // token to CAP[4]/101 = 80000/792 on every tick
+                    // where 646's own castle did not stamp after it
+                    // — retail's token 26 instead holds the price
+                    // its LAST LEVEL EVENT wrote and does not move:
+                    // 10000/99 through t=32741, 5000/49 at the t=32742
+                    // raze, unchanged at t=32743 (retail's own
+                    // changelog shows only `f63` moving), then
+                    // 10000/99 at t=32744 when the rebuild commits.
+                    // That is 386 of mc1l49's segment heads on slot
+                    // 26 alone.
+                    //
+                    // The gate: fire only on a tick where the castle
+                    // record's LEVEL changed, or its raze bit (0x400
+                    // — the teardown at :56528/:56533) or its
+                    // first-commit bind bit (2, :56057-62 — the
+                    // port's stand-in for wizext+50) moved. Those are
+                    // the port's images of retail's three call sites.
+                    // ⚠ NOT covered: a teardown call that leaves the
+                    // level unchanged (retail calls sub_47C60
+                    // unconditionally at :56528) — unobserved in the
+                    // corpus; and the :54996 setup call, which the
+                    // port never reached anyway because an authored
+                    // castle has no bind bit.
+                    let ladder_event = mc1_castle_ladder_per_tick()
+                        || self.g.ent[i].f26 != pre26
+                        || (self.g.ent[i].flags ^ pre_flags) & 0x402 != 0;
+                    if !ladder_event {
+                        // no level event this tick: the token keeps
+                        // the price its last event wrote
+                    } else if self.g.ent[i].f26 > 0
                         && self.g.ent[i].flags & 0x400 == 0
                         && self.g.ent[i].flags & 2 != 0
                     {
@@ -6893,7 +7472,10 @@ impl World {
                 }
             }
             let (at_castle, at_dolmen) = self.regen_boost(&ctx);
-            self.player_mail_block(player, at_castle);
+            // The native (post-walk) anchor's copy of the mailbox
+            // warp seat — see the in-walk anchor above. A LAW ON ONE
+            // CALL PATH IS NOT LANDED.
+            self.player_mail_block(self.warp_peek_pose(player), at_castle);
             // Mid-walk pdead republish — see the in-walk anchor's
             // note (:21658-61; the MC1 half of the MC2 anchors' law).
             ctx.pdead = self.player.life < 0;
@@ -7908,7 +8490,36 @@ impl World {
                 // come back unrestricted on respawn even if the
                 // scattered jar expires meanwhile.
                 self.player.death_owned_blue[s] = self.g.ent[m].flags & BLUE_SPELL != 0;
-                self.player.owned[s] = 0;
+                // ⚠ NO `owned` CLEAR. The landing rewrites the `+532`
+                // ACQUISITION list and NOTHING else (:55516-49); `+676`
+                // has exactly two writers in CARPET.EXE and both are
+                // inside `sub_45C10_45F50` (the `memset(wizext+676, 0,
+                // 48)` at file 0x5e41a and the indexed
+                // `mov [ebx+ecx*2+0x2A4], dx` at 0x5e466 — every other
+                // reference to offset 0x2A4 in the shipped binary is a
+                // READ; HIDDEN.EXE identical at 0x5e9a6). Because the
+                // class-3 dispatch table only reaches `sub_45C10` from
+                // its LIVE arms, a corpse's book FREEZES at the last
+                // live tick's publish, naming the very jars the
+                // landing just threw, and stays readable by every
+                // cross-wizard probe (:54662, :54669, :56629, :64794)
+                // for the whole husk. See
+                // [`crate::mc1::rivals::owned_survives_scatter`];
+                // `MGC_NO_MC1_OWNED_SCATTER_KEEP=1` restores the clear.
+                // ⚠ SCOPED TO `strict_retail`. Keeping the register
+                // is retail's law, but it is entangled with the
+                // player-ruled `no_spell_loss` / `death_regrant`
+                // family on the NATIVE arm: `mint_manifestation`
+                // refuses a spell whose `owned[s]` is already set, so
+                // a native retry would see a full book naming freed
+                // slots (the exact stale-handle class that patch
+                // exists to kill), and `loadout().owned` — the HUD's
+                // book — would read full through the death. The
+                // native clear therefore stays until that is dug
+                // properly; strict worlds run retail verbatim.
+                if !strict || !crate::mc1::rivals::owned_survives_scatter() {
+                    self.player.owned[s] = 0;
+                }
             }
             let (d1, d2, d3) = {
                 let r = match cs {
@@ -7953,10 +8564,23 @@ impl World {
                 } else {
                     e.f26 = ttl as i16;
                 }
-                // Back to the ground-jar convention (f144 = 0): a
-                // stale owner tag would let a post-death charge-pin
-                // release zero this jar's decay timer.
-                e.f144 = 0;
+                // ⛔ NO `+144` WRITE. The scatter loop's whole write
+                // set is `+16 &= ~1`, `++(+70)`, the move-relink and
+                // `+12 = rand % 90 + 200` (:55534-49; CARPET.EXE
+                // `0x5E9B8..0x5EAE4` carries no store to `0x90(%ebp)`)
+                // — the owner tag rides the scatter untouched. The
+                // port's old "ground-jar convention" clear was
+                // invented, and it is not free: a book handle can name
+                // a slot that has been recycled into someone else's
+                // record, and clearing THAT record's owner drops it
+                // out of its owner's mana census (mc1l49 t=39094 —
+                // rival 594's book names slot 26, the human's live
+                // 7,000 mana ball, and retail scatters it keeping
+                // `+144 = 569`).
+                // `MGC_NO_MC1_SCATTER_JAR_OWNER_CLEAR=1` restores it.
+                if features::no_mc1_scatter_jar_owner_clear() {
+                    e.f144 = 0;
+                }
             }
             self.g.move_relink(m, x, y, z);
         }
@@ -8190,14 +8814,25 @@ impl World {
                     self.mc1_acq[idx] = 0;
                     continue;
                 }
-                if entry == 0 && !self.player.death_owned[0] {
-                    // An alive-form empty (a respawn whose scatter
-                    // never ran holds no bank — nothing to mint).
-                    // Retail cannot distinguish this from a banked
-                    // fireball and mints one per :54893; the port
-                    // reaches here only through its own respawn, so
-                    // the bank flag disambiguates without deviating
-                    // on any scattered list.
+                if crate::engine::features::no_mc1_regrant_zero_entry()
+                    && entry == 0
+                    && !self.player.death_owned[0]
+                {
+                    // PRE-DIG (round 119): an INVENTED disambiguator.
+                    // It read a dead-form 0 as "an alive-form empty
+                    // (a respawn whose scatter never ran holds no
+                    // bank — nothing to mint)" whenever the fireball
+                    // bank flag was already spent. Retail's walk has
+                    // NO such test — `:54893` branches on `< 0` and
+                    // nothing else, so a banked 0 IS fireball and
+                    // mints, index 0 having minted one already or
+                    // not. The case the guard was defending cannot
+                    // arise: the death walk (:55517-24) turns every
+                    // empty entry into the −1 sentinel, so a 0 in a
+                    // dead-form list only ever comes from a live
+                    // entry whose record read `model65 = 0` — a
+                    // recycled seat, which is exactly the mc1l49
+                    // t=26654 witness.
                     continue;
                 }
                 let s = entry as usize;
@@ -9506,10 +10141,24 @@ impl World {
         // ONLY (:20601/:20621). Heal/Shield/Beyond-Sight/Invis/
         // Rebound are +60==1 → edge-only, handled below (I2 ruling).
         if matches!(id, 2 | 21) {
-            // The Accelerate brake veto (manual: "press the down
-            // cursor to cancel"): a resisting thrust input this tick
-            // keeps the channel down ([`World::thrust_cancel`]).
-            if (id == 2 && self.accel_veto.0) || (id == 21 && self.accel_veto.1) {
+            // ⭐⭐ THE CAST SITE HAS NO BRAKE VETO — RETIRED, the last
+            // residue of the `thrust_cancel` deviation (DEVIATIONS.md
+            // :115, retired for MC2 in 2026-08-25 and left standing
+            // here). Retail's `sub_46B00_46E40` speed arm (:55869-77 /
+            // :55912-18) is the opposite token's `+48 = 0` clear plus
+            // `+140 >= +136`, then LABEL_32's unconditional
+            // `var_48 = var_50` (:55893); the manual's "press the down
+            // cursor to cancel" is the v_14 two-phase inside the mover,
+            // NOT a refusal here. mc1l48 t=4897: the human casts
+            // Accelerate while still holding the backward key — retail
+            // pins the token to 251, and t=4898 arms the 0x80 bit,
+            // debits 1000 and slams 240/240 before the resisting press
+            // steps the target back into the band (tgt 80, actSpeed
+            // 240→224); the veto refused the whole event and held the
+            // carpet at −80/−80. See [`mc1_accel_cast_veto_on`].
+            if mc1_accel_cast_veto_on()
+                && ((id == 2 && self.accel_veto.0) || (id == 21 && self.accel_veto.1))
+            {
                 return;
             }
             // THE HOLD IS NOT FREE. `sub_55E80` (:64936) debits on
@@ -9829,7 +10478,13 @@ impl World {
         // frozen speed and lagged retail by one servo step forever
         // (mc1l42 slot 259: retail 306→324 over the flight, port
         // 304→322, a constant 2 behind).
-        e.f126 += p.speed; // carpet speed inherited (:65060)
+        //
+        // ⭐ …EXCEPT ON THE DUEL. `sub_57040_57570` (:65620-72) is the
+        // one arm of the sixteen with no `+126 +=` line at all — see
+        // [`mc1_duel_dart_exact_off`].
+        if id != 11 || mc1_duel_dart_exact_off() {
+            e.f126 += p.speed; // carpet speed inherited (:65060)
+        }
         e.id24 = PLAYER_TARGET;
         // +30/+32 only (the sub_56510 skeleton :65250-51); +34/+36
         // keep the ctor default — corpus target_yaw 0 on fresh spawns.
@@ -9873,11 +10528,28 @@ impl World {
             // its 10000 broadcast over the ring's 10-tick growth
             // (trace-confirmed, sub_25CE0).
             7 => e.f69 = 17,
-            // The duel tether (ctor :47116: +44 = 200, the ch4
-            // per-tick grip amount).
+            // The duel dart (:65654-64). ⚠ `+44 = 200` was the
+            // (10,26) TETHER's ctor value (:47116) on the wrong
+            // record: retail writes `*(v5+44) = *(a1+44)`, the
+            // TOKEN's own damage stamp — `SPELLS[11].damage = 100`,
+            // which `def.damage` above already put there
+            // (mc1l48 t=59114 slot 937 records 100).
             11 => {
                 e.f69 = 26;
-                e.f44 = 200;
+                if mc1_duel_dart_exact_off() {
+                    e.f44 = 200;
+                } else {
+                    // The aim point (:65660-62): the CASTER's own raw
+                    // position — not the muzzle's, not the lifted z —
+                    // stepped a flat 10240 along the live `(+30, +32)`.
+                    // The same shape possess uses below, with the
+                    // duel's shorter reach (10240, not 0x4000).
+                    let mut d = (p.x, p.y, p.z);
+                    Gen::polar_step(&mut d, p.heading, pitch, 10240);
+                    e.dest_x = d.0;
+                    e.dest_y = d.1;
+                    e.site_z = d.2;
+                }
             }
             // Steal Mana's damage is forced 2000 (:65754), exploding
             // into the m11 steal flash (ch3).
@@ -9958,27 +10630,85 @@ impl World {
     ///
     /// Every arm then zeroes the caster's `Type_160 v_12` — the flight
     /// TARGET speed (:65583/:65601; the burst expiry repeats it, :65614).
+    ///
+    /// ⭐⭐⭐ THE SAVED AXIS AND ITS ARMED BIT LIVE ON THE MANIFESTATION
+    /// RECORD, NOT ON THE PLAYER — the MC1 twin of the MC2 law in
+    /// `mc2_cast_teleport`. `CARPET.EXE` **0x6F648** (`sub_56E50_57380`,
+    /// VA 0x56E50) settles every leg:
+    /// - `0x56EE8 lea ecx,[ebx+0x96]` stages the manifestation's
+    ///   `+0x96..+0x9B` = `dest_x/dest_y/site_z` (+150/+152/+154).
+    /// - `0x56EFB cmp word [ebx+0x9a],0 / jnz` — **THE ARMED TEST IS
+    ///   `+154 != 0`**, and nothing else.
+    /// - Save leg `0x56F09-14`: `lea edi,[ebx+0x96]` / `lea
+    ///   esi,[ebp+0x48]` / `movsd; movsw` — the CASTER's `+72/+74/+76`
+    ///   copied whole into `+150/+152/+154` BEFORE the castle hop.
+    /// - Return leg `0x56F4F-56`: `CopyEntityPosition(caster,
+    ///   ebx+0x96)` then `mov word [ebx+0x9a],0` — **ONLY `+154` is
+    ///   cleared; `+150/+152` keep the consumed value.**
+    /// - No-castle leg `0x56F90-FF`: the same `movsd; movsw` SAVE runs
+    ///   FIRST (so `+150/+152` do take the caster's x/y), then the LCG
+    ///   hop, then `mov word [ebx+0x9a],0` at the arm tail.
+    ///
+    /// Those are POOL FIELDS WITH AN IMPORT SEAT; `Player::
+    /// teleport_return` was a port-side register with NONE, so every
+    /// segment re-anchor and every pair import between the save and the
+    /// return erased the arming and the return leg silently hopped to
+    /// the castle instead. mc1l48 t=34723: retail's (12,10) token slot
+    /// 213 carries `dest = (58595, 14163)`, `site_z = 1521` at t=34722
+    /// and lands the carpet on that axis, clearing `+154` alone — the
+    /// port hopped to castle 604 at (34.0, 94.0) and dragged the whole
+    /// (9,0)/(10,0) creature-fire cloud that chases the carpet with it.
     pub(crate) fn cast_teleport(&mut self, m: usize, p: PlayerPose) {
+        let seat = !mc1_teleport_save_axis_off();
         // :65574 picks the branch off `pool + 164 * wizext->var_50`
         // vs `pool` — i.e. off the BOUND register, not any owned
         // (3,2): an unbound castle takes the 64-tile LCG hop.
         match self.player_castle_bound() {
             None => {
                 self.player.teleport_return = None;
+                if seat {
+                    // 0x56F90's `movsd; movsw` runs on this leg too —
+                    // the x/y land and only +154 is zeroed after.
+                    let e = &mut self.g.ent[m];
+                    e.dest_x = p.x;
+                    e.dest_y = p.y;
+                    e.site_z = 0;
+                }
                 let yaw = (self.g.ent_rand(m) & 0x7FF) as u16;
                 let mut d = (p.x, p.y, 0i16);
                 Gen::polar_step(&mut d, yaw, 0, 0x4000);
                 self.pending_teleport = Some((d.0 as f32 / 256.0, d.1 as f32 / 256.0, None));
             }
             Some(c) => {
-                if let Some((rx, ry, rz)) = self.player.teleport_return.take() {
+                let armed = if seat {
+                    let e = &self.g.ent[m];
+                    if e.site_z != 0 {
+                        Some((e.dest_x, e.dest_y, e.site_z))
+                    } else {
+                        None
+                    }
+                } else {
+                    self.player.teleport_return
+                };
+                self.player.teleport_return = None;
+                if let Some((rx, ry, rz)) = armed {
                     self.pending_teleport = Some((
                         rx as f32 / 256.0,
                         ry as f32 / 256.0,
                         Some(rz as f32 / 256.0),
                     ));
+                    if seat {
+                        // 0x56F56 clears +154 ALONE.
+                        self.g.ent[m].site_z = 0;
+                    }
                 } else {
                     self.player.teleport_return = Some((p.x, p.y, p.z));
+                    if seat {
+                        let e = &mut self.g.ent[m];
+                        e.dest_x = p.x;
+                        e.dest_y = p.y;
+                        e.site_z = p.z;
+                    }
                     let e = &self.g.ent[c];
                     self.pending_teleport = Some((
                         e.x as f32 / 256.0,
@@ -10292,10 +11022,25 @@ impl World {
 
     /// Arm the human-caster duel pull (the victim intake writes the
     /// ATTACKER's Type_160 u16_314/316/318, :55671-77).
+    /// ⭐ THE ARM IS UNCONDITIONAL AND THE COUNTER STARTS AT **200**
+    /// (:55672). Retail's three stores are plain assignments with no
+    /// "already latched" test, so a sustained beam re-stamps victim,
+    /// counter AND hold every tick it lands — `mc1l48` t=59119-59127
+    /// shows exactly that in the recording, `+316` pinned at 200 for
+    /// nine ticks while `+318` walks 1705 → 1729 → 1746 → 1771 →
+    /// 1812 → 1852 → 1888 → 1923 → 1954, and only from t=59128 (the
+    /// first tick with no letter) does the counter start counting.
+    /// The port's `is_none()` guard froze the FIRST hold for the whole
+    /// grip and its `0` start ran the lock 1000 ticks where retail's
+    /// `+316 == 1000` release gives 800.
     pub(crate) fn set_duel_latch(&mut self, victim: u16, hold: u32) {
-        if self.duel.is_none() {
-            self.duel = Some((victim, 0, hold));
+        if mc1_duel_grip_exact_off() {
+            if self.duel.is_none() {
+                self.duel = Some((victim, 0, hold));
+            }
+            return;
         }
+        self.duel = Some((victim, 200, hold));
     }
 
     /// SPELLS row 14 (duel) tier params: `(subSpellIndex_2, life)` =
@@ -10550,6 +11295,17 @@ impl World {
     /// owner. Model-40 claim totems are excluded (:56880). Banked =
     /// house tally + own castle stored (the HUD % numerator, :54721).
     fn recompute_mana(&mut self) {
+        // ⭐ EVERY ACCUMULATOR HERE IS A PLAIN 32-BIT ADD IN RETAIL.
+        // `sub_48340_48680` (VA 0x48340, CARPET.EXE file 0x60B38) is
+        // `add %edx,0x88(%eax)` for the owner's `+136` and
+        // `add %ebx,0xbc(%edx)` for the world total — no clamp, no
+        // saturation, the word WRAPS. The port saturated, which froze
+        // the census's own runaway grave accumulator at `i32::MAX`
+        // (mc1l48-nodeath pair 28313→28314, slot 22 `(10,40)`: retail
+        // −2146963936, port 2147483647 — the pair's only dirty lane).
+        // `MGC_NO_MC1_MANA_CENSUS_WRAP=1` restores the clamps.
+        let sat = crate::engine::features::no_mc1_mana_census_wrap();
+        let add32 = |a: u32, b: u32| if sat { a.saturating_add(b) } else { a.wrapping_add(b) };
         for r in &mut self.rivals {
             r.mana_max = WIZARD_BASE_MANA; // the intrinsic base (u32_322, :55031-33)
         }
@@ -10635,7 +11391,7 @@ impl World {
             // `mc2_authored_mana_spheres`, which authors THING (10,58)
             // and asserts the entity comes out `model65 == 39`.
             let m = e.f140.max(0) as u32;
-            world = world.saturating_add(m);
+            world = add32(world, m);
             // ⭐ THE CREDIT IS ALWAYS THROUGH `+144`, FOR EVERY
             // COUNTED ENTITY. The census body never reads `+24`: it
             // hands each match to `sub_48340_48680` (:56911-19),
@@ -10655,17 +11411,17 @@ impl World {
             // 1000. Only the world total is unconditional (:56919).
             let owner = e.f144;
             if owner == PLAYER_TARGET {
-                max = max.saturating_add(m);
+                max = add32(max, m);
                 if e.class64 == 10 && e.model65 == 45 {
-                    houses = houses.saturating_add(m);
+                    houses = add32(houses, m);
                 }
                 if e.class64 == 3 && e.model65 == 2 {
-                    castle_stored = castle_stored.saturating_add(m);
+                    castle_stored = add32(castle_stored, m);
                 }
             } else if let Some(r) = self.rivals.iter_mut().find(|r| r.ent == owner) {
-                r.mana_max = r.mana_max.saturating_add(m);
+                r.mana_max = add32(r.mana_max, m);
             } else if let Some(r) = self.mc2_rivals.iter_mut().find(|r| r.ent == owner) {
-                r.mana_max = r.mana_max.saturating_add(m);
+                r.mana_max = add32(r.mana_max, m);
             } else if owner != 0 && (owner as usize) < self.g.ent.len() {
                 // Owner tag that names no wizard: the credit still
                 // lands on the entity and nothing ever resets it.
@@ -10674,14 +11430,18 @@ impl World {
         }
         for (owner, m) in owner_credit {
             let e = &mut self.g.ent[owner as usize];
-            e.f136 = e.f136.saturating_add(m.min(i32::MAX as u32) as i32);
+            e.f136 = if sat {
+                e.f136.saturating_add(m.min(i32::MAX as u32) as i32)
+            } else {
+                e.f136.wrapping_add(m as i32)
+            };
         }
         self.player.mana_max = max;
-        self.player.banked = houses.saturating_add(castle_stored);
+        self.player.banked = add32(houses, castle_stored);
         self.player.world_mana = world;
         // The castle overflow ejector reads the house tally
         // (sub_47130 :56185-89 — wizext u32_308).
-        self.g.banked_houses = houses.min(i32::MAX as u32) as i32;
+        self.g.banked_houses = if sat { houses.min(i32::MAX as u32) as i32 } else { houses as i32 };
         // Retail's census writes each wizard CARPET's +136 directly
         // (:56860-907 accumulates on the entity) — the ceiling lives
         // on the pool record, and every afford gate AND the recorder
@@ -10694,7 +11454,11 @@ impl World {
                 && self.g.ent[ent].class64 == 3
                 && self.g.ent[ent].model65 == 1
             {
-                self.g.ent[ent].f136 = self.rivals[ri].mana_max.min(i32::MAX as u32) as i32;
+                self.g.ent[ent].f136 = if sat {
+                    self.rivals[ri].mana_max.min(i32::MAX as u32) as i32
+                } else {
+                    self.rivals[ri].mana_max as i32
+                };
             }
         }
         // The MC2 census is the same law (sub_60F00 EF:61976-62052
@@ -11273,6 +12037,22 @@ impl World {
         self.g.ent[i].f26 -= 1;
     }
 
+    /// Is pool slot `i` the HUMAN's own token for `spell`? The
+    /// register must name it AND the token's own owner tag (retail
+    /// `+42`, homed at `f144` by the importer and by every native
+    /// mint) must not name a live rival — see
+    /// [`mc1_token_owner_tag_off`] for the `CARPET.EXE` citation.
+    fn mc1_token_is_players(&self, i: usize, spell: usize) -> bool {
+        if self.player.owned[spell] != i as u16 {
+            return false;
+        }
+        if mc1_token_owner_tag_off() {
+            return true;
+        }
+        let owner = self.g.ent[i].f144;
+        owner == PLAYER_TARGET || !self.rivals.iter().any(|r| r.ent == owner)
+    }
+
     /// Class-12 dispatch: pre-placed JARS wait for pickup; owned
     /// manifestations run their burst countdown + continuous effects.
     fn class12_tick(&mut self, i: usize, ctx: &MobCtx) {
@@ -11287,7 +12067,7 @@ impl World {
             // buff set stays with the rival tick's refresh.
             let spell = (t - MANIFEST_BASE) as usize;
             if spell < SPELL_COUNT {
-                if self.player.owned[spell] == i as u16 {
+                if self.mc1_token_is_players(i, spell) {
                     self.manifestation_tick(i, spell, ctx);
                 } else if let Some(ri) = {
                     let owner = self.g.ent[i].f144;
@@ -11429,16 +12209,47 @@ impl World {
                 // exactly +1103, plus 488 pair rows of frozen `f26`
                 // (the `+48` we never decremented).
                 //
-                // ⚠ Spell 5 (Beyond Sight) is STILL absent. `sub_56730`
-                // (:65292, row 0x0F) is structurally the same
-                // skeleton, but no take in the corpus casts (12,5), so
-                // it would ride 12's evidence rather than its own —
-                // do not add it without a witness.
-                if self.player.owned[spell] == i as u16
+                // ⭐ 5 (BEYOND SIGHT) NOW HAS ITS WITNESS and has
+                // joined the list — the note that stood here said no
+                // take in the corpus casts (12,5) and that the spell
+                // must not ride 12's evidence. mc1l48 carries a
+                // complete, isolated 101-tick burst on the HUMAN's own
+                // token, pool slot 106 `(12,5)` f70=15, `+136` = 3000,
+                // `+50` = 101, and every tick of it is retail's:
+                //   t=64292  +48 = 0            mana 4,103,109 (= +136 cap)
+                //   t=64293  +48 = 101 (armed)  mana 4,103,109
+                //   t=64294  +48 = 100          mana 4,100,109  (the -3000)
+                //   t=64295..64394  +48 99..0   mana FROZEN at 4,100,109
+                //   t=64395  +48 = 0            mana 4,102,160  (+2051 = +136/2000)
+                //   t=64396                     mana 4,103,109  (clamped)
+                // — i.e. `sub_55E80_563B0`'s two arms exactly:
+                // the full tick's `+132 = -(+136)` and the mid-burst
+                // `if (v2 && +132 > 0) +132 = 0` pin, for 101 ticks,
+                // with the pin lifting on the very tick `+48` reaches
+                // 0. Retail's snapshot `+132` reads 2051 on every one
+                // of those frozen ticks (the carpet's own step
+                // re-arms the rate AFTER applying the token's pin —
+                // token 106 walks below carpet 681), which is why the
+                // wound is invisible in the pair lane: the pair
+                // importer's own mid-burst seed clamp
+                // ([`RetailClosure`]'s `mana_delta` guard) zeroes it
+                // for exactly one tick. It took a SECOND free tick to
+                // surface — 50 of mc1l48's 122 sharp segment heads,
+                // every one `slot 681 mana` off by exactly +2051,
+                // t=64295 through the end of the take.
+                // `sub_56730` (:65292, row 0x0F) is the bare skeleton
+                // — gate, `sub_55E80`, `--(+48)` — with no emit and no
+                // owner bit, so 5 also joins `skeleton` below and its
+                // arm-tick debit moves OFF the command site onto the
+                // token, where retail pays it. `MGC_NO_MC1_BEYOND_SIGHT_TOKEN=1`
+                // restores the inert token and the command-site debit
+                // together.
+                if self.mc1_token_is_players(i, spell)
                     && matches!(
                         spell,
                         0 | 2
                             | 3
+                            | 5
                             | 6
                             | 7
                             | 8
@@ -11458,6 +12269,7 @@ impl World {
                             | 22
                             | 23
                     )
+                    && !(spell == 5 && mc1_beyond_sight_token_off())
                 {
                     self.manifestation_tick(i, spell, ctx);
                     return;
@@ -11690,7 +12502,47 @@ impl World {
                         .get(e as usize)
                         .is_some_and(|r| r.class64 == 12 && r.model65 as usize == spell)
             });
-            if self.player.state == LifeState::Alive && hit && !acq_holds {
+            // ⭐⭐ THE FULL LIST REFUSES THE GRANT. Retail's scan
+            // (:64818-31) tracks TWO results in one walk: `v25` — the
+            // list already holds a class-12 record of this model (the
+            // `acq_holds` above) — and `v24`, THE INDEX OF THE FIRST
+            // EMPTY ENTRY, initialised to −1. `:64841` refuses on
+            // EITHER (`if ( v25 || v24 == -1 ) goto LABEL_40;`), and
+            // the grant needs `v24` anyway: it is the seat the pool
+            // slot is written into (`+532 + 4*v24`) and the value
+            // stamped into the LEFT hand (`+940 = v24`). With all 24
+            // seats taken there is nowhere to put the acquisition, so
+            // retail walks on and the jar keeps its phase and its
+            // `flags 4`. The port scanned only for `v25` and granted:
+            // it converted the jar in place (`+70 = 3*spell`, bit 0
+            // set, `+42` re-pointed at the carpet) while
+            // `mc1_acq_push` silently dropped the append — the doc
+            // comment on that function already CLAIMED this law
+            // ("A full list refuses the append, like retail's
+            // `v24 == -1` arm refuses the whole grant") and the grant
+            // site never enforced it.
+            //
+            // ⚠ THE LIST CAN BE FULL AND THE SPELL STILL UNOWNED: a
+            // seat holds a raw POOL SLOT with no liveness test, so a
+            // recycled slot leaves a zombie seat that is neither
+            // empty (`slot != 0`) nor a match (`class64 != 12`).
+            // WITNESS (mc1l49 t=18525, read from `state.struct_b64`):
+            // wizard 0's `+532` is all 24 seats non-zero, `+676[20]`
+            // is 0 — spell 20 is NOT owned — and seat 20 holds pool
+            // slot 235, whose `class64` is 0. Jar 693 is a decaying
+            // `(12,20)` phase-1 jar (`+70 = 61`, `actLife 113`) lying
+            // under the carpet; retail polls it every 4th tick from
+            // t=18526 to t=25124 across a dozen different jars and
+            // NEVER grants, holding `flags 4` and `+42 = 672`, while
+            // the port granted on every poll (`flags 5`, `+70 = 60`,
+            // `+42 = 569`) and re-equipped the left hand to spell 20
+            // where retail keeps 22.
+            //
+            // `MGC_NO_MC1_ACQ_LIST_FULL=1` restores the pre-dig
+            // grant.
+            let acq_free = crate::engine::features::no_mc1_acq_list_full()
+                || self.mc1_acq.iter().any(|&e| e <= 0);
+            if self.player.state == LifeState::Alive && hit && !acq_holds && acq_free {
                 self.g.ent[i].flags |= 1;
                 self.g.ent[i].tick70 = (spell * 3) as u8;
                 // ⭐ NO eager `player.owned[spell]` write: the grant
@@ -11796,6 +12648,16 @@ impl World {
     fn try_pickup(&mut self, i: usize) {
         let spell = self.g.ent[i].model65 as usize;
         if spell >= SPELL_COUNT || self.player.owned[spell] != 0 {
+            return;
+        }
+        // The full-list refusal (:64841 `v24 == -1`) is the SAME
+        // function on this call path — `sub_55A40_55F70` is the whole
+        // jar poll and the native encoding only changes how `+70` is
+        // spelled. See the strict arm in [`World::class12_tick`] for
+        // the citation and the mc1l49 witness.
+        if !crate::engine::features::no_mc1_acq_list_full()
+            && !self.mc1_acq.iter().any(|&e| e <= 0)
+        {
             return;
         }
         // The native encoding keeps retail's jar sub-state bare in +70
@@ -11956,21 +12818,68 @@ impl World {
         // t=5164: retail arms +48 = 251 and the machine spends 2000
         // on its first full tick; the port ran the countdown and the
         // shield bit and never touched the purse.
-        let skeleton = matches!(spell, 4 | 14);
+        // 5 BEYOND SIGHT IS THE THIRD SKELETON, and the barest of
+        // them: `sub_56730` (:65292, dispatch row 0x0F) is
+        // `if (+48 > 0) { if (gate) sub_55E80_563B0 else +48 = 1;
+        // --(+48); }` — Rebound's body with NO owner bit and NO emit
+        // at all. So the FULL tick pays the whole `+136` through
+        // `+132` (and must NOT fall through to the mid-burst regen
+        // pin below), and every mid-burst tick pins it. The flag the
+        // spell actually produces is derived from the live burst in
+        // the `match spell` tail (`5 => beyond_sight = active`).
+        // WITNESS mc1l48 t=64292-64396, the human's token 106 — see
+        // [`mc1_beyond_sight_token_off`].
+        let skeleton =
+            matches!(spell, 4 | 14) || (spell == 5 && !mc1_beyond_sight_token_off());
         let mut fired = false;
         let mut gate_failed = false;
-        if was_live
-            && (launcher || skeleton)
-            && self.g.ent[i].f26 == self.spells()[spell].count as i16
-        {
-            if self.mc1_token_gate(spell) {
-                self.mana_debit(self.spell_cast_cost(spell));
-                if launcher {
-                    let p = self.mc1_cast_pose;
-                    let right = self.hand_bits & 0x200 != 0;
-                    self.emit_spell(spell, i, p, right, ctx);
+        // ⭐⭐⭐ THE GATE IS PER TICK, NOT PER ARM. Every launcher and
+        // skeleton machine opens `if (+48 > 0) { … if
+        // (!sub_55DD0_56300(a1, caster)) { +48 = 1; goto LABEL_5; } …
+        // }` — the fireball `sub_56090_565C0` (:64977), Possess
+        // `sub_56510_56A40`, Shield `sub_566C0` (:65273-85), Rebound
+        // `sub_573F0_57920`, Global Death `sub_580A0_585B0`
+        // (:66244-59) and every twin between them. NOTHING guards
+        // that call on `+48 == +50`; only the gate's own full-price
+        // leg is. So a burst that was affordable when it armed is
+        // CANCELLED the moment a hard leg stops holding — and the
+        // cancel path returns BEFORE `sub_55E80_563B0`, so that
+        // tick's mid-burst regen pin never runs and the wizard's
+        // pending `+132` survives into his own step.
+        //
+        // The port only ever tested the gate on the arm tick, so a
+        // live burst ran to completion and pinned the regen every
+        // tick of it. mc1l49 t=9646: the human's castle (slot 353)
+        // takes its fatal hit and DOWNGRADES 6 → 5, dropping its
+        // store from 271,488 to 160,000 — under the 200,000 that his
+        // live Global Death token (slot 87, `+132 = 200000`) needs.
+        // Retail cancels it that tick (`+48` 47 → 0) and pays the
+        // wizard his pending 1,452; the port decremented to 46 and
+        // pinned the regen, and the human ran 1,452 mana short for
+        // the rest of the take.
+        //
+        // `MGC_NO_MC1_TOKEN_GATE_PER_TICK=1` restores the arm-only
+        // gate.
+        let per_tick_gate = !mc1_token_gate_per_tick_off();
+        if was_live && (launcher || skeleton) {
+            let full = self.g.ent[i].f26 == self.spells()[spell].count as i16;
+            let admitted = if full {
+                self.mc1_token_gate(spell)
+            } else if per_tick_gate {
+                self.mc1_token_gate_hard(spell)
+            } else {
+                true
+            };
+            if admitted {
+                if full {
+                    self.mana_debit(self.spell_cast_cost(spell));
+                    if launcher {
+                        let p = self.mc1_cast_pose;
+                        let right = self.hand_bits & 0x200 != 0;
+                        self.emit_spell(spell, i, p, right, ctx);
+                    }
+                    fired = true;
                 }
-                fired = true;
             } else {
                 self.g.snd_player(29); // :64931
                 self.g.ent[i].f26 = 1; // +48 = 1, the shared decrement zeroes it
@@ -12081,8 +12990,16 @@ impl World {
                 // human's +128 (out of pool; measured 80 on every
                 // take), the same literal the END restore uses.
                 if speed_sustained {
-                    self.pending_speed_base =
-                        Some(dir as i16 * if speed_full { 3 } else { 2 } * 80);
+                    let base = dir as i16 * if speed_full { 3 } else { 2 } * 80;
+                    self.pending_speed_base = Some(base);
+                    // ⭐ AND `+126` IS WRITTEN ON THE RECORD, NOW.
+                    // Retail's `*(v1 + 126) = *(Type_160 + 12)` lands
+                    // at the TOKEN's walk slot, so a spell token below
+                    // this one launches at the fresh speed in this
+                    // same tick ([`mc1_no_speed_token_cast_pose`]).
+                    if !mc1_no_speed_token_cast_pose() {
+                        self.mc1_cast_pose.speed = base;
+                    }
                 }
                 if !active && self.player.accel == dir {
                     self.player.accel = 0;
@@ -12099,6 +13016,14 @@ impl World {
                     self.player.accel = 0;
                     self.player.speed_boost = 0.0;
                     self.pending_speed_base = Some(80 * dir as i16);
+                    // The END restore is the same record write
+                    // (:65192-96) — mc1l48-nodeath t=13555 and
+                    // t=24439 both catch it: retail's volcano bolt
+                    // launches at 384 + 80 (the restored base) while
+                    // the carpet's own settled speed was still 144.
+                    if !mc1_no_speed_token_cast_pose() {
+                        self.mc1_cast_pose.speed = 80 * dir as i16;
+                    }
                 }
                 // sub_56380 (:65180-89) / the twin (:66211-18): the
                 // burst's (10,2) contrail puff at the carpet every
@@ -12670,6 +13595,15 @@ impl World {
     /// the whole World and never needs this.
     pub fn reload_thing_table(&mut self) {
         self.table = self.table_load.clone();
+    }
+
+    /// Test hook: raise the level-restart signal directly, without
+    /// staging a castle-less death. Lets a consumer pin that it
+    /// POLLS `take_restart` at the right cadence (the app's replay
+    /// resync) without rebuilding the whole death flow.
+    #[doc(hidden)]
+    pub fn debug_signal_restart(&mut self) {
+        self.pending_restart = true;
     }
 
     /// Test hook: zero the grace and hand the player a lethal hit
@@ -16207,7 +17141,27 @@ impl World {
         // out-of-pool human answers from the tick-top latch; with him
         // off the roster the loop finds nobody, so the probe MISSES
         // regardless of `want` and takes the z re-stamp path.
-        if self.human_wiz_top && self.overlap(i, player) == want {
+        //
+        // ⭐⭐⭐ AND A MID-TICK SEIZURE TAKES HIM OFF IT TOO. The head
+        // `var_u32_36462[0]` is NULLED by `NewEvent_372C0`'s sacrifice
+        // arm (:43885-91), so once anything in this tick has seized a
+        // victim the walk starts from NULL and finds NOBODY — the
+        // human latch included ([`Gen::wiz_roster_head_blanked`]).
+        // mc1l48 t=10545: THREE co-located (11,2) volumes on
+        // disposition 9 (slots 131/132/133, same pose, same box).
+        // Retail fires 131 (f26 0 -> 10, z untouched), whose fire
+        // seizes 138/139/141/142 for its four (10,17)s and blanks the
+        // head; 132 then probes on the same `f63 & 7 == 0` phase, finds
+        // the roster empty and takes the z re-stamp (3648 -> 3712,
+        // f26 STAYS 0); 133 is in rearm and reads the wizard TABLE
+        // instead (`sub_5A120`, no roster) so it neither fires nor
+        // decrements. Ungated, the port fired disposition 9 TWICE in
+        // one tick and minted eight (10,17)s, the second four seizing
+        // 143/145/146/147 — 143 being a live 700-life (5,15).
+        if self.human_wiz_top
+            && !self.g.wiz_roster_head_blanked()
+            && self.overlap(i, player) == want
+        {
             // sub_5A090 (:67642, VERIFIED against CARPET.EXE @0x5A0E9):
             // on the every-8th-tick phase, when a wizard CARPET is in
             // (want=1) / out of (want=0) the volume, the probe plays
@@ -16561,6 +17515,35 @@ impl World {
                 for e in &mut evs {
                     if !e.player && (e.tag as usize) < self.g.ent.len() {
                         e.tag = self.g.ent[e.tag as usize].id24;
+                    }
+                }
+                // ⭐ THE MC2 CAVE DRIP AMBIENCE (ids 65-69), the one
+                // retail trigger the port had never emitted — its own
+                // note said "presentation; owed to the audio layer"
+                // (`mc2_cave_carpet_tail`). Retail's per-wizard tail
+                // (EF:59799-59808) steps the global LCG, adds the turn
+                // counter, and on `rand % 0x83 < 5` asks for
+                // `rand % 0x83 + 65` at emitter 0 — the untagged arm,
+                // full volume, center pan. The DRAW is already spent
+                // by `mc2_cave_carpet_tail` (it must be: the stream is
+                // graded); only the READ was missing, and a read is
+                // hash-silent, which is why it belongs HERE and not in
+                // `snd()` (the sim-side vec is hashed, and a new event
+                // there would move every MC2 cave golden).
+                // ⚠ APPROX — THE PHASE, NOT THE RULE: retail reads the
+                // value the instant the tail perturbs it; this reads
+                // it at the end of the tick, after later consumers
+                // have stepped the same global stream. Same rule, same
+                // ~5/131 per-tick rate, a different exact sequence.
+                if self.g.is_cave() && !no_mc2_cave_drips() {
+                    let r = self.g.rand % 0x83;
+                    if r < 5 {
+                        evs.push(crate::engine::features::SoundEvent {
+                            id: (r + 65) as u8,
+                            pos: (0, 0, 0),
+                            tag: crate::mc1::mobs::PLAYER_TARGET,
+                            player: true,
+                        });
                     }
                 }
                 evs
@@ -22213,6 +23196,66 @@ mod tests {
     /// exactly one trailing cell, and at t=31888 the free stack ran
     /// dry and all 54 following seizures took the wrong slot
     /// (world horizon 31,887 → 37,109 once the discard landed).
+    /// ⛔ THE SCATTER WRITES NO `+144`. `sub_45C10_45F50`'s jar loop
+    /// (`for (i = 0; i != 96; i += 4)`, :55520-49) touches the
+    /// scattered record exactly four ways — `+16 &= ~1` (:55534),
+    /// `++(+70)` (:55535), the `sub_41C70_41FB0` move-relink (:55546)
+    /// and `+12 = rand % 90 + 200` (:55549). CARPET.EXE carries the
+    /// same four at the loop body `0x5E9B8..0x5EAE4`:
+    /// `andb $0xfe,0x10(%ebp)` (`0x5EA22`), `incb 0x46(%ebp)`
+    /// (`0x5EA26`), `call 0x5A468` (`0x5EA94`), `mov %edx,0xc(%ebp)`
+    /// (`0x5EABA`) — and **no store to `0x90(%ebp)` anywhere in it**.
+    /// The port's invented "ground-jar convention" clear was not free:
+    /// the acquisition list is a BARE handle (no `+42` on `Ent`, and
+    /// retail's own `+676` is a bare array index), so a book entry can
+    /// name a slot that has been recycled into somebody else's live
+    /// record, and clearing THAT record's owner drops it out of its
+    /// owner's mana census.
+    ///
+    /// ⚠ A RECORDING FIXTURE CANNOT PIN THIS. `+144` is not in
+    /// `EntObsMc1` at all (the schema's `owner_ptr` is `+160`), and
+    /// the pair channel re-imports the whole pool from the record at
+    /// every anchor, so the clear heals before it can be graded: the
+    /// corpus witness — mc1l49 t=39094, where rival 594 dies with his
+    /// book still naming pool slot 26, by then the HUMAN's live
+    /// `(10,39)` ball holding 7,000 — reads as an INHERITED
+    /// `player.mana_max` head at t=39095 (retail 1,718,909, port
+    /// 1,711,909) with a 250/250-conforming pair lane under it.
+    #[test]
+    fn the_death_scatter_keeps_the_jar_record_s_owner_tag() {
+        let mut w = flat_world();
+        // Retail's scatter arm, not the `no_spell_loss` cosmetic one.
+        w.patches.no_spell_loss = false;
+        // A live mana ball owned by wizard slot 700 — the shape a
+        // recycled book handle aliases.
+        let ball = 26usize;
+        {
+            let e = &mut w.g.ent[ball];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.tick70 = 41;
+            e.max_life = 300;
+            e.act_life = 300;
+            e.flags = 12;
+            e.f140 = 7_000;
+            e.f144 = 700;
+        }
+        // The dying wizard's acquisition list still names it.
+        w.mc1_acq[0] = ball as i32;
+
+        w.player_land(away());
+
+        assert_eq!(
+            w.g.ent[ball].tick70, DROPPED_JAR,
+            "the scatter DID run on this record (the native arm's own \
+             jar state; strict worlds take retail's `++(+70)` instead)"
+        );
+        assert_eq!(
+            w.g.ent[ball].f144, 700,
+            "⚠ REVERSION PROBE: the scatter loop has no `+144` store —              CARPET.EXE 0x5E9B8..0x5EAE4 — so the owner tag rides it              untouched and the record keeps counting into its owner's              mana census"
+        );
+    }
+
     #[test]
     fn the_death_landing_discards_the_top_recycle_victim() {
         let mut w = flat_world();
@@ -23345,6 +24388,120 @@ mod tests {
         );
         let (kills, _, _) = w.combat_stats();
         assert_eq!(kills, 1, "the execution credits the castle owner");
+    }
+
+    /// ⭐⭐⭐ THE ACTION-6 CREATE-CASTLE TOKEN PIN LIVES INSIDE THE
+    /// LEVELER'S POOL GUARD. `sub_470E0` (:56142-56) is
+    ///
+    /// ```text
+    ///   result = sub_37710_37AD0();          // free-stack depth
+    ///   if (result) { sub_47A70_47DB0(a1); a1+70 = 4; … }
+    ///   else        { a1+70 = 4; }
+    /// ```
+    ///
+    /// and the token pin/release pair is inside `sub_47A70_47DB0`
+    /// (:56529 `sub_46D20_47060(a1, 1)` under `if (+26 > 0)`, :56533
+    /// `…(a1, 0)` under `if (+26 == 0)`) — NOT in `sub_470E0`'s own
+    /// body. So an action-6 pass on an EXHAUSTED pool parks `+70` back
+    /// to 4 and leaves the owner's Create-Castle token's `+48` exactly
+    /// where it stood. The port already gated the DOWNGRADE
+    /// ([`Gen::castle_tick`], `MGC_NO_MC1_LEVELER_POOL_GATE`) but
+    /// stamped the token outside the guard, so a besieged castle in a
+    /// starved world re-armed its owner's token to `+50 − 1` = 100 on
+    /// every other tick.
+    ///
+    /// ⚠ NO FIXTURE CAN PIN THIS. `+48` is not a field of `EntObsMc1`
+    /// (`mgc-formats/src/mgcr.rs`) — the recorder never projects it —
+    /// and its only graded consequence is downstream, through
+    /// `sub_14120`'s `token+48 == 0` term, as a `chase` (`+146`)
+    /// divergence that classifies INHERITED. mc1l49 measures it:
+    /// rival 672's castle 953 is fatally hit at t=17809 and oscillates
+    /// `+70` 4→6→4 through t=17813 while retail's own free stack reads
+    /// EMPTY (`var_u32_40 = −1`) at every snapshot from 17805 to
+    /// 17815; retail holds token 676's `+48 = 0` across that whole
+    /// window AND leaves the castle's rung at 2, then pins at t=17814,
+    /// the tick whose reap leaves the leveler a record to spend and
+    /// the rung drops 2 → 1. The ungated port pinned at t=17810,
+    /// shutting the Upgrade arm on ticks 17811/17813/17870 (`+146` 953
+    /// vs the port's 569 — three segment heads, all pair-clean).
+    /// This test is the pin. Kill switch `MGC_NO_MC1_LEVELER_PIN_GATE`.
+    #[test]
+    fn a_starved_leveler_leaves_the_castle_token_alone() {
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        // Arm: a level-2 castle owned by the human, with the human's
+        // own Create-Castle manifestation as the pin target.
+        let build = |free_stack: bool| -> (World, usize, usize) {
+            let mut w = bare_creature_world(2);
+            w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+            w.grant_spells(&[16]);
+            let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
+            w.g.ent[c].id24 = PLAYER_TARGET;
+            w.g.ent[c].f144 = PLAYER_TARGET;
+            for _ in 0..60 {
+                w.tick(pose, PlayerCommand::default());
+            }
+            w.g.ent[c].mail[5] = (10, PLAYER_TARGET);
+            for _ in 0..60 {
+                w.tick(pose, PlayerCommand::default());
+            }
+            assert_eq!(
+                w.loadout().castle.map(|(_, _, l)| l),
+                Some(2),
+                "the castle stands at level 2"
+            );
+            let m = w
+                .castle_owner_token(PLAYER_TARGET)
+                .expect("the human holds a (12,16) token");
+            // Park the token IDLE — retail's state through the whole
+            // mc1l49 t=17808..17813 window.
+            w.g.ent[m].f26 = 0;
+            // The lethal tick only PARKS the castle in action 6
+            // (:56003); the leveler runs at the top of the NEXT tick.
+            w.g.ent[c].f140 = 30_000;
+            w.g.mail_write(crate::mc1::combat::MailTarget::Pool(c), 0, 45_000, 1);
+            w.tick(pose, PlayerCommand::default());
+            assert_eq!(w.g.ent[c].tick70, 6, "parked in the leveler");
+            assert_eq!(w.g.ent[m].f26, 0, "the parking tick pins nothing");
+            if !free_stack {
+                w.g.free.clear();
+            }
+            (w, c, m)
+        };
+
+        // A — the starved pool. `sub_37710_37AD0()` reads 0, so
+        // `sub_47A70_47DB0` never runs: no rung decrement AND no pin.
+        let (mut w, c, m) = build(false);
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[c].tick70, 4,
+            "the starved leveler still parks +70 back to 4"
+        );
+        assert_eq!(
+            w.loadout().castle.map(|(_, _, l)| l),
+            Some(2),
+            "…and runs no teardown (the rung is untouched)"
+        );
+        assert_eq!(
+            w.g.ent[m].f26, 0,
+            "…so the owner's Create-Castle token keeps its +48: the \
+             pin lives INSIDE sub_47A70_47DB0's guard (:56529)"
+        );
+
+        // B — the same tick with a record to spare: the teardown runs
+        // and the pin lands, `+48 = +50 − 1`.
+        let (mut w, c, m) = build(true);
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(
+            w.loadout().castle.map(|(_, _, l)| l),
+            Some(1),
+            "a fed leveler takes the rung"
+        );
+        assert_eq!(
+            w.g.ent[m].f26,
+            SPELLS[16].count as i16 - 1,
+            "…and pins the token on its way (:56529)"
+        );
+        assert_eq!(w.g.ent[c].tick70, 4);
     }
 
     #[test]
@@ -26261,6 +27418,98 @@ mod tests {
         );
     }
 
+    /// ⭐⭐ A FULL ACQUISITION LIST REFUSES THE JAR GRANT — the
+    /// NATIVE call path of `sub_55A40_55F70` (:64818-41). The scan
+    /// keeps two results in one walk: `v25` (the list already holds a
+    /// class-12 record of this spell) and `v24`, the index of the
+    /// FIRST EMPTY seat, initialised to −1; `:64841` refuses the whole
+    /// grant on `v25 || v24 == -1`, because `v24` is both the seat the
+    /// pool slot is written into (`+532 + 4*v24`, :64850) and the
+    /// value stamped into the left hand (`+940 = v24`, :64851).
+    ///
+    /// A seat holds a RAW pool slot with no liveness test, so a
+    /// recycled slot leaves a ZOMBIE seat that is neither empty
+    /// (`slot != 0`) nor a class-12 match — the list can be full with
+    /// the spell still unowned. That is mc1l49's state at t=18525
+    /// (24/24 seats taken, seat 20 naming the freed slot 235,
+    /// `+676[20] = 0`) and the recorded jar there is never picked up;
+    /// the fixture `a-full-acquisition-list-refuses-the-grant-retail`
+    /// pins the strict-retail arm, this pins the native one.
+    ///
+    /// `MGC_NO_MC1_ACQ_LIST_FULL=1` restores the pre-dig grant and
+    /// FAILS this test. The `no_spell_loss` patch is the relief arm —
+    /// it scrubs the zombie seats in native play — so the test runs on
+    /// `WorldPatches::LEGACY`, retail's own behaviour.
+    #[test]
+    fn a_full_acquisition_list_refuses_the_jar_grant() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 12,
+            model: 7,
+            x: 200,
+            y: 200,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        w.set_patches(crate::patches::WorldPatches::LEGACY);
+        let away = PlayerPose::level(10 << 8, 10 << 8, 3260, 0);
+        w.tick(away, PlayerCommand::default());
+        let jar = (1..w.g.ent.len())
+            .find(|&i| w.g.ent[i].class64 == 12 && w.g.ent[i].flags & 0x400 == 0)
+            .expect("the placed jar exists");
+        let (jx, jy, jz) = (w.g.ent[jar].x, w.g.ent[jar].y, w.g.ent[jar].z);
+        let on_jar = PlayerPose::level(jx, jy, jz, 0);
+        assert_eq!(w.player.owned[7], 0, "spell 7 starts unowned");
+
+        // Fill every empty seat with a ZOMBIE: a non-zero slot whose
+        // pool record is FREE, so `v24` stays −1 and `v25` stays 0.
+        let mut z = w.g.ent.len() - 1;
+        for k in 0..w.mc1_acq.len() {
+            if w.mc1_acq[k] > 0 {
+                continue;
+            }
+            while w.g.ent[z].class64 != 0 {
+                z -= 1;
+            }
+            w.mc1_acq[k] = z as i32;
+            z -= 1;
+        }
+        assert!(w.mc1_acq.iter().all(|&e| e > 0), "the list is 24/24 full");
+
+        w.tick(on_jar, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[jar].tick70, 0,
+            "the full list refuses the grant: the jar keeps its phase"
+        );
+        assert_eq!(w.player.owned[7], 0, "and the spell stays unowned");
+        assert_ne!(w.player.left, Some(crate::mc1::spells::SpellId(7)));
+
+        // Free ONE seat — `v24` now names it — and the same overlap
+        // grants on the very next poll.
+        w.mc1_acq[23] = 0;
+        w.tick(on_jar, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[jar].tick70,
+            MANIFEST_BASE + 7,
+            "one free seat is enough: the jar converts in place"
+        );
+        assert_eq!(w.player.owned[7], jar as u16);
+        assert_eq!(w.player.left, Some(crate::mc1::spells::SpellId(7)));
+    }
+
     /// The jar ground-snap deviation over real content: on baked HW
     /// level 0 (the original buried-jar offender) every placed jar
     /// sits AT the shaped ground within one played tick — never
@@ -26427,12 +27676,25 @@ mod tests {
         assert_eq!(w.accel_override(), Some(-3.0), "negative held backward");
         let m2 = w.player.owned[2] as usize;
         assert_eq!(w.g.ent[m2].f26, 0, "forward's charge force-cleared");
-        // The resisting thrust input is a TWO-PHASE kill: the veto
-        // arms at the tick head, and the press that moves the flight
-        // target arms the mover's v_14 latch (:55766-80) — the token
-        // reads the latch on its NEXT pass and ends the burst
-        // (counter = 1 → 0, :66188-89). Pinned lanes have no mover,
-        // so the test publishes the latch by hand.
+        // ⭐⭐ THE RESISTING PRESS IS A ONE-PHASE KILL AT THE TOKEN, AND
+        // IT DOES NOT VETO THE CAST. This block used to assert the
+        // opposite ("the veto blocked the re-arm") — the last residue
+        // of the retired `thrust_cancel` deviation. Retail's trigger
+        // `sub_46B00_46E40` tests the opposite token's `+48` clear and
+        // `+140 >= +136` and nothing else (:55869-77/:55912-18), then
+        // LABEL_32 pins `var_48 = var_50` unconditionally (:55893) —
+        // and the two calls sit at the TAIL of the very routine that
+        // just ran the bounds-tested speed step (:55825-33), with no
+        // test of its result in between. So the cancel is the v_14
+        // two-phase ALONE: the press moves the flight target
+        // (:55766-80), the token reads the latch on its NEXT pass and
+        // ends the burst (counter = 1 → 0, :66188-89), and the held
+        // command RE-ARMS behind it in the same tick. mc1l48 t=4899
+        // records exactly that shape — retail's 0x80 clears while the
+        // token's `+48` sits back at 251 — and only t=4900 leaves it
+        // at 0, because the input site's held re-issue is gated on a
+        // nonzero counter (:20621-27), not on the stick. Pinned lanes
+        // have no mover, so the test publishes the latch by hand.
         w.thrust_cancel(1.0);
         assert_eq!(
             w.accel_override(),
@@ -26442,14 +27704,19 @@ mod tests {
         w.mc1_v14 = true;
         w.tick(away(), back);
         assert_eq!(
-            w.accel_override(),
-            None,
-            "v_14 ends the burst at the token; the veto blocked the re-arm"
-        );
-        assert_eq!(
             w.pending_speed_base,
             Some(-80),
-            "the backwards burst restores the NEGATIVE base (:66226-27)"
+            "v_14 ended the burst at the token, restoring the NEGATIVE base (:66226-27)"
+        );
+        let m21 = w.player.owned[21] as usize;
+        assert_eq!(
+            w.g.ent[m21].f26, 251,
+            "and the held command re-armed behind it — NO cast-site veto (mc1l48 t=4899)"
+        );
+        assert_eq!(
+            w.accel_override(),
+            Some(-3.0),
+            "so the channel is live again on the same tick"
         );
         w.mc1_v14 = false;
         w.pending_speed_base = None;
@@ -28323,10 +29590,21 @@ mod tests {
     /// before wizext+708). mc1l48 t=27414: retail's token 146 stays
     /// frozen at CAP[2] 20000/198 over its falling-corpse owner where
     /// the un-gated every-tick stamp wrote CAP[1].
+    ///
+    /// ⭐⭐⭐ AND THE STAMP IS EVENT-DRIVEN (wave 115 / D5): the second
+    /// half of this test used to poke the castle's `+26` BETWEEN
+    /// ticks and assert the next tick published it — which only holds
+    /// under the port's invented per-tick stamp. `sub_47C60_47FA0`
+    /// has three callers (the level-up commit :56481, the teardown
+    /// :56528, the setup :54996) and `sub_47DD0_48110` one (the
+    /// respawn :55036); NONE of them is the per-tick wizard walk. A
+    /// tick with no level event must leave the token exactly where
+    /// the last event put it — see the `no level event` leg.
     #[test]
     fn castle_ladder_stamp_requires_a_live_owner() {
+        // ARM 1 — a LIVE owner across the authored castle's own
+        // first-tick level-up commit: the event publishes.
         let mut w = rival_world(true, 3); // authored level 2
-        let r_ent = w.rivals[0].ent as usize;
         let c = w.rival_castle(w.rivals[0].ent).expect("castle");
         let m = w.rivals[0].owned[16] as usize;
         // Freeze the brain for the whole probe (no upgrades, no AI
@@ -28334,27 +29612,39 @@ mod tests {
         // under test.
         w.rivals[0].eliminated = true;
         w.g.ent[c].flags |= 2; // the first-commit bind latch
+        let ctor = w.g.ent[m].f136;
         // The authored castle's FIRST tick runs its own level-up
         // commit (the ctor +70 note), so read the committed level
         // rather than assuming the spawn one.
         w.tick(away(), PlayerCommand::default());
         let lvl = w.g.ent[c].f26 as usize;
+        assert!(lvl > 0, "the authored castle committed a level");
+        assert_ne!(ctor, Gen::CASTLE_CAP[lvl], "the ctor price is not the rung");
         assert_eq!(w.g.ent[m].f136, Gen::CASTLE_CAP[lvl], "live owner: stamped");
-        // The owner dies (corpse byte 3).
-        w.g.ent[r_ent].tick70 = 3;
-        w.g.ent[c].f26 = lvl as i16 - 1; // a level change the stamp would publish
+        // ⭐ THE EVENT LAW: the NEXT tick carries no level event, so a
+        // sentinel poked over the token survives it untouched.
+        w.g.ent[m].f136 = 1;
+        w.g.ent[m].f140 = 1;
         w.tick(away(), PlayerCommand::default());
         assert_eq!(
-            w.g.ent[m].f136,
-            Gen::CASTLE_CAP[lvl],
-            "dead owner: the ladder freezes at the last commit"
+            (w.g.ent[m].f136, w.g.ent[m].f140),
+            (1, 1),
+            "no level event, no stamp"
         );
-        w.g.ent[r_ent].tick70 = 1;
+        // ARM 2 — the SAME commit under a corpse owner (+70 = 3)
+        // publishes nothing: the token keeps its ctor price.
+        let mut w = rival_world(true, 3);
+        let r_ent = w.rivals[0].ent as usize;
+        let c = w.rival_castle(w.rivals[0].ent).expect("castle");
+        let m = w.rivals[0].owned[16] as usize;
+        w.rivals[0].eliminated = true;
+        w.g.ent[c].flags |= 2;
+        w.g.ent[r_ent].tick70 = 3; // corpse
         w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[c].f26 as usize, lvl, "the same commit ran");
         assert_eq!(
-            w.g.ent[m].f136,
-            Gen::CASTLE_CAP[lvl - 1],
-            "live again: the stamp re-prices"
+            w.g.ent[m].f136, ctor,
+            "dead owner: the ladder freezes at the last commit"
         );
     }
 
@@ -28634,6 +29924,130 @@ mod tests {
             w.rival_attack_pick(0, true),
             Some(0),
             "a cooling high-priority spell must yield to Fireball, not freeze"
+        );
+    }
+
+    /// ⭐⭐ **MC1'S ONE CRT `rand()` DRAW SITS AT `LABEL_49`, BEHIND
+    /// THE 17/8 ARMS** (`sub_16030` :19492-19508). Retail walks Undead
+    /// Army (17) then Volcano (8) and `return`s out of the picker the
+    /// moment one is ready — or holds on it — so `rand()` is never
+    /// reached on those ticks. The port used to roll the anti-rebound
+    /// plan BEFORE the walk, spending a draw retail never spends.
+    ///
+    /// MC1 has EXACTLY ONE `rand()` call site and NO `srand()`
+    /// (grep `reference/remc1`), so the global Watcom stream starts at
+    /// Watcom's `_RWD_randnext = 1` and every phantom draw shifts it
+    /// permanently. That is what made the phase look unrecoverable:
+    /// it was never the seed, it was the draw site. With the site
+    /// corrected, seed 1 reproduces retail's rolls over mc1l49's whole
+    /// take — 50 independently observed `roll >= acc` fall-throughs
+    /// (each a spell 7/20/0 cast, which exists only in the roll's ELSE
+    /// arm), 50/50, and a 2^32 sweep over the first six of them leaves
+    /// exactly one phase (mod the unobservable bit 31) which then
+    /// predicts the other 44. mc1l49's free-run horizon moves
+    /// 7,719 → 17,477.
+    ///
+    /// ⚠ THIS LAW HAS NO PAIR-LANE OBSERVABLE, so it cannot take a
+    /// recording fixture: an isolated fixture file starts the stream
+    /// at 1 with zero prior draws, and rolls #1/#2 are 8 and 148 —
+    /// both PASS at any real accuracy, so both arms pick the same
+    /// spell. Only a run of thousands of chained draws can reach the
+    /// ~1.2% tail where the phase shows. Hence this whole-process A/B:
+    /// it passes with the law on and FAILS under
+    /// `MGC_NO_MC1_CRT_DRAW_SITE=1`.
+    #[test]
+    fn crt_draw_sits_behind_the_seventeen_eight_arms() {
+        use crate::mc1::mobs::PLAYER_TARGET;
+        use crate::mc1::rivals::RivalConfig;
+        // Undead Army (17, the FIRST arm) + Lightning (15, the
+        // rebound plan's spell) + Fireball (0, the ELSE arm's tail).
+        let mut book = [false; SPELL_COUNT];
+        book[0] = true;
+        book[15] = true;
+        book[17] = true;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut w = World::new(planes, &rival_marker_things(), 1, assets());
+        let mut cfgs: [Option<RivalConfig>; 8] = Default::default();
+        cfgs[1] = Some(RivalConfig {
+            aggression: 200,
+            accuracy: 255,
+            tempo: 255,
+            castle_level: 0,
+            book,
+            allowed: book,
+        });
+        w.set_wizards(&cfgs, 2);
+        let rid = w.rivals[0].ent;
+        // A REBOUNDING player target, so `sub_16000` says yes and the
+        // gate would draw if it were ever reached.
+        w.rivals[0].target = PLAYER_TARGET;
+        w.rivals[0].mana = 20_000; // >= Undead Army's 13000, and no poverty
+        w.rivals[0].mana_max = 20_000;
+        let tok =
+            w.g.spawn_effect(2, 100, 100, 0)
+                .expect("a pool slot for the rebound token");
+        {
+            let e = &mut w.g.ent[tok];
+            e.class64 = 12;
+            e.model65 = 14;
+            e.f26 = 10; // mid-burst: +48 > 0
+        }
+        w.player.owned[14] = tok as u16;
+        let (ex, ey) = (w.g.ent[rid as usize].x, w.g.ent[rid as usize].y);
+        let (hx, hy) = (ex.wrapping_add(5000), ey);
+        w.human_pose = (hx, hy, w.g.ent[rid as usize].z);
+        w.g.ent[rid as usize].f30 = Gen::angle_between(ex, ey, hx, hy);
+        w.g.ent[rid as usize].f34 = w.g.ent[rid as usize].f30;
+        assert!(w.rivals[0].owned[17] != 0, "Undead Army minted");
+
+        // (a) The 17 arm is READY, so retail returns 17 from :19494
+        // and LABEL_49 is unreachable — NO draw.
+        let crt_before = w.g.debug_crt_rand();
+        assert_eq!(
+            w.rival_attack_pick(0, true),
+            Some(17),
+            "a ready Undead Army is the first arm"
+        );
+        assert_eq!(
+            w.g.debug_crt_rand(),
+            crt_before,
+            "the 17 arm returns BEFORE LABEL_49 — the CRT stream must not move \
+             (fails under MGC_NO_MC1_CRT_DRAW_SITE=1)"
+        );
+
+        // (b) The 17 arm HOLDS (affordable by ceiling, off cooldown,
+        // short on CURRENT mana) — retail falls out to `return -1` at
+        // :19497 without reaching LABEL_49 either.
+        w.rivals[0].mana = 6_000; // < 13000 cost, >= 20000/4 (no poverty)
+        assert_eq!(
+            w.rival_attack_pick(0, true),
+            None,
+            "an unaffordable-now Undead Army HOLDS the picker"
+        );
+        assert_eq!(
+            w.g.debug_crt_rand(),
+            crt_before,
+            "a HOLD on the 17 arm spends no draw either"
+        );
+
+        // (c) Non-vacuous: with 17 out of the book the walk reaches
+        // LABEL_49 and the draw IS spent.
+        w.rivals[0].owned[17] = 0;
+        w.rivals[0].mana = 20_000;
+        assert!(
+            w.rival_attack_pick(0, true).is_some(),
+            "the walk still lands on a spell"
+        );
+        assert_ne!(
+            w.g.debug_crt_rand(),
+            crt_before,
+            "reaching LABEL_49 DOES spend the global Watcom draw"
         );
     }
 
@@ -38411,6 +39825,119 @@ mod tests {
         assert_eq!(ralt, Some(4224.0 / 256.0), "the saved z restored");
         assert!(w.player.teleport_return.is_none(), "toggle cleared");
         assert!(w.take_speed_zero(), "v_12 zero on the return arm");
+    }
+
+    /// ⭐⭐⭐ THE CASTLE-PORTAL SAVE/RETURN AXIS RIDES THE (12,10)
+    /// MANIFESTATION, AND `+154 != 0` IS ITS ARMED BIT — the MC1 twin
+    /// of the MC2 T1 law. `sub_56E50_57380` (CARPET.EXE **0x6F648**,
+    /// remc1 :65554): `0x56EE8 lea ecx,[ebx+0x96]` stages
+    /// `dest_x/dest_y/site_z`; `0x56EFB cmp word [ebx+0x9a],0 / jnz`
+    /// picks the leg; the save leg's `lea edi,[ebx+0x96] / lea
+    /// esi,[ebp+0x48] / movsd; movsw` (0x56F09-14) copies the CASTER's
+    /// `+72/+74/+76` whole; the return leg clears `+0x9a` ALONE
+    /// (`mov word [ebx+0x9a],0`, 0x56F56), leaving `+150/+152` stale;
+    /// the no-castle LCG leg runs the SAME save first and zeroes
+    /// `+0x9a` at its tail (0x56F90 / 0x56FFF).
+    ///
+    /// The lanes are `Ent` pool fields with an import seat, so the
+    /// arming survives a conformance re-anchor — the whole point.
+    /// `Player::teleport_return` had none, so between the save and the
+    /// return every segment reset disarmed the toggle and the return
+    /// leg silently hopped to the castle instead. Witness mc1l48
+    /// t=34723 (token slot 213: `dest = (58595, 14163)`, `site_z =
+    /// 1521` at t=34722, consumed to `site_z = 0`); the pose lane's
+    /// own head 34722 and eight more (34045, 35532, 36837, 40358,
+    /// 40827, 43211, 46611, 52537) close with it.
+    ///
+    /// ⚠ NOT PINNABLE BY A FIXTURE: `dest_x/dest_y/site_z` are not in
+    /// `EntObsMc1`, and both teleport pairs keep a residual once this
+    /// law is in (the acquire scan reads a STALE carpet position for
+    /// every slot walked after the carpet's own — see the dig note),
+    /// so no `head-1` pair on the corpus grades clean. Unconditional
+    /// assertions instead: they fail under
+    /// `MGC_NO_MC1_TELEPORT_SAVE_AXIS=1`.
+    #[test]
+    fn the_mc1_teleport_save_return_axis_lives_on_the_manifestation() {
+        let mut w = flat_world();
+        let m = w.g.new_event().expect("token stand-in");
+        let c = w.g.new_event().expect("castle slot");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = PLAYER_TARGET;
+            e.x = 80 << 8;
+            e.y = 90 << 8;
+            e.z = 3456;
+        }
+        w.g.castle_reg[0] = c as u16;
+        let a = PlayerPose {
+            x: 50 << 8,
+            y: 60 << 8,
+            z: 4224,
+            heading: 0,
+            pitch: 0,
+            speed: 80,
+        };
+        // Save leg (0x56F09-14): the caster's whole axis lands on the
+        // TOKEN, and the hop still goes to the castle.
+        w.cast_teleport(m, a);
+        assert_eq!(
+            w.take_teleport(),
+            Some((80.0, 90.0, Some(3456.0 / 256.0))),
+            "the unarmed leg hops to the castle"
+        );
+        assert_eq!(
+            (w.g.ent[m].dest_x, w.g.ent[m].dest_y, w.g.ent[m].site_z),
+            (a.x, a.y, a.z),
+            "+150/+152/+154 = the caster's own +72/+74/+76"
+        );
+        // A conformance re-anchor / pair import erases every port-side
+        // register but re-seats every POOL field. The toggle must
+        // survive that: it is the whole law.
+        w.player.teleport_return = None;
+        let b = PlayerPose {
+            x: 10 << 8,
+            y: 10 << 8,
+            z: 5000,
+            heading: 0,
+            pitch: 0,
+            speed: 80,
+        };
+        w.cast_teleport(m, b);
+        assert_eq!(
+            w.take_teleport(),
+            Some((50.0, 60.0, Some(4224.0 / 256.0))),
+            "the RECORD's armed axis returns the caster, not the castle"
+        );
+        assert_eq!(w.g.ent[m].site_z, 0, "0x56F56 clears +154");
+        assert_eq!(
+            (w.g.ent[m].dest_x, w.g.ent[m].dest_y),
+            (a.x, a.y),
+            "+150/+152 keep the consumed value — only +154 is cleared"
+        );
+        // Disarmed now: the next cast saves again and hops home.
+        w.cast_teleport(m, b);
+        assert_eq!(
+            w.take_teleport(),
+            Some((80.0, 90.0, Some(3456.0 / 256.0))),
+            "a cleared +154 reads UNARMED"
+        );
+        assert_eq!(
+            (w.g.ent[m].dest_x, w.g.ent[m].dest_y, w.g.ent[m].site_z),
+            (b.x, b.y, b.z),
+            "and re-banks the new caster axis"
+        );
+        // The no-castle LCG leg (0x56F90/0x56FFF): the same save runs
+        // FIRST, so +150/+152 take the caster's x/y, and +154 ends 0.
+        w.g.castle_reg[0] = 0;
+        w.cast_teleport(m, a);
+        assert!(w.take_teleport().is_some(), "the castle-less hop stages");
+        assert_eq!(
+            (w.g.ent[m].dest_x, w.g.ent[m].dest_y, w.g.ent[m].site_z),
+            (a.x, a.y, 0),
+            "the LCG leg saves x/y and zeroes +154 at its tail"
+        );
     }
 
     /// The resolve's `Type_160 v_12 = 0` (:65583/:65601) is a

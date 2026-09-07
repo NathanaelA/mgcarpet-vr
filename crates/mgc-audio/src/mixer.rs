@@ -313,9 +313,23 @@ impl FaithfulMixer {
         self.ambient = [false; 4];
     }
 
+    /// `MGC_SOUND_TRACE=1` — the mixer half of the sim's `SNDREQ`
+    /// trace: every request that reaches the mixer, with the distance
+    /// and volume it was scored at and the reason it was thrown away
+    /// (`cull` past 12288 units, `quiet` under 512, `policy` = the
+    /// dispatcher's `default: return`, `slot` = a louder pending
+    /// request for the same id won).
+    fn trace() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_SOUND_TRACE").is_some())
+    }
+
     /// The request phase: one sim sound event.
     pub fn request(&mut self, id: u8, source: Source, listener: &Listener) {
         if id as usize >= SLOT_COUNT {
+            if Self::trace() {
+                eprintln!("SNDMIX id={id} DROP:range");
+            }
             return;
         }
         let (vol, pan, tag, player_sourced) = match source {
@@ -328,6 +342,12 @@ impl FaithfulMixer {
                 let dy = i64::from(pos.1.wrapping_sub(listener.pos.1) as i16);
                 let dist_sq = dx * dx + dy * dy;
                 if dist_sq > CULL_DIST_SQ {
+                    if Self::trace() {
+                        eprintln!(
+                            "SNDMIX id={id} DROP:cull dist={} units",
+                            (dist_sq as f64).sqrt() as i32
+                        );
+                    }
                     return;
                 }
                 let dist = (dist_sq as f64).sqrt() as i32;
@@ -350,6 +370,9 @@ impl FaithfulMixer {
                 let range = (BASE_RANGE * (1024 - rel / 2)) >> 10;
                 let vol = 0x7FFF * (range - dist) / range.max(1);
                 if vol < MIN_VOL {
+                    if Self::trace() {
+                        eprintln!("SNDMIX id={id} DROP:quiet dist={dist} vol={vol}");
+                    }
                     return;
                 }
                 let vol = vol.min(0x7FFF) as u16;
@@ -376,6 +399,19 @@ impl FaithfulMixer {
         };
 
         let policy = if self.mc2 { policy_mc2 } else { policy_mc1 };
+        if Self::trace() {
+            eprintln!(
+                "SNDMIX id={id} vol={vol} pan={pan} tag={tag} player={player_sourced} policy={}",
+                match policy(id) {
+                    Policy::Drop => "DROP:policy",
+                    Policy::Loop(_) => "loop",
+                    Policy::Restart => "restart",
+                    Policy::KeepRunning => "keep",
+                    Policy::RestartPlayerOnly => "restart-player-only",
+                    Policy::Feed => "feed",
+                }
+            );
+        }
         match policy(id) {
             Policy::Drop => {}
             Policy::Loop(_) => {} // loops are driven by ambient state
@@ -649,6 +685,37 @@ mod tests {
             pos: (0, 0, 0),
             yaw: 0,
         }
+    }
+
+    /// ⭐ THE PORTAL-WARP ENTRY SOUND (player report 2026-09-08).
+    /// MC1's vortex `sub_26A60` (CARPET.EXE @0x3f397) requests sound
+    /// 22 at the PORTAL's own slot and only THEN copies the
+    /// destination onto the carpet (@0x3f3a7), so retail's
+    /// request-time listener stands inside the vortex. The port
+    /// scored the same request after the step had already warped the
+    /// listener: 92 of MC1's 113 authored portals warp further than
+    /// the 12288-unit cull (median 22,990), so the sound vanished.
+    /// The app now hands the mixer the pose the step STARTED from.
+    #[test]
+    fn portal_entry_sound_needs_the_request_time_listener() {
+        // mc1/level-020 slot 468: portal (13696, 44672) → (896, 55936),
+        // 17,050 units — a representative warp.
+        let src = (13696u16, 44672u16, 0i16);
+        let post_warp = Listener {
+            pos: (896, 55936, 0),
+            yaw: 0,
+        };
+        let at_portal = Listener { pos: src, yaw: 0 };
+        let mut m = FaithfulMixer::new();
+        m.request(22, Source::World { pos: src, owner: 7 }, &post_warp);
+        assert!(
+            !m.slots[22].pending,
+            "the drain-time listener culls the warp's own entry sound"
+        );
+        let mut m = FaithfulMixer::new();
+        m.request(22, Source::World { pos: src, owner: 7 }, &at_portal);
+        assert!(m.slots[22].pending, "the request-time listener hears it");
+        assert_eq!(m.slots[22].vol, 0x7FFF, "at the vortex mouth: full volume");
     }
 
     #[test]

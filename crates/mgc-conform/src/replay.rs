@@ -102,10 +102,31 @@ pub(crate) fn replay(path: &std::path::Path, args: &Args) -> i32 {
 /// because one unexplained row on the same boundary demotes the whole
 /// thing back to `SegOpen::Deviation`.
 ///
-/// Three lanes can NEVER be excused, whatever the roster says:
-///   * the POSE channel — its rows are the human's own mover lanes and
-///     carry no (class, model, slot) for a rule to scope against, so a
-///     roster rule cannot even be written for one;
+/// ⭐⭐⭐ THE POSE CHANNEL *IS* SCOPEABLE — THE PLAYER IS JUST ANOTHER
+/// POOL RECORD (round 103, re-measured round 119 dig W119-8). This
+/// function used to refuse every pose row outright on the stated
+/// grounds that "its rows carry no (class, model, slot) for a rule to
+/// scope against". That is factually wrong: the human is a live pool
+/// record — class 3, model 0, at `human_slot`, with a position — and
+/// [`PoseLane::note`] already writes exactly that tuple into its own
+/// CSV. The refusal cost mc1l48 its horizon: at t=12848 the carpet is
+/// at tile (143.95, 61.57), standing on cells (143,61)/(144,61) of the
+/// REGISTERED `mc1l48-reload-painter-dat-damage-top-wall` wound
+/// (`MGC_CELL_TRACE` from the t=12424 reload: port height 16, retail
+/// 24, drifting from t=12435 and healing only at the re-anchor), so
+/// `pose.z` and `pose.eff_pitch` — the two ground-derived lanes —
+/// part by 2 and 5 while the one-tick pair lane, which reads the
+/// MEASURED plane, is bit-exact. A registered deviation the excuse
+/// machinery structurally could not see.
+///
+/// A pose row is therefore classified like any other, with the
+/// human's own `(class, model, slot, pos)`, under its own
+/// [`RowKind::Pose`] so no existing rule can reach one by accident: a
+/// pose rule must say `"kind": "pose"` and name `pose.*` fields out
+/// loud. `MGC_NO_POSE_ROSTER_EXCUSE=1` restores the old blanket
+/// refusal.
+///
+/// Two lanes can still NEVER be excused, whatever the roster says:
 ///   * an RNG boundary — a parted LCG stream is not a per-row fact
 ///     about one entity, it is the whole world's future;
 ///   * `status: capture` and `status: open` rows. Capture rows are the
@@ -117,6 +138,11 @@ pub(crate) fn replay(path: &std::path::Path, args: &Args) -> i32 {
 /// report can print the same visible per-rule table `verify-deltas`
 /// does — a rule that starts excusing an order of magnitude more is a
 /// signal, never a silent mask.
+fn no_pose_roster_excuse() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_POSE_ROSTER_EXCUSE").is_some())
+}
+
 fn roster_excuse(
     stats: &mut RStats,
     roster: Option<&crate::roster::Roster>,
@@ -124,17 +150,44 @@ fn roster_excuse(
     t: u64,
     pose: &[(&'static str, i64, i64)],
     pd: &PairDiff,
+    human_slot: u16,
     ctx: &dyn Fn(u16) -> Option<(u8, u8, f64, f64)>,
 ) -> bool {
-    use crate::roster::{RuleStatus, Tag};
+    use crate::roster::{RowCtx, RowKind, RuleStatus, Tag};
     let Some(r) = roster else { return false };
-    if !pose.is_empty() || pd.rng_want != pd.rng_got {
+    if pd.rng_want != pd.rng_got {
         return false;
+    }
+    let mut idxs: Vec<usize> = Vec::new();
+    // THE POSE PASS. All-or-nothing like the world pass: one pose row
+    // that no `deviation` rule claims demotes the whole boundary.
+    if !pose.is_empty() {
+        if no_pose_roster_excuse() {
+            return false;
+        }
+        // No context for the carpet ⇒ nothing to scope against ⇒ the
+        // old refusal, which is the conservative answer.
+        let Some((class, model, x, y)) = ctx(human_slot) else {
+            return false;
+        };
+        for (name, ..) in pose {
+            let row = RowCtx {
+                kind: RowKind::Pose,
+                slot: Some(human_slot),
+                class,
+                model,
+                field: Some(name),
+                pos: Some((x, y)),
+            };
+            match r.classify(take, t.saturating_sub(1), &row) {
+                Some(i) if r.rules[i].status == RuleStatus::Deviation => idxs.push(i),
+                _ => return false,
+            }
+        }
     }
     // The boundary t grades the pair (t-1 → t) — rules scope on the
     // pair tick, the same key `verify-deltas` classifies under.
     let tags = crate::verify::classify_pair(Some(r), take, t.saturating_sub(1), pd, ctx);
-    let mut idxs: Vec<usize> = Vec::new();
     for tag in tags
         .missing
         .iter()
@@ -731,12 +784,24 @@ enum SegOpen {
     /// The PORT signalled a level restart (`World::take_restart` — the
     /// castle-less PERMADEATH respawn, MC1 case 0xF :48628-31 / MC2
     /// EF:37671-75). Retail's reload runs machinery whose inputs are
-    /// not in the recording — MC1 re-runs LoadLevel+GenerateFeatures
-    /// with its own reseed over its own heap residue (:51592-609);
-    /// MC2 re-reads a PRE-CAPTURE disk checkpoint (SaveLevel slot 1,
+    /// not in the recording — MC1 re-reads the level (`sub_408D0`
+    /// :51596 → LoadLevel) OVER ITS OWN LIVE HEAP RESIDUE; MC2
+    /// re-reads a PRE-CAPTURE disk checkpoint (SaveLevel slot 1,
     /// EF:39894-921) — so the reload boundary is re-anchored like a
     /// gap: a property of the mechanism, not a port failure, and it
     /// does not count against certification.
+    ///
+    /// ⛔ THE OLD JUSTIFICATION HERE WAS FALSE (round 116). It claimed
+    /// MC1 "re-runs LoadLevel+GenerateFeatures with its own reseed
+    /// over its own heap residue (:51592-609)". There is no `srand` in
+    /// `sub_408D0_40C10` and none in the shipped binary: the reload
+    /// regenerates MID-STREAM, and the port reaches the seam bit-exact
+    /// INCLUDING rng. What is actually unrecoverable is the RESIDUE —
+    /// the previous life's heap is an input to the reload and the
+    /// capture does not hold it. The conclusion survives; the reason
+    /// did not.
+    ///
+    /// A plain free run opts in with `--resync-restarts`.
     Restart,
 }
 
@@ -788,6 +853,21 @@ struct RStats {
 impl RStats {
     fn seg(&mut self) -> &mut Segment {
         self.segs.last_mut().expect("segment open")
+    }
+
+    /// Has ANY segment diverged yet? The gate on `--resync-restarts`
+    /// (see [`SegOpen::Restart`]): before the first divergence the
+    /// port's restart signal is corroborated — it is running retail's
+    /// own state, so it permadeaths where retail permadeathed. AFTER
+    /// it the port is wild, and a `take_restart` there is evidence of
+    /// nothing at all. Resyncing on it would launder the port's own
+    /// noise back into retail's state, which is exactly the purity
+    /// `--segmented` buys honestly (it re-anchors at EVERY break, so
+    /// its restarts are never load-bearing) and a plain run must not
+    /// buy on credit. Measured on mc1l48: ungated, the tail books 8
+    /// restart segments against retail's 5.
+    fn any_diverged(&self) -> bool {
+        self.segs.iter().any(|s| s.horizon.is_some())
     }
 
     fn open(&mut self, t0: u64, opened_by: SegOpen) {
@@ -1637,6 +1717,28 @@ fn run_mc1(
                 (cw.knock_dir, cw.knock_mag),
             );
             stats.seg().stepped += 1;
+            if let Ok(v) = std::env::var("MGC_PLANE_DIFF") {
+                if let Some((a, b)) = v.split_once(':')
+                    && let (Ok(t0), Ok(t1)) = (a.parse::<u64>(), b.parse::<u64>())
+                    && tick.t >= t0
+                    && tick.t <= t1
+                    && let Some(img) = timg.as_ref()
+                    && let Some(th) = img.plane("height")
+                {
+                    let ph = &world.planes().height;
+                    let mut n = 0usize;
+                    let mut first = Vec::new();
+                    for i in 0..th.len().min(ph.len()) {
+                        if th[i] != ph[i] {
+                            n += 1;
+                            if first.len() < 4000 {
+                                first.push((i & 0xFF, i >> 8, ph[i], th[i]));
+                            }
+                        }
+                    }
+                    println!("PLANEDIFF t={} hdiff={n} {first:?}", tick.t);
+                }
+            }
             celltrace.emit(&world, &timg, tick.t);
             if let Some((t0, t1)) = ctrace
                 && tick.t >= t0
@@ -1875,14 +1977,17 @@ fn run_mc1(
             }
             // Grade at the boundary (capture-clean pairs only — a torn
             // snapshot grades nothing, the chain runs on regardless).
-            if args.segmented && restart_at.is_some_and(|a| tick.t > a && tick.t - a <= 4) {
+            if (args.segmented || (args.resync_restarts && !stats.any_diverged()))
+                && restart_at.is_some_and(|a| tick.t > a && tick.t - a <= 4)
+            {
                 // THE RELOAD BOUNDARY (Seam B): the port signalled the
                 // restart 1-2 boundaries ago and retail has now
                 // rebuilt the level from inputs outside the recording
                 // (its own reseed over its own heap residue; MC2's
                 // pre-capture disk checkpoint) — nothing is gradable.
-                // Re-anchor like a gap, tagged `restart`. Segmented
-                // only: the plain run keeps its "never correct"
+                // Re-anchor like a gap, tagged `restart`. Segmented,
+                // or a plain run that asked with `--resync-restarts`:
+                // by default the plain run keeps its "never correct"
                 // purity (a WILD post-horizon run can trip
                 // `take_restart` on state retail never held — the
                 // mc1hwl0 guard row must not re-anchor on it).
@@ -1936,7 +2041,16 @@ fn run_mc1(
                             .or_else(|| pmap.get(&slot))
                             .map(|e| (e.class, e.model, e.x, e.y))
                     };
-                    roster_excuse(&mut stats, roster.as_ref(), &take, tick.t, &pose, &pd, &rctx)
+                    roster_excuse(
+                        &mut stats,
+                        roster.as_ref(),
+                        &take,
+                        tick.t,
+                        &pose,
+                        &pd,
+                        slot,
+                        &rctx,
+                    )
                 };
                 if args.stop_at_div && !boundary_clean && !(excused && args.resync_deviations) {
                     stop_at = Some(tick.t);
@@ -2071,6 +2185,16 @@ fn run_mc1(
         ));
     }
     let mode = if args.pose_only { "pose-only" } else { "world" };
+    // ⭐ A RESYNC MUST NEVER BE INVISIBLE IN A BASELINE DIFF. A plain
+    // run that crossed a permadeath seam is holding retail's state
+    // from that boundary on, so its numbers are not comparable with a
+    // pure free run's — the mode says which instrument produced them.
+    let mode = if args.resync_restarts && !args.segmented {
+        format!("{mode}+resync-restarts")
+    } else {
+        mode.to_string()
+    };
+    let mode = mode.as_str();
     if args.brief {
         let terrain = if measured_planes(&timg).is_some() {
             "measured"
@@ -2487,6 +2611,28 @@ fn run_mc2(
                 (kp.knock_dir, kp.knock_mag),
                 (cp.knock_dir, cp.knock_mag),
             );
+            if let Ok(v) = std::env::var("MGC_PLANE_DIFF") {
+                if let Some((a, b)) = v.split_once(':')
+                    && let (Ok(t0), Ok(t1)) = (a.parse::<u64>(), b.parse::<u64>())
+                    && tick.t >= t0
+                    && tick.t <= t1
+                    && let Some(img) = timg.as_ref()
+                    && let Some(th) = img.plane("height")
+                {
+                    let ph = &world.planes().height;
+                    let mut n = 0usize;
+                    let mut first = Vec::new();
+                    for i in 0..th.len().min(ph.len()) {
+                        if th[i] != ph[i] {
+                            n += 1;
+                            if first.len() < 4000 {
+                                first.push((i & 0xFF, i >> 8, ph[i], th[i]));
+                            }
+                        }
+                    }
+                    println!("PLANEDIFF t={} hdiff={n} {first:?}", tick.t);
+                }
+            }
             celltrace.emit(&world, &timg, tick.t);
             // `MGC_MOB_TRACE` — the MC1 arm has carried the creature-
             // machine microscope since 19c, and on MC2 it silently
@@ -2531,11 +2677,16 @@ fn run_mc2(
                 }
             }
             stats.seg().stepped += 1;
-            if args.segmented && restart_at.is_some_and(|a| tick.t > a && tick.t - a <= 4) {
-                // The reload boundary — see the MC1 arm (segmented
-                // only, same plain-mode purity rule). MC2's restore
-                // re-reads a PRE-CAPTURE disk checkpoint (SaveLevel
-                // slot 1), so the seam is ungradable by construction.
+            if (args.segmented || (args.resync_restarts && !stats.any_diverged()))
+                && restart_at.is_some_and(|a| tick.t > a && tick.t - a <= 4)
+            {
+                // The reload boundary — see the MC1 arm (segmented, or
+                // `--resync-restarts`; same plain-mode purity rule).
+                // MC2's restore re-reads a PRE-CAPTURE disk checkpoint
+                // (SaveLevel slot 1), so the seam is ungradable by
+                // construction — and re-importing retail's closure is
+                // the ONLY way an MC2 take can carry a permadeath at
+                // all, which is why this arm is not MC1-only.
                 stats.seg().ungraded += 1;
                 reset_at = Some((tick.t, SegOpen::Restart));
             } else if capture_clean_mc2(&pst, &st) {
@@ -2599,7 +2750,16 @@ fn run_mc2(
                             .or_else(|| pmap.get(&slot))
                             .map(|e| (e.class, e.model, e.x, e.y))
                     };
-                    roster_excuse(&mut stats, roster.as_ref(), &take, tick.t, &pose, &pd, &rctx)
+                    roster_excuse(
+                        &mut stats,
+                        roster.as_ref(),
+                        &take,
+                        tick.t,
+                        &pose,
+                        &pd,
+                        slot,
+                        &rctx,
+                    )
                 };
                 if args.stop_at_div && !boundary_clean && !(excused && args.resync_deviations) {
                     stop_at = Some(tick.t);
@@ -2734,6 +2894,16 @@ fn run_mc2(
         ));
     }
     let mode = if args.pose_only { "pose-only" } else { "world" };
+    // ⭐ A RESYNC MUST NEVER BE INVISIBLE IN A BASELINE DIFF. A plain
+    // run that crossed a permadeath seam is holding retail's state
+    // from that boundary on, so its numbers are not comparable with a
+    // pure free run's — the mode says which instrument produced them.
+    let mode = if args.resync_restarts && !args.segmented {
+        format!("{mode}+resync-restarts")
+    } else {
+        mode.to_string()
+    };
+    let mode = mode.as_str();
     if args.brief {
         let terrain = if measured_planes(&timg).is_some() {
             "measured"
@@ -3247,4 +3417,132 @@ fn emit_replay_csv(
         Ok(())
     };
     go().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// THE PIN for the pose-channel roster pass (round 119, dig
+    /// W119-8). The law's only observable is the GRADING VERDICT, not
+    /// a sim lane — `pose.z` and `pose.eff_pitch` are not `ObsMc1`
+    /// entity fields and the fixture suite deliberately grades raw
+    /// signatures with the roster switched out (roster.rs' own
+    /// doctrine), so a recording fixture cannot pin this. Sweep
+    /// evidence instead: mc1l48 12847 → 13895, mc1l49 / mc1l0 /
+    /// mc1l32-quick / mc2l22 / mc1hwl0 / mc1l0-spells-galore
+    /// byte-identical, 477 fixtures 0 regressions.
+    ///
+    /// UNCONDITIONAL: the assertion is `true`, so the test FAILS
+    /// under `MGC_NO_POSE_ROSTER_EXCUSE=1`.
+    fn painter_pose_roster() -> crate::roster::Roster {
+        serde_json::from_str(
+            r#"{"rules":[{
+                 "id":"mc1l48-reload-painter-dat-damage-top-wall-pose",
+                 "status":"deviation","note":"test copy of the shipped rule",
+                 "takes":["mc1l48"],"kind":"pose","class":3,"model":0,
+                 "fields":["pose.z","pose.eff_pitch"],"slots":[681],
+                 "ticks":[12847],"rect":[142.0,59.5,163.0,62.5]}]}"#,
+        )
+        .expect("rule parses")
+    }
+
+    /// The measured witness: mc1l48 boundary t=12848, carpet slot 681
+    /// (class 3 model 0) at tile (143.95, 61.57) — inside the
+    /// registered top-wall rect — with retail 1446/21 against port
+    /// 1444/16 on the two ground-derived lanes.
+    #[test]
+    fn pose_rows_on_the_painter_wound_are_roster_excused() {
+        let r = painter_pose_roster();
+        let mut stats = RStats::default();
+        let pose = [("pose.z", 1446_i64, 1444_i64), ("pose.eff_pitch", 21, 16)];
+        let ctx = |s: u16| (s == 681).then_some((3_u8, 0_u8, 143.953_125, 61.574_218_75));
+        assert!(
+            roster_excuse(
+                &mut stats,
+                Some(&r),
+                "mc1l48",
+                12848,
+                &pose,
+                &PairDiff::default(),
+                681,
+                &ctx,
+            ),
+            "the pose channel must be scopeable — the player is just another pool record"
+        );
+        assert_eq!(stats.roster_ticks, vec![12848]);
+        assert_eq!(
+            stats.roster_hits["mc1l48-reload-painter-dat-damage-top-wall-pose"],
+            (2, 1)
+        );
+    }
+
+    /// The scope is real, not a blanket pass: the same two lanes one
+    /// tick later, or off the rect, or on a lane the rule does not
+    /// name, stay UNEXPLAINED. All-or-nothing survives too — one
+    /// unclaimed pose row demotes the whole boundary.
+    #[test]
+    fn the_pose_rule_stays_scoped() {
+        let r = painter_pose_roster();
+        let ctx = |s: u16| (s == 681).then_some((3_u8, 0_u8, 143.953_125, 61.574_218_75));
+        let off_rect = |s: u16| (s == 681).then_some((3_u8, 0_u8, 32.2, 87.1));
+        let z = [("pose.z", 1446_i64, 1444_i64)];
+        let mut st = RStats::default();
+        // Wrong boundary (the floor is a finite tick list).
+        assert!(!roster_excuse(
+            &mut st, Some(&r), "mc1l48", 12849, &z, &PairDiff::default(), 681, &ctx
+        ));
+        // Off the wound's rect (t=42813's pose head, 100 tiles away).
+        assert!(!roster_excuse(
+            &mut st, Some(&r), "mc1l48", 12848, &z, &PairDiff::default(), 681, &off_rect
+        ));
+        // A lane the rule does not name.
+        let unnamed = [("pose.act_speed", 80_i64, -16_i64)];
+        assert!(!roster_excuse(
+            &mut st, Some(&r), "mc1l48", 12848, &unnamed, &PairDiff::default(), 681, &ctx
+        ));
+        // ALL-OR-NOTHING: a claimed lane beside an unclaimed one.
+        let mixed = [("pose.z", 1446_i64, 1444_i64), ("pose.x", 0, 1)];
+        assert!(!roster_excuse(
+            &mut st, Some(&r), "mc1l48", 12848, &mixed, &PairDiff::default(), 681, &ctx
+        ));
+        // A different take.
+        assert!(!roster_excuse(
+            &mut st, Some(&r), "mc1l49", 12848, &z, &PairDiff::default(), 681, &ctx
+        ));
+        assert!(st.roster_ticks.is_empty(), "nothing may be booked");
+    }
+
+    /// `RowKind::Pose` is its own kind so no `field`-scoped rule — nor
+    /// a kind-less one — can reach a pose row by accident.
+    #[test]
+    fn a_field_rule_never_reaches_a_pose_row() {
+        use crate::roster::{RowCtx, RowKind, Roster};
+        let r: Roster = serde_json::from_str(
+            r#"{"rules":[
+                {"id":"field-scoped","status":"deviation","note":"",
+                 "kind":"field","class":3,"model":0,"fields":["pose.z","z"]},
+                {"id":"kindless","status":"deviation","note":"",
+                 "class":3,"model":0}]}"#,
+        )
+        .expect("rules parse");
+        let pose_row = RowCtx {
+            kind: RowKind::Pose,
+            slot: Some(681),
+            class: 3,
+            model: 0,
+            field: Some("pose.z"),
+            pos: Some((143.95, 61.57)),
+        };
+        // The field-scoped rule is skipped; only the kind-less one can
+        // see a pose row at all, and `roster_excuse` still needs every
+        // row claimed by a `deviation` rule.
+        assert_eq!(r.classify("mc1l48", 12847, &pose_row), Some(1));
+        let field_only: Roster = serde_json::from_str(
+            r#"{"rules":[{"id":"field-scoped","status":"deviation","note":"",
+                 "kind":"field","class":3,"model":0,"fields":["pose.z"]}]}"#,
+        )
+        .expect("rule parses");
+        assert_eq!(field_only.classify("mc1l48", 12847, &pose_row), None);
+    }
 }

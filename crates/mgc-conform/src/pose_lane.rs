@@ -62,6 +62,14 @@ fn pose_grade_debuff() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_POSE_GRADE_DEBUFF").is_some())
 }
 
+/// KILL SWITCH (`MGC_NO_POSE_MANIF_SPEED_EXPIRY=1`) for
+/// [`PoseLane::manif_speed_expiry_mc1`] — the pre-mover manifestation
+/// expiry write. Set it to restore the blind step.
+fn no_manif_speed_expiry() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_POSE_MANIF_SPEED_EXPIRY").is_some())
+}
+
 #[derive(Default)]
 struct LaneStat {
     rows: u64,
@@ -87,6 +95,17 @@ pub struct PoseLane {
     /// visible for triage. MC1-only — MC2's sub_5F380 has no such
     /// short-circuit.
     pub dw48: u64,
+    /// Pairs whose step carried a manifestation EXPIRY speed write
+    /// ([`PoseLane::manif_speed_expiry_mc1`]) from a token BELOW the
+    /// carpet's pool slot — the write runs before the pair's command
+    /// integration.
+    pub manif_expiry: u64,
+    /// The same expiry seen on a token ABOVE the carpet's slot, where
+    /// retail's write lands AFTER the mover and the `v_14` the token
+    /// reads is the one this tick's own `sub_46840` just stamped —
+    /// not the recorded one. Counted, never applied; zero across the
+    /// corpus as measured (round 119).
+    pub manif_expiry_above: u64,
     /// Which mover the run exercised (report label).
     arm: &'static str,
 }
@@ -237,6 +256,112 @@ impl PoseLane {
     /// and before the higher-slot digs, an image neither record
     /// endpoint holds (t=567 vs t=1210, the two failure families).
     /// When absent, the world's settled planes.
+    /// ⭐⭐⭐ THE MANIFESTATION EXPIRY WRITES THE CARPET'S SPEED
+    /// REGISTERS, AND IT RUNS AT THE TOKEN'S OWN POOL SLOT.
+    ///
+    /// Every class-12 machine ends with the same tail — decrement the
+    /// burst counter, and on the tick it reaches zero slam the
+    /// CASTER's commanded speed (`Type_160 +12`):
+    ///
+    /// ```text
+    ///   Teleport  (10)  sub_56E50_57380 :65613-14
+    ///       v6 = *(a1+48) - 1; *(a1+48) = v6;
+    ///       if ( !v6 ) *(_WORD *)(*(_DWORD *)(v1 + 160) + 12) = 0;
+    ///   Accelerate (2)  sub_56380_568B0 :65191-96
+    ///       if ( !v7 ) { mgr->v_12 = *(v1+128); *(v1+126) = v_12; }
+    ///   Accel back (21) sub_57F00_58410 :66222-29
+    ///       if ( !v5 ) { mgr->v_12 = -*(v1+128); *(v1+126) = v_12; }
+    /// ```
+    ///
+    /// and the ACCELERATE pair reaches that tail through a second
+    /// door: the resisting-thrust latch `v_14` (:65145-50 / :66185-90)
+    /// clamps the counter to 1 first, so a burst that was at full
+    /// 251 last tick expires on THIS one. `v_14` is stamped by
+    /// `sub_46840` at the CARPET's slot and cleared at the top of the
+    /// next one, so a token below the carpet reads the value the
+    /// recording holds at N — direct capture, no reconstruction.
+    ///
+    /// ⭐ The phase is the whole law. The token dispatches at its own
+    /// pool slot; the human's manifestations live at slots 18..255 in
+    /// `mc1l48` against the carpet's 681, so the write lands BEFORE
+    /// `sub_46840`'s ±16 integration and before `sub_455D0` — the
+    /// pair must slam the registers, THEN integrate, THEN move. The
+    /// port's world arm has had both laws since round 47
+    /// (`World::mc1_manifestation_tick`, `pending_speed_zero` /
+    /// `pending_speed_base`); only this shadow lane was blind, and
+    /// 35 of `mc1l48`'s 36 dirty pose pairs are it.
+    ///
+    /// Measured witnesses (`mc1l48`): t=29133 slot 248 model 10
+    /// `f48 == 1` — `cmd_speed 80 -> 0` with an EMPTY move byte, an
+    /// 80-unit step no integrator can take; t=4723 slot 232 model 2
+    /// `f48 == 251` with `v_14 == 1` — `cmd_speed -32 -> 80`.
+    ///
+    /// Returns the state edit as a closure over `s`; `Ok` is silent.
+    fn manif_speed_expiry_mc1(
+        &mut self,
+        pst: &RetailMc1,
+        human_slot: u16,
+        base_speed: i16,
+        s: &mut Mc1State,
+    ) {
+        if no_manif_speed_expiry() {
+            return;
+        }
+        let Some(w0) = pst.wizards.get(pst.local_player as usize) else {
+            return;
+        };
+        let mut hit = false;
+        for (slot, tok) in pst.ents.iter().enumerate() {
+            // `if ( *(__int16 *)(a1 + 48) > 0 )` — the machine's own
+            // head guard, plus the caster test `*(a1 + 42)`.
+            if tok.class64 != 12 || tok.f42 != human_slot || tok.f48 == 0 {
+                continue;
+            }
+            // ⭐⭐⭐ THE SELECTOR IS `+70`, NOT THE MODEL BYTE. A
+            // class-12 record's handler is `str_2563D8[+70]` and the
+            // machine states run `3 × spell` + 0/1/2 (round 116), so
+            // a token that has ADVANCED off its manifestation state
+            // still carries the spell in `+65` while dispatching
+            // somewhere else entirely. `mc1l48` slot 15 is the
+            // witness: model 2, `f48` frozen at 234, `+70` moved
+            // 6 → 7 at t≈31520 and the accelerate machine has not
+            // run since — keying on `model65` mis-fires the restore
+            // on t=31601..31603 and makes three clean pairs dirty.
+            let restore = match tok.f70 {
+                30 => Some(0i16),         // 10 Teleport, sub_56E50_57380
+                6 => Some(base_speed),    //  2 Accelerate, sub_56380_568B0
+                63 => Some(-base_speed),  // 21 Accel back, sub_57F00_58410
+                _ => None,
+            };
+            let Some(restore) = restore else { continue };
+            // Does the counter reach zero on the coming tick? Either
+            // it is already 1, or — Accelerate only — the resisting
+            // press latched `v_14` and the machine clamps it to 1.
+            let expires =
+                tok.f48 == 1 || (matches!(tok.f70, 6 | 63) && w0.v14 != 0);
+            if !expires {
+                continue;
+            }
+            if slot as u16 > human_slot {
+                // ABOVE the carpet: retail's write lands after the
+                // mover and reads THIS tick's own `v_14`. Not
+                // reconstructable from the pair; counted for triage.
+                self.manif_expiry_above += 1;
+                continue;
+            }
+            s.tgt_speed = restore;
+            // Teleport writes `v_12` ONLY (:65613-14); the two
+            // Accelerate tails mirror it into `+126` as well.
+            if tok.f70 != 30 {
+                s.act_speed = restore;
+            }
+            hit = true;
+        }
+        if hit {
+            self.manif_expiry += 1;
+        }
+    }
+
     pub fn run_pair_mc1(
         &mut self,
         world: &World,
@@ -337,14 +462,56 @@ impl PoseLane {
                 s.strafe += 4 * s.strafe.signum();
             }
         }
+        // The manifestation expiry tail runs at the TOKEN's pool
+        // slot, i.e. BEFORE this carpet's command integration when
+        // the token sits below it (the corpus case).
+        self.manif_speed_expiry_mc1(pst, human_slot, e0.f128, &mut s);
         let knock = consumed_knock(w0.knock_mag, w0.knock_dir, w1.knock_mag, w1.knock_dir);
         let ground = |x: u16, y: u16| match ground_mid {
             Some(h) => World::ground_z_on_plane(h, x, y),
             None => world.ground_z_engine(x, y),
         };
-        flight::mc1_move(&mut s, &inp, None, knock, &ground, &|cur, prop| {
+        // The DUEL GRIP (`sub_455D0`'s lock tail, :55226-48) — the
+        // lock triple `Type_160` +314/+316/+318 is recorded state and
+        // `+128` is on the record, so a duelled pair steps faithfully.
+        // ⭐ IT RIDES INSIDE THE MOVER: retail's block sits between
+        // the knock add and `sub_45410`'s commit gate, so its step is
+        // gated and z-floored with the rest of the move. Applying it
+        // AFTER `mc1_move` (D12's landing, now the
+        // `MGC_NO_MC1_DUEL_GRIP_EXACT=1` arm) leaves the grip's own
+        // displacement unfloored — that is `mc1l48`'s residual
+        // `pose.z` family in the duel window.
+        // `MGC_NO_POSE_DUEL_TURN=1` restores the old blind step.
+        let duelling = w0.duel_victim != 0 && std::env::var_os("MGC_NO_POSE_DUEL_TURN").is_none();
+        let post_gate_grip = std::env::var_os("MGC_NO_MC1_DUEL_GRIP_EXACT").is_some();
+        let grip = (duelling && !post_gate_grip).then(|| {
+            let ve = &pst.ents[w0.duel_victim as usize];
+            flight::Mc1DuelGrip {
+                vpos: (ve.x, ve.y, ve.z),
+                hold: w0.duel_hold,
+                max_speed: e0.f128,
+                yaw_drag: true,
+            }
+        });
+        flight::mc1_move_duel(&mut s, &inp, None, knock, grip, &ground, &|cur, prop| {
             world.player_wall_gate_fixed(cur, prop)
         });
+        if duelling && post_gate_grip {
+            let ve = &pst.ents[w0.duel_victim as usize];
+            let mut cand = (s.x, s.y, s.z);
+            s.yaw = flight::mc1_duel_tail(
+                &mut cand,
+                s.yaw,
+                s.aim_pitch,
+                (e0.x, e0.y, e0.z),
+                (ve.x, ve.y, ve.z),
+                w0.duel_hold,
+                e0.f128,
+            );
+            s.x = cand.0;
+            s.y = cand.1;
+            s.z = cand.2;
+        }
         self.stepped += 1;
         let ctx = (
             human_slot,
@@ -730,6 +897,13 @@ impl PoseLane {
             let gates: Vec<String> = self.gates.iter().map(|(k, v)| format!("{k} {v}")).collect();
             let _ = writeln!(out, "    gated: {}", gates.join(", "));
         }
+        if self.manif_expiry > 0 || self.manif_expiry_above > 0 {
+            let _ = writeln!(
+                out,
+                "    manifestation speed-expiry pairs: {} (above-carpet, unmodelled: {})",
+                self.manif_expiry, self.manif_expiry_above
+            );
+        }
         if self.dw48 > 0 {
             let _ = writeln!(
                 out,
@@ -752,6 +926,116 @@ impl PoseLane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pool holding one human carpet at 681 and one class-12
+    /// machine at `slot`, owned by him.
+    fn manif_world(slot: usize, f70: u8, f48: u16, v14: i16) -> RetailMc1 {
+        let mut st = RetailMc1 {
+            local_player: 0,
+            wizards: vec![mgc_formats::mgcr::RetailWizardMc1::default()],
+            ents: vec![mgc_formats::mgcr::RetailEntMc1::default(); 1000],
+            ..RetailMc1::default()
+        };
+        st.wizards[0].v14 = v14;
+        st.ents[681].class64 = 3;
+        st.ents[681].f128 = 80; // the base commanded max (:55343)
+        let t = &mut st.ents[slot];
+        t.class64 = 12;
+        t.model65 = f70 / 3;
+        t.f70 = f70;
+        t.f42 = 681;
+        t.f48 = f48;
+        t.f50 = 251;
+        st
+    }
+
+    fn manif_step(st: &RetailMc1, tgt: i16, act: i16) -> (i16, i16) {
+        let mut lane = PoseLane::default();
+        let mut s = Mc1State {
+            tgt_speed: tgt,
+            act_speed: act,
+            ..Mc1State::default()
+        };
+        lane.manif_speed_expiry_mc1(st, 681, st.ents[681].f128, &mut s);
+        (s.tgt_speed, s.act_speed)
+    }
+
+    /// ⭐ THE MANIFESTATION EXPIRY TAIL, from the shipped machines:
+    /// Teleport zeroes the COMMANDED speed only (`sub_56E50_57380`
+    /// :65613-14), the two Accelerate tails slam BOTH registers back
+    /// to ±`+128` (`sub_56380_568B0` :65191-96 / `sub_57F00_58410`
+    /// :66222-29), and the resisting-thrust latch `v_14` is a second
+    /// door into the Accelerate tail (:65145-50) that Teleport does
+    /// not have.
+    ///
+    /// Witnesses, all `mc1l48`: t=29133 slot 248 `f70 = 30`,
+    /// `f48 == 1` — `cmd_speed 80 -> 0` on an EMPTY move byte;
+    /// t=4723 slot 232 `f70 = 6`, `f48 == 251`, `v_14 == 1` —
+    /// `cmd_speed -32 -> 80`.
+    #[test]
+    fn the_manifestation_expiry_writes_the_carpet_speed_registers() {
+        // Teleport (10), last burst tick: v_12 := 0, +126 untouched.
+        assert_eq!(manif_step(&manif_world(213, 30, 1, 0), -80, -80), (0, -80));
+        // ... and NOT while the burst still has ticks to run.
+        assert_eq!(
+            manif_step(&manif_world(213, 30, 5, 0), -80, -80),
+            (-80, -80)
+        );
+        // ... nor on the resisting-thrust latch: Teleport's machine
+        // has no `v_14` door.
+        assert_eq!(
+            manif_step(&manif_world(213, 30, 5, 1), -80, -80),
+            (-80, -80)
+        );
+        // Accelerate forward (2): both registers back to +128.
+        assert_eq!(manif_step(&manif_world(232, 6, 1, 0), -32, -32), (80, 80));
+        // ... reached from a FULL burst by the `v_14` latch alone.
+        assert_eq!(manif_step(&manif_world(232, 6, 251, 1), -32, -32), (80, 80));
+        // ... and a full burst with no latch is the SUSTAIN arm, not
+        // the tail (the ±240 write; `GATE_ACCEL` owns those pairs).
+        assert_eq!(
+            manif_step(&manif_world(232, 6, 251, 0), -32, -32),
+            (-32, -32)
+        );
+        // Accelerate backwards (21): −`+128`.
+        assert_eq!(manif_step(&manif_world(255, 63, 1, 0), 32, 32), (-80, -80));
+    }
+
+    /// ⭐⭐⭐ THE SELECTOR IS `+70`, NOT THE MODEL BYTE — a machine
+    /// that has advanced off its manifestation state still carries
+    /// the spell in `+65`. `mc1l48` slot 15: model 2, `f48` frozen at
+    /// 234, `+70` moved 6 → 7 at t≈31520 and the Accelerate machine
+    /// has not run since. Keying on `model65` restores ±80 over
+    /// t=31601..31603 and turns three bit-exact pairs dirty.
+    #[test]
+    fn a_machine_off_its_manifestation_state_writes_nothing() {
+        let mut st = manif_world(15, 6, 234, 1);
+        assert_eq!(manif_step(&st, 16, 16), (80, 80), "state 6 IS the machine");
+        st.ents[15].f70 = 7; // the successor state; model65 still 2
+        assert_eq!(manif_step(&st, 16, 16), (16, 16));
+    }
+
+    /// The machine only speaks for ITS OWN caster, and only from
+    /// below the carpet's pool slot — above it retail's write lands
+    /// after the mover and reads the `v_14` this tick's own
+    /// `sub_46840` just stamped, which the pair cannot reconstruct.
+    #[test]
+    fn the_expiry_is_scoped_to_the_caster_and_to_the_slot_order() {
+        let mut st = manif_world(213, 30, 1, 0);
+        st.ents[213].f42 = 706; // a rival's token
+        assert_eq!(manif_step(&st, -80, -80), (-80, -80));
+
+        let st = manif_world(900, 30, 1, 0); // above the carpet
+        let mut lane = PoseLane::default();
+        let mut s = Mc1State {
+            tgt_speed: -80,
+            ..Mc1State::default()
+        };
+        lane.manif_speed_expiry_mc1(&st, 681, 80, &mut s);
+        assert_eq!(s.tgt_speed, -80);
+        assert_eq!(lane.manif_expiry_above, 1);
+        assert_eq!(lane.manif_expiry, 0);
+    }
 
     /// Every (acc, stick) transition the filter can produce must be
     /// invertible to a stick that reproduces the same landing value.

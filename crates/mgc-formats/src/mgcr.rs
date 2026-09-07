@@ -705,6 +705,8 @@ mod m1 {
     pub const WIZARD_STRIDE: usize = 2_049;
     pub const WIZARD_COUNT: usize = 8;
     pub const WIZ_PLAYINDEX: usize = 10;
+    /// `var_u8_13332_9` (+9) — the AI-driven byte (`sub_46480` :55605).
+    pub const WIZ_AI_FLAG: usize = 9;
     /// `messages_13351_28[]` — the wizard's 8 on-screen message slots
     /// (`Type_str_28`, 68 bytes: 64-byte text, `periods_13415` u16 at
     /// +64, `drawType_13417` u16 at +66). ⚠ Retail addresses these
@@ -1353,6 +1355,14 @@ pub struct RetailEntMc1 {
 pub struct RetailWizardMc1 {
     /// Exit-status word `var_u16_13325` (+2; bit 2 = won).
     pub status: u16,
+    /// `var_u8_13332_9` (+9) — the roster's AI-DRIVEN byte. Set to 1
+    /// for every row but `var_u16_8`'s by the per-level roster reset
+    /// (`sub_3DD50` :49154) and stored nowhere else; `sub_46480`
+    /// :55605 dispatches a state-3 wizard's whole tick on `== 1`.
+    /// A rival's row can nevertheless be cleared mid-level by the
+    /// death scatter's `var_916[model]` overflow (see MC1
+    /// `Rival::human_driven`), so it is IMPORTED, not assumed.
+    pub ai_flag: u8,
     /// Pool slot of this wizard's carpet (+10).
     pub play_index: u16,
     // Type_160 (wizard+1103) fields, by their in-record offsets:
@@ -1410,6 +1420,18 @@ pub struct RetailWizardMc1 {
     pub charge: u8, // +326
     pub roll_acc: u16,    // +327
     pub pitch_acc: u16,   // +329
+    /// THE DUEL LOCK TRIPLE (`sub_46540` :55668-77 arms it, the
+    /// mover's tail :55228-50 spends it): +314 = the VICTIM's pool
+    /// slot (0 = no lock), +316 = the tick counter, armed to 200 and
+    /// released at 1000, +318 = the HOLD distance,
+    /// clamp(dist(caster, victim), 1024, 3072). While +314 is set the
+    /// caster's own mover servos his heading onto the victim's
+    /// bearing (cap 0x82) and steps him along it at the closing rate
+    /// — the pose channel cannot reproduce a duelled tick without
+    /// this triple.
+    pub duel_victim: u16, // +314
+    pub duel_count: u16,  // +316
+    pub duel_hold: u32,   // +318
     /// Spawn grace (u16_331): mailbox wiped while > 0.
     pub grace: u16,
     /// Life-regen stall (u32_383): every processed hit sets 16 —
@@ -1484,6 +1506,7 @@ impl Default for RetailWizardMc1 {
     fn default() -> Self {
         Self {
             status: 0,
+            ai_flag: 0,
             play_index: 0,
             move_bits: 0,
             roll_delta: 0,
@@ -1502,6 +1525,9 @@ impl Default for RetailWizardMc1 {
             charge: 0,
             roll_acc: 0,
             pitch_acc: 0,
+            duel_victim: 0,
+            duel_count: 0,
+            duel_hold: 0,
             grace: 0,
             regen_stall: 0,
             life_rate: 0,
@@ -1774,6 +1800,7 @@ fn decode_retail_wizard_mc1(d: &[u8], i: u16) -> RetailWizardMc1 {
     }
     RetailWizardMc1 {
         status: u16_(d, w + 2),
+        ai_flag: u8_(d, w + m1::WIZ_AI_FLAG),
         play_index: u16_(d, w + m1::WIZ_PLAYINDEX),
         move_bits: u32_(d, t),
         roll_delta: i16_(d, t + 4),
@@ -1790,6 +1817,9 @@ fn decode_retail_wizard_mc1(d: &[u8], i: u16) -> RetailWizardMc1 {
         guard_reg: core::array::from_fn(|k| u16_(d, t + 84 + k * 2)),
         banked_houses: i32_(d, t + 308),
         charge: u8_(d, t + 326),
+        duel_victim: u16_(d, t + 314),
+        duel_count: u16_(d, t + 316),
+        duel_hold: u32_(d, t + 318),
         roll_acc: u16_(d, t + 327),
         pitch_acc: u16_(d, t + 329),
         grace: u16_(d, t + 331),

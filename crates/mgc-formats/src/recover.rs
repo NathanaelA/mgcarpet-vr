@@ -483,9 +483,18 @@ impl RecoveredPair {
     }
 }
 
+/// `MGC_NO_MC1_RESPAWN_STATE_DATING=1` — restore the bare SPACE lane
+/// (the key alone dates the MC1 respawn, ±1 tick). See the `respawn`
+/// arm of [`recover_pair_mc1`].
+fn mc1_respawn_key_only() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RESPAWN_STATE_DATING").is_some())
+}
+
 /// Recover the input consumed across an MC1 pair (records N → N+1).
 /// `input_end` is the END record's raw input channel (the respawn
-/// SPACE lane — MC1's ±1-tick dating caveat, docs/RECORDING.md).
+/// SPACE lane — MC1's ±1-tick dating caveat, docs/RECORDING.md, which
+/// the `respawn` arm below resolves against retail's own revival).
 pub fn recover_pair_mc1(
     pst: &RetailMc1,
     st: &RetailMc1,
@@ -522,7 +531,49 @@ pub fn recover_pair_mc1(
         fire_right,
         equip_left: equip(pw.hand_left, cw.hand_left),
         equip_right: equip(pw.hand_right, cw.hand_right),
-        respawn: respawn_key(input_end),
+        // ⭐ THE RESPAWN IS DATED BY RETAIL'S OWN REVIVAL, NOT BY THE
+        // KEY. SPACE is MC1's LAST raw-key lane — every other verb in
+        // this recovery (move byte, stick, fires, equips, demolish,
+        // suicide, cheat) already reads the state closure — and it is
+        // the one lane that carries the ±1-tick attribution caveat,
+        // because MC1's held scancodes live in the STATIC FRAME, which
+        // is sampled outside the consensus window (docs/RECORDING.md
+        // "`input`"). The caveat is not a constant offset: mc1l49
+        // records BOTH signs inside one take. SPACE first appears at
+        // record 5723 and retail's carpet revives across 5723 → 5724
+        // (`act_life` −428 → 10000, `+70` 3 → 0), so the key is a tick
+        // EARLY there; SPACE first appears at record 7072 and retail
+        // revives across 7071 → 7072 (−1705 → 10000), so the same key
+        // is dated exactly there. Feeding the key alone therefore
+        // respawns the free run a tick early on one death and on time
+        // on the next — measured, `mc1l49-5487-7690`.
+        //
+        // Retail's own record settles it. `sub_44D30` reseats and
+        // REFILLS the carpet in the frame that consumes the command,
+        // so the pair whose END record shows the local carpet back
+        // above zero IS the tick that ran the respawn. The key stays
+        // as corroboration (a held SPACE somewhere across the pair);
+        // the STATE picks which pair. Same doctrine as the `suicide`
+        // lane just below and as the cheat witness — "raw input is
+        // advisory; retail recordings are validated by state".
+        //
+        // ⚠ Residual: a press held for exactly ONE record that lands
+        // on the record BEFORE the revival would be missed. Both
+        // mc1l49 deaths hold SPACE for 4-5 records; retail's own key
+        // repeat makes a sub-frame press unlikely, and the fallback
+        // costs a tick, not the respawn.
+        // Kill switch `MGC_NO_MC1_RESPAWN_STATE_DATING=1` restores the
+        // bare key lane.
+        respawn: {
+            let key = respawn_key(input_end);
+            if mc1_respawn_key_only() {
+                key
+            } else {
+                let s = cw.play_index as usize;
+                key && matches!((pst.ents.get(s), st.ents.get(s)), (Some(p), Some(c))
+                    if p.act_life < 0 && c.act_life > 0)
+            }
+        },
         // The Shift+K state witness (field doc): life > 0 → exactly
         // −1 on the local carpet, knock channel without a fresh
         // impulse (a decay step is fine; a hit's re-arm is not).
@@ -1148,5 +1199,78 @@ mod wall_stop_tests {
             0,
             "no key, nothing to re-integrate"
         );
+    }
+}
+
+#[cfg(test)]
+mod respawn_dating_tests {
+    use super::*;
+    use crate::mgcr::{RetailEntMc1, RetailWizardMc1};
+
+    /// One MC1 closure with the local wizard's carpet parked in pool
+    /// slot 1 (`play_index`), carrying retail's own life word: negative
+    /// while the carpet is down, back above zero on the frame
+    /// `sub_44D30` reseats and refills it.
+    fn closure(act_life: i32) -> RetailMc1 {
+        let mut st = RetailMc1 {
+            wizards: vec![RetailWizardMc1::default()],
+            ents: vec![RetailEntMc1::default(); 4],
+            ..RetailMc1::default()
+        };
+        st.wizards[0].play_index = 1;
+        st.ents[1].act_life = act_life;
+        st
+    }
+
+    /// The END record's raw input channel — scancode 57 is SPACE, the
+    /// respawn key ([`respawn_key`]).
+    fn space(held: bool) -> serde_json::Value {
+        serde_json::json!({ "keys_down": if held { vec![57] } else { Vec::<i64>::new() } })
+    }
+
+    /// A pair's recovered `respawn` verdict, END-record key and all.
+    fn respawn(prev_life: i32, cur_life: i32, key: bool) -> bool {
+        let input = space(key);
+        recover_pair_mc1(&closure(prev_life), &closure(cur_life), Some(&input)).respawn
+    }
+
+    /// ⭐ THE MC1 RESPAWN IS DATED BY RETAIL'S OWN REVIVAL, NOT BY THE
+    /// SPACE KEY. SPACE is MC1's last raw-key lane and the only one
+    /// carrying the ±1-tick attribution caveat (the held scancodes live
+    /// in the static frame, sampled outside the consensus window), and
+    /// the caveat is NOT a constant offset — mc1l49 records BOTH SIGNS
+    /// inside one take, so no fixed shift can fix the key lane. Rows
+    /// below are that take's two deaths, `mc1l49-5487-7690`.
+    ///
+    /// Pair-BLIND harness machinery like the wall-stop above: the
+    /// recovery runs between records, so no `.mgcr` fixture reaches it.
+    #[test]
+    fn the_mc1_respawn_is_dated_by_the_revival_not_the_space_key() {
+        // Death A — SPACE first appears at record 5723 while the
+        // carpet is still down at −428, and retail revives it across
+        // 5723 → 5724. The key is a tick EARLY here, and the state
+        // refuses the early pair.
+        assert!(
+            !respawn(-428, -428, true),
+            "the key alone respawns mc1l49's first death a tick early"
+        );
+        assert!(
+            respawn(-428, 10000, true),
+            "the pair whose END record has the carpet back above zero IS the respawn"
+        );
+        // Death B — the same key, dated exactly: SPACE first appears at
+        // record 7072 and retail revives across 7071 → 7072. One take,
+        // both signs; the state lane lands on the revival either way.
+        assert!(respawn(-1705, 10000, true), "mc1l49 t=7072, the on-time death");
+        // The key stays as CORROBORATION — a revival with no held
+        // SPACE across the pair is not the player's respawn command.
+        assert!(!respawn(-428, 10000, false), "no key, no respawn");
+        // A live carpet never respawns, key or no key (the `< 0 → > 0`
+        // crossing is the whole witness, not just the end state).
+        assert!(!respawn(10000, 10000, true), "a carpet that never died");
+        // NON-VACUITY: the first row IS the kill switch's lane — run
+        // this test under `MGC_NO_MC1_RESPAWN_STATE_DATING=1` and the
+        // bare key fires on a pair with no revival in it, so the
+        // assertion fails. Every other row holds under both arms.
     }
 }

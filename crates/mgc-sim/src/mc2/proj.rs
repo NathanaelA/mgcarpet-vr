@@ -963,6 +963,13 @@ impl Gen {
         // life 8, `id_0x1A_26` = its own slot) beside the meteor's
         // OWN trailing spark at 438, which does carry the overrides.
         self.mc2_spawn_fire(x, y, z);
+        // ⭐ THE CLANG (EF:55437) — `PrepareEventSound_6E450(a1x, -1,
+        // 26)` at the SWALLOWED SHOT's slot, between the ctor and the
+        // two writes. The port had the swallow but not its sound, so
+        // a magic mine eating a spell was silent.
+        if !crate::engine::world::no_mc2_mine_clang() {
+            self.snd(26, i);
+        }
         // `v4 = a1x->word_0x26_38; if (v4) { v5x = Entities_EA3E4[v4];
         //   a2x->word_0x36_54 = v5x->model_0x40_64;
         //   a2x->word_0x34_52 = v5x->byte_0x46_70;

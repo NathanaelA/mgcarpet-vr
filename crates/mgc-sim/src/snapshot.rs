@@ -116,7 +116,15 @@ const MAGIC: u32 = 0x5343_474D;
 ///     a mid-summon save resumed at zero; joins the Ent stream after
 ///     `f26`. All three are retail-persistent state their exclusion
 ///     comments had misfiled as transient or unread.
-pub const SNAPSHOT_VERSION: u32 = 19;
+/// 20: `Rival::human_driven` — MC1's roster byte `var_u8_13332_9`
+///     (`sub_46480` :55605), the gate that decides whether a state-3
+///     wizard runs the AI respawn arm or the HUMAN's killer-watch
+///     arm. A per-level constant except for the death scatter's
+///     `var_916[39]` overflow ([`crate::mc1::rivals`]), which brands
+///     one rival human-driven FOR THE REST OF THE LEVEL — so a
+///     reloaded save that dropped it would freeze a husk retail keeps
+///     turning. Joins the Rival stream after `rebound`.
+pub const SNAPSHOT_VERSION: u32 = 20;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]

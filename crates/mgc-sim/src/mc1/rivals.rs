@@ -43,6 +43,432 @@ use crate::mc1::behavior::BEHAVIOR;
 use crate::mc1::mobs::PLAYER_TARGET;
 use crate::mc1::spells::{SPELL_COUNT, SPELLS};
 
+/// `MGC_NO_MC1_RIVAL_TOKEN_GATE_LIVE_PURSE=1` — see
+/// [`crate::engine::features::no_mc1_rival_token_gate_live_purse`].
+#[inline]
+fn live_purse_legacy() -> bool {
+    crate::engine::features::no_mc1_rival_token_gate_live_purse()
+}
+
+/// ⭐ THE RAID ARM READS THE OWNER'S CARPET RECORD RAW (`sub_143A0`
+/// :18517-18). Set `MGC_NO_RAID_OWNER_RAW_POS=1` to restore the
+/// pre-dig behaviour, where the defender lookup went through
+/// [`World::wizard_pos`] and its invented liveness gates
+/// (`LifeState::Alive` for the human, `tick70 == 1` for a rival) —
+/// which made every castle whose owner was mid-death-fall read
+/// UNDEFENDED. See `rival_pick_castle_target`.
+pub(crate) fn raid_owner_pos_is_raw() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_RAID_OWNER_RAW_POS").is_none())
+}
+
+/// ⭐ THE BALL-CLAIM GUARD ELECTION SEATS THE HUMAN BY TICK-TOP
+/// BUCKET[0] MEMBERSHIP (`sub_15340` :19003 walks the chain rebuilt at
+/// :52290-97). Set `MGC_NO_BALL_GUARD_BUCKET=1` to restore the pre-dig
+/// behaviour, where the seed came from [`World::wizard_pos`] and its
+/// LIVE `LifeState::Alive` test — which dropped a human who died
+/// mid-tick out of the election and unguarded the balls beside him.
+/// See `rival_pick_ball_target`.
+pub(crate) fn ball_guard_is_tick_top() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_BALL_GUARD_BUCKET").is_none())
+}
+
+/// ⭐⭐⭐ **THE GUARD ELECTION EXCLUDES THE CANDIDATE'S OWN `+24`, AND
+/// A HUMAN-OWNED MANIFESTATION CARRIES THE HUMAN'S `+24`.**
+///
+/// `sub_15340` opens `v5 != *(_WORD *)(a1 + 24)` — a1 being the
+/// CANDIDATE the ball claim is scoring, not the wizard — so any
+/// class-3 chain member sharing the candidate's id is barred from
+/// guarding it. Disassembled at file offset 0x2db5c (VA 0x15340 +
+/// 0x187f8 = 0x2db38): `mov 0x14(%esp),%edx; mov 0x18(%ebx),%ax;
+/// cmp 0x18(%edx),%ax; je <skip>`.
+///
+/// On an ordinary mana ball `+24` is the ball's own slot and the test
+/// never fires. But the tick-top ball chain is walked LIVE: a slot it
+/// held at the tick top can have been recycled into something else by
+/// the time a rival brain reaches it, and `sub_15080` reads that
+/// record raw. A human-cast BALLOON stamps `+24` with the CASTER's
+/// carpet id — so retail's guard election drops the human himself and
+/// the balloon reads UNGUARDED however close he is standing.
+///
+/// The port seats the human OUTSIDE the chain walk (he rides
+/// out-of-pool), and that seat skipped the id test the loop applies to
+/// every pooled member — so the human guarded his own balloon and the
+/// claim was refused. mc1l48 t=23213: the human mints balloon 249 over
+/// his castle; retail's Adhab (712) claims it (`+146` 690 -> 249,
+/// `+148` 1068 = 681 + 3 + (3 << 7)), the port found him 1,920 units
+/// off it, called it guarded, dropped out of the ball arm entirely and
+/// fell through to the mana hunt (creature 43, 5,000 mana).
+///
+/// Set `MGC_NO_BALL_GUARD_OWN_ID=1` to restore the pre-dig behaviour.
+pub(crate) fn ball_guard_excludes_own_id() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_BALL_GUARD_OWN_ID").is_none())
+}
+
+/// ⭐⭐⭐ **THE OUT-OF-POOL HUMAN IS A CLASS-3 ROSTER MEMBER, AND A
+/// BLANKED OR SEVERED ROSTER HIDES HIM FROM THE WIZARD PICK.**
+///
+/// `sub_145B0` (:18554) elects its victim from `var_u32_36462[0]` and
+/// NOTHING else — the human's carpet is an ordinary record on that
+/// chain, so [`Gen::new_event`]'s mid-tick seizure blank (:43885-91,
+/// which NULLS all four roster heads for the rest of the tick) and the
+/// severed-chain law hide him exactly as they hide every pooled
+/// carpet. The port carries the human OUT OF THE POOL and judged him
+/// in a pre-pass placed OUTSIDE the chain walk, so a blanked roster
+/// left him standing as the only candidate in the world and the rival
+/// re-elected him on a tick retail could see nobody at all.
+///
+/// Retail's chain is ascending slot order, so the human's index in it
+/// is the number of PORT-list members below his slot, and
+/// `TickChain::cut` — measured in the port's list, which is one member
+/// shorter — compares correctly against that index either way round: a
+/// sever BELOW him yields `cut <= hpos` (hidden), a sever ABOVE him
+/// leaves `cut > hpos` (visible). A native world has no carpet slot, so
+/// index 0 degrades the rule to the blank alone (`cut == 0`), which is
+/// all a world with no pooled carpet can express.
+///
+/// WITNESS mc1l48 t=26739 / 26741-26744 / 26747 / 26750 (wizard 2,
+/// carpet slot 712, `+522` tempo 252 ⇒ think period 1, so the cascade
+/// re-decides EVERY tick): a seizure blanks the rosters, retail finds
+/// no candidate anywhere, and the cascade falls through arms 4-8 to
+/// Idle → CRUISE (`+415` 8 → 12). `sub_13A10`, the Cruise handler,
+/// stamps NO `+34` — so retail's `target_yaw` HOLDS across those ticks
+/// while the port, still in AttackWizard, re-aimed every one of them.
+/// The same blank already parks wizard 1 (`+415` 6 → 12) on exactly
+/// those seven ticks in BOTH engines, because its arm is the ball
+/// claim and the port's ball chain is chain-gated already.
+///
+/// `MGC_NO_MC1_HUMAN_ON_WIZ_ROSTER=1` restores the pre-dig pre-pass.
+pub(crate) fn mc1_human_on_wiz_roster() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HUMAN_ON_WIZ_ROSTER").is_none())
+}
+
+/// ⭐⭐⭐ **THE OWNED REBUILD IS AN UNBOUNDED INDEXED WRITE**
+/// (`sub_45C10_45F50` :55310-19). The decompile's own original line —
+/// preserved as a comment beside the hand-converted one — is
+/// `*(_WORD *)(v2 + 2 * *(char *)(164 * v3 + POOL + 65) + 676) =
+/// *(_WORD *)(v2 + result + 532)`: no class filter, no bounds check,
+/// and the model byte read as a SIGNED `char`. `+676` (the owned-spell
+/// book) is only 24 entries wide, and `+724` — the AI RECAST COOLDOWN
+/// table — sits immediately after it, `+628` (the learn countdowns)
+/// immediately before. So an acquisition entry whose pool slot has
+/// been RECYCLED into a record that is not a class-12 manifestation
+/// writes the slot number into a NEIGHBOURING array.
+///
+/// And it is not a one-shot: the rebuild runs at the TOP OF EVERY
+/// DISPATCH (:17969), just AFTER the cooldown decay loop (:17939-45),
+/// so the stray write is RE-STAMPED every tick — whatever it lands on
+/// is PINNED FOREVER.
+///
+/// mc1l49 t=36793, rival 594 (wizard 1): `acq[3]` still names pool
+/// slot 26, which had just been recycled into a class-10 model-39
+/// record. `676 + 2*39 = 754 = 724 + 2*15`, so the write puts the slot
+/// number **26** into `cooldown[15]` — Lightning — and the recording
+/// holds it at exactly 26 on every tick from 36793 to the end of the
+/// take while `cooldown[0]/[8]/[17]/[20]` decay normally around it
+/// (and wizard 4, the same tick, shows a healthy `cooldown[15] 1 -> 0`
+/// off `AI_RECAST[15] = 1`). Retail's rival can never cast Lightning
+/// again; the port's `m < SPELL_COUNT` guard was INVENTED, dropped the
+/// stray write, and let it fire — and in `AiState::RaidBalloon` a
+/// FIRED cast replaces the arrival hover step, so the port's z ran
+/// exactly one `-v_14` (= 4) below retail's. MEASURED: mc1l49
+/// `--segmented` 85 segments / 84 excess resets -> 62 / 61, the
+/// whole slot-594 run t=36854..38078 gone, every one of them `z`
+/// low by exactly 4.
+///
+/// `MGC_NO_MC1_OWNED_REBUILD_OVERFLOW=1` restores the pre-dig bound.
+pub(crate) fn owned_rebuild_overflow() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_OWNED_REBUILD_OVERFLOW").is_none())
+}
+
+/// ⭐⭐ **MC1'S ONE CRT `rand()` DRAW SITS AT `LABEL_49`, BEHIND THE
+/// 17/8 ARMS** (`sub_16030` :19492-19508). Retail's attack picker
+/// walks Undead Army (17) then Volcano (8) and `return`s out of the
+/// function the moment one is castable — or holds on it — so
+/// `rand()` is simply never reached on those ticks. The port used to
+/// roll the anti-rebound plan BEFORE walking 17/8, which spent a draw
+/// retail never spends; because MC1 has exactly ONE `rand()` call
+/// site and no `srand()`, every such phantom draw permanently shifts
+/// the whole global Watcom stream relative to retail's.
+///
+/// `MGC_NO_MC1_CRT_DRAW_SITE=1` restores the pre-dig ordering (roll
+/// first, then walk). See `World::rival_attack_pick`.
+pub(crate) fn mc1_crt_draw_at_label49() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CRT_DRAW_SITE").is_none())
+}
+
+/// `MGC_MC1_CRT_TRACE=1` — one stderr line per CRT draw
+/// (`[crt] t= ri= ent= acc= roll= pass=`), the instrument the phase
+/// recovery is fitted on.
+pub(crate) fn crt_trace() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_MC1_CRT_TRACE").is_some())
+}
+
+/// One arm of `sub_16030`'s cascade — see `World::rival_arm`.
+enum ArmStep {
+    /// retail's `goto LABEL_5x`
+    Next,
+    /// retail's `return s` / fall-out-to-`return -1`
+    Stop(Option<usize>),
+}
+
+/// MC1's mana-steal credit has NO CEILING — see
+/// [`World::credit_wizard_mana`].
+/// `MGC_NO_MC1_RAW_STEAL_CREDIT=1` restores the pre-dig `.min()`.
+pub(crate) fn mc1_raw_steal_credit() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RAW_STEAL_CREDIT").is_none())
+}
+
+/// ⭐⭐⭐ **THE HUSK WATCH AND ITS GATE.** A state-3 wizard runs the
+/// watch aim (`sub_463B0` :55575-91) — every tick it re-aims
+/// `+34`/`+36` at the pool record named by `+38` (the KILLER slot)
+/// and steps `+30` toward `+34` at 22/tick — but ONLY down
+/// `sub_46480`'s ELSE arm (:55621-29), i.e. only when the wizard's
+/// PLAYER ROSTER byte `str_13323[wizext->var_48].var_u8_13332_9` is
+/// NOT 1 (CARPET.EXE `cmp byte [esi+0x3414],1` at file 0x5eca4). That
+/// byte is set to 1 for every non-`var_u16_8` row by the per-level
+/// roster reset and by NOTHING else — so the arm is the HUMAN's
+/// death camera, not a rival's, and the companion
+/// `sub_44BE0_44F20(a1, 7)` (:54767-70) confirms it: it writes the
+/// global view-mode byte and only for the local player's row.
+///
+/// A rival can nevertheless fall into it, because the death scatter
+/// overflows a 24-byte array with a MODEL index and lands on the next
+/// player's copy of that byte — see [`World::rival_death_impact`],
+/// which is where [`Rival::human_driven`] gets set. `MGC_NO_HUSK_WATCH=1`
+/// retires the whole law (no overflow write, no watch), restoring the
+/// frozen husk the port shipped.
+pub(crate) fn husk_watch_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_HUSK_WATCH").is_none())
+}
+
+/// ⭐⭐⭐ THE SPEED-0 SINK OF THE SHARED MOVER (`sub_455D0` :55171-72)
+/// runs on the RIVAL's state-2 death fall too — see
+/// [`World::rival_death_fall`]. `MGC_NO_DEATH_SINK=1` restores the
+/// sink-less fall the port shipped.
+pub(crate) fn death_sink_runs() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_DEATH_SINK").is_none())
+}
+
+/// ⭐⭐⭐ THE OWNED REGISTER HAS EXACTLY ONE WRITER IN THE WHOLE MC1
+/// BINARY — `sub_45C10_45F50` (`reference/remc1/sub_main.cpp:55304-20`,
+/// twin `remc1hw:51372`). A grep of every `+676` reference in the
+/// decompile (:18773, :19407, :20672, :20707, :20732, :26921, :26966,
+/// :26967, :48843, :54662, :54669, :54969, :55871-72, :55914-15,
+/// :56629, :64794, :64813) finds READS at every site but two, and both
+/// of those are inside `sub_45C10` itself: the `memset(..., 0, 48)` at
+/// :55310 and the re-register at :55318.
+///
+/// In particular **the death scatter does NOT blank it**.
+/// `sub_45FC0_46300`'s impact arm (:55516-49) walks the `+532`
+/// ACQUISITION list, rewrites each entry to its token's model byte (or
+/// −1), scatters the jar and brands the roster overflow — and never
+/// touches `+676`. Because `sub_45C10` is reached only from the class-3
+/// dispatch table's live arms (`str_254ADC[0]` = `sub_45C90_45FD0`
+/// :55342 for the human, `str_254ADC[1]` = `sub_13170` → `sub_132B0`
+/// :17969 for a rival) plus the two respawn calls (:54962, :55033),
+/// a corpse's `+676` FREEZES at the book its last live tick published
+/// and stays readable — by `sub_47EC0`'s castle probe (:56629), by
+/// every rival's Create-Castle / mana-ball election (:54662, :54669),
+/// by the trigger walk (:64794) — for the whole husk window.
+///
+/// The port blanked it in the scatter, an INVENTED WRITE, so a dead
+/// rival's book vanished a tick early. WITNESS (mc1l49, the raw
+/// wizext shadow over 9404-11604): all five `owned` divergence ticks
+/// are death-scatter ticks — t=9640→9641 wiz 2 (ent 620) and
+/// t=9645→9646 wiz 6 (ent 724), t=10392→10393 both, t=10693→10694
+/// wiz 6 — each one ALL 24 indices at once, retail holding the intact
+/// slot book (621..644 for wiz 2) against the port's zeros, with the
+/// `+532` list on both sides rewritten to models by the same scatter.
+/// The HUMAN's half was already right: `World::mc1_owned_rebuild` is
+/// gated on `LifeState::Alive` and no human death path blanks the
+/// book. `MGC_NO_MC1_OWNED_SCATTER_KEEP=1` restores the blank.
+pub(crate) fn owned_survives_scatter() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_OWNED_SCATTER_KEEP").is_none())
+}
+
+/// A retail rival corpse KEEPS its Rebound/deflection bit (`+17`
+/// bit 7 = our `0x8000`) for the whole of its death; only the token's
+/// own tick clears it, and only when its burst lapses. See the site in
+/// [`World::rival_entity_tick`]'s death arm.
+/// `MGC_NO_MC1_DEATH_KEEPS_REBOUND=1` restores the pre-dig clear.
+pub(crate) fn death_keeps_rebound() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DEATH_KEEPS_REBOUND").is_none())
+}
+
+/// `sub_57610_57B40` bills the Create-Castle ladder price BEFORE it
+/// asks the pool for the castle ball (:65880-81) — the `if (v3)` null
+/// guard covers only the ball and its in-transit `+48` pin. A rival
+/// who fires into an exhausted pool therefore PAYS IN FULL and gets
+/// nothing. See the site in [`World::rival_castle_token_tick`].
+/// `MGC_NO_MC1_CASTLE_BALL_DEBIT_ORDER=1` restores the pre-dig
+/// spawn-then-bill order.
+pub(crate) fn castle_ball_debit_order() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_BALL_DEBIT_ORDER").is_none())
+}
+
+/// `sub_44D30`'s wizext CLEAR LIST is exact, and the port's copy was
+/// wrong on three lanes at once (:54868-70 and :55043-46):
+///
+/// - **`+24` (`knock_dir`) IS cleared** — `v_24 = 0; v_26 = 0;
+///   v_22 = 0` is one statement group; the port cleared only `+22`.
+/// - **`+462` (`war`) is NOT cleared** — the rival-only ledger loop
+///   writes `str_456[kx].var_u16_4` (+460, hate) and nothing else.
+/// - **`+406` (`poverty`) is NOT cleared** — `sub_44D30` never
+///   mentions it; it is the attack picker's own latch (:19468-91).
+///
+/// See the site in [`World::rival_respawn`].
+/// `MGC_NO_MC1_RESPAWN_CLEAR_LIST=1` restores the pre-dig list
+/// (knock_dir kept, war and poverty blanked).
+pub(crate) fn respawn_clear_list() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RESPAWN_CLEAR_LIST").is_none())
+}
+
+/// The AI cascade's two CASTLE arms read RAW REGISTERS, never a pool
+/// scan, a `known` flag or the ladder table: `sub_13F00`'s head is
+/// `!wizext->var_50 && sub_14E60(a1, 0x10) && sub_15E90(a1, 0x10)`
+/// (:18359) and `sub_14120`'s mana leg is `a1->+136 < token->+136`
+/// (:18427; `sub_15E90` itself is :19376-79, `sub_14E60` :18769-77) — both pricing off the TOKEN's live `+136`, which D5's
+/// ladder-event law made a per-LEVEL-EVENT value rather than a
+/// derivable one. See the sites in [`World::rival_selector`].
+/// `MGC_NO_MC1_CASTLE_ARM_REGISTERS=1` restores the pre-dig gates.
+pub(crate) fn castle_arm_registers() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_ARM_REGISTERS").is_none())
+}
+
+/// ⭐⭐⭐ `sub_14E60` (:18769-77) — THE MANIFESTATION RESOLVER — IS A
+/// BARE ARRAY INDEX AND NOTHING ELSE:
+///
+/// ```text
+/// result = POOL + 164 * wizext[676 + 2*spell];
+/// if (result <= POOL) return 0;      // index 0 (or negative) = null
+/// return result;
+/// ```
+///
+/// No class test, no model test, no state test, and — the one that
+/// matters — **no owner test**. Retail's acquisition register `+676`
+/// is authoritative on its own: whatever record its index names IS
+/// the wizard's token for that spell, even when that record's `+42`
+/// (our `f144`) names a DIFFERENT wizard because the slot was
+/// re-bound underneath it.
+///
+/// The castle commit `sub_155F0` case 0x10 (:19191-93) resolves
+/// through exactly that helper and gates on only three things —
+/// `!v6`, `v6->+48` (busy) and `a1->+140 < v6->+136` (price). The
+/// port's [`World::rival_token`] adds five gates of its own, and the
+/// `f144 == ent` one is the one retail does not have.
+///
+/// mc1l49 t=33081 pins it: rival 1 (entity 594, wizard slot 1) sits
+/// arrived over its own castle 619 in the Upgrade state with
+/// `owned[16]` = slot 26 — a live `(12,16)` token, `tick70` 48,
+/// `flags` 0x5, `f136` 40,000 — whose `+42` reads **646**, another
+/// wizard's entity. Retail fires: `explain` t=33081→33082 shows
+/// `wiz 1 (ent 594): cooldown[16] 0 -> 40`, and `sub_13800`'s
+/// `if (sub_155F0(a1, 0x10)) return 0;` (:18121) then leaves the
+/// handler BEFORE its z-hover, so retail's z stays at the housekeeping
+/// clamp's `ground + v_12` = 5476 + 128 = 5604. The port's commit
+/// refused on the owner test, fell through to the hover, and climbed
+/// `−v_14` = +4 to 5608 — the take's single most repeated head shape.
+///
+/// `MGC_NO_MC1_CASTLE_TOKEN_INDEX=1` restores the pre-dig owner-checked
+/// resolve at the castle commit.
+pub(crate) fn castle_token_index() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_TOKEN_INDEX").is_none())
+}
+
+/// ⭐⭐ **THE WIZARD PICK'S INVISIBILITY SKIP IS A LIVE TOKEN READ AT
+/// THE CALLER'S OWN DISPATCH — the exact sibling of the Rebound
+/// notice this file already models** (`the-anti-rebound-notice-is-a-
+/// live-token-read` fixture, mc1l49 t=3559).
+///
+/// `sub_145B0` :18558 skips a candidate on `!sub_16000(i, 0xCu)`, and
+/// `sub_16000` (:19449-56) is
+/// `v = sub_14E60(i, s); v && *(__int16 *)(v + 48) > 0` — a SIGNED
+/// read of the TARGET's spell-12 manifestation record's `+48`, taken
+/// at the moment the ATTACKER's selector runs. The port read the
+/// attacker's cached [`RivalMc1::invisible`] planner flag instead,
+/// which [`World::rival_refresh_buffs`] refreshes at the TARGET's own
+/// dispatch — and refresh runs BEFORE that rival's cast arm, so a
+/// wizard who cloaks on tick T stays visible to every reader until
+/// T+1.
+///
+/// mc1l49 t=47357 is the witness, read from `state.struct_b64`: rival
+/// 646 casts Invisibility that tick — its (12,12) token 113 goes
+/// `+48` 0 → 251 and its purse 23657 → 22657 — and rival 672's
+/// selector, running afterwards at slot 672, DROPS it: retail's
+/// `+146` goes 646 → 569, abandoning the nearer 646 (d² 3,145,090)
+/// for the human at d² 4,098,505. The one-tick-late port kept 646.
+/// The same tick's `+48 = 251` is already visible because the token
+/// walks below both carpets (113 < 646 < 672) — walk order is the
+/// law, exactly as for spell 14.
+///
+/// `MGC_NO_MC1_INVIS_LIVE_TOKEN=1` restores the cached planner flag.
+pub(crate) fn invis_live_token() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_INVIS_LIVE_TOKEN").is_none())
+}
+
+/// A/B toggle for the CLOAK NOTICE'S RAW `+48` READ (wave 121, dig
+/// D13): set `MGC_NO_MC1_INVIS_WORD48` to restore the pre-dig
+/// [`World::mc1_invis_notice`], which read [`Ent::f26`] — retail's
+/// `+26` on anything that is not a live class-12 manifestation —
+/// where `sub_16000` (`CARPET.EXE` file 0x2E7F8) reads `+48`.
+pub(crate) fn no_mc1_invis_word48() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_INVIS_WORD48").is_some())
+}
+
+/// ⭐⭐⭐ **THE RIVAL'S CHARGE MOVE IS THE WHOLE EMIT FAMILY'S, NOT
+/// FOUR SPELLS' — the same law the HUMAN's arm already carries
+/// (`crate::engine::world`'s `cast_projectile` :10385), never landed
+/// on the AI's call path.** The class-12 token machines in
+/// `str_2563D8` (`reference/remc1/sub_main.cpp:4957-5033`, state =
+/// 3*spell) are ONE set of functions for the human and the AI, and
+/// fourteen of them close their emit with the two-line pair
+/// `bolt.+26 = wizext.u8_326; wizext.u8_326 = 0`: fireball :65072,
+/// earthquake :65356, meteor :65414, volcano :65472, crater :65536,
+/// steal mana :65756, **lightning :65846**, castle :65910, undead
+/// army :65973, storm :66031, mana magnet :66092, wall of fire
+/// :66153, global death :66278, rapid fireball :66339 — and possess
+/// (:65246) zeroes WITHOUT stamping. Only the duel (`sub_57040`
+/// :65620-710) leaves the meter standing.
+///
+/// The port's rival arm modelled four of them (0/7/8 stamp, 3 zero,
+/// 20 stamp) and its comment asserted "the other rival arms never
+/// touch +326" — refuted by the table above and by the corpus.
+/// mc1l49's whole-take pair census makes it the take's LARGEST
+/// family: **766 `(9,9)` `f26` rows + 766 complementary
+/// `rival.charge` rows on the same 766 ticks** — 62% of all 2,468
+/// dirty pair rows, which the law takes to 936 with every other
+/// lane's row count UNCHANGED. First witness t=2926→2927 slot 920, a `(9,9)`
+/// born with `+70`=9, `+69`=23, sprite 216 — the zigzag lightning
+/// `sub_39EC0` (:46135) minted by spell 15's machine
+/// `sub_57470_579A0` (:65806-61), whose spawner call is literally
+/// `sub_373F0_377B0(caster.+72, 9, 9)` (:65847). Retail reads
+/// `+26` = 1 with the rival's meter back at 0; the port left the
+/// bolt's `+26` at 0 and let the meter run on to 2.
+///
+/// `MGC_NO_MC1_RIVAL_CHARGE_FAMILY=1` restores the four-spell arm.
+pub(crate) fn rival_charge_family() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_CHARGE_FAMILY").is_none())
+}
+
 /// Per-slot config from the level record (wizards.json), resolved by
 /// the app: personality params, starting castle, and the two spell
 /// masks (str_230867_37072[slot], :49222/:54965-67).
@@ -272,6 +698,25 @@ pub(crate) struct Rival {
     pub shield: bool,
     pub invisible: bool,
     pub rebound: bool,
+    /// ⭐⭐⭐ THE HUSK-WATCH GATE — this player's roster byte
+    /// `str_13323[slot].var_u8_13332_9` read as "NOT 1", i.e. **this
+    /// row is HUMAN-driven**. `sub_46480_467C0` (:55605, CARPET.EXE
+    /// `cmp byte [esi+0x3414],1` at file 0x5eca4) dispatches the whole
+    /// state-3 wizard tick on it: `== 1` takes the AI arm (respawn
+    /// countdown / castle-less `13329 = 0`), anything else takes the
+    /// ELSE arm — `sub_44BE0_44F20(a1, 7)` (the VIEW-MODE byte, only
+    /// when the row is the local player's, :54767-70) plus
+    /// `sub_463B0_466F0` (:55575-91), the killer watch.
+    ///
+    /// Retail writes the byte in exactly ONE place — `sub_3DD50_3E090`
+    /// (:49154, `mov byte [ebx+0x9],1` at file 0x56614), the per-level
+    /// roster reset, `1` for every row except `var_u16_8`'s. It is a
+    /// per-LEVEL CONSTANT (the binary contains no other store to it: a
+    /// full opcode scan of CARPET.EXE finds the two `+0x3414` readers
+    /// at file 0x3042f/0x5eca4 and no `mov byte [reg+9]` writer of 0).
+    /// So this flag is FALSE for every rival — until the death-scatter
+    /// overflow below sets it. See [`World::rival_death_impact`].
+    pub(crate) human_driven: bool,
 }
 
 impl Rival {
@@ -314,6 +759,8 @@ impl Rival {
             shield: false,
             invisible: false,
             rebound: false,
+            // `sub_3DD50` :49154 — every non-`var_u16_8` row is 1.
+            human_driven: false,
         }
     }
 
@@ -652,6 +1099,17 @@ impl World {
             return;
         };
         if self.rivals[ri].eliminated {
+            // ⭐ NOT INERT. An eliminated wizard's record still enters
+            // the state-3 handler every tick, and `sub_46480`'s ELSE
+            // arm (:55621-22) runs `sub_463B0` — the watch aim. The
+            // rest of that handler (the respawn countdown, the
+            // castle-bound release) is what elimination takes away.
+            if self.g.ent[i].tick70 == 3
+                && husk_watch_gate()
+                && self.rivals[ri].human_driven
+            {
+                self.rival_watch_track(i);
+            }
             return;
         }
         match self.g.ent[i].tick70 {
@@ -745,14 +1203,36 @@ impl World {
                 // accelerating. `+46` is not published by the pair
                 // grader, so only the free run ever saw it.
                 self.g.ent[i].tick70 = 2;
-                // Drop the Rebound bit with the wizard. Retail's token
-                // keeps ticking through the death states and clears
-                // +17 bit 7 when its burst lapses (sub_573F0_57920
-                // :65774); the port drives rival tokens only from
+                // ⭐⭐⭐ A RETAIL CORPSE KEEPS DEFLECTING. This clear
+                // was INVENTED, and the comment that justified it
+                // ("the port drives rival tokens only from
                 // `rival_refresh_buffs`, which death states 2/3 never
-                // reach — without this a corpse would deflect for the
-                // rest of the level.
-                self.g.ent[i].flags &= !0x8000;
+                // reach") went stale when `rival_rebound_token_tick`
+                // moved to the class-12 walk (`engine/world.rs:11417`
+                // / `:11603`) — the token now lapses the bit on its
+                // own schedule, so the safety net is both redundant
+                // and wrong.
+                //
+                // The rival death arm is `*(a1 + 70) = 2; return 0;`
+                // and NOTHING else (:17980-83), and `+17` bit 7 — our
+                // 0x8000 — has EXACTLY TWO writers in the whole
+                // listing, both inside the token's own tick
+                // `sub_573F0_57920` (:65785 `&= ~0x80u`, :65792
+                // `|= 0x80u`; twin remc1hw :62007 / :62014). Nothing
+                // in the death path writes it.
+                //
+                // mc1l49 t=6669 settles it from the RECORDING: slot
+                // 646 takes a fatal 4000 (`act_life 2040 → −1960`)
+                // and `explain`'s changelog lists `act_life`, `f38`,
+                // `f63`, `f70`, `mail0.src` — and NO `flags` row. The
+                // word is 0x800C at t=6666..6668, stays 0x800C through
+                // the death, goes 0x802C at 6670, holds through death
+                // states 2 AND 3 to t=6700, and only the RESPAWN
+                // (t≈6750) rewrites it to 0x000C.
+                // `MGC_NO_MC1_DEATH_KEEPS_REBOUND=1` restores the clear.
+                if !death_keeps_rebound() {
+                    self.g.ent[i].flags &= !0x8000;
+                }
                 // ⚠ The death scream is cited to :55424-30 — the
                 // HUMAN's arm, the same mis-owned site the `+46 = 0`
                 // above came from; the rival arm (:17980-83) sounds
@@ -881,7 +1361,22 @@ impl World {
             self.rival_selector(ri, i, think);
         }
         // Publish the +140 mana mirror for the combat reads.
-        self.g.ent[i].f140 = self.rivals[ri].mana.min(i32::MAX as u32) as i32;
+        // ⭐ THE MIRROR IS A RAW 32-BIT COPY, NOT A CLAMP. Retail's
+        // `+140` is the wizard's purse word itself; the shield-quarter
+        // debit above subtracts RAW (`sub_46540_46880` :55703, on the
+        // RECORD's own `+140`) and a fatal tick's shortfall WRAPS the
+        // word negative, which the death arm then preserves (it
+        // returns before the regen floor at :17990). The old
+        // `.min(i32::MAX)` turned every wrapped purse into
+        // `2147483647`. WITNESS mc1l49 pair 53215→53216, rival slot
+        // 750 `(3,1)` life −301: retail `+140` = 4294964965
+        // (= −2331 signed), the port published 2147483647.
+        // `MGC_NO_MC1_RIVAL_MANA_WRAP_PUBLISH=1` restores the clamp.
+        self.g.ent[i].f140 = if crate::engine::features::no_mc1_rival_mana_wrap_publish() {
+            self.rivals[ri].mana.min(i32::MAX as u32) as i32
+        } else {
+            self.rivals[ri].mana as i32
+        };
         self.entities_dirty = true;
     }
 
@@ -915,10 +1410,20 @@ impl World {
             self.g.ent[i].mail[4] = (grip_amt, 0);
             if self.owner_slot_of_source(grip_src) == Some(0) {
                 // u16_314/316/318 on the human: victim, counter,
-                // clamp(dist, 1024, 3072) (:55671-77).
-                let (vx, vy) = (self.g.ent[i].x, self.g.ent[i].y);
-                let dist =
-                    Gen::isqrt(Gen::dist2_sq(self.human_pose.0, self.human_pose.1, vx, vy) as u32);
+                // clamp(dist, 1024, 3072) (:55671-77). ⚠ THE HOLD IS
+                // 3-D — :55673 measures with `sub_42340_42680`, the
+                // same helper the grip's own release test and closing
+                // rate use (`flight::mc1_duel_dist`), not a ground
+                // separation. Under
+                // `MGC_NO_MC1_DUEL_GRIP_EXACT=1` the old 2-D hold
+                // comes back with the rest of the pre-D18 grip.
+                let e = &self.g.ent[i];
+                let (vx, vy, vz) = (e.x, e.y, e.z);
+                let dist = if crate::engine::world::mc1_duel_grip_exact_off() {
+                    Gen::isqrt(Gen::dist2_sq(self.human_pose.0, self.human_pose.1, vx, vy) as u32)
+                } else {
+                    crate::flight::mc1_duel_dist(self.human_pose, (vx, vy, vz)) as u32
+                };
                 let hold = dist.clamp(1024, 3072);
                 self.set_duel_latch(self.rivals[ri].ent, hold);
             }
@@ -1152,13 +1657,53 @@ impl World {
     }
 
     /// Credit stolen mana to a wizard by owner tag.
+    ///
+    /// ⭐⭐⭐ **MC1'S STEAL CREDIT HAS NO CEILING.** `sub_46540_46880`'s
+    /// ch3 arm is a raw 32-bit add on the THIEF's record
+    /// (`reference/remc1/sub_main.cpp:55689`, twin `remc1hw:51757-58`
+    /// byte-identical):
+    /// `if (*(_BYTE *)(v8 + 64) == 3) *(_DWORD *)(v8 + 140) += mail3.amt;`
+    /// — there is no `+140 > +136` test anywhere near it. Settled in the
+    /// shipped bytes at `CARPET.EXE` 0x5EE7F:
+    /// `80 78 40 03` `cmp byte [eax+0x40],3` · `75 09` `jne` ·
+    /// `8b 53 6c` `mov edx,[ebx+0x6C]` (0x6C = 108 = mail3 amt) ·
+    /// **`01 90 8C 00 00 00` `add dword [eax+0x8C],edx`** — a RAW ADD,
+    /// with no compare against `+0x88` (136 = mana_max) in the sequence.
+    ///
+    /// The ONLY ceiling clamp in the MC1 wizard lane is the mana STEP
+    /// (:55396-97), and that step runs at the THIEF's own pool slot — so
+    /// when the victim is chained ABOVE the thief the credit lands after
+    /// his step and **his purse sits over its ceiling for exactly one
+    /// tick**, then the next step pulls it back. `f140 > f136` on an MC1
+    /// wizard is LEGAL. mc1l48 t=61361: slot 712 (a rival wizard) carries
+    /// `ch3 amt = 2000, src = 681`, and at t=61362 the human's `+140`
+    /// reads 4,157,277 against an `f136` of 4,156,277.
+    ///
+    /// The `.min()` here was INVENTED — standing law 4's exact tell, a
+    /// `.min()` where the decompile has a plain `+=`. ⚠ MC2 keeps its
+    /// clamp: `sub_61050` (EF:62202-20) credits `min(mana + amount,
+    /// mana_max)` explicitly, which is a genuinely different law.
+    /// `MGC_NO_MC1_RAW_STEAL_CREDIT=1` restores the old behaviour.
     pub(crate) fn credit_wizard_mana(&mut self, owner: u16, amount: u32) {
+        let raw = mc1_raw_steal_credit()
+            && matches!(
+                self.game(),
+                crate::ids::GameId::Mc1 | crate::ids::GameId::Mc1Hw
+            );
         if owner == PLAYER_TARGET {
-            self.player.mana = (self.player.mana + amount).min(self.player.mana_max);
+            self.player.mana = if raw {
+                self.player.mana.wrapping_add(amount)
+            } else {
+                (self.player.mana + amount).min(self.player.mana_max)
+            };
             return;
         }
         if let Some(r) = self.rivals.iter_mut().find(|r| r.ent == owner) {
-            r.mana = (r.mana + amount).min(r.mana_max);
+            r.mana = if raw {
+                r.mana.wrapping_add(amount)
+            } else {
+                (r.mana + amount).min(r.mana_max)
+            };
             return;
         }
         if let Some(ri) = self.mc2_rivals.iter().position(|r| r.ent == owner) {
@@ -1260,10 +1805,28 @@ impl World {
                 continue;
             }
             if let Some(r) = self.g.ent.get(e as usize) {
-                let m = r.model65 as usize;
-                if m < SPELL_COUNT {
+                // `*(char *)(record + 65)` (:55317) — the model byte is
+                // read SIGNED, and the `+676 + 2*m` write is UNBOUNDED.
+                // See [`owned_rebuild_overflow`].
+                let m = r.model65 as i8 as i32;
+                if (0..SPELL_COUNT as i32).contains(&m) {
+                    let m = m as usize;
                     self.rivals[ri].owned[m] = e as u16;
                     self.rivals[ri].known[m] = true;
+                } else if owned_rebuild_overflow() {
+                    // Out of the book: land the word wherever
+                    // `+676 + 2*m` actually points inside Type_160.
+                    // The port models the three adjacent u16[24]
+                    // tables — learn `+628`, owned `+676`, cooldown
+                    // `+724`; a byte offset outside 628..772 is not
+                    // modelled and is dropped (no witness yet).
+                    let off = 676i32 + 2 * m;
+                    let v = e as u16;
+                    match off {
+                        628..=674 => self.rivals[ri].learn[((off - 628) / 2) as usize] = v,
+                        724..=770 => self.rivals[ri].cooldown[((off - 724) / 2) as usize] = v,
+                        _ => {}
+                    }
                 }
             }
         }
@@ -1302,7 +1865,57 @@ impl World {
                 let ent = self.rivals[ri].ent;
                 self.rivals[ri].learn[s] = 0;
                 if let Some(m) = self.mint_manifestation(s, ent) {
-                    self.rivals[ri].acq_push(m as u16);
+                    // ⭐⭐ THE FULL LIST ORPHANS THE TOKEN. The ctor
+                    // runs FIRST — the pool slot is taken, the RNG
+                    // spent, the record built — and only THEN does
+                    // retail walk the rival's own `wizext+532` for the
+                    // first empty seat (:19421-25):
+                    //
+                    //     v6 = 0;
+                    //     while ( *(_DWORD *)(v5 + 532) )
+                    //     { ++v6; v5 += 4; if ( v6 >= 24 ) goto LABEL_12; }
+                    //     *(_BYTE *)(v4 + 16) |= 1u;              // :19428
+                    //     *(_WORD *)(v4 + 42) = (a1 - v7) / 164;  // :19429
+                    //     *(_DWORD *)(... + 4 * v6 + 532) = ...;  // :19430
+                    //
+                    // `LABEL_12` is the loop's CONTINUE, past all
+                    // THREE writes — so with 24/24 seats taken the
+                    // newborn keeps `flags 4` (no owned bit), `+42 = 0`
+                    // (no owner) and never enters the book: a
+                    // permanently orphaned `3*spell` record that
+                    // nothing ever polls (`f70 % 3 == 0` is the
+                    // spell's own manifest row in `str_2563D8`
+                    // :4957-5028, never `sub_56250`/`sub_56260` →
+                    // `sub_55A40`) and nothing ever frees (`actLife 0`).
+                    // This is the SAME `v24 == -1` refusal as the human
+                    // jar poll's ([`crate::engine::features::no_mc1_acq_list_full`])
+                    // on a THIRD call path — the rival's learn timer —
+                    // where retail lets the record be born and only
+                    // withholds the registration.
+                    //
+                    // WITNESS mc1l49, wizard at carpet slot 594 with a
+                    // full list: t=24927 pool slot 230 and t=25321 pool
+                    // slot 123, both `(12,16)` `+70 = 48`, `+63 = the
+                    // slot number` (the allocator's stamp, :43882),
+                    // `actLife 0`. Retail: `flags 4`, `+42 0`. The port
+                    // registered unconditionally and shipped `flags 5`,
+                    // `+42 594`. Retail then declines all 9,942 / 9,843
+                    // of each record's remaining polls, and neither
+                    // record ever moves again — over 40,240 ticks only
+                    // its `+20` list link and its `+63` clock change.
+                    //
+                    // `MGC_NO_MC1_RIVAL_LEARN_SEAT=1` restores the
+                    // unconditional registration.
+                    if crate::engine::features::no_mc1_rival_learn_seat()
+                        || self.rivals[ri].acq.iter().any(|&e| e == 0)
+                    {
+                        self.rivals[ri].acq_push(m as u16);
+                    } else {
+                        let e = &mut self.g.ent[m];
+                        e.flags &= !1;
+                        e.f144 = 0;
+                        self.entities_dirty = true;
+                    }
                 }
             }
         }
@@ -1646,7 +2259,14 @@ impl World {
             let e = &self.g.ent[i];
             (e.act_life, e.max_life as i32)
         };
-        if self.rival_token_gate(ri, 1, full) && life < max && self.rivals[ri].mana >= cost {
+        // `sub_56270`'s own extra afford leg is `v1[35] >= *(a1+136)` —
+        // the RECORD's purse word again, not the mirror.
+        let affords = if live_purse_legacy() {
+            self.rivals[ri].mana >= cost
+        } else {
+            self.g.ent[i].f140 >= cost.min(i32::MAX as u32) as i32
+        };
+        if self.rival_token_gate(ri, 1, full) && life < max && affords {
             if full {
                 self.g.snd(25, i); // :65106 — the burst's first tick only
             }
@@ -1703,7 +2323,17 @@ impl World {
         let price = self.rival_castle_price(ri);
         // sub_55DD0 (:64915-24): owner-dead refuses every tick, the
         // cost compare runs on the FULL tick only.
-        if self.g.ent[i].act_life < 0 || (full && self.rivals[ri].mana < price) {
+        // The inlined twin of `rival_token_gate` — the SAME `sub_55DD0`
+        // predicate, so the same live-purse operand and the same
+        // negative-purse leg (round 104: a law on ONE call path is not
+        // landed).
+        let purse_short = if live_purse_legacy() {
+            full && self.rivals[ri].mana < price
+        } else {
+            self.g.ent[i].f140 < 0
+                || (full && self.g.ent[i].f140 < price.min(i32::MAX as u32) as i32)
+        };
+        if self.g.ent[i].act_life < 0 || purse_short {
             self.g.ent[m].f26 = 0;
             return;
         }
@@ -1714,18 +2344,55 @@ impl World {
             let e = &self.g.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.f126, e.f84 as i16, e.id24)
         };
-        let Some(b) = self.g.spawn_castle_ball(ex, ey, ez) else {
-            return; // allocation guard: stays FULL, re-fires next tick
-        };
-        // sub_55E80's full arm — the debit on the regen delta.
-        {
-            let r = &mut self.rivals[ri];
+        // ⭐⭐⭐ THE DEBIT IS BILLED BEFORE THE BALL EXISTS.
+        // `sub_57610_57B40` (:65880-83, twin remc1hw :62103-06,
+        // byte-identical) runs
+        //   `sub_55E80_563B0(a1, v2);`             // the debit
+        //   `v3 = sub_373F0_377B0(v2+72, 9, 10);`  // the ball
+        //   `if (v3) { a1+48 = a1+50 - 1; … }`
+        // — the null guard covers ONLY the ball and the in-transit
+        // pin. On an exhausted pool retail STILL CHARGES the full
+        // ladder price, spawns nothing, and leaves `+48` at the full
+        // count; the NEXT tick's `sub_55DD0` afford leg then fails on
+        // the emptied purse and its else arm releases the burst
+        // (`+48 = 0`). The port hoisted the allocation guard above the
+        // debit, so a dry-pool rival built no castle AND paid nothing.
+        // Same shape as the volcano's plume handover (L14): the
+        // handover lives inside the spawn's guard, the BILLING does
+        // not.
+        //
+        // **mc1l49 t=15552 is exact, read from `state.struct_b64`.**
+        // Wiz 7 (ent 750) holds a level-3 castle (slot 940), so his
+        // (12,16) token slot 112 carries `+136 = 40000 = CASTLE_CAP[3]`
+        // and `+140 = 396 = 40000/101`. The commit arms `+48 = 101` at
+        // t=15551 with the purse at 40100 (it had been climbing
+        // +1000/tick since t=15522). At t=15552 the free stack is 0:
+        // retail's purse drops 40100 → **100** — a clean 40,000 debit —
+        // `+48` stays **101**, and NO (9,10) castle ball ever appears
+        // in the take. At t=15553 the gate refuses (100 < 40000) and
+        // `+48` goes 101 → 0. The port free-ran to 41100 (40100 plus
+        // its own +1000 regen step) with no debit at all.
+        // `MGC_NO_MC1_CASTLE_BALL_DEBIT_ORDER=1` restores the old
+        // spawn-then-bill order.
+        let debit = |w: &mut Self| {
+            let r = &mut w.rivals[ri];
             let c = price.min(i32::MAX as u32) as i32;
             r.mana_delta = if r.mana_delta >= 0 {
                 -c
             } else {
                 r.mana_delta - c
             };
+        };
+        let billed_first = castle_ball_debit_order();
+        if billed_first {
+            debit(self);
+        }
+        let Some(b) = self.g.spawn_castle_ball(ex, ey, ez) else {
+            return; // allocation guard: stays FULL, re-fires next tick
+        };
+        // sub_55E80's full arm — the debit on the regen delta.
+        if !billed_first {
+            debit(self);
         }
         let (tok_f44, tok_f140) = {
             let t = &self.g.ent[m];
@@ -1891,6 +2558,15 @@ impl World {
     fn rival_token_gate(&self, ri: usize, spell: usize, full: bool) -> bool {
         let r = &self.rivals[ri];
         let i = r.ent as usize;
+        // ⭐ THE PURSE IS THE OWNER RECORD'S OWN LIVE `+140`, NOT A
+        // CACHED MIRROR. `sub_55DD0` refuses on a NEGATIVE purse
+        // BEFORE it reaches the mid-burst escape (CARPET.EXE
+        // `0x55DDA: 83 b9 8c 00 00 00 00` = `cmpl $0x0,0x8c(%ecx)`,
+        // then `0f 8c 7a 00 00 00` = `jl 0x55E61`; the mid-burst arm
+        // is at `0x55E4F`). The port had no such leg.
+        if !live_purse_legacy() && self.g.ent[i].f140 < 0 {
+            return false; // a2[35] — the purse wrapped negative
+        }
         if self.g.ent[i].act_life < 0 {
             return false; // a2[3] — the owner is dying
         }
@@ -1902,7 +2578,20 @@ impl World {
         {
             return false;
         }
-        !full || r.mana >= self.spells()[spell].possess_mana
+        // :64926 — `0x55E2F: 8b 81 8c 00 00 00` (`mov 0x8c(%ecx),%eax`,
+        // the OWNER RECORD's live +140) compared SIGNED against the
+        // TOKEN's live +136 (`0x55E35: 3b 82 88 00 00 00` / `7c 12`
+        // = `jl`). `RivalState::mana` is a mirror re-synced only at
+        // the owner's own dispatch, but combat debits `+140` DIRECTLY
+        // and MID-TICK (`sub_52B30` :62884, `sub_46540` :55703), so a
+        // token dispatched later in the same tick saw a purse retail
+        // had already emptied. WITNESS mc1l49 t=19558 (rival 724).
+        if live_purse_legacy() {
+            return !full || r.mana >= self.spells()[spell].possess_mana;
+        }
+        !full
+            || self.g.ent[i].f140
+                >= self.spells()[spell].possess_mana.min(i32::MAX as u32) as i32
     }
 
     /// Buff flags derive from the manifestations' burst counters
@@ -2062,6 +2751,38 @@ impl World {
 
     // ---- the decision cascade (sub_136C0 :18048) --------------------------
 
+    /// `sub_16000(target, 12)` — the spell-12 cloak notice, a LIVE
+    /// read of the target's manifestation `+48` through the bare
+    /// [`castle_token_index`] resolve (`sub_14E60` + `+48 > 0`,
+    /// :19449-56). See [`invis_live_token`].
+    fn mc1_invis_notice(&self, owned12: u16, cached: bool) -> bool {
+        if !invis_live_token() {
+            return cached;
+        }
+        let m = owned12 as usize;
+        if m == 0 {
+            return false;
+        }
+        if no_mc1_invis_word48() {
+            return m < self.g.ent.len() && self.g.ent[m].f26 > 0;
+        }
+        // ⭐⭐⭐ THE SECOND CALL PATH OF THE SAME LAW. `sub_16000`
+        // (VA 0x16000 = `CARPET.EXE` file 0x2E7F8) is
+        // `call 0x2D658` (= `sub_14E60`) / `test %eax,%eax` /
+        // `je -> 0` / `66 83 78 30 00  cmpw $0x0,0x30(%eax)` /
+        // `7e jle -> 0` — a SIGNED `> 0` read of **`+48`** off the
+        // same unguarded raw slot resolve the castle gate uses. The
+        // port read [`Ent::f26`], which is retail's **`+26`** on
+        // every record that is not a live class-12 manifestation, so
+        // a stale `owned[12]` register naming a recycled slot made
+        // the port's selector treat a wizard as CLOAKED off a
+        // stranger's `+26` — measured on the corpus, the dominant
+        // shape by far (mc1l49: `(0,13)` `+26` 116, `(10,13)` `+26`
+        // 100..116, `(10,52)` `+26` 444..584, `(5,15)` `+26` 29, all
+        // with `+48 == 0`).
+        self.mc1_token_word48(m) > 0
+    }
+
     /// The LIVE Create-Castle price — the manifestation's +136 cost
     /// cache, which retail's want/commit gates read (sub_15E90
     /// :19375: `manifest +136 <= wizard +136`). Ctor 1000; CAP[lvl]
@@ -2099,12 +2820,48 @@ impl World {
                 self.g.ent[i].f63,
             );
         }
-        // 1. Need a castle (sub_13F00 :18345).
+        // 1. Need a castle (sub_13F00 :18345). ⭐⭐⭐ ITS HEAD IS
+        // THREE RAW REGISTER READS AND THE PORT HAD REPLACED ALL
+        // THREE (`reference/remc1/sub_main.cpp:18359`):
+        //
+        //     if ( !wizext->var_50 && sub_14E60(a1, 0x10)
+        //          && sub_15E90(a1, 0x10) )
+        //
+        // - `!wizext->var_50` is the ESTABLISHED-CASTLE REGISTER, the
+        //   same one arm 3 already reads — not a pool scan.
+        // - `sub_14E60(a1, 0x10)` (:18769-77) is a bare
+        //   `pool + 164 * wizext->var_676[16]`, guarded only against
+        //   slot 0: the test is "is my Create-Castle TOKEN REGISTER
+        //   set", NOT "do I know spell 16". A rival who knows the
+        //   spell but whose token was scattered and never re-minted
+        //   does not build.
+        // - `sub_15E90(a1, 0x10)` (:19376-79) is
+        //   `pool[owned[16]]->+136 <= a1->+136` — the TOKEN's LIVE
+        //   price cache, with NO class, flag or liveness guard and no
+        //   spell-table fallback (the register is already proven
+        //   nonzero by the term before it).
+        //
+        // WITNESS (mc1l49 t=37000, `state.struct_b64`): wiz 1 has
+        // `+50 = 0` AND `owned[16] = 0`, so retail refuses at the
+        // second term and stays in Possess (brain byte 6); the port
+        // saw `known[16]` true, priced the build off
+        // `SPELLS[16].possess_mana` and went to Build (3) on EVERY
+        // pair tick of the window, which is what drove slot 594's
+        // `target_yaw` torrent. `MGC_NO_MC1_CASTLE_ARM_REGISTERS=1`
+        // restores the pre-dig gates.
         let castle = self.rival_castle(self.rivals[ri].ent);
-        if castle.is_none()
-            && self.rivals[ri].known[16]
-            && self.rivals[ri].mana_max >= self.rival_castle_price(ri)
-        {
+        let build_open = if castle_arm_registers() {
+            let m16 = self.rivals[ri].owned[16] as usize;
+            self.g.castle_reg[self.rivals[ri].slot as usize] == 0
+                && m16 != 0
+                && m16 < self.g.ent.len()
+                && (self.g.ent[m16].f136 as u32) <= self.rivals[ri].mana_max
+        } else {
+            castle.is_none()
+                && self.rivals[ri].known[16]
+                && self.rivals[ri].mana_max >= self.rival_castle_price(ri)
+        };
+        if build_open {
             if self.rival_scout_site(ri, i) {
                 self.rivals[ri].state = AiState::Build;
                 return;
@@ -2137,11 +2894,25 @@ impl World {
         if reg != 0 {
             let m16 = self.rivals[ri].owned[16] as usize;
             if m16 != 0
-                && self.g.ent[m16].f26 == 0
+                && self.mc1_token_word48(m16) == 0
                 && self.rivals[ri].cooldown[16] == 0
                 && self.g.castle_upgrade_space_ok(reg)
-                && self.rivals[ri].mana_max
-                    >= Gen::CASTLE_CAP[self.g.ent[reg].f26.clamp(0, 7) as usize] as u32
+                // ⭐ `sub_14120` :18427 is `a1->+136 < v3->+136` on
+                // the TOKEN (`v3` = `sub_14E60(a1, 0x10)`), exactly
+                // like `sub_15E90`'s — NOT `CASTLE_CAP[level]`. The
+                // two agreed only while the port re-priced the token
+                // every tick; D5's ladder-event law (L6) made the
+                // token's live `+136` the last LEVEL EVENT's price,
+                // which on a register shared through a recycled slot
+                // is a different castle's rung altogether (mc1l49
+                // t=35404: token 26 holds 40,000 = CAP[3] under a
+                // level-4 castle's CAP[4] = 80,000).
+                && (if castle_arm_registers() {
+                    self.rivals[ri].mana_max >= self.g.ent[m16].f136 as u32
+                } else {
+                    self.rivals[ri].mana_max
+                        >= Gen::CASTLE_CAP[self.g.ent[reg].f26.clamp(0, 7) as usize] as u32
+                })
                 && self.g.ent[reg].tick70 == 4
             {
                 // ⭐ sub_14120 :18432-33 — the predicate stamps the
@@ -2280,6 +3051,96 @@ impl World {
         // life-rate register and the (AI-unread, but mirrored) stall.
         r.life_rate = life_rate as i32;
         r.regen_stall = regen_stall;
+    }
+
+    /// Retail's `+48` off a wizard's owned-token register, READ THE
+    /// WAY `sub_14E60`'s callers read it: with no class guard.
+    ///
+    /// ⭐⭐⭐ THE TOKEN REGISTER IS A RAW SLOT INDEX AND RETAIL NEVER
+    /// CHECKS WHAT LIVES THERE. `sub_14E60` (VA 0x14E60 = CARPET.EXE
+    /// file 0x2D658) is, verbatim from the shipped binary:
+    /// `movswl 0x2a4(%edx,%eax,2),%edx` (wizext+676+2*spell, SIGNED),
+    /// three `lea`s for `164*idx`, `add` the pool base, `cmp`/`jbe`
+    /// against that base, `ret`. No class, no flags, no liveness. Its
+    /// caller `sub_14120` (file 0x2C971) then does
+    /// `cmpw $0x0,0x30(%eax)` — the **+48** word of whatever record
+    /// now occupies the slot.
+    ///
+    /// The port homes retail's `+48` in [`Ent::f26`] only while the
+    /// record is a live class-12 manifestation (`import_ent`); on any
+    /// other class `f26` is retail's `+26`, a different word entirely.
+    /// mc1l49 t=26530 is the witness: wizard 1's `owned[16] = 26`, and
+    /// slot 26 has been recycled into a `(9,16)` bolt whose `+26 = 16`
+    /// and whose `+48 = 0`. Retail passes the gate and promotes the
+    /// rival from RaidCastle to Upgrade (brain 7 → 1, `+146` 933 →
+    /// 619, `+148` 1084 → 980); the port read 16, refused, and stayed
+    /// on the raid.
+    ///
+    /// ⚠ THIS EXTENDS AN EXISTING LAW, IT DOES NOT REPLACE IT. The
+    /// retired `mc1_freed_token_burst` import seat used to cover a
+    /// **FREED** slot (`class64 == 0`) by writing retail's `+48`
+    /// straight into `f26` at import time — and `f26` is right for that case *for the whole free
+    /// run*, because the port used `f26` as the token's own `+48`
+    /// home while it was alive and `Gen::free_entity` writes nothing
+    /// but `class64 = 0`. The gap this closes is the slot that has
+    /// been **RE-TAKEN by a live record of another class**, where the
+    /// seat cannot fire without clobbering that record's own `+26`.
+    ///
+    /// ⭐⭐⭐ **AND IT IS ALREADY TRUE IN NATIVE PLAY, BECAUSE RETAIL'S
+    /// ALLOCATOR MEMSETS.** `NewEvent_372C0` (VA 0x372C0 =
+    /// `CARPET.EXE` file 0x4FAB8) merges both arms — the free-stack
+    /// pop and the sacrifice — at file **0x4FB5B**, which is
+    /// `push $0xa4 / push $0x0 / push %ebx / call 0x75428`, i.e.
+    /// `memset(record, 0, 164)` over the WHOLE 164-byte record
+    /// (0x75428 is Watcom's `memset`: it byte-replicates arg2 through
+    /// `%edx` and tail-calls the filler). So a RE-TAKEN slot carries
+    /// no stranger residue at all — retail reads `+48 == 0` there
+    /// unless the new occupant writes the word itself, and the port's
+    /// `Ent::default()` in [`Gen::new_event`] gives `raw48 == 0` by
+    /// exactly the same act. And `sub_41E90` (file 0x5A688-0x5A6AE)
+    /// frees with the unlink, `movb $0x0,0x40(%ebx)` and the stack
+    /// push and NOTHING ELSE, so `+48` survives a free — which is why
+    /// [`Gen::free_entity`] carries a dying manifestation's live
+    /// `f26` across the seam into `raw48` and the class-0 arm below
+    /// reads the shadow rather than the freed record's own `+26`.
+    ///
+    /// ⚠ RESIDUAL, MEASURED not assumed: classes that write `+48`
+    /// THEMSELVES have no port home for the word at all, so `raw48`
+    /// stays 0 natively where retail's is not. Off the three focus
+    /// takes' `state.struct_b64`, the `owned[]`-named records with a
+    /// nonzero `+48` and a class other than 12/0 are `(10,39)`,
+    /// `(5,15)`, `(10,41)` and `(12,2)` — see the dig report.
+    fn mc1_token_word48(&self, m16: usize) -> i16 {
+        let Some(e) = self.g.ent.get(m16) else {
+            // Retail's `sub_14E60` bounds only from BELOW (`jbe` the
+            // pool base); an over-range register is an out-of-bounds
+            // READ we cannot reproduce, and both callers already
+            // treat 0 as "no notice / no refusal".
+            return 0;
+        };
+        if e.class64 == 12
+            || crate::engine::features::no_mc1_token_raw48()
+            || (e.class64 == 0
+                && crate::engine::features::no_mc1_token_raw48_native())
+        {
+            // Class 12 — a live manifestation: `f26` IS the `+48`
+            // home and the one the native token machine keeps up to
+            // date.
+            e.f26
+        } else {
+            // Class 0 — a FREED record — and every live record of
+            // another class read the raw shadow. On the free path
+            // [`Gen::free_entity`] carries a manifestation's live
+            // `f26` across into `raw48`, so a freed TOKEN still wears
+            // its burst; a freed NON-token wears whatever `+48` it
+            // had, which for a natively allocated record is the
+            // allocator's memset zero. The pre-dig code read `f26`
+            // here, which on a freed non-token is that record's
+            // `+26` — a different word (mc1l49 `owned[16]` names a
+            // freed `(0,13)` whose `+26` is 116 while retail's `+48`
+            // is 0, i.e. retail PROMOTES and the port refused).
+            e.raw48.0 as i16
+        }
     }
 
     fn set_rival_state(&mut self, ri: usize, s: AiState, target: u16) {
@@ -2552,8 +3413,36 @@ impl World {
             // until retail elects at 15820). The human's carpet is
             // out-of-pool here — its sub_11950 runs on the live pose
             // with the sprite-44 halves (World::overlap's box).
+            // ⭐⭐ THE DEFENDER IS A RECORD, NOT A LIFE STATE. Retail
+            // indexes the owner's carpet by the castle's OWN `+24`
+            // (`v2 = 164 * *(__int16 *)(i + 24)`, :18517) and reads
+            // `+72` / runs `sub_11950` on that record RAW — there is
+            // no liveness gate, no `+70` test, no chain lookup. A
+            // wizard who died THIS TICK still defends his keep,
+            // because his carpet record still sits where it fell.
+            // The port routed both legs through `wizard_pos`, whose
+            // `LifeState::Alive` / `tick70 == 1` gates return None
+            // for a falling wizard — and `is_none_or` reads None as
+            // UNDEFENDED, which flips the whole raid arm on the tick
+            // a hated wizard dies. mc1l49 t=5688 is the witness: the
+            // human takes his fatal hit on that very tick (569 `+70`
+            // 0 -> 2, life 3572 -> −428) 5,738 units from his own
+            // castle 23; retail's conjunct fails and the cascade
+            // falls through to arm 5, keeping `+146` = 569, while
+            // the port raided the keep (`+146` 569 -> 23) and stayed
+            // there for the next 298 segment heads.
+            let owner_pos = if e.id24 == PLAYER_TARGET {
+                Some(self.human_pose)
+            } else {
+                self.g.ent.get(e.id24 as usize).map(|o| (o.x, o.y, o.z))
+            };
+            let owner_pos = if raid_owner_pos_is_raw() {
+                owner_pos
+            } else {
+                self.wizard_pos(owner)
+            };
             let parked_on = if e.id24 == PLAYER_TARGET {
-                self.wizard_pos(0).is_some_and(|(wx, wy, wz)| {
+                owner_pos.is_some_and(|(wx, wy, wz)| {
                     use crate::mc1::combat::{PLAYER_HH, PLAYER_HW};
                     let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
                     wd(wx, e.x) < e.f80 as i32 + PLAYER_HW
@@ -2564,8 +3453,7 @@ impl World {
             } else {
                 self.g.ent_overlap(e.id24 as usize, j)
             };
-            let undefended = self
-                .wizard_pos(owner)
+            let undefended = owner_pos
                 .is_none_or(|(wx, wy, _)| Gen::dist2_sq(e.x, e.y, wx, wy) > 7680 * 7680)
                 && !parked_on;
             let poorer = (e.f140.max(0) as u32)
@@ -2677,13 +3565,24 @@ impl World {
         };
         // Candidacy is TICK-TOP bucket[0] membership, not live state
         // (mc1hwl0 t=7592: the rival's own kill lands before its
-        // selector runs, and retail still picks the corpse).
-        if self.human_bucket_alive
+        // selector runs, and retail still picks the corpse) — AND the
+        // human rides the chain's VISIBLE PREFIX like every pooled
+        // carpet: see [`mc1_human_on_wiz_roster`].
+        let human_seen = self.human_bucket_alive && {
+            if mc1_human_on_wiz_roster() {
+                let hs = self.mc1_carpet_slot;
+                let hpos = self.g.wiz_chain.list.partition_point(|&s| s < hs);
+                hpos < self.g.wiz_chain.cut
+            } else {
+                true
+            }
+        };
+        if human_seen
             && judge(
                 PLAYER_TARGET,
                 self.human_pose.0,
                 self.human_pose.1,
-                self.player.invisible,
+                self.mc1_invis_notice(self.player.owned[12], self.player.invisible),
                 self.player.mana_max as i64,
                 self.player.mana as i64,
                 // :18570-72 — the target's raw +50 register + owned
@@ -2715,7 +3614,7 @@ impl World {
                     o.ent,
                     e.x,
                     e.y,
-                    o.invisible,
+                    self.mc1_invis_notice(o.owned[12], o.invisible),
                     o.mana_max as i64,
                     o.mana as i64,
                     // :18570-72 — raw +50 register + owned token, as
@@ -2904,9 +3803,42 @@ impl World {
             // caller's SIGNED recompute on the WINNER (:18910
             // `int > 26214400`), so an antipodal sole guard still
             // reads GUARDED there.
-            let mut guard: Option<u32> = self
-                .wizard_pos(0)
-                .map(|(hx, hy, _)| Gen::dist2_sq(bx, by, hx, hy) as u32);
+            // ⭐⭐ THE HUMAN'S SEAT IN THE GUARD ELECTION IS HIS
+            // TICK-TOP BUCKET[0] MEMBERSHIP, NOT HIS LIVE LIFE STATE.
+            // `sub_15340` (:19003) walks the chain the tick head
+            // rebuilt at :52290-97 and reads each node's LIVE `+72`;
+            // a carpet that takes its fatal hit mid-tick is still IN
+            // that chain and still guards, exactly as the port's own
+            // `human_bucket_alive` records for every other bucket[0]
+            // consumer (the learn clock, the wizard pick). Seeding
+            // from `wizard_pos(0)` instead read the LIVE
+            // `LifeState::Alive`, so the moment the human died the
+            // balls he was standing over went UNGUARDED for one tick.
+            // mc1l48 t=6377 is the witness: the human's fatal hit
+            // lands that tick (681 life 50 -> −350, `+70` 0 -> 2) at
+            // (2363, 43268); ball 298 sits 2,345 units off him —
+            // GUARDED for retail, which claims the farther ball 291
+            // (4,947 off the corpse-to-be, past the 5120 disc), while
+            // the port dropped the human from the election and took
+            // the nearer 298.
+            // ⭐⭐⭐ `sub_15340`'s FIRST test is `+24 != the
+            // CANDIDATE's +24` (0x2db5c), and it applies to the human
+            // like any other chain member. The port's out-of-pool
+            // human is seated outside the loop, so give his seat the
+            // same id test — a human-owned manifestation (a BALLOON
+            // stamps `+24` with the caster's carpet id) is not guarded
+            // by its own caster. See `ball_guard_excludes_own_id`.
+            let human_is_own_id = bid == PLAYER_TARGET
+                || (self.mc1_carpet_slot != 0 && bid == self.mc1_carpet_slot);
+            let human_guard = if ball_guard_excludes_own_id() && human_is_own_id {
+                None
+            } else if ball_guard_is_tick_top() {
+                self.human_bucket_alive.then_some(self.human_pose)
+            } else {
+                self.wizard_pos(0)
+            };
+            let mut guard: Option<u32> =
+                human_guard.map(|(hx, hy, _)| Gen::dist2_sq(bx, by, hx, hy) as u32);
             let mut castle: Option<(usize, u32)> = None;
             for k in 0..self.g.wiz_chain.visible_len() {
                 let w = self.g.wiz_chain.list[k] as usize;
@@ -3399,16 +4331,100 @@ impl World {
         // rebounding switches the plan to lightning, acc% of the
         // time — and that success path ENDS the walk: 15-when-ready
         // or hold, never falling through to 7/20/0 (:19517-31; the
-        // 7/20/0/15 ladder is the roll's ELSE arm).
-        //
-        // The notice is a LIVE read of the TARGET's spell-14 TOKEN
-        // record's +48 (sub_16000 :19449-56 — pool[wizext+676+2*14],
-        // `+48 > 0`), taken at the CASTER's own dispatch — not the
-        // carpet's 0x8000 mirror. Walk order is the law: a token
-        // arming below the reader is seen the same tick (mc1l49
-        // t=3560, token 600 < reader 620), and the owner-slot mirror
-        // refresh misses a token above its owner (t=4003, token 704
-        // > owner 698). The import re-homes class-12 +48 into f26.
+        // 7/20/0/15 ladder is the roll's ELSE arm). The notice and
+        // its draw live in [`World::rival_rebound_roll`].
+        let mut lightning_plan = false;
+        let mut planned = false;
+        // ⭐⭐ THE DRAW SITS AT `LABEL_49`, BEHIND THE 17/8 ARMS
+        // (:19492-19506). Retail walks Undead Army (17) and Volcano (8)
+        // FIRST and `return`s out of the picker the moment one is
+        // ready or holds — `rand()` is never reached on those ticks.
+        // The port used to roll BEFORE the walk, so every 17/8 tick
+        // burnt a draw retail never spends and the global CRT stream
+        // ran ahead of retail's by an unbounded, state-dependent
+        // amount. See [`mc1_crt_draw_at_label49`].
+        if !mc1_crt_draw_at_label49() {
+            lightning_plan = self.rival_rebound_roll(ri, vs_wizard);
+            planned = true;
+        }
+        for s in [17usize, 8] {
+            match self.rival_arm(ri, s, false) {
+                ArmStep::Next => {}
+                ArmStep::Stop(v) => return v,
+            }
+        }
+        // LABEL_49 (:19506-08) — the anti-rebound notice and its roll.
+        if !planned {
+            lightning_plan = self.rival_rebound_roll(ri, vs_wizard);
+        }
+        // The roll's SUCCESS path ends the walk at 15 (:19509-16):
+        // 15-when-ready or hold, never falling through to 7/20/0.
+        if lightning_plan {
+            return match self.rival_arm(ri, 15, true) {
+                ArmStep::Next => None,
+                ArmStep::Stop(v) => v,
+            };
+        }
+        for s in [7usize, 20, 0, 15] {
+            match self.rival_arm(ri, s, false) {
+                ArmStep::Next => {}
+                ArmStep::Stop(v) => return v,
+            }
+        }
+        None
+    }
+
+    /// ONE ARM of the picker cascade (`sub_16030`'s repeated
+    /// owned → ready → wait-or-continue triple, e.g. :19492-98 for
+    /// spell 17): `Next` = retail's `goto LABEL_5x`, `Stop(Some(s))` =
+    /// its `return s`, `Stop(None)` = its fall-out-to-`return -1` hold.
+    ///
+    /// `plan15` is the anti-rebound SUCCESS arm (:19509-16), whose
+    /// only outcomes are cast-15 and hold — it has no fall-through.
+    fn rival_arm(&mut self, ri: usize, s: usize, plan15: bool) -> ArmStep {
+        if self.rivals[ri].owned[s] == 0 {
+            return ArmStep::Next;
+        }
+        if self.rival_cast_ready(ri, s) {
+            return ArmStep::Stop(Some(s));
+        }
+        if plan15 {
+            return ArmStep::Stop(None); // the plan holds for the bolt (:19525-29)
+        }
+        // WAIT-vs-continue discriminant (sub_15E90 :19497): fall
+        // through to the next spell when this one is unaffordable by
+        // ceiling OR on its recast cooldown; only HOLD (save mana /
+        // settle the aim) when it's affordable-by-ceiling, off
+        // cooldown, and merely short on current mana or unaimed.
+        // (The cooldown escape is what lets a just-fired — or
+        // castle-fizzled — high-priority spell yield to a cheaper
+        // castle-free one like Fireball while it recharges.)
+        if self.rivals[ri].mana_max < self.spells()[s].possess_mana
+            || self.rivals[ri].cooldown[s] != 0
+        {
+            return ArmStep::Next;
+        }
+        ArmStep::Stop(None)
+    }
+
+    /// `sub_16000(target, 14) && rand() % 255 < acc` (:19507-08) — the
+    /// anti-rebound notice. `&&` SHORT-CIRCUITS, so the global Watcom
+    /// stream advances ONLY when the target holds a live Rebound token;
+    /// that is why MC1's one CRT draw site has no steady phase drift.
+    ///
+    /// The notice is a LIVE read of the TARGET's spell-14 TOKEN
+    /// record's +48 (sub_16000 :19449-56 — pool[wizext+676+2*14],
+    /// `+48 > 0`), taken at the CASTER's own dispatch — not the
+    /// carpet's 0x8000 mirror. Walk order is the law: a token
+    /// arming below the reader is seen the same tick (mc1l49
+    /// t=3560, token 600 < reader 620), and the owner-slot mirror
+    /// refresh misses a token above its owner (t=4003, token 704
+    /// > owner 698). The import re-homes class-12 +48 into f26.
+    ///
+    /// The roll is CRT `rand() % 255`, the global stream, NOT the
+    /// wizard's own entity LCG — burning ent_rand here stole a
+    /// graded-lane draw (mc1l49 t=2788).
+    fn rival_rebound_roll(&mut self, ri: usize, vs_wizard: bool) -> bool {
         let token_live =
             |m: u16| m != 0 && (m as usize) < self.g.ent.len() && self.g.ent[m as usize].f26 > 0;
         let target_rebounds = vs_wizard
@@ -3420,48 +4436,20 @@ impl World {
                     .find(|r| r.ent == t)
                     .is_some_and(|r| token_live(r.owned[14])),
             };
-        let mut order: Vec<usize> = vec![17, 8];
-        let mut lightning_plan = false;
-        if target_rebounds {
-            // The roll is CRT `rand() % 255` (:19507-08) — the global
-            // Watcom stream, NOT the wizard's own entity LCG. Burning
-            // ent_rand here stole a graded-lane draw (mc1l49 t=2788).
-            let roll = (self.g.watcom_rand() % 255) as u16;
-            if roll < self.rivals[ri].acc {
-                lightning_plan = true;
-            }
+        if !target_rebounds {
+            return false;
         }
-        if lightning_plan {
-            order.push(15);
-        } else {
-            order.extend([7, 20, 0, 15]);
+        let roll = (self.g.watcom_rand() % 255) as u16;
+        let acc = self.rivals[ri].acc;
+        if crt_trace() {
+            eprintln!(
+                "[crt] t={} ri={ri} ent={} acc={acc} roll={roll} pass={}",
+                crate::DEBUG_TICK.load(std::sync::atomic::Ordering::Relaxed),
+                self.rivals[ri].ent,
+                u8::from(roll < acc),
+            );
         }
-        for s in order {
-            if self.rivals[ri].owned[s] == 0 {
-                continue;
-            }
-            if self.rival_cast_ready(ri, s) {
-                return Some(s);
-            }
-            if lightning_plan && s == 15 {
-                return None; // the plan holds for the bolt (:19525-29)
-            }
-            // WAIT-vs-continue discriminant (sub_15E90 :19497): fall
-            // through to the next spell when this one is unaffordable by
-            // ceiling OR on its recast cooldown; only HOLD (save mana /
-            // settle the aim) when it's affordable-by-ceiling, off
-            // cooldown, and merely short on current mana or unaimed.
-            // (The cooldown escape is what lets a just-fired — or
-            // castle-fizzled — high-priority spell yield to a cheaper
-            // castle-free one like Fireball while it recharges.)
-            if self.rivals[ri].mana_max < self.spells()[s].possess_mana
-                || self.rivals[ri].cooldown[s] != 0
-            {
-                continue;
-            }
-            return None;
-        }
-        None
+        roll < acc
     }
 
     // ---- the cast arm (readiness sub_15A00 :19219 + executor
@@ -3702,7 +4690,16 @@ impl World {
         // has NO space test at the commit — that's the selector's
         // (:18408); and the recast cooldown is the UPGRADE arm's
         // alone (:19197), the free plant leaves it untouched.
-        let Some(m) = self.rival_token(ri, 16) else {
+        // ⭐ `sub_14E60` IS THE INDEX, NOT A VALIDATOR — see
+        // [`castle_token_index`]. Retail's commit takes whatever
+        // record `+676[16]` names, owner byte and all.
+        let resolved = if castle_token_index() {
+            let m = self.rivals[ri].owned[16] as usize;
+            (m != 0 && m < self.g.ent.len()).then_some(m)
+        } else {
+            self.rival_token(ri, 16)
+        };
+        let Some(m) = resolved else {
             return false;
         };
         if self.g.ent[m].f26 != 0 || self.rivals[ri].mana < self.rival_castle_price(ri) {
@@ -3818,7 +4815,14 @@ impl World {
         // writes +128, so the ctor's base survives and the flight
         // servo walks the launch boost back off (mc1l48 t=271 slot
         // 790: retail f126 462 / f128 384 one tick after birth).
-        e.f126 += speed;
+        //
+        // ⭐ …EXCEPT THE DUEL (s == 11). `sub_57040_57570` (:65620-72)
+        // is the SAME token machine for the human and the AI, and it
+        // is the one arm of the sixteen with no `+126 +=` line — see
+        // [`crate::engine::world::mc1_duel_dart_exact_off`].
+        if s != 11 || crate::engine::world::mc1_duel_dart_exact_off() {
+            e.f126 += speed;
+        }
         e.id24 = owner;
         e.f30 = yaw;
         e.f32 = pitch;
@@ -3851,6 +4855,27 @@ impl World {
                 e.f26 = 200;
             }
             7 => self.g.ent[pr].f69 = 17,
+            // The duel dart's impact pair and aim point (:65654-55,
+            // :65660-62) — the token machine stamps them for the AI
+            // exactly as for the human, and the rival arm had
+            // neither, so an AI duel dart flew with `+68`/`+69` 0 and
+            // detonated into nothing.
+            11 if !crate::engine::world::mc1_duel_dart_exact_off() => {
+                // `*(v5+150) = *(v3+72)` / `*(v5+154) = *(v3+76)` is
+                // the caster's RAW record position — `z` here is the
+                // already-lifted muzzle height, so read the record.
+                let mut d = {
+                    let c = &self.g.ent[i];
+                    (c.x, c.y, c.z)
+                };
+                Gen::polar_step(&mut d, yaw, pitch, 10240);
+                let e = &mut self.g.ent[pr];
+                e.f68 = 10;
+                e.f69 = 26;
+                e.dest_x = d.0;
+                e.dest_y = d.1;
+                e.site_z = d.2;
+            }
             13 => {
                 let e = &mut self.g.ent[pr];
                 e.f44 = 2000;
@@ -3866,24 +4891,26 @@ impl World {
             _ => {}
         }
         // The charge move — the AI's manifestations run the SAME
-        // class-12 spawners as the human's: fireball (:65072-73),
-        // meteor (:65414) and volcano (:65472) bank the rival's
-        // u8_326 meter in the bolt's +26; possess zeroes without
-        // stamping (:65246). The other rival arms never touch +326.
+        // class-12 token machines as the human's (`str_2563D8`
+        // :4957-5033, state = 3*spell), and FOURTEEN of them close
+        // with `+26 = u8_326; u8_326 = 0`; possess (:65246) zeroes
+        // without stamping and the duel (:65620-710) never reads the
+        // meter at all. See [`rival_charge_family`].
         let ws = self.rivals[ri].slot as usize;
-        match s {
-            0 | 7 | 8 => {
-                self.g.ent[pr].f26 = self.wiz_charge[ws] as i16;
-                self.wiz_charge[ws] = 0;
-            }
-            3 => self.wiz_charge[ws] = 0,
-            // The firewall token banks the meter too (:66139-40 —
-            // `+26 = u8_326; u8_326 = 0`, same shape as fireball).
-            20 => {
-                self.g.ent[pr].f26 = self.wiz_charge[ws] as i16;
-                self.wiz_charge[ws] = 0;
-            }
-            _ => {}
+        let banks: bool = if rival_charge_family() {
+            // ⭐ The FULL retail list — see [`rival_charge_family`].
+            // Spell 16 (castle) banks in its own machine
+            // (`rival_castle_commit`, :65910-11); 3 zeroes below.
+            matches!(s, 0 | 6 | 7 | 8 | 9 | 13 | 15 | 17 | 18 | 19 | 20 | 22 | 23)
+        } else {
+            matches!(s, 0 | 7 | 8 | 20)
+        };
+        if banks {
+            self.g.ent[pr].f26 = self.wiz_charge[ws] as i16;
+            self.wiz_charge[ws] = 0;
+        } else if s == 3 {
+            // Possess zeroes WITHOUT stamping (:65246).
+            self.wiz_charge[ws] = 0;
         }
         self.entities_dirty = true;
     }
@@ -3912,6 +4939,33 @@ impl World {
             let e = &self.g.ent[i];
             (e.x, e.y, e.z)
         };
+        // ⭐⭐⭐ THE SPEED-0 SINK (`sub_455D0` :55171-72). The shared
+        // mover's vertical block ends in a bare `else` that no other
+        // arm can reach: with the ACTUAL speed at zero and the body
+        // still above `ground + row.v_10`, the SCRATCH drops 8 —
+        // `if (!+126 && scratch.z > row156->v_10 + sub_11F50(scratch))
+        // scratch.z -= 8;`. The human's mover has carried it since the
+        // flight port (`flight.rs`, "Speed-0 sink above the soft
+        // ceiling"), hard-coded at the carpet row's v_10 = 1024; the
+        // RIVAL's state-2 fall runs the very same `sub_455D0` and the
+        // port's copy skipped it, so a corpse whose `vdes` was already
+        // 0 fell at pure gravity where retail sinks an extra 8/tick
+        // until it drops through the band.
+        //
+        // mc1l49 slot 620 is the witness and it is the ROOT of that
+        // take's biggest divergence family: retail's z runs 5777,
+        // 5775, 5763, 5749 (−2, −12, −14) against the port's pure
+        // −2/−4/−6 ladder, and the 8 lost units land the corpse — and
+        // every jar, grave and free-stack pop its impact schedules —
+        // on the wrong tick. `MGC_NO_DEATH_SINK=1` restores the
+        // sink-less fall.
+        if speed == 0 && death_sink_runs() {
+            let g = self.g.ground_z(pos.0, pos.1) as i32;
+            let v10 = BEHAVIOR[self.g.ent[i].row156 as usize].v_10 as i32;
+            if (pos.2 as i32) > g + v10 {
+                pos.2 -= 8;
+            }
+        }
         Gen::polar_step(&mut pos, yaw, 0, speed);
         // The strafe lane of the same shared mover (:55199-203): the
         // wizext's v_16 holds whatever jink residue the AI died with,
@@ -4058,7 +5112,14 @@ impl World {
             let e = &self.g.ent[i];
             (e.x, e.y, e.z)
         };
-        self.rivals[ri].owned = [0; SPELL_COUNT];
+        // ⚠ NO `owned` BLANK HERE. The scatter walks `+532` ONLY;
+        // `+676` has a single writer in the whole binary and it is
+        // `sub_45C10`, which the dispatch stops calling the moment
+        // `+70` leaves the live arms — so the corpse's book FREEZES,
+        // it does not clear. See [`owned_survives_scatter`].
+        if !owned_survives_scatter() {
+            self.rivals[ri].owned = [0; SPELL_COUNT];
+        }
         for k in 0..SPELL_COUNT {
             let entry = self.rivals[ri].acq[k];
             if entry <= 0 || entry as usize >= self.g.ent.len() {
@@ -4067,6 +5128,53 @@ impl World {
             }
             let m = entry as usize;
             self.rivals[ri].acq[k] = self.g.ent[m].model65 as i32;
+            // ⭐⭐⭐ THE ROSTER OVERFLOW (:55529-31, the two arms
+            // `*(_BYTE *)(*(_DWORD *)(a1 + 160) + *(char *)(v16 + 65)
+            // + 916) = 1 / = 0`; CARPET.EXE `mov byte
+            // [edx+eax+0x394],1` at file 0x5ea06 and `…,0` at
+            // 0x5ea1a, both off a FRESHLY RELOADED `[ebx+0xa0]`).
+            //
+            // The scatter records, per scattered token, whether it was
+            // BURSTING — `Type_160.var_916[model] = (flags & 0x40000)
+            // != 0` — for the respawn's re-mint to restore (:54908,
+            // `if (var_916[model]) { +86 = 280; +132 = 0; flags.byte[2]
+            // |= 4; }`). ⚠ `var_916` is TWENTY-FOUR bytes wide and the
+            // index is the token's MODEL, a SIGNED char that runs well
+            // past 24 — and `Type_160` is exactly 946 bytes at +1103
+            // of a 2049-byte roster row, so `var_916[m]` for m >= 30
+            // writes into the NEXT PLAYER'S ROW at byte `m - 30`:
+            //
+            //     1103 + 916 + m - 2049 = m - 30
+            //
+            // m = 39 is that row's `var_u8_13332_9` — the husk-watch
+            // gate. A MANA BALL is class 10 MODEL 39, and a stale
+            // acquisition entry can name one (the manifestation was
+            // freed and its pool slot recycled into a ball), so a
+            // dying wizard scatters "his" mana ball and silently
+            // brands player `slot + 1` as HUMAN-DRIVEN, for good.
+            //
+            // mc1l49 is the witness and it is EXACT: at t=39094 rival
+            // 594 (player 1) dies with `acq[3] = 26`, pool slot 26 is
+            // (class 10, model 39) with `flags = 12` (bit 18 clear),
+            // and the recorded roster shows player 2's byte 9 go
+            // 1 -> 0 on that very tick and never move again — the ONLY
+            // byte in the whole 2049-byte row to change. From then on
+            // slot 620, player 2's husk, runs the killer watch every
+            // tick to the end of the take: 15,532 `heading` + 14,660
+            // `target_yaw` segment heads, 89% of the take's dirt.
+            //
+            // Only the m = 39 byte is modelled: the port has no other
+            // roster byte for m in 30..=40 to land on, and m < 30 is
+            // the in-bounds write of a register nothing else reads
+            // (the port carries the burst restore on `Rival::acq`).
+            // `MGC_NO_HUSK_WATCH=1` retires the whole law.
+            if husk_watch_gate() && self.g.ent[m].model65 as i8 as i32 == 39 {
+                let blue = self.g.ent[m].flags & crate::engine::world::BLUE_SPELL != 0;
+                let next = self.rivals[ri].slot.wrapping_add(1);
+                if let Some(t) = self.rivals.iter().position(|r| r.slot == next) {
+                    self.rivals[t].human_driven = !blue;
+                }
+            }
             // The scatter draws ride the DYING WIZARD's own LCG
             // (:55563-70 — `a1+4`, three draws per jar), not the
             // jar's.
@@ -4102,7 +5210,17 @@ impl World {
                     e.tick70 = crate::engine::world::DROPPED_JAR; // pickup-able, decaying
                     e.f26 = life; // the decay countdown
                 }
-                e.f144 = 0; // no owner — a free copy
+                // ⛔ NO `+144` WRITE — see
+                // [`crate::engine::features::no_mc1_scatter_jar_owner_clear`]:
+                // the scatter loop (:55534-49, CARPET.EXE
+                // `0x5E9B8..0x5EAE4`) never stores to `0x90`. The old
+                // "free copy" clear cost the HUMAN 7,000 of ceiling at
+                // mc1l49 t=39094, where this rival's book still named
+                // pool slot 26 — his own token long gone, the slot now
+                // the human's live `(10,39)` ball.
+                if crate::engine::features::no_mc1_scatter_jar_owner_clear() {
+                    e.f144 = 0; // no owner — a free copy
+                }
             }
             // MOVE_RELINK (:55546 `sub_41C70_41FB0`), not the bare
             // link: `Gen::link` early-returns on flags bit 2, which an
@@ -4178,11 +5296,81 @@ impl World {
         self.entities_dirty = true;
     }
 
+    /// `sub_463B0_466F0` (:55575-91) — THE WATCH AIM of a wizard whose
+    /// state-3 handler took the non-respawning arm. Verbatim:
+    ///
+    /// ```text
+    ///   v1 = &pool[*(u16*)(a1+38)].pos            ; +38 = the KILLER slot
+    ///   *(a1+34) = sub_42150(a1+72, v1)           ; bearing to the watched record
+    ///   *(a1+36) = sub_42180(a1+72, v1)           ; pitch  to the watched record
+    ///   *(a1+30) += sub_422A0(*(a1+30), *(a1+34), 5, 0x16)
+    ///   *(a1+31) &= 7                             ; i.e. +30 &= 0x7FF
+    ///   *(a1+32) += sub_422A0(*(a1+32), *(a1+36), 5, 0x16)
+    ///   *(a1+33) &= 7
+    ///   *(a1+32) = 0                              ; …and then thrown away
+    /// ```
+    ///
+    /// The `a3 = 5` argument of `sub_422A0` is DEAD (:52689 ignores
+    /// it); the cap is `a4 = 0x16` = 22/tick, the same rate-limited
+    /// step [`Gen::turn_step`] already models. The `+32` leg computes
+    /// a pitch step and immediately overwrites it with 0 — retail's
+    /// own dead store, kept.
+    ///
+    /// mc1l49 slot 620 (Vodor's husk) is the corpus witness: from its
+    /// elimination to the end of the take retail re-aims `+34` at the
+    /// human (slot 569) every single tick and walks `+30` after it,
+    /// where the port's eliminated rival froze — 15,532 `heading` and
+    /// 14,660 `target_yaw` segment heads, 89% of the take's dirt.
+    /// t=64902 is the arithmetic check: the husk at (43761, 11714,
+    /// 4768) against the human at (44529, 2779, 386) gives bearing 27
+    /// and pitch 148, and retail holds exactly `f34 = 27, f36 = 148`.
+    pub(crate) fn rival_watch_track(&mut self, i: usize) {
+        let w = self.g.ent[i].f38;
+        // The import re-homes the human's pool slot onto
+        // `PLAYER_TARGET`, so the killer tag has to resolve back
+        // through `human_pose` — RAW, with no liveness gate, exactly
+        // like retail's bare `pool[+38].pos` read (the same law
+        // `raid_owner_pos_is_raw` carries). mc1l49's husks watch the
+        // human, so this arm IS the corpus witness.
+        let (tx, ty, tz) = if w == PLAYER_TARGET {
+            self.human_pose
+        } else if let Some(t) = self.g.ent.get(w as usize) {
+            (t.x, t.y, t.z)
+        } else {
+            return;
+        };
+        let (px, py, pz) = {
+            let e = &self.g.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let yaw = Gen::angle_between(px, py, tx, ty);
+        let dh = Gen::isqrt(Gen::dist2_sq(px, py, tx, ty) as u32) as i32;
+        let pitch = Gen::pitch_toward(pz, tz, dh);
+        let e = &mut self.g.ent[i];
+        e.f34 = yaw;
+        e.f36 = pitch;
+        let step = Gen::turn_step(e.f30, e.f34, 22);
+        e.f30 = e.f30.wrapping_add(step as u16) & 0x7FF;
+        // The +32 leg's step is computed and discarded (:55586-88).
+        e.f32 = 0;
+    }
+
     /// State 3 — dead on the ground (sub_46480 :55594): with a
     /// castle, count down and re-init; castle-less = ELIMINATED
     /// (checked every tick — losing the castle during the wait
     /// counts, :55622).
     fn rival_dead_wait(&mut self, ri: usize, i: usize) {
+        // ⭐ THE GATE COMES FIRST (:55605). The castle test, the
+        // respawn countdown and the castle-less `13329 = 0` all live
+        // INSIDE the `== 1` arm; a row the death scatter has branded
+        // HUMAN-DRIVEN skips the lot and takes the ELSE arm — view
+        // mode 7 (a presentation register the port has no seat for)
+        // plus the killer watch — for the rest of the level, castle
+        // or no castle. See [`husk_watch_gate`].
+        if husk_watch_gate() && self.rivals[ri].human_driven {
+            self.rival_watch_track(i);
+            return;
+        }
         if self.rival_castle(self.rivals[ri].ent).is_none() {
             // The FINAL-death broadcast (retail etext 62 via the
             // opcode-0x1D elimination arm, :48812-25: "<Name> has
@@ -4199,7 +5387,9 @@ impl World {
                 );
             }
             self.rivals[ri].eliminated = true;
-            // The husk stays hidden; property persists (:55622).
+            // The husk stays hidden and inert; property persists
+            // (:55622). The WATCH AIM is NOT part of this arm — it is
+            // the ELSE arm's, gated above.
             return;
         }
         if self.g.ent[i].f26 > 0 {
@@ -4272,6 +5462,18 @@ impl World {
                 self.rivals[ri].acq[k] = 0;
             }
         }
+        // :54962 / :55033 — the respawn's OWN `sub_45C10` calls, the
+        // memset-and-rebuild that publishes the reborn book. Retail
+        // runs it twice (once before the `+676[16]` castle probe at
+        // :54969, once before `sub_47DD0` at :55034) and both are the
+        // same derivation, so one call here covers both. It is what
+        // clears a STARVED entry's stale rung now that the scatter no
+        // longer blanks the register ([`owned_survives_scatter`]):
+        // the in-place writes above alone would leave the pre-death
+        // slot standing for any spell whose re-mint found no record.
+        if owned_survives_scatter() {
+            self.rival_owned_rebuild(ri);
+        }
         // :55034 — the respawn's own `sub_47DD0` call on the bound
         // castle: the FRESH Create-Castle token leaves the respawn
         // wearing the ladder price at the STANDING castle's level,
@@ -4304,16 +5506,52 @@ impl World {
             r.regen_stall = 16;
             r.state = AiState::Fresh;
             r.target = 0;
-            r.poverty = false;
             // :54868-83 — the respawn clears EXACTLY three flight
             // registers: v_12 (target speed), v_16 (strafe/jink) and
             // the knock triple; +126 keeps servoing from the fall's
             // 160 (mc1hwl0 t=20762 reads 160 → 144).
+            //
+            // ⭐ THE KNOCK "TRIPLE" IS THREE WRITES AND THE PORT MADE
+            // ONE. `sub_44D30` :54868-70 is `v_24 = 0; v_26 = 0;
+            // v_22 = 0` — DIRECTION (+24) as well as MAGNITUDE (+22).
+            // The port cleared only `knock_mag`, so a rival reborn
+            // after a knocked death carried the dead body's bearing
+            // in `+24` forever (mc1l49 t=21968, wiz 1: retail's +24
+            // goes 1300 → 0, the port's stays 1300 for the rest of
+            // the take). See [`respawn_clear_list`].
             r.vdes = 0;
             r.jink = 0;
             r.knock_mag = 0;
+            if respawn_clear_list() {
+                r.knock_dir = 0;
+            }
+            // ⭐ THE RESPAWN'S LEDGER RESET IS HATE ONLY. The tail's
+            // rival-only block (:55043-46) is
+            // `for (kx = 0; kx < 8; kx++) str_456[kx].var_u16_4 =
+            // 24607` — `var_u16_4` is +460, the HATE half of the
+            // 8-byte `str_456` row; the WAR flag at +462
+            // (`var_u16_6`) is not in the loop and appears nowhere
+            // else in `sub_44D30`. A reborn rival therefore keeps
+            // every war he declared before he died, on a NEUTRAL hate
+            // ledger — which is exactly the state the wizard picker's
+            // rangeless war arm (:18886-90) reads.
             r.hate = [HATE_NEUTRAL; 8];
-            r.war = [false; 8];
+            if !respawn_clear_list() {
+                r.war = [false; 8];
+            }
+            // ⭐ AND THE POVERTY LATCH (+406) SURVIVES TOO — the
+            // respawn never writes it. It is the attack picker's own
+            // register (:19468-91) and only the picker moves it, so a
+            // wizard who died poor is reborn poor and holds his fire
+            // until the release threshold. The port's `poverty =
+            // false` was an INVENTED WRITE: with a 1000-mana purse
+            // against a 61,634 cap the reborn rival is poor by
+            // retail's own test on his first live tick anyway, but the
+            // port's clear let one dispatch through before the latch
+            // could re-arm.
+            if !respawn_clear_list() {
+                r.poverty = false;
+            }
             // ⭐ THE BURST AND COOLDOWN REGISTERS SURVIVE THE RESPAWN:
             // sub_44D30 writes NO +48 burst and exactly ONE cooldown
             // entry — `var_756 = 4·slot` = cooldown[16] (both
@@ -4402,6 +5640,7 @@ impl Snap for Rival {
             shield,
             invisible,
             rebound,
+            human_driven,
         } = self;
         w.put(slot);
         w.put(ent);
@@ -4437,6 +5676,8 @@ impl Snap for Rival {
         w.put(shield);
         w.put(invisible);
         w.put(rebound);
+        // v20 joiner — the husk-watch roster byte (`var_u8_13332_9`).
+        w.put(human_driven);
     }
     fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
         Ok(Rival {
@@ -4474,6 +5715,7 @@ impl Snap for Rival {
             shield: r.get()?,
             invisible: r.get()?,
             rebound: r.get()?,
+            human_driven: r.get()?,
         })
     }
 }
@@ -4609,6 +5851,92 @@ mod tests {
         PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0, 0.0, 0.0)
     }
 
+    /// ⭐⭐⭐ **RETAIL'S `+48` IS JUST A WORD IN A 164-BYTE RECORD, AND
+    /// THE PORT'S SHADOW OF IT MUST BEHAVE LIKE MEMORY — NATIVELY,
+    /// WITH NO IMPORT ANYWHERE IN SIGHT.**
+    ///
+    /// This is the instrument for a lane both graded channels are
+    /// blind to (`+48` is not in `EntObsMc1`, and the replay harness
+    /// re-imports the pool every segment, so `--segmented` cannot see
+    /// any of the three transitions below). Every assert is a byte
+    /// fact off `CARPET.EXE`, re-verified in wave 121 dig D13:
+    ///
+    /// * `sub_41E90` (file **0x5A688-0x5A6AE**) frees with the tile
+    ///   unlink, `movb $0x0,0x40(%ebx)` and the free-stack push —
+    ///   AND NOTHING ELSE. `+48` SURVIVES A FREE.
+    /// * `NewEvent_372C0` (file **0x4FAB8**) merges its free-pop and
+    ///   sacrifice arms at file **0x4FB5B** on
+    ///   `push $0xa4 / push $0x0 / push %ebx / call 0x75428`, i.e.
+    ///   `memset(record, 0, 164)`. A RE-TAKEN SLOT CARRIES NO
+    ///   RESIDUE — retail reads 0 there, so the port must too.
+    /// * `sub_14E60` (file 0x2D658) resolves `wizext+676+2*spell` as
+    ///   a raw slot index with no class, flag or liveness guard, and
+    ///   `sub_14120` (file 0x2C971) reads `cmpw $0x0,0x30(%eax)` off
+    ///   whatever record now occupies it.
+    #[test]
+    fn the_token_word48_lane_behaves_like_retail_memory_natively() {
+        let mut w = rebound_world();
+        let m = w.rivals[0].owned[16] as usize;
+        assert!(m != 0, "non-vacuity: the rival must own a Castle token");
+        assert_eq!(w.g.ent[m].class64, 12, "…and it is a live manifestation");
+
+        // 1. LIVE: `f26` is the port's home for a manifestation's
+        //    `+48`, and the reader takes it from there.
+        w.g.ent[m].f26 = 100;
+        assert_eq!(w.mc1_token_word48(m), 100, "live token: the burst");
+
+        // 2. FREED: retail clears the class byte alone, so the word
+        //    stands. The pre-dig lane lost it natively — only the
+        //    now-RETIRED `mc1_freed_token_burst` import seat put it
+        //    back, which is exactly the seat hazard (round 98).
+        w.g.free_entity(m);
+        assert_eq!(w.g.ent[m].class64, 0, "the free clears the class byte");
+        assert_eq!(
+            w.mc1_token_word48(m),
+            100,
+            "freed token: `+48` survives `sub_41E90` (0x5A688)"
+        );
+
+        // 3. RE-TAKEN: the allocator memsets 164 bytes, so the new
+        //    occupant's `+48` is ZERO — not the stranger's residue
+        //    (the brief's premise) and not the stranger's `+26`
+        //    (the pre-D2 port). D2's mc1l49 witness shape: the slot
+        //    comes back as a bolt whose `+26` is 16.
+        assert_eq!(w.g.new_event(), Some(m), "the free stack is LIFO");
+        w.g.ent[m].class64 = 9;
+        w.g.ent[m].model65 = 16;
+        w.g.ent[m].f26 = 16;
+        assert_eq!(
+            w.mc1_token_word48(m),
+            0,
+            "re-taken slot: `NewEvent_372C0`'s memset (0x4FB5B) zeroes \
+             `+48`; reading the stranger's `+26` (16) is the pre-D2 bug"
+        );
+        assert_eq!(w.g.ent[m].f26, 16, "…and `f26` really does hold 16");
+
+        // 4. FREED AGAIN, THIS TIME A NON-TOKEN — the arm the pre-dig
+        //    lane got wrong NATIVELY and the import seat papered over.
+        //    Retail's word is still the allocator's zero (nothing in
+        //    the corpus's `(9,*)` writes `+48`) and `sub_41E90` does
+        //    not touch it, so the gate reads 0 and PROMOTES. The
+        //    pre-dig class-0 arm read `f26` — the bolt's `+26`, 16 —
+        //    and refused. Corpus shape: mc1l49's `owned[16]` names a
+        //    freed `(0,13)` carrying `+26 = 116` against `+48 = 0`.
+        //    ⭐ NON-VACUITY: this assert FAILS under either kill
+        //    switch (`MGC_NO_MC1_TOKEN_RAW48_NATIVE`,
+        //    `MGC_NO_MC1_TOKEN_RAW48`), which is what makes it the
+        //    fixture for this dig.
+        w.g.free_entity(m);
+        assert_eq!(w.g.ent[m].class64, 0, "freed a second time");
+        assert_eq!(w.g.ent[m].f26, 16, "…and its own `+26` still stands");
+        assert_eq!(
+            w.mc1_token_word48(m),
+            0,
+            "freed NON-token: retail's `+48` is the allocator's zero, \
+             not this record's `+26`"
+        );
+    }
+
     /// Plant a stationary class-9 model-0 (fireball) threat homing on
     /// the rival, 512 units off — inside `sub_16890`'s 1024 reactive
     /// radius and outside the extents that would resolve it as a hit.
@@ -4645,6 +5973,124 @@ mod tests {
 
     fn rebound_bit(w: &World, ri: usize) -> bool {
         w.g.ent[w.rivals[ri].ent as usize].flags & 0x8000 != 0
+    }
+
+    /// ⭐⭐⭐ **THE RIVAL'S CHARGE MOVE IS THE WHOLE EMIT FAMILY'S,
+    /// NOT FOUR SPELLS'** — see [`super::rival_charge_family`] for the
+    /// citation. The class-12 token machines in `str_2563D8`
+    /// (`reference/remc1/sub_main.cpp:4957-5033`, state = 3*spell) are
+    /// ONE set of functions for the human and the AI; the human's arm
+    /// (`crate::engine::world`'s `cast_projectile`) already banks the
+    /// whole family, the rival's arm banked four spells.
+    ///
+    /// ⛔ **NO RECORDING FIXTURE IS POSSIBLE.** Neither observable is
+    /// in the recorder's obs schema — `EntObsMc1`
+    /// (`crates/mgc-formats/src/mgcr.rs:744-770`) has no `+26`, and
+    /// `WizardMc1` has no charge lane. Both ride the RAW state channel
+    /// (`mgc_conform::verify::append_charge_diffs`), which only the
+    /// PAIR instrument reads, so `replay`/`fixtures` are blind to them.
+    /// The corpus proof instead: mc1l49's whole-take pair census drops
+    /// from **2,468 dirty rows to 936** with this law in — the entire
+    /// 766-row `(9,9) f26` family and its 766 complementary
+    /// `rival.charge` rows gone, every other lane's row count
+    /// unchanged — mc1l48 16,019 -> 15,921, and all 27 graded takes'
+    /// `replay --segmented --brief` byte-identical.
+    ///
+    /// NON-VACUITY: with `MGC_NO_MC1_RIVAL_CHARGE_FAMILY=1` leg (b)
+    /// reads `+26` 0 and the meter still 117.
+    #[test]
+    fn rival_emit_banks_the_charge_meter_for_the_whole_family() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let ws = w.rivals[ri].slot as usize;
+        let muzzle = {
+            let e = &w.g.ent[i];
+            (e.x, e.y, e.z)
+        };
+        // (a) The already-modelled arm still banks — the control.
+        w.wiz_charge[ws] = 42;
+        w.rival_emit(ri, i, 7, muzzle.0, muzzle.1, muzzle.2, 0, 0);
+        let bolt = (1..w.g.ent.len())
+            .find(|&p| w.g.ent[p].class64 == 9 && w.g.ent[p].model65 == 3)
+            .expect("the meteor arm mints its (9,3) bolt");
+        assert_eq!(w.g.ent[bolt].f26, 42, "the meteor arm stopped banking");
+        assert_eq!(w.wiz_charge[ws], 0, "the meteor arm left the meter standing");
+
+        // (b) ⭐ THE WITNESS — spell 15, the zigzag lightning.
+        // `sub_57470_579A0` (:65806-61) spawns `sub_373F0_377B0(
+        // caster.+72, 9, 9)` (:65847) and closes with :65846-48
+        // `+26 = u8_326; u8_326 = 0`. mc1l49 t=2926->2927 slot 920:
+        // a (9,9) born `+70`=9 `+69`=23 sprite 216 with `+26` = 1 and
+        // the rival's meter back at 0; the port left `+26` 0 and let
+        // the meter run on to 2 — 766 pairs on that take alone.
+        w.wiz_charge[ws] = 117;
+        w.rival_emit(ri, i, 15, muzzle.0, muzzle.1, muzzle.2, 0, 0);
+        let zig = (1..w.g.ent.len())
+            .find(|&p| {
+                let e = &w.g.ent[p];
+                e.class64 == 9 && e.model65 == 9 && e.tick70 == 9
+            })
+            .expect("the lightning arm mints its (9,9) bolt");
+        assert_eq!(
+            w.g.ent[zig].f26, 117,
+            "the rival's lightning did not bank the +326 meter (:65846)"
+        );
+        assert_eq!(
+            w.wiz_charge[ws], 0,
+            "the rival's lightning left the +326 meter standing (:65848)"
+        );
+        assert_eq!(w.g.ent[zig].f69, 23, "the lightning arm's +69 stamp");
+
+        // (c) THE BOUNDARY: the duel (`sub_57040` :65620-710) is the
+        // ONE spawning arm of the sixteen with no `+326` reference at
+        // all — the meter must survive it untouched.
+        w.wiz_charge[ws] = 91;
+        w.rival_emit(ri, i, 11, muzzle.0, muzzle.1, muzzle.2, 0, 0);
+        assert_eq!(
+            w.wiz_charge[ws], 91,
+            "the duel arm ate the +326 meter — retail's sub_57040 never reads it"
+        );
+    }
+
+    /// ⭐ THE RIVAL PURSE MIRROR IS A RAW 32-BIT COPY, NOT A CLAMP.
+    /// Retail's `+140` IS the wizard's purse word — the shield-quarter
+    /// debit writes it directly and RAW (`sub_46540_46880` :55703,
+    /// `a1x->var_u32_29935_140 -= v10`, no afford clamp), so a fatal
+    /// tick's shortfall WRAPS the word negative and the death arm
+    /// preserves it (that arm returns before the regen floor at
+    /// :17990). `rival_dispatch_tail` mirrored the purse through
+    /// `.min(i32::MAX)`, so every wrapped purse read back as
+    /// `2147483647`.
+    ///
+    /// WITNESS mc1l49 pair 53215→53216, rival slot 750 `(3,1)`
+    /// `act_life` −301: retail `+140` = 4294964965 (= −2331 signed),
+    /// the port published 2147483647. That head is `replay
+    /// --segmented`'s segment 22 boundary; the law retires it
+    /// (segments 25 → 24, devs 24 → 23).
+    ///
+    /// NON-VACUITY: `MGC_NO_MC1_RIVAL_MANA_WRAP_PUBLISH=1` restores
+    /// the clamp and the mirror reads `i32::MAX` instead of the purse.
+    #[test]
+    fn the_rival_purse_mirror_is_a_raw_32_bit_copy() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        // The exact word mc1l49's slot 750 carries at t=53216.
+        w.rivals[ri].mana = 4_294_964_965;
+        w.rival_dispatch_tail(ri, i);
+        assert!(
+            w.rivals[ri].mana > i32::MAX as u32,
+            "scaffold: the dispatch tail must leave the purse wrapped \
+             (mana = {})",
+            w.rivals[ri].mana
+        );
+        assert_eq!(
+            w.g.ent[i].f140,
+            w.rivals[ri].mana as i32,
+            "the +140 purse mirror clamped a wrapped word — retail's \
+             :55703 debits the record's own +140 RAW"
+        );
     }
 
     /// ⭐ THE DEFENSE SCAN WALKS THE TICK-TOP CLASS-9 ROSTER
@@ -5267,6 +6713,147 @@ mod tests {
         );
     }
 
+    /// ⭐⭐ A WIZARD WHO DIED THIS TICK STILL DEFENDS HIS KEEP
+    /// (`sub_143A0` :18517-18). Retail indexes the defender off the
+    /// castle's OWN `+24` (`164 * *(__int16 *)(i + 24)`) and reads
+    /// that record's `+72` — and runs `sub_11950` on it — with NO
+    /// life, `+70` or chain test of any kind. The port routed the
+    /// lookup through `wizard_pos`, whose `LifeState::Alive` gate
+    /// returns None for a falling carpet, and `is_none_or` read that
+    /// as UNDEFENDED — so the raid arm switched on for exactly the
+    /// tick a hated wizard died.
+    ///
+    /// mc1l49 t=5688: the human takes his fatal hit that tick (569
+    /// life 3572 → −428, `+70` 0 → 2) 5,738 units from castle 23.
+    /// Retail's conjunct fails, the cascade falls through to arm 5
+    /// and `+146` stays 569; the port raided (`+146` 569 → 23) and
+    /// held the wrong quarry for the next 298 segment heads.
+    ///
+    /// NON-VACUITY: the second leg moves the same DEAD owner past the
+    /// 7680 disc and the raid must then be admitted — so the pin is
+    /// about the DISTANCE being read at all, not about a blanket
+    /// refusal.
+    #[test]
+    fn a_dying_owner_still_defends_his_castle() {
+        let mut w = possess_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let (rx, ry, rz) = {
+            let e = &w.g.ent[i];
+            (e.x, e.y, e.z)
+        };
+        w.rivals[ri].hate[0] = 60_000;
+        // A hated human-owned keep, well inside the rival's raid range.
+        let c = w.g.spawn_fireball(rx.wrapping_add(3_000), ry, rz).expect("castle slot");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = PLAYER_TARGET;
+            e.act_life = 1000;
+            e.flags &= !0x10;
+        }
+        let (cx, cy) = (w.g.ent[c].x, w.g.ent[c].y);
+        w.g.rebuild_wiz_chain();
+        // THE OWNER IS MID-DEATH-FALL — and parked 4,000 from his keep.
+        w.player.state = LifeState::Falling;
+        w.human_pose = (cx.wrapping_add(4_000), cy, rz);
+        assert!(
+            w.wizard_pos(0).is_none(),
+            "test premise: the live-state lookup has already dropped him"
+        );
+        assert!(
+            !w.rival_pick_castle_target(ri, i),
+            "a corpse-to-be still holds its ground: retail reads the \
+             record's +72, not its life state"
+        );
+        // NON-VACUITY: the same dead owner, now 20,000 out.
+        w.human_pose = (cx.wrapping_add(20_000), cy, rz);
+        assert!(
+            w.rival_pick_castle_target(ri, i),
+            "20,000 is past the 7680 disc — the keep IS undefended"
+        );
+        assert_eq!(w.rivals[ri].state, AiState::RaidCastle);
+        assert_eq!(w.rivals[ri].target, c as u16);
+    }
+
+    /// ⭐⭐ THE BALL GUARD SEATS THE HUMAN BY TICK-TOP MEMBERSHIP
+    /// (`sub_15340` :19003 walks `var_u32_36462[0]`, rebuilt at
+    /// :52290-97). A carpet that takes its fatal hit mid-tick is
+    /// still in that chain for the rest of the tick and still guards
+    /// the balls beside it. The port seeded the election from
+    /// `wizard_pos(0)` — the LIVE `LifeState` — so the balls around a
+    /// dying human went unguarded for one tick and the rival claimed
+    /// the nearest instead of the nearest UNGUARDED one.
+    ///
+    /// mc1l48 t=6377: the human dies that tick (681 life 50 → −350)
+    /// at (2363, 43268); retail's rival 712 skips ball 298 (2,345
+    /// units off him, guarded) and claims ball 291 (4,947 off, past
+    /// the 5120 disc). The port took 298.
+    ///
+    /// NON-VACUITY: clearing the tick-top membership admits the ball,
+    /// so the pin turns on the membership bit and not on the geometry.
+    #[test]
+    fn a_ball_beside_a_dying_human_is_still_guarded() {
+        let mut w = possess_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let me = w.rivals[ri].ent;
+        let rz = w.g.ent[i].z;
+        // A neutral ball, and a far-off foreign carpet so the election
+        // has a member even when the human is out of it.
+        let b = w.g.new_event().expect("ball slot");
+        {
+            let e = &mut w.g.ent[b];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.tick70 = 41;
+            e.f140 = 512;
+            e.f144 = PLAYER_TARGET; // neutral-owned (no hate latched)
+            e.act_life = 300;
+            e.max_life = 300;
+        }
+        let (bx, by) = (w.g.ent[i].x.wrapping_add(1_000), w.g.ent[i].y);
+        w.g.move_relink(b, bx, by, rz);
+        let far = w
+            .g
+            .spawn_fireball(bx.wrapping_add(20_000), by, rz)
+            .expect("carpet slot");
+        {
+            let e = &mut w.g.ent[far];
+            e.class64 = 3;
+            e.model65 = 1;
+            e.id24 = me.wrapping_add(9); // foreign
+            e.act_life = 1000;
+            e.flags &= !0x10;
+        }
+        w.g.rebuild_wiz_chain();
+        w.g.rebuild_ball_chain();
+        // The human took his fatal hit AFTER the tick top: dead now,
+        // but still a chain member, and parked 2,000 from the ball.
+        w.player.state = LifeState::Falling;
+        w.human_bucket_alive = true;
+        w.human_pose = (bx.wrapping_add(2_000), by, rz);
+        assert!(
+            w.wizard_pos(0).is_none(),
+            "test premise: the live-state lookup has already dropped him"
+        );
+        assert!(
+            !w.rival_pick_ball_target(ri, i),
+            "the dying human is still in the tick-top chain — his ball \
+             is GUARDED for the rest of this tick"
+        );
+        // NON-VACUITY: he was already out of the chain at the tick top.
+        w.human_bucket_alive = false;
+        assert!(
+            w.rival_pick_ball_target(ri, i),
+            "off the tick-top chain he does not guard, and the only \
+             other carpet is 20,000 out"
+        );
+        assert_eq!(w.rivals[ri].state, AiState::Possess);
+        assert_eq!(w.rivals[ri].target, b as u16);
+    }
+
     /// A castle-less rival with Create Castle (16) in its book — the
     /// plant/rebuild laws' scaffolding (ledger 2026-08-20b).
     fn castle_world() -> World {
@@ -5305,6 +6892,104 @@ mod tests {
         });
         w.set_wizards(&cfgs, 2);
         w
+    }
+
+    /// ⭐⭐⭐ THE OWNED REBUILD WRITES PAST THE BOOK, INTO THE RECAST
+    /// TABLE (`sub_45C10_45F50` :55310-19 — see
+    /// [`owned_rebuild_overflow`]). Retail re-registers each
+    /// acquisition entry under the MODEL byte of whatever pool record
+    /// it now names, with NO class filter and NO bound: `+676 + 2*m`
+    /// runs straight off the 24-entry book into `+724`, the AI recast
+    /// cooldown table. mc1l49 t=36793: rival 594's `acq[3]` still
+    /// names pool slot 26, recycled into a class-10 model-39 record,
+    /// and `676 + 2*39 = 754 = 724 + 2*15` pins Lightning's recast at
+    /// the slot number 26 — the recording holds it there for the
+    /// remaining 28,000 ticks while its neighbours decay normally.
+    ///
+    /// NOT FIXTURE-PINNABLE: the write's only direct observable is the
+    /// wizext shadow (`cooldown[]`), which the pair grader does not
+    /// score — `verify-deltas` on the stamp pair 36792→36793 reports
+    /// "2 conforming" with the pre-dig port writing nothing at all.
+    #[test]
+    fn the_owned_rebuild_writes_past_the_book_into_the_recast_table() {
+        let mut w = castle_world();
+        let ri = 0;
+        // The recycled acquisition slot: NOT a class-12 manifestation.
+        let stray = 26usize;
+        w.g.ent[stray].class64 = 10;
+        w.g.ent[stray].model65 = 39;
+        w.rivals[ri].acq[3] = stray as i32;
+        w.rivals[ri].cooldown[15] = 0;
+        w.rival_owned_rebuild(ri);
+        assert_eq!(
+            w.rivals[ri].cooldown[15], stray as u16,
+            "`+676 + 2*39` is `+754` = cooldown[15]: the blind write lands there"
+        );
+        assert_eq!(
+            w.rivals[ri].owned[15], 0,
+            "the BOOK slot for spell 15 is untouched — the rival still owns nothing there"
+        );
+        // And it is re-stamped every dispatch, one step AFTER the
+        // decay loop (:17939-45 then :17969), so it never runs down.
+        for _ in 0..3 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(
+            w.rivals[ri].cooldown[15], stray as u16,
+            "the rebuild re-stamps it after every decay — the recast is pinned forever"
+        );
+    }
+
+    /// ⭐⭐⭐ A BLANKED CLASS-3 ROSTER HIDES THE HUMAN FROM THE WIZARD
+    /// PICK (`sub_145B0` :18554 — see [`mc1_human_on_wiz_roster`]).
+    /// Retail's election walks `var_u32_36462[0]` and nothing else, and
+    /// [`Gen::new_event`]'s mid-tick seizure NULLS that head for the
+    /// rest of the tick; the port carries the human out of the pool and
+    /// judged him in a pre-pass placed OUTSIDE the walk, so a blanked
+    /// roster left him standing as the only candidate in the world.
+    ///
+    /// NOT FIXTURE-PINNABLE: the pair grader re-seeds `+415` from the
+    /// record at every anchor ([`World::reanchor_rival_ai`]), so an
+    /// import at `head - 1` starts the port ALREADY in Cruise and the
+    /// pair conforms — mc1l48's four `target_yaw` heads on slot 712
+    /// (t=26740/26742/26744/26751) all classify INHERITED, and
+    /// `verify-deltas` over the whole 300-pair window reports not one
+    /// `target_yaw` row on that slot. The defect lives only in the free
+    /// run.
+    #[test]
+    fn a_blanked_class3_roster_hides_the_human_from_the_wizard_pick() {
+        let mut w = possess_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        w.g.rebuild_wiz_chain();
+        w.human_bucket_alive = true;
+        w.player.invisible = false;
+        // The war arm is first-in-chain and RANGELESS (:18563-68), so
+        // the election turns on candidacy alone.
+        w.rivals[ri].war[0] = true;
+        w.rivals[ri].state = AiState::Cruise;
+        assert!(
+            w.rival_pick_wizard_target(ri, i),
+            "an intact roster seats the human: the war arm must elect him"
+        );
+        assert_eq!(w.rivals[ri].state, AiState::AttackWizard);
+        assert_eq!(w.rivals[ri].target, PLAYER_TARGET);
+
+        // Now blank the head, exactly as a mid-tick seizure does
+        // (`Gen::new_event` :43885-91 nulls all four roster heads).
+        w.rivals[ri].state = AiState::Cruise;
+        w.rivals[ri].target = 0;
+        w.g.wiz_chain.cut = 0;
+        assert!(
+            !w.rival_pick_wizard_target(ri, i),
+            "a blanked `var_u32_36462[0]` head hides the human too — \
+             retail's walk starts from NULL and terminates at once"
+        );
+        assert_eq!(
+            w.rivals[ri].state,
+            AiState::Cruise,
+            "the refused arm writes nothing; the cascade falls through to Idle"
+        );
     }
 
     /// ⭐⭐ THE MC1 CASTLE-ARM WAR THRESHOLD IS FLAT 50000 (:19733-39):
@@ -5371,6 +7056,184 @@ mod tests {
             (w.g.ent[0].x, w.g.ent[0].y),
             (0, 0),
             "the scratch keeps the last probed candidate"
+        );
+    }
+
+    /// ⭐⭐⭐ THE AI CASCADE'S CASTLE ARMS READ RAW REGISTERS — never a
+    /// pool scan, a `known` flag or the ladder table. `sub_13F00`'s
+    /// head (:18359) is three raw reads:
+    ///
+    ///     if ( !wizext->var_50 && sub_14E60(a1, 0x10)
+    ///          && sub_15E90(a1, 0x10) )
+    ///
+    /// `sub_14E60` (:18769-77) is a bare `pool + 164 * var_676[16]`
+    /// guarded only against slot 0 — "is my Create-Castle TOKEN
+    /// REGISTER set", NOT "do I know spell 16" — and `sub_15E90`
+    /// (:19376-79) is `pool[owned[16]]->+136 <= a1->+136`, the
+    /// TOKEN's LIVE price cache with NO class, flag or liveness guard
+    /// and no spell-table fallback. `sub_14120`'s mana leg (:18427)
+    /// prices off the same `+136`. D5's ladder-EVENT law made that
+    /// field a per-level-event value rather than a derivable one, so
+    /// the two readings genuinely part company.
+    ///
+    /// WITNESS (mc1l49 t=37002, `state.struct_b64`): wiz 1 has
+    /// `+50 = 0` AND `owned[16] = 0`, so retail refuses at the SECOND
+    /// term and stays in Possess; the port saw `known[16]` true,
+    /// priced off `SPELLS[16].possess_mana` and went to Build on
+    /// every pair tick of the window.
+    ///
+    /// This law takes no recording fixture — `ObsMc1`/`EntObsMc1`
+    /// emit neither the `owned` book nor `+50` nor the token's
+    /// `+136`, and a 21-tick sweep either side of t=37002 is
+    /// byte-identical under the switch — so the unit is the only pin.
+    ///
+    /// NON-VACUITY: under `MGC_NO_MC1_CASTLE_ARM_REGISTERS=1` the
+    /// pre-dig gate reads `known[16]` and `rival_castle_price`, whose
+    /// class/flag-guarded fallback lands on the table price, and BOTH
+    /// refusals below become Build.
+    #[test]
+    fn the_castle_build_arm_gates_on_the_token_register_not_the_spell_book() {
+        let mut w = castle_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let ws = w.rivals[ri].slot as usize;
+        assert_eq!(w.g.castle_reg[ws], 0, "castle-less: the +50 register is 0");
+        assert!(w.rivals[ri].known[16], "the rival knows Create Castle");
+        let m = w.rivals[ri].owned[16] as usize;
+        assert!(m != 0, "the rival minted its (12,16) token");
+        // A purse that comfortably covers the SPELL-TABLE price — the
+        // number the pre-dig gate falls back to whenever the token
+        // register cannot be read.
+        let table = SPELLS[16].possess_mana;
+        let purse = table + 10_000;
+        w.rivals[ri].mana_max = purse;
+        w.rivals[ri].mana = purse;
+
+        // ---- the anchor: every raw register says yes ------------------
+        w.g.ent[m].f136 = (purse - 1) as i32;
+        w.rivals[ri].state = AiState::Possess;
+        w.rival_selector(ri, i, true);
+        assert_eq!(
+            w.rivals[ri].state,
+            AiState::Build,
+            "non-vacuous: +50 clear, the token register set and its live \
+             +136 inside the purse — the build arm opens"
+        );
+
+        // ---- sub_14E60: the TOKEN REGISTER, not the book -------------
+        // The scattered wizard still KNOWS spell 16 and could still
+        // afford the table price; retail refuses at the second term
+        // because `var_676[16]` is 0 (mc1l49 t=37002).
+        w.rivals[ri].owned[16] = 0;
+        assert!(w.rivals[ri].known[16], "the book entry is untouched");
+        w.rivals[ri].state = AiState::Possess;
+        w.rival_selector(ri, i, true);
+        assert_ne!(
+            w.rivals[ri].state,
+            AiState::Build,
+            "a scattered token register refuses the build — sub_14E60 \
+             reads +676[16], never the `known` flag"
+        );
+
+        // ---- sub_15E90: the token's RAW +136, no guards, no table ----
+        // The register points at a SOFT-KILLED token whose live price
+        // cache is over the purse. Retail dereferences it anyway (no
+        // class, flag or liveness test) and refuses; the pre-dig
+        // `rival_castle_price` guard rejects the token and prices the
+        // build off the spell table instead, which the purse covers.
+        w.rivals[ri].owned[16] = m as u16;
+        w.g.ent[m].f136 = (purse + 1) as i32;
+        w.g.ent[m].flags |= 0x400;
+        assert!(
+            w.rivals[ri].mana_max >= table,
+            "non-vacuous: the table price is still affordable"
+        );
+        w.rivals[ri].state = AiState::Possess;
+        w.rival_selector(ri, i, true);
+        assert_ne!(
+            w.rivals[ri].state,
+            AiState::Build,
+            "the arm priced off the token's raw +136 — sub_15E90 has no \
+             class/flag guard and no spell-table fallback"
+        );
+    }
+
+    /// ⭐⭐ THE SAME LAW ON THE OTHER ARM: `sub_14120`'s mana leg
+    /// (:18427) is `a1->+136 < v3->+136` where `v3` is
+    /// `sub_14E60(a1, 0x10)` — the TOKEN again, NOT
+    /// `CASTLE_CAP[level]`. The two readings agreed only while the
+    /// port re-priced the token every tick; D5's ladder-EVENT law
+    /// (L6) made the token's live `+136` the last LEVEL EVENT's
+    /// price, which on a register shared through a recycled slot is a
+    /// different castle's rung altogether — mc1l49 t=35404, token 26
+    /// holds 40,000 = `CAP[3]` under a level-4 castle whose
+    /// `CAP[4]` is 80,000.
+    ///
+    /// NON-VACUITY: under `MGC_NO_MC1_CASTLE_ARM_REGISTERS=1` the leg
+    /// reads `CASTLE_CAP[reg.f26]`, which this purse covers, and the
+    /// upgrade opens.
+    #[test]
+    fn the_castle_upgrade_arm_prices_off_the_token_not_the_ladder_table() {
+        let mut w = castle_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let ws = w.rivals[ri].slot as usize;
+        // Plant a castle the way Build does, so +50 is bound for real.
+        w.rivals[ri].state = AiState::Build;
+        w.rivals[ri].site = (w.g.ent[i].x, w.g.ent[i].y);
+        w.rivals[ri].mana = 200_000;
+        w.rivals[ri].cooldown[16] = 0;
+        w.rival_state_tick(ri, i, false);
+        let c = w.rival_castle(w.rivals[ri].ent).expect("the plant landed");
+        assert_eq!(w.g.castle_reg[ws], c as u16, "+50 is bound to the castle");
+        // A SETTLED level-1 castle: the ladder table would price its
+        // next rung at CASTLE_CAP[1].
+        {
+            let e = &mut w.g.ent[c];
+            e.f26 = 1;
+            e.tick70 = 4;
+            // Full health — arm 2 (flee home hurt) sits above arm 3.
+            e.act_life = e.max_life as i32;
+        }
+        w.g.ent[i].act_life = w.g.ent[i].max_life as i32;
+        let table = Gen::CASTLE_CAP[1] as u32;
+        // The purse clears the LADDER rung and nothing else.
+        let purse = table + 5_000;
+        w.rivals[ri].mana_max = purse;
+        w.rivals[ri].mana = purse;
+        w.rivals[ri].cooldown[16] = 0;
+        let m = w.rivals[ri].owned[16] as usize;
+        assert!(m != 0, "the (12,16) token stands");
+        w.g.ent[m].f26 = 0; // the burst is idle: the arm's first term
+
+        // ---- the anchor: the token's own price is affordable ---------
+        w.g.ent[m].f136 = (purse - 1) as i32;
+        w.rivals[ri].state = AiState::Possess;
+        w.rival_selector(ri, i, true);
+        assert_eq!(
+            w.rivals[ri].state,
+            AiState::Upgrade,
+            "non-vacuous: with the TOKEN's live +136 inside the purse the \
+             upgrade arm opens"
+        );
+
+        // ---- the law: the token's +136, above the purse, refuses -----
+        // The ladder rung is still comfortably affordable, so only a
+        // gate reading the TOKEN can refuse here.
+        w.g.ent[m].f26 = 0;
+        w.g.ent[m].f136 = (purse + 1) as i32;
+        w.rivals[ri].cooldown[16] = 0;
+        assert!(
+            w.rivals[ri].mana_max >= Gen::CASTLE_CAP[w.g.ent[c].f26 as usize] as u32,
+            "non-vacuous: CASTLE_CAP[level] is still inside the purse"
+        );
+        w.rivals[ri].state = AiState::Possess;
+        w.rival_selector(ri, i, true);
+        assert_ne!(
+            w.rivals[ri].state,
+            AiState::Upgrade,
+            "sub_14120's mana leg reads the TOKEN's live +136, never \
+             CASTLE_CAP[level]"
         );
     }
 
@@ -5686,12 +7549,30 @@ mod tests {
     /// (:17980-83). The human's twin (:55424-29) also zeroes `+46`
     /// and screams — but that arm lives in `sub_45C90`, which a rival
     /// never runs; its carpet tick is `sub_13170`. So the corpse
-    /// enters the fall AT ITS LIVE CLIMB RATE and drops that far on
-    /// the very first fall step. mc1hwl0 t=23252: `+46` = −56 rides
-    /// through and z goes 2769 → 2713 where the zeroed port hung at
-    /// 2769. `+46` is not a published pair lane, so only the free run
-    /// could see it (the head classified INHERITED; `--start`
-    /// bisection put the birth in the death tick itself).
+    /// enters the fall AT ITS LIVE CLIMB RATE and spends it on the
+    /// very first fall step, on TOP of the speed-0 sink
+    /// ([`death_sink_runs`]).
+    ///
+    /// ⚠ The witness this test used to cite (mc1hwl0 t=23252, "z 2769
+    /// → 2713") is not in the corpus — mc1hwl0's rival at that tick is
+    /// ALIVE. **mc1l49 rival 594 is the real one and it pins both
+    /// laws at once** (measured off the recording, `f126 = 0`
+    /// throughout, ground 4064):
+    ///
+    /// ```text
+    ///   t=39083  +70=1  +46=-60  z=4707     alive
+    ///   t=39084  +70=2  +46=-60  z=4711     death arm: +46 RIDES THROUGH
+    ///   t=39085  +70=2  +46=-62  z=4643     first fall step: -68 = -60 - 8
+    ///   t=39086  +70=2  +46=-64  z=4581     -62, no sink
+    ///   t=39087  +70=2  +46=-66  z=4517     -64, no sink
+    /// ```
+    ///
+    /// The first step is the inherited `-60` PLUS the speed-0 sink's
+    /// 8; from the second on the sink is silent because z has dropped
+    /// below `ground + row156.v_10` (4711 is above that band, 4643 is
+    /// not). Both arms below reproduce that: the corpse starts 4000
+    /// above the floor, so the sink is live for the whole test, and
+    /// the second arm turns it off with speed alone.
     /// Non-vacuous: restoring the `f46 = 0` write parks the corpse.
     #[test]
     fn a_rival_corpse_enters_the_fall_at_its_live_climb_rate() {
@@ -5713,14 +7594,163 @@ mod tests {
             "the death arm leaves +46 alone — no human-side zero"
         );
         assert_eq!(w.g.ent[i].z, z0, "the death tick itself does not fall");
-        // The next tick IS the fall, and it spends the inherited rate.
+        // The next tick IS the fall. The fall's own speed decay drives
+        // the corpse's `+126` to 0 BEFORE the mover reads it, so this
+        // corpse spends the inherited rate AND the sink's 8.
         w.rival_entity_tick(i);
+        assert_eq!(w.g.ent[i].f126, 0, "the corpse reached the mover speed-0");
+        assert_eq!(
+            w.g.ent[i].z,
+            z0.wrapping_add(-64i16),
+            "the first fall step drops the inherited climb rate plus the speed-0 sink"
+        );
+        assert_eq!(w.g.ent[i].f46, -58, "and gravity steps it by 2");
+    }
+
+    /// The SPEED arm of the same law (`sub_455D0` :55171-72): the
+    /// sink's `!actSpeed` guard is real, so a corpse still carrying
+    /// speed spends its `+46` and NOTHING else — the same first fall
+    /// step as above, 8 units shallower. Pins the guard the other way
+    /// round, so the sink cannot be turned into an unconditional −8.
+    #[test]
+    fn a_moving_corpse_takes_no_speed_zero_sink() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        w.g.ent[i].tick70 = 1;
+        w.g.ent[i].f46 = -56;
+        // Well clear of one 16/tick decay step, so the mover still
+        // sees a nonzero speed on the first fall tick.
+        w.g.ent[i].f126 = 160;
+        w.g.ent[i].z = w.g.ent[i].z.wrapping_add(4000);
+        w.rivals[ri].grace = 0;
+        w.g.ent[i].act_life = 10;
+        w.g.ent[i].mail[0] = (10_000, 7);
+        let z0 = w.g.ent[i].z;
+        w.rival_entity_tick(i);
+        assert_eq!(w.g.ent[i].tick70, 2, "the intake killed it into the fall");
+        w.rival_entity_tick(i);
+        assert_ne!(w.g.ent[i].f126, 0, "still moving on the first fall step");
         assert_eq!(
             w.g.ent[i].z,
             z0.wrapping_add(-56i16),
-            "the first fall step drops the whole inherited climb rate"
+            "a moving corpse spends only its +46"
         );
-        assert_eq!(w.g.ent[i].f46, -58, "and gravity steps it by 2");
+    }
+
+    /// ⭐⭐⭐ THE DEATH SCATTER DOES NOT BLANK `+676`
+    /// (`sub_45FC0_46300` :55516-49 walks the `+532` ACQUISITION list
+    /// and nothing else). `sub_45C10_45F50` is the register's ONLY
+    /// writer in the whole MC1 binary and the class-3 dispatch table
+    /// reaches it from the LIVE arms alone, so a corpse's book freezes
+    /// at what its last live tick published and stays readable through
+    /// the husk — by the castle probe (:56629), the Create-Castle /
+    /// mana-ball elections (:54662, :54669) and the trigger walk
+    /// (:64794). Pins the invented blank out.
+    /// WITNESS: mc1l49 t=9640→9641, wiz 2 (ent 620) scatters, its
+    /// `+532` list is rewritten 621→0, 622→3, 623→2 … and its `+676`
+    /// still reads the intact slot book 621..644 at t=9641.
+    #[test]
+    fn a_rival_death_scatter_leaves_the_owned_register_standing() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        // One lethal packet in the box: this tick is the last LIVE
+        // tick, so it runs `sub_45C10` and then dies into the fall.
+        w.g.ent[i].tick70 = 1;
+        w.rivals[ri].grace = 0;
+        w.g.ent[i].act_life = 10;
+        w.g.ent[i].mail[0] = (10_000, 7);
+        w.rival_entity_tick(i);
+        assert_eq!(w.g.ent[i].tick70, 2, "the intake killed it into the fall");
+        let book = w.rivals[ri].owned;
+        assert!(
+            book.iter().any(|&m| m != 0),
+            "non-vacuous: the corpse enters the fall holding a book"
+        );
+        // Fall to the impact — the scatter arm, which flips +70 to 3.
+        for _ in 0..2000 {
+            if w.g.ent[i].tick70 != 2 {
+                break;
+            }
+            w.rival_entity_tick(i);
+        }
+        assert_eq!(w.g.ent[i].tick70, 3, "the corpse reached the scatter");
+        assert!(
+            w.rivals[ri].acq.iter().all(|&e| e < SPELL_COUNT as i32),
+            "the scatter rewrote +532 to DEAD (model) form: {:?}",
+            w.rivals[ri].acq
+        );
+        assert_eq!(
+            w.rivals[ri].owned, book,
+            "+676 is untouched — sub_45C10 is its only writer and the \
+             dispatch stopped calling it when +70 left the live arms"
+        );
+    }
+
+    /// ⭐⭐⭐ A RETAIL CORPSE KEEPS DEFLECTING. The rival death arm is
+    /// `*(a1 + 70) = 2; return 0;` and NOTHING else (:17980-83), and
+    /// `+17` bit 7 — our `0x8000` — has EXACTLY TWO writers in the
+    /// whole listing, both inside the Rebound token's own tick
+    /// `sub_573F0_57920` (:65785 `&= ~0x80u`, :65792 `|= 0x80u`; twin
+    /// remc1hw :62007 / :62014). Nothing on the death path writes it,
+    /// so the bit a live burst published rides straight through the
+    /// kill and only lapses when the token's `+48` runs out — see
+    /// [`World::rival_rebound_token_tick`].
+    ///
+    /// The port's clear in the death arm was an INVENTED WRITE, and
+    /// the comment that justified it ("death states 2/3 never reach
+    /// `rival_refresh_buffs`") went stale when the token moved to the
+    /// class-12 walk.
+    ///
+    /// WITNESS: mc1l49 t=6669 — slot 646 takes a fatal 4000
+    /// (`act_life 2040 → −1960`) and `explain`'s changelog lists
+    /// `act_life`, `f38`, `f63`, `f70`, `mail0.src` and NO `flags`
+    /// row; the word reads 0x800C at t=6666..6668, stays 0x800C
+    /// across the death, and the deflection bit only leaves at the
+    /// respawn (t≈6750, 0x000C).
+    ///
+    /// NON-VACUITY: under `MGC_NO_MC1_DEATH_KEEPS_REBOUND=1` the
+    /// death arm blanks the bit and the final assertion fails.
+    #[test]
+    fn a_dying_rival_carries_its_rebound_bit_into_the_corpse() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        // A live Rebound burst on the books, its deflection bit
+        // already published on the wizard entity the way the token's
+        // own tick publishes it (sub_573F0 :65792).
+        let m = w.rivals[ri].owned[14] as usize;
+        assert!(m != 0, "the rival never minted a Rebound manifestation");
+        w.g.ent[m].f26 = SPELLS[14].count as i16;
+        w.g.ent[i].flags |= 0x8000;
+        assert!(
+            rebound_bit(&w, ri),
+            "non-vacuous: the bit stands before the killing tick"
+        );
+        // One lethal packet in the box on a live tick with no spawn
+        // grace left: the intake takes `act_life` negative and the
+        // dispatch falls into the death arm.
+        w.g.ent[i].tick70 = 1;
+        w.rivals[ri].grace = 0;
+        w.g.ent[i].act_life = 10;
+        w.g.ent[i].mail[0] = (10_000, 7);
+        w.rival_entity_tick(i);
+        assert!(
+            w.g.ent[i].act_life < 0,
+            "non-vacuous: the packet was lethal"
+        );
+        assert_eq!(w.g.ent[i].tick70, 2, "the intake killed it into the fall");
+        assert_eq!(
+            w.g.ent[m].f26,
+            SPELLS[14].count as i16,
+            "the burst is untouched — only the token's own tick spends it"
+        );
+        assert!(
+            rebound_bit(&w, ri),
+            "the death arm blanked +17 bit 7 — retail's `*(a1+70) = 2; \
+             return 0;` writes no flags and the corpse keeps deflecting"
+        );
     }
 
     /// The respawn block (sub_44D30 :54842-923 + :55031-41), rival
@@ -5839,5 +7869,113 @@ mod tests {
             "the ONE cooldown write: var_756 = 4*slot"
         );
         assert_eq!(r.regen_stall, 16, "the stall block is SET to 16");
+    }
+
+    /// ⭐⭐⭐ `sub_44D30`'s WIZEXT CLEAR LIST IS EXACT, and the port's
+    /// copy was wrong on three lanes at once.
+    ///
+    /// - `:54868-70` is `v_24 = 0; v_26 = 0; v_22 = 0` — the knock
+    ///   DIRECTION as well as the magnitude. The port cleared only
+    ///   `knock_mag`.
+    /// - the rival-only tail (`:55043-46`) is
+    ///   `for (kx = 0; kx < 8; kx++) str_456[kx].var_u16_4 = 24607`;
+    ///   `var_u16_4` is `+460`, the HATE half of the 8-byte row. The
+    ///   WAR flag at `+462` is not in the loop and appears nowhere
+    ///   else in the function, so a reborn rival KEEPS every war he
+    ///   declared.
+    /// - `+406`, the poverty latch, is never written by the respawn
+    ///   at all — it belongs to the attack picker (`:19468-91`).
+    ///
+    /// mc1l49 t=21968, rival 594's respawn (`explain` + the raw
+    /// wizext shadow): retail's `+24` goes 1300 → 0 while `poverty`
+    /// stays 1 and `war[6]` stays 1 across the whole transition. Both
+    /// arms are pinned, so the test still means something under
+    /// `MGC_NO_MC1_RESPAWN_CLEAR_LIST=1`.
+    #[test]
+    fn the_respawn_clears_the_knock_direction_and_keeps_war_and_poverty() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        {
+            let r = &mut w.rivals[ri];
+            r.knock_dir = 1300;
+            r.knock_mag = 40;
+            r.poverty = true;
+            r.war = [false; 8];
+            r.war[6] = true;
+            r.hate = [0; 8];
+            r.acq = [-1; SPELL_COUNT];
+        }
+        w.rival_respawn(ri, i);
+        let r = &w.rivals[ri];
+        assert_eq!(r.knock_mag, 0, "v_22 is cleared on every arm");
+        assert_eq!(
+            r.hate,
+            [HATE_NEUTRAL; 8],
+            "str_456[kx].var_u16_4 = 24607 on every arm"
+        );
+        if respawn_clear_list() {
+            assert_eq!(r.knock_dir, 0, "v_24 = 0 — the knock DIRECTION too");
+            assert!(r.poverty, "+406 survives: sub_44D30 never writes it");
+            assert!(r.war[6], "+462 survives: the ledger loop is hate-only");
+        } else {
+            assert_eq!(r.knock_dir, 1300, "pre-dig arm left the bearing standing");
+            assert!(!r.poverty, "pre-dig arm blanked the latch");
+            assert!(!r.war[6], "pre-dig arm blanked the war flags");
+        }
+    }
+
+    /// ⭐⭐⭐ `sub_57610_57B40` BILLS BEFORE IT SPAWNS (:65880-83).
+    /// The `if (v3)` null guard wraps only the castle ball and its
+    /// in-transit `+48 = +50 − 1` pin; `sub_55E80_563B0` sits ABOVE
+    /// it. A rival firing Create Castle into an exhausted pool pays
+    /// the FULL ladder price, mints nothing, and leaves `+48` at the
+    /// full count — the next tick's `sub_55DD0` afford leg then
+    /// refuses on the emptied purse and releases the burst.
+    /// mc1l49 t=15552: wiz 7's purse 40100 → 100 on a dry free stack,
+    /// token 112 (`+136 = CASTLE_CAP[3] = 40000`) holding `+48 = 101`
+    /// and no `(9,10)` ball anywhere in the take. Both arms are
+    /// pinned so the test is meaningful under
+    /// `MGC_NO_MC1_CASTLE_BALL_DEBIT_ORDER=1` too.
+    #[test]
+    fn a_dry_pool_castle_cast_is_billed_in_full() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let m = w.rivals[ri].owned[16] as usize;
+        assert!(m != 0 && w.g.ent[m].class64 == 12, "the (12,16) token");
+        let price = w.rival_castle_price(ri);
+        assert!(price > 0, "the token carries a live ladder price");
+        w.rivals[ri].mana = price + 1_000;
+        w.rivals[ri].mana_delta = 0;
+        // Arm the burst the way the commit does, then dry the pool.
+        let count = w.spells()[16].count as i16;
+        w.g.ent[m].f26 = count;
+        while w.g.new_event().is_some() {}
+        assert!(w.g.spawn_castle_ball(0, 0, 0).is_none(), "the pool is dry");
+        let balls = |w: &World| {
+            w.g.ent
+                .iter()
+                .filter(|e| e.class64 == 9 && e.model65 == 10 && e.flags & 0x400 == 0)
+                .count()
+        };
+        let before = balls(&w);
+        w.rival_castle_token_tick(m, ri);
+        assert_eq!(balls(&w), before, "no ball was minted");
+        assert_eq!(
+            w.g.ent[m].f26, count,
+            "the burst stays FULL — the `+48` pin is inside `if (v3)`"
+        );
+        if castle_ball_debit_order() {
+            assert_eq!(
+                w.rivals[ri].mana_delta,
+                -(price as i32),
+                "retail bills the ladder price ABOVE the spawn guard"
+            );
+        } else {
+            assert_eq!(
+                w.rivals[ri].mana_delta, 0,
+                "the pre-dig arm billed nothing when the spawn refused"
+            );
+        }
     }
 }

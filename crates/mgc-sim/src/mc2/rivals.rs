@@ -6692,11 +6692,20 @@ impl World {
                 // way — retail's entity `rand` stands at 60615 across
                 // the tick while the port's stepped to 2566.
                 //
-                // ⚠ `crt_rand`'s phase is unrecoverable at import (it
-                // has no capture channel), so the roll's OUTCOME stays
-                // best-effort; keeping the entity stream honest is the
-                // part that is measurable, and it is the part that
-                // propagates.
+                // ⚠ `crt_rand`'s phase has no capture channel, so the
+                // roll's OUTCOME is best-effort here; keeping the
+                // entity stream honest is the part that is measurable,
+                // and it is the part that propagates.
+                //
+                // ⭐ MC1's twin site was called unrecoverable for the
+                // same reason and was NOT: see
+                // `mc1::rivals::mc1_crt_draw_at_label49`. The phase
+                // was never the problem — a phantom draw at the wrong
+                // site was, and the seed is Watcom's default 1. MC2 is
+                // worth the same treatment: enumerate ITS draw sites
+                // (`watcomrand` in EF), check each against the
+                // decompile's short-circuits, then fit the outcome on
+                // recorded casts.
                 let roll = (self.g.watcom_rand() % 255) as u16;
                 if roll < self.mc2_rivals[ri].per && walk(self, 7) {
                     return Some(7);

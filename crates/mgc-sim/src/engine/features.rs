@@ -511,6 +511,27 @@ pub(crate) struct Ent {
     /// [`Mc2Pinned`]. Verified, not asserted: the golden suites are
     /// byte-identical with the law on.
     pub(crate) lease2e: Lease2e,
+    /// ⭐ RETAIL'S `+48`, CARRIED RAW FOR **EVERY** CLASS — the lane
+    /// [`Ent::f26`] only homes while the record is a class-12
+    /// manifestation (`import_ent`: `if class64 == 12 { r.f48 }`).
+    ///
+    /// `sub_14E60` (VA 0x14E60, CARPET.EXE file 0x2D658) is
+    /// `pool + 164 * (i16)wizext->owned[spell]` with **no class,
+    /// liveness or flag guard at all** — three `lea`s, an `add` and a
+    /// `jbe` against the pool base, then `ret`. So every reader of a
+    /// wizard's owned-token register dereferences whatever now
+    /// occupies that slot, and `sub_14120`'s `if (*(_WORD *)(v2 + 48))
+    /// return 0;` (file 0x2C971 `cmpw $0x0,0x30(%eax)`) reads that
+    /// stranger's `+48`. When the register is stale — the token was
+    /// scattered and its slot recycled into a projectile or a creature
+    /// — the port read the stranger's `+26` through `f26` instead and
+    /// the upgrade arm answered the wrong question.
+    ///
+    /// ⚠⚠⚠ HASH-SILENT BY CONSTRUCTION, exactly like [`Lease2e`]:
+    /// `Ent` is `#[derive(Hash)]` and `World::state_hash` hashes `g`
+    /// wholesale, so a plain `u16` here would move every golden with
+    /// zero behaviour change.
+    pub(crate) raw48: Raw48,
     pub(crate) f28: u16,
     /// Wall step dx/dy (offsets 30/32); canyon/ridge heading (30).
     pub(crate) f30: u16,
@@ -949,6 +970,9 @@ pub(crate) struct Gen {
     /// The player's Rebound deflection bit (spell 14; +17 0x80,
     /// :65774) — incoming class-9 projectiles bounce back.
     pub(crate) player_rebound: bool,
+    /// The out-of-pool human's seat in his own tile chain — see
+    /// [`PlayerChain`].
+    pub(crate) player_chain: PlayerChain,
     /// Player stat counters: creatures killed (`Type_160+359`), shots
     /// resolved (+343), shots that struck the aimed target (+347).
     pub(crate) kills: u32,
@@ -1410,9 +1434,56 @@ pub(crate) fn no_castle_eject_gc() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_CASTLE_EJECT_GC").is_some())
 }
 
+/// `MGC_NO_MC1_LEVELER_POOL_GATE=1` restores the UNGATED MC1 castle
+/// leveler: the deferred downgrade runs even on an exhausted free
+/// stack, where retail's `sub_470E0` (:56142) skips the whole teardown.
+/// See the action-6 arm of [`Gen::castle_tick`].
+pub(crate) fn mc1_no_leveler_pool_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_LEVELER_POOL_GATE").is_some())
+}
+
+/// `MGC_NO_MC1_LEVELER_PIN_GATE=1` restores the UNGATED action-6
+/// Create-Castle token pin: the port used to stamp the owner's `+48`
+/// on EVERY `+70 == 6` castle pass, where retail's pin/release lives
+/// INSIDE `sub_47A70_47DB0` (:56529 / :56533), which `sub_470E0`
+/// (:56142) calls only when `sub_37710_37AD0()` reports a non-empty
+/// free stack. On an exhausted pool retail's leveler parks `+70` back
+/// to 4 and touches nothing else — the token keeps whatever `+48` it
+/// had. See the MC1 action-6 arm of the class-3 model-2 dispatch in
+/// `World::tick`. (MC2's twin arm has always been gated: `6 if
+/// downgraded`.)
+pub(crate) fn mc1_no_leveler_pin_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_LEVELER_PIN_GATE").is_some())
+}
+
+/// `MGC_NO_MC1_LEVELER_SHAKE_GATE=1` restores the pre-dig MC1 castle
+/// ground LEVELER, which stepped its translation on every tick with a
+/// live counter. Retail's `sub_28200` (:30333) opens the whole work
+/// body on `!castle[+42]->+50 && +26` — a SHAKING castle (blast
+/// damage arms `+50 = 30`, `sub_127E0` :17523) sends the leveler
+/// straight to the ELSE arm, which is the FINISH: castle sub-state 2,
+/// site z = 32 * current, perimeter smooth, despawn. The twin guard on
+/// the PAINTER (`sub_285C0` :30520) is only a per-tick suspend, so the
+/// asymmetry is real and deliberate. See [`Gen::tick_castle_leveler`].
+fn mc1_no_leveler_shake_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_LEVELER_SHAKE_GATE").is_some())
+}
+
 fn no_mc2_seize_blank() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SEIZE_BLANK").is_some())
+}
+
+/// `MGC_NO_TRIGGER_ROSTER_BLANK=1` restores the pre-dig
+/// [`World::balloon_probe`], whose out-of-pool human answered the
+/// class-3 roster walk even after a mid-tick seizure had blanked the
+/// roster head. See [`Gen::wiz_roster_head_blanked`].
+pub(crate) fn no_trigger_roster_blank() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_TRIGGER_ROSTER_BLANK").is_some())
 }
 
 /// `MGC_NO_MC2_REBUILD_VICTIM_HALF=1` restores the pre-dig
@@ -1434,12 +1505,407 @@ pub(crate) fn no_objective_death_literal() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_OBJECTIVE_DEATH_LITERAL").is_some())
 }
 
+/// `MGC_NO_MC1_ROW0_SHIM_119=1` drops shim byte {119} back to PLAIN,
+/// restoring the pre-dig smoother that ran on the row-0 cells x=118
+/// and x=119. Retail's `sub_360C0` (:42912-19) gates a row-0 cell on
+/// `mapTerrainType_CC1E0[(u16)t - 257]` and `[(u16)t - 256]` — SIGNED
+/// int indices, so for t < 257 both land in the sound-driver block
+/// below the type plane. mc1l49 t=22193 (a castle perimeter epilogue,
+/// `smooth_perimeter` cx=128 cy=0 half=10 thick=3, left strip
+/// x=115..118) smooths (115,0)->134, (116,0)->127 and (117,0)->117
+/// exactly as retail does, but retail leaves (118,0) at 103 where the
+/// 3x3 average is 975/9 = 108. (117,0) smoothing pins shim {117, 118}
+/// plain, so the byte (118,0) alone adds — {119}, i.e. VA CC156 inside
+/// the weak `dword_CC154` — is the building-classed one. That single
+/// byte is BOTH of the take's locally-rooted z heads: with (118,0)
+/// wrongly raised to 108 the same epilogue's (117,1) averages
+/// 1057/9 = 117 instead of 1052/9 = 116 and (118,1) 874/8 = 109
+/// instead of 868/8 = 108, and the (10,6) standing fire riding
+/// `ground + f46` at (118.05, 1.69) reads z 3499 where retail reads
+/// 3491 (t=22193 slot 947; t=22291 slot 900 is the same byte one
+/// eruption cycle later).
+///
+/// ⚠ CORRECTED (round 116, the z-ranking dig): this comment used to
+/// claim the take's other 25 z-only heads were all pair-CLEAN. They
+/// are not — **12 of the 26 are pair-DIRTY**, and 13 of those closed
+/// on a single unrelated law ([`castle_token_index`]). The
+/// `--classify` LOCAL/INHERITED tag is ALSO unreliable for a late z
+/// head, because it grades against the free-run world whose terrain
+/// has drifted for tens of thousands of ticks: 31887 and 32457 tag
+/// LOCAL yet their pairs are clean. **For a z head, trust
+/// `verify-deltas` on a tight slice, not the tag.**
+/// See [`Gen::OOB_TYPE_SHIM`] and [`Gen::smooth_cell`].
+fn mc1_no_row0_shim_119() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_119").is_some())
+}
+
+/// `MGC_NO_MC1_ROW0_SHIM_47_55_76_85=1` restores the pre-dig shim table,
+/// which had shim bytes {47, 55, 76, 85} plain. See
+/// [`Gen::OOB_TYPE_SHIM`].
+fn mc1_no_row0_shim_47_55_76_85() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_47_55_76_85").is_some())
+}
+
 /// `MGC_NO_BEAM_UNLINK=1` restores the pre-dig lightning beam, which
 /// marched a MAP-LINKED record. See the citation inside
 /// [`Gen::move_relink`].
 pub(crate) fn no_beam_unlink() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_BEAM_UNLINK").is_some())
+}
+
+/// `MGC_NO_MC1_ACQ_LIST_FULL=1` restores the pre-dig jar grant, which
+/// enforced only retail's `v25` half of the acquisition scan (the
+/// list already holds a class-12 record of this spell) and ignored
+/// the `v24 == -1` half — a FULL 24-seat `wizext+532` list. Retail
+/// refuses the whole grant on either (`sub_55A40_55F70` :64818-41),
+/// because `v24` is the seat the pool slot is written into
+/// (`+532 + 4*v24`, :64850) and the index stamped into the left hand
+/// (`+940 = v24`, :64851). WITNESS mc1l49 t=18525: wizard 0's list is
+/// 24/24 occupied — seat 20 a ZOMBIE (pool slot 235, `class64 = 0`)
+/// so `+676[20]` is 0 and spell 20 reads unowned — and retail's poll
+/// of the `(12,20)` jar at slot 693 holds `flags 4` / `+70 = 61`
+/// where the port granted. See [`World::class12_tick`] and
+/// [`World::try_pickup`], the two call paths of the same retail
+/// function.
+pub(crate) fn no_mc1_acq_list_full() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ACQ_LIST_FULL").is_some())
+}
+
+/// `MGC_NO_MC1_REGRANT_ZERO_ENTRY=1` restores the pre-dig respawn
+/// re-grant, which SKIPPED a dead-form acquisition entry of 0 unless
+/// the fireball bank flag was still up — an invented disambiguator.
+/// Retail's respawn walk (`sub_45C10_45F50`, remc1
+/// `sub_main.cpp:54893-922`) tests the entry ONLY for `< 0`:
+///
+/// ```c
+/// if (var_532[v9x] < 0) var_532[v9x] = 0;
+/// else { v11x = sub_373F0_377B0(&v2x->+72, 12, var_532[v9x]);
+///        if (v11x) { ...register... } else var_532[v9x] = 0; }
+/// ```
+///
+/// so a banked 0 is FIREBALL, not "empty", and mints a token like any
+/// other model — even when index 0 already minted one. WITNESS
+/// mc1l49 t=26654, the human's respawn: `wizext+532` reads
+/// `[0,3,2,16,1,14,4,12,6,9,7,8,15,18,17,19,13,5,11,10,0,21,22,23]`
+/// (seat 20's spell was lost to a slot recycle, so the death walk
+/// banked its recycled record's `model65` = 0), and retail lays 24
+/// tokens — slot 345 `(12,0)` for seat 20 — where the port laid 23
+/// and shifted every later member up a slot. See
+/// [`World::death_regrant`].
+pub(crate) fn no_mc1_regrant_zero_entry() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_REGRANT_ZERO_ENTRY").is_some())
+}
+
+/// `MGC_NO_MC1_CASTLE_UPGRADE_LATCH=1` restores the pre-dig level-up
+/// commit, which consumed the upgrade-request bit (`+16 & 0x40`) at the
+/// TOP of sub-state 0, before the painter spawn. Retail's `+48`
+/// machine (`sub_46F10_47250` case 0, :56053-72) leaves exactly three
+/// things outside the guard — the house pre-clear, the space gate and
+/// the one-time team stamp — and clears 0x40 on only TWO paths: the
+/// space REJECT (:56070 `+16 = v2 & 0xBF`, with `+48 = 2`) and, inside
+/// `sub_47960_47CA0`'s `if (v1)` (:56475), the successful commit. `v1`
+/// is `sub_3B7B0_3BB30(+150)` (:47567-86), which is a bare
+/// `NewEvent_372C0_37680()` — it returns 0 only when the POOL IS
+/// EXHAUSTED, and then the whole commit is skipped and case 0 retries
+/// next tick with the request bit STILL SET.
+///
+/// WITNESS mc1l49 castle 940 `(3,2)`, owner 750, level 4: retail arms
+/// the bit at t=55127 (`+70 4→5`, `flags 14→78`) and holds `flags 78`
+/// through t=55132 with `+26 = 4` and `+48 = 0` — six ticks of a full
+/// pool — then commits at t=55133 (`flags 78→14`, `+26 4→5`, `+48 0→4`,
+/// `+136 80000→160000`). The port cleared the bit on the first state-5
+/// tick, so the pairs anchored at t=55127..55131 all read `flags`
+/// retail 78 / port 14.
+pub(crate) fn no_mc1_castle_upgrade_latch() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_UPGRADE_LATCH").is_some())
+}
+
+/// `MGC_NO_MC1_DIG_ABORT_LATCH=1` restores the pre-dig ring walk, which
+/// swallowed [`Gen::dig_cell`]'s clamp latch on every caller that did
+/// not pass `protect`. `sub_40D30_41070` (:51711-16, CARPET.EXE
+/// `0x595a9` `test al,al / je next-cell`) aborts the disc on ANY
+/// nonzero cell return — there is no `a5` test on that path; the
+/// `a4`/protect test lives INSIDE `sub_40A10_40D50` on its own
+/// `return 1` (:51645, EXE `0x59269`). The other `return 1` is the
+/// SATURATION LATCH: `v8 = 1` when the height clamps at 200 or 0 and
+/// `!a1 && !a2` — the literal map origin, tested on the FULL 16-bit
+/// args while the cell index takes only their low bytes (:51634/51641,
+/// EXE `0x59242`/`0x59263`). The port's `&& protect` made that latch
+/// unreachable for the two non-protect diggers, and the stale doc
+/// comment on `dig_cell` called it "dead in practice".
+///
+/// WITNESS mc1l49 t=33302 slot 796, a `(10,9)` hill/crater sitting AT
+/// tile (0,0) (`x = y = 0`, `+26 7→8`, `actLife 10→9`, `+80 = 768`):
+/// its ring 0..1 covers the origin, retail's dig clamps that cell to 0,
+/// `sub_25470` (:28302-25) takes the finish arm — the `-40` levelling
+/// dig, the `(10,18)` child stamped with `+24`, and `sub_41E80`'s
+/// `flags |= 0x400` — while the port held `flags 0`. Same head at
+/// t=41372 slot 776, t=43542 slot 996, t=32259 slot 183, t=32645 slot
+/// 676 and t=43705 slot 452.
+pub(crate) fn no_mc1_dig_abort_latch() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DIG_ABORT_LATCH").is_some())
+}
+
+/// `MGC_NO_MC1_RIVAL_LEARN_SEAT=1` restores the pre-dig rival learn
+/// expiry, which registered the freshly conjured manifestation into
+/// the rival's book unconditionally. Retail conjures the record FIRST
+/// (`off_987DE[spell]`, :19415-19) and only then walks that wizard's
+/// `wizext+532` for the first EMPTY seat (:19421-25); when all 24 are
+/// taken the `v6 >= 24` arm jumps to the loop's continue, past ALL
+/// THREE registration writes — `+16 |= 1` (:19428), `+42 = the
+/// wizard's slot` (:19429) and `+532[v6]` (:19430) — so the token is
+/// born ORPHANED: `flags 4`, `+42 0`, in nobody's book, never polled
+/// (`+70 = 3*spell` is the spell's own manifest dispatch row, not
+/// `sub_56250`/`sub_56260`) and never freed (`actLife 0`). Same
+/// `v24 == -1` refusal as [`no_mc1_acq_list_full`], third call path.
+/// WITNESSES mc1l49 t=24927 slot 230 and t=25321 slot 123, both
+/// `(12,16)` `+70 = 48`: retail `flags 4` / `+42 0` against the port's
+/// `flags 5` / `+42 594`. See [`crate::mc1::rivals`]'s
+/// `rival_learn_tick`.
+pub(crate) fn no_mc1_rival_learn_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_LEARN_SEAT").is_some())
+}
+
+/// `MGC_NO_MC1_RIVAL_MANA_WRAP_PUBLISH=1` restores the pre-dig
+/// `.min(i32::MAX)` clamp on the rival purse mirror. Retail's `+140`
+/// IS the purse word: the shield-quarter debit subtracts RAW
+/// (`sub_46540_46880` :55703 — `a1x->var_u32_29935_140 -= v10` on the
+/// RECORD's own purse word, no afford clamp) and a fatal tick wraps it
+/// negative, which the death arm preserves (it returns before the
+/// regen floor at :17990). WITNESS mc1l49 pair 53215→53216, rival
+/// slot 750 `(3,1)` life −301: retail `+140` = 4294964965 (−2331),
+/// the port published `i32::MAX`. See `mc1::rivals`'s
+/// `rival_dispatch_tail`.
+pub(crate) fn no_mc1_rival_mana_wrap_publish() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_MANA_WRAP_PUBLISH").is_some())
+}
+
+/// `MGC_NO_MC1_MANA_CENSUS_WRAP=1` restores the pre-dig SATURATING
+/// accumulators in [`World::recompute_mana`]. Retail's census credit
+/// `sub_48340_48680` (VA `0x48340`, `CARPET.EXE` file `0x60B38`) is a
+/// pair of PLAIN 32-BIT ADDS and nothing else:
+///
+/// ```text
+///   60b3d: 66 8b 93 90 00 00 00   mov  0x90(%ebx),%dx     ; +144 owner tag
+///   60b46: 66 85 d2               test %dx,%dx
+///   60b49: 74 3a                  je   0x60b85            ; no owner -> world only
+///   ...    (edx*164 + [0x1e400] + 0x7463)                 ; &pool[owner]
+///   60b79: 8b 93 8c 00 00 00      mov  0x8c(%ebx),%edx    ; src +140
+///   60b7f: 01 90 88 00 00 00      add  %edx,0x88(%eax)    ; owner +136 += it
+///   60b8b: 8b 9b 8c 00 00 00      mov  0x8c(%ebx),%ebx
+///   60b91: 01 9a bc 00 00 00      add  %ebx,0xbc(%edx)    ; world total  += it
+/// ```
+///
+/// No clamp, no signed saturation — the word WRAPS. The port used
+/// `saturating_add` throughout the census and published the wizard
+/// ceilings through `.min(i32::MAX)`, so every runaway accumulator
+/// froze at `2147483647` instead of carrying retail's wrapped word.
+///
+/// WITNESS mc1l48-nodeath pair 28313→28314, the `(10,40)` grave at
+/// slot 22 — the census's own documented runaway owner (nothing ever
+/// re-baselines a non-wizard `+144` tag): retail `+136` =
+/// −2146963936 (u32 2148003360, i.e. `i32::MAX + 519713`), the port
+/// published `i32::MAX`. `f136` is the pair's ONLY dirty lane.
+///
+/// This is the `+136`/`+188` twin of
+/// [`no_mc1_rival_mana_wrap_publish`], which already landed the same
+/// raw-32-bit-copy law on the `+140` purse mirror.
+pub(crate) fn no_mc1_mana_census_wrap() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_MANA_CENSUS_WRAP").is_some())
+}
+
+/// `MGC_NO_MC1_RIVAL_TOKEN_GATE_LIVE_PURSE=1` restores the pre-dig
+/// `RivalState::mana` MIRROR reads in the three MC1 rival class-12
+/// token gates. Retail has no separate rival purse: `sub_55DD0`
+/// (`CARPET.EXE 0x6E5C8`) reads the OWNER RECORD's own live `+140`
+/// word — `0x55E2F: 8b 81 8c 00 00 00` (`mov 0x8c(%ecx),%eax`) — and
+/// compares it SIGNED against the TOKEN's live `+136`
+/// (`0x55E35: 3b 82 88 00 00 00` / `7c 12` = `jl`). It also refuses
+/// outright when `+140 < 0` (`0x55DDA: 83 b9 8c 00 00 00 00` +
+/// `0f 8c 7a 00 00 00`), a leg that sits AHEAD of the mid-burst
+/// escape at `0x55E4F` and which the port lacked entirely.
+///
+/// The mirror is only re-synced at the owner's own dispatch, but
+/// combat writes `+140` DIRECTLY and MID-TICK (the Rebound deflection
+/// quarter `sub_52B30` :62884, the shield quarter `sub_46540` :55703),
+/// so a token dispatched after its owner's brain but before the tick
+/// ends saw a purse retail had already emptied. WITNESS mc1l49
+/// t=19558: rival 724 `(3,1)` holds a full-strength Shield burst
+/// (token slot 632 `(12,4)`, `+136 = 2000`); a deflection debits
+/// `60000 >> 2 = 15000` onto `724.+140`, leaving 1603. Retail reads
+/// 1603 < 2000 → refuse → `+48 = 1; --` → 0. The port read the stale
+/// mirror 16603 → admit → `mana 16603 − 15000 − 2000 = −397` →
+/// `clamp(0, …)` = 0 and `+48 = 250`.
+///
+/// ⭐ The port's own doc comment on `rival_token_gate` already said
+/// "the OWNER's purse" while the code read the mirror — round 115's
+/// law, hit again. Three call paths, per round 104: the gate itself,
+/// `rival_castle_token_tick`'s inlined twin, and
+/// `rival_heal_token_tick`'s extra afford leg (`sub_56270`'s
+/// `v1[35] >= *(a1+136)`). MC2 landed this same law already; see
+/// [`crate::mc2::cast::no_mc2_wiz_purse_is_entity`].
+pub(crate) fn no_mc1_rival_token_gate_live_purse() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_TOKEN_GATE_LIVE_PURSE").is_some())
+}
+
+/// `MGC_NO_MC1_CASTLE_BALL_STEPBACK_MOVES_BALL=1` restores the pre-dig
+/// behaviour where the Create-Castle ball's refused-scan step-back was
+/// computed into locals for `spawn_castle` only, with `z` seeded 0 and
+/// discarded. Retail's `sub_53B50_53E90` tripwire branch MOVES THE BALL
+/// ITSELF and seeds the step from the ball's live `+72/+76`:
+/// `CARPET.EXE 0x6C531` (`cmp BYTE [esp+4],0` / `74 42`) →
+/// `0x6C53D lea esi,[ebx+0x48]`, `0x6C540 a5` (x,y) **and
+/// `0x6C541 66 a5` (z)** → `yaw+0x400` (`0x6C553 add ah,4`,
+/// `0x6C556 and ah,7`), the LIVE pitch (`0x6C54A mov ax,[ebx+0x20]`)
+/// and live speed (`0x6C543 movsx eax,[ebx+0x7e]`) into
+/// `sub_41EC0_42200` (`0x6C564` → VA `0x41EC0`) → then
+/// **`0x6C571 53` = `push ebx`** into `0x6C572` → `sub_41C70_41FB0`
+/// (VA `0x41C70`, move + relink). The ctor runs AFTER that and reads
+/// the ball's own axis (`0x6C584 lea eax,[ebx+0x48]` → `0x6C588` →
+/// `sub_373F0_377B0`, VA `0x373F0`), so the castle is built at the
+/// ball's NEW position and the ball's final recorded x/y/z are the
+/// stepped-back ones. Decompile `reference/remc1/sub_main.cpp`
+/// :63598-611.
+///
+/// WITNESS mc1l48-nodeath t=473→474 slot 972 (yaw 527, pitch 31, speed
+/// 458): retail `(1388, 29804, 3466)` → `(1387, 29805, 3380)`; the port
+/// stopped at the FORWARD step `(1842, 29825, 3423)` and `3423 − 43 =
+/// 3380` — the pitch's vertical component applied once where retail
+/// applies it twice. ⚠ The ball is the HUMAN's (`id24 = 681`), alive
+/// since well before the head, so this is neither a mint nor a
+/// mover-arithmetic law: every steering lane, the speed ease, the life
+/// countdown and the `0x400` latch were already byte-exact. Gated on
+/// MC1 so the MC2 column is byte-identical by construction; the
+/// `castle_latch_bug` patch arms fork the displacement PREDICATE, not
+/// this mechanic.
+pub(crate) fn no_mc1_castle_ball_stepback_moves_ball() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var_os("MGC_NO_MC1_CASTLE_BALL_STEPBACK_MOVES_BALL").is_some()
+    })
+}
+
+/// `MGC_NO_MC1_ERUPTION_COUNTER_REREAD=1` restores the pre-dig
+/// behaviour where `eruption_tick` cached `+26` at function entry and
+/// used that one value for the blast gate, the death gate and the
+/// increment. `sub_25EC0` re-reads `+26` FROM MEMORY at all three
+/// points: `:28803` (`v13 = *(a1+26)`, CARPET.EXE `0x3E88A:
+/// 66 8b 7b 1a` = `mov 0x1a(%ebx),%di`, then `0x3E891 test %di,%di` /
+/// `0x3E894 75 77 jne 0x3E90D` — the blast is skipped straight to the
+/// death check), `:28825` (`0x3E90D: 66 83 7b 1a 7f` =
+/// `cmpw $0x7f,0x1a(%ebx)`) and `:28831` (`0x3E928: 66 ff 43 1a` =
+/// `incw 0x1a(%ebx)`, an in-memory `++`).
+///
+/// It matters because the eruption-start block's register kick
+/// `*(prev+26) = 250` (`0x3E7B6: 66 c7 42 1a fa 00`) is a BLIND write
+/// guarded only by `slot != 0` (`0x3E7B4: 76 06`). When the stale
+/// global `erupting` register happens to name the very pool slot just
+/// recycled into THIS new volcano driver, retail **self-kicks its own
+/// `+26` to 250** — and the re-reads then make it mint NO
+/// eruption-start blast (250 ≠ 0), reap-flag itself on its very first
+/// tick (250 ≥ 127), clear the `erupting` register it set two
+/// instructions earlier, and end the tick recording `+26 = 251`.
+///
+/// WITNESS mc1l49 t=29062: at t=29061 `erupting=968` with slot 968 a
+/// long-stale reap-flagged `(10,6)` (`act_life −2`); the pool recycles
+/// 968 into the new `(10,18)` driver and retail records
+/// `f26 0 → 251`, `flags 132100 → 1024`, `f30 0 → 1280`, popping ONE
+/// slot all tick (free stack 262 → 261, next-pop 168 → 169) for a
+/// `(10,13)` at 168. The port minted a spurious `(9,0)` blast at 168 —
+/// `sclass/smodel 255` is `new_event`'s default (`+66 = +67 = 0xFF`,
+/// :43879), i.e. exactly a fresh blast fireball, not a record missing
+/// its source — and pushed retail's `(10,13)` to 169. Because the
+/// spurious blast consumes a free-stack slot, the defect surfaces as
+/// an ENTITY-SET divergence.
+///
+/// ⚠ The register-block gate (:28778 / `0x3E779`) is deliberately left
+/// on the entry value: retail re-reads there too, but only the pure
+/// ground query `sub_11F50` runs between the `fire` decision and it,
+/// so the two are provably identical.
+pub(crate) fn no_mc1_eruption_counter_reread() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ERUPTION_COUNTER_REREAD").is_some())
+}
+
+/// `MGC_NO_MC1_SCATTER_JAR_OWNER_CLEAR=1` restores the pre-dig
+/// `+144 = 0` the port stamped on every spell jar a dying wizard
+/// scatters. **The write is INVENTED.** Retail's scatter loop is the
+/// `for (i = 0; i != 96; i += 4)` body of `sub_45C10_45F50`
+/// (:55520-49) and its ENTIRE set of writes to the scattered record is
+/// `+16 &= ~1` (:55534), `++(+70)` (:55535), the `sub_41C70_41FB0`
+/// move-relink (:55546) and `+12 = rand % 90 + 200` (:55549). Byte-
+/// verified in CARPET.EXE at the loop body `0x5E9B8..0x5EAE4`:
+/// `andb $0xfe,0x10(%ebp)` (`0x5EA22`), `incb 0x46(%ebp)` (`0x5EA26`),
+/// `call 0x5A468` (`0x5EA94`) and `mov %edx,0xc(%ebp)` (`0x5EABA`) —
+/// **there is no store to `0x90(%ebp)` anywhere in the loop**, and the
+/// only other stores are the wizext blue byte `0x394(%edx,%eax,1)` and
+/// the `+0x214 = -1` empty-handle arm. The owner tag therefore RIDES
+/// the scatter untouched.
+///
+/// It matters because a wizard's book can name a slot that is no
+/// longer his token (the port has no `+42` on `Ent`, and retail's own
+/// `+676` is a bare array index — see [`no_mc1_castle_token_index`] —
+/// so a recycled slot aliases). WITNESS mc1l49 t=39094: rival 594
+/// dies with `wizext+532` naming pool slot 26, which by then is the
+/// HUMAN's live `(10,39)` mana ball holding 7,000. Retail scatters it
+/// verbatim — `+70 41→42`, `actLife 300→242`, teleported to the
+/// corpse at (18912, 813) — and **keeps `+144 = 569`**; the port's
+/// clear dropped the ball out of the human's mana census, so
+/// `player.mana_max` read 1,711,909 against retail's 1,718,909 at
+/// t=39095 (exactly −7,000). Both arms of the fall handler carry the
+/// stray, the human's ([`crate::engine::world::World::player_land`])
+/// and the rival's (`mc1::rivals`' `rival_land`).
+pub(crate) fn no_mc1_scatter_jar_owner_clear() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SCATTER_JAR_OWNER_CLEAR").is_some())
+}
+
+/// `MGC_NO_MC1_PAYLOAD_CHILD_REAP_GATE=1` restores the pre-dig
+/// UNCONDITIONAL soft kill on a spell-payload detonation. Retail's
+/// `sub_52770` explode tail (:62757-72) is one guarded block:
+///
+/// ```c
+/// result = sub_373F0_377B0((axis_3d*)(a1 + 72), *(char*)(a1+68), *(char*)(a1+69));
+/// if ( result ) {
+///     sub_526C0_52A00(a1, v6, v22_21);
+///     …five child stamps…
+///     sub_41E80_421C0((Type_AE400_29795*)a1);   // flags |= 0x400
+/// }
+/// ```
+///
+/// — so a detonation the ALLOCATOR refuses does not reap the bolt: it
+/// stays airborne (parked on its victim) and retries the explode every
+/// tick until a slot exists. The port reaped unconditionally, which
+/// killed the bolt on the parking tick and, on a starved pool, moved
+/// the child's birth tick and slot.
+///
+/// WITNESS mc1l49 t=54341, slot 857, the human's `(9,4)` volcano lob:
+/// the pool is DRY (free 0 / recycle 0 at t=54340, 54341 and 54342 —
+/// zero births at 54342), the bolt parks on rival castle 940 at
+/// (0, 16384, 6048), and retail keeps `flags = 0x2006` through 54341
+/// AND 54342, raising `0x400` only at t=54343 — the first tick a slot
+/// frees, where the `(10,9)` hill is minted into slot 363. The port
+/// read `0x2406` from t=54341. Both mc1l49 heads t=54341 and t=54342
+/// are this one law. See [`crate::mc1::combat`]'s `proj_payload_tick`.
+///
+/// ⚠ An arm that attempts NO spawn still reaps: the duel dart's miss
+/// fork (`sub_530C0_53400` :63208-09) calls `sub_526C0(a1, 0, ..)` and
+/// `sub_41E80` with no `+68/+69` call at all, so `spell_payload`
+/// returns `true` there and the gate is a no-op on that path.
+pub(crate) fn no_mc1_payload_child_reap_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_PAYLOAD_CHILD_REAP_GATE").is_some())
 }
 
 /// (:64766-70) soft-free. Kept so one binary can be A/B'd.
@@ -1749,8 +2215,11 @@ impl Gen {
 /// tag (the original's entity+24). `player` marks requests the
 /// original issued against the player's own entity (full volume,
 /// center pan, and the gate for the player-only ids 4/14/17/29).
-/// See [`Gen::crt_rand`] — the phase is UNRECOVERABLE at import, so
-/// the stream is hash-silent OUTRIGHT (the ⚠⚠ `derive(Hash)` trap on
+/// See [`Gen::crt_rand`] — MC1's phase is RECOVERED (it is Watcom's
+/// own `_RWD_randnext = 1`, because MC1 never calls `srand()`), but
+/// MC2's is still open, and the stream stays hash-silent OUTRIGHT
+/// either way: a mid-level import cannot carry a count of draws the
+/// recording never sampled (the ⚠⚠ `derive(Hash)` trap on
 /// [`Gen::mc2_mobilize`]: `crt_rand: _` in `snap_write` is only the
 /// SAVE opt-out; a plain field here moved every golden in both games).
 #[derive(Debug, Clone, Copy, Default)]
@@ -1772,6 +2241,50 @@ impl std::hash::Hash for Mc2Pinned {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
+/// ⭐⭐⭐ WHERE THE OUT-OF-POOL HUMAN SITS IN HIS OWN TILE CHAIN.
+///
+/// Retail's carpet is an ordinary linked record: `sub_41CF0` (:52468)
+/// / `AddEventToMap_57D70` (EF:40315-27) HEAD-INSERT on tile entry and
+/// `sub_41C70` (:52442) relinks only ACROSS tiles, so a chain is
+/// ordered most-recently-entered FIRST and the carpet's rank is
+/// simply "who entered this tile after I did". `sub_11980` (:16988)
+/// returns the FIRST overlapping member, so that rank decides which
+/// victim a bolt eats.
+///
+/// The port carries the human OUT OF POOL, so he is spliced out of
+/// every chain and his rank has to be carried here: `next` is the
+/// slot that FOLLOWS him in `cell`'s chain (0 = he is the tail).
+/// Maintained by exactly three events — he enters a new tile (he
+/// becomes that chain's head, [`Gen::player_relink`]), his successor
+/// unlinks ([`Gen::unlink`] hands the seat on), and a record links
+/// into his cell (head insertion, so it lands AHEAD of him and `next`
+/// does not move).
+///
+/// Hash-silent OUTRIGHT, like [`CrtRand`] and [`Mc2Pinned`]: `Gen` is
+/// `#[derive(Hash)]` and a plain field would move every golden in both
+/// games for a lane that is pure bookkeeping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PlayerChain {
+    /// The tile whose chain `next` indexes; `usize::MAX` = unseeded,
+    /// which forces the first [`Gen::player_relink`] to take a head.
+    pub cell: usize,
+    /// The human's chain SUCCESSOR in `cell` — 0 = chain tail.
+    pub next: u16,
+}
+
+impl Default for PlayerChain {
+    fn default() -> Self {
+        Self {
+            cell: usize::MAX,
+            next: 0,
+        }
+    }
+}
+
+impl std::hash::Hash for PlayerChain {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
 /// [`Ent::lease2e`]'s hash opt-out — retail's `word_0x2E_46`, the
 /// class-5 charm/summon lease, given its own home so it stops
 /// sharing `f26` with `dword_0x10_16`. Hash-silent OUTRIGHT: `Ent`
@@ -1782,6 +2295,44 @@ pub(crate) struct Lease2e(pub i16);
 
 impl std::hash::Hash for Lease2e {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// [`Ent::raw48`]'s hash opt-out — retail's `+48` word kept for every
+/// class so the UNGUARDED owned-token readers (`sub_14E60`'s callers)
+/// can read it off a recycled slot. Hash-silent OUTRIGHT for the same
+/// reason [`Lease2e`] is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Raw48(pub u16);
+
+impl std::hash::Hash for Raw48 {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// A/B toggle for the RAW `+48` TOKEN LANE: set
+/// `MGC_NO_MC1_TOKEN_RAW48` to restore the pre-dig upgrade gate, which
+/// read `Ent::f26` — retail's `+26` on anything that is not a live
+/// class-12 manifestation — where `sub_14120` reads `+48`.
+pub(crate) fn no_mc1_token_raw48() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TOKEN_RAW48").is_some())
+}
+
+/// A/B toggle for **THE NATIVE HALF** of the raw `+48` token lane
+/// (wave 121, dig D13): set `MGC_NO_MC1_TOKEN_RAW48_NATIVE` to
+/// restore the import-only lane, where [`Gen::free_entity`] did not
+/// carry a dying manifestation's `+48` across the `f26` → `raw48`
+/// seam and the reader fell back to `f26` on a class-0 record.
+///
+/// ⭐ The distinction matters because the port has TWO homes for
+/// retail's one word and retail has none — `+48` is just a word in a
+/// 164-byte record. `sub_41E90` (`CARPET.EXE` 0x5A688) frees by
+/// clearing the class byte alone, and `NewEvent_372C0` (0x4FAB8)
+/// re-takes a slot with `memset(record, 0, 164)` at file 0x4FB5B, so
+/// the word survives a free and is zeroed by an allocation. This
+/// switch restores the pre-dig behaviour of the first half.
+pub(crate) fn no_mc1_token_raw48_native() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TOKEN_RAW48_NATIVE").is_some())
 }
 
 /// A/B toggle for the SUMMON-LEASE LANE SPLIT (dig 98-Q20): set
@@ -1822,6 +2373,18 @@ impl Ent {
         let v = self.lease().wrapping_add(d);
         self.set_lease(v);
     }
+}
+
+/// `MGC_SOUND_TRACE=1` prints every sound REQUEST the sim makes, with
+/// the `#[track_caller]` trigger site, the emitter's `(class, model)`
+/// and its flags word — the instrument for "is this trigger still
+/// firing?" questions. Sound is not a graded lane (it appears in
+/// neither `ObsMc1` nor `EntObsMc2`, and neither `replay` nor
+/// `verify-deltas` reads it), so a deleted trigger leaves the whole
+/// conformance corpus green: this trace is the only census there is.
+pub fn snd_trace_on() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_SOUND_TRACE").is_some())
 }
 
 #[derive(Debug, Clone, Copy, Hash)]
@@ -1910,6 +2473,7 @@ impl Gen {
             rival_wanted: [0; 8],
             player_invisible: false,
             player_rebound: false,
+            player_chain: PlayerChain::default(),
             kills: 0,
             shots: 0,
             hits: 0,
@@ -1967,8 +2531,23 @@ impl Gen {
 
     /// Emit a sound request from entity `i` (its position and slot
     /// become the request's position and instance tag).
+    #[track_caller]
     pub(crate) fn snd(&mut self, id: u8, i: usize) {
         let e = &self.ent[i];
+        if snd_trace_on() {
+            eprintln!(
+                "SNDREQ id={id} site={} emitter=({},{}) slot={i} flags={:#x}{}",
+                std::panic::Location::caller(),
+                e.class64,
+                e.model65,
+                e.flags,
+                if e.flags & 0x80 != 0 {
+                    " DROP:silent-emitter"
+                } else {
+                    ""
+                }
+            );
+        }
         self.sounds.push(SoundEvent {
             id,
             pos: (e.x, e.y, e.z),
@@ -1979,7 +2558,14 @@ impl Gen {
 
     /// Emit a player-entity sound request (the original's calls
     /// against the wizard's own entity — full volume, center pan).
+    #[track_caller]
     pub(crate) fn snd_player(&mut self, id: u8) {
+        if snd_trace_on() {
+            eprintln!(
+                "SNDREQ id={id} site={} emitter=PLAYER",
+                std::panic::Location::caller()
+            );
+        }
         self.sounds.push(SoundEvent {
             id,
             pos: (0, 0, 0),
@@ -2456,6 +3042,24 @@ impl Gen {
         }
     }
 
+    /// ⭐⭐⭐ HAS A MID-TICK SEIZURE BLANKED THE CLASS-3 ROSTER HEAD?
+    ///
+    /// [`Gen::new_event`]'s sacrifice arm nulls `var_u32_36462[0]`
+    /// (:43885-91) BEFORE it hands the victim out, so every later
+    /// walk of that roster in the same tick starts from a NULL head
+    /// and terminates immediately — not merely severed at the victim.
+    /// `cut` is `usize::MAX` outside a blank and can only be lowered
+    /// to `pos + 1 >= 1` by the severed-chain law, so `cut == 0` is
+    /// the blank and nothing else (an EMPTY roster still reads
+    /// `usize::MAX`).
+    ///
+    /// The reader that needed it is the class-11 trigger volume's
+    /// FIRE probe `sub_5A090_5A5A0` (:67632-48), whose whole body
+    /// lives inside `for (i = var_u32_36462[0]; i > pool; …)`.
+    pub(crate) fn wiz_roster_head_blanked(&self) -> bool {
+        self.wiz_chain.cut == 0 && !no_trigger_roster_blank()
+    }
+
     pub(crate) fn rebuild_recycle(&mut self, mask: u32) {
         self.mc2_recycle.stack = (1..self.ent.len() as u16)
             .rev()
@@ -2483,7 +3087,16 @@ impl Gen {
     /// the global `_RWD_randnext` stream. See the `crt_rand` field
     /// doc — TWO retail sim call sites, one per game, and both are
     /// the rival anti-rebound plan roll (MC1 :19507-08, MC2
-    /// EF:7212). Phase unrecoverable at import.
+    /// EF:7212).
+    ///
+    /// ⭐⭐ MC1's PHASE IS RECOVERED, AND IT IS THE DEFAULT: MC1 has
+    /// exactly one `rand()` call site and NO `srand()` anywhere, so
+    /// the stream is Watcom's `_RWD_randnext = 1` from process start
+    /// and the only thing that can put the port out of phase is
+    /// spending a draw retail does not. It was doing exactly that
+    /// (see `mc1::rivals::mc1_crt_draw_at_label49`); with the draw
+    /// site corrected, seed 1 reproduces retail's rolls across
+    /// mc1l49's whole take.
     pub(crate) fn watcom_rand(&mut self) -> u32 {
         self.crt_rand.0 = self.crt_rand.0.wrapping_mul(1103515245).wrapping_add(12345);
         (self.crt_rand.0 >> 16) & 0x7FFF
@@ -2541,12 +3154,34 @@ impl Gen {
         e.flags |= 4;
     }
 
+    /// The out-of-pool human's tile-entry HEAD INSERT — retail's own
+    /// `sub_41C70` (:52442) relink inside the carpet's walk handler
+    /// `sub_455D0`, which is why this is called from the carpet's walk
+    /// slot and nowhere else. Crossing into a tile makes him that
+    /// chain's head, so his successor becomes whatever the head was;
+    /// staying inside a tile leaves his seat untouched. See
+    /// [`PlayerChain`].
+    pub(crate) fn player_relink(&mut self, x: u16, y: u16) {
+        let t = tile((x >> 8) as u8, (y >> 8) as u8);
+        if self.player_chain.cell != t {
+            self.player_chain.cell = t;
+            self.player_chain.next = self.map_entity[t];
+        }
+    }
+
     /// sub_41DD0 (:52486).
     pub(crate) fn unlink(&mut self, i: usize) {
         if self.ent[i].flags & 4 == 0 {
             return;
         }
         let (next, prev) = (self.ent[i].next20, self.ent[i].prev22);
+        // The human's SEAT is a gap between two chain members, so the
+        // record holding it hands the seat on when it leaves — exactly
+        // what retail's doubly-linked splice does to the carpet's own
+        // `+20` (:52490-96) when its successor unlinks.
+        if self.player_chain.next == i as u16 {
+            self.player_chain.next = next;
+        }
         if prev != 0 {
             self.ent[prev as usize].next20 = next;
         } else {
@@ -2640,6 +3275,28 @@ impl Gen {
             if let Some(at) = self.mc2_recycle.stack.iter().position(|&s| s as usize == i) {
                 self.mc2_recycle.stack.swap_remove(at);
             }
+        }
+        // ⭐⭐⭐ **THE `+48` WORD SURVIVES THE FREE — SO THE PORT'S
+        // RAW SHADOW OF IT MUST TOO.** Retail's MC1 free
+        // (`sub_41E90`, `CARPET.EXE` file **0x5A688-0x5A6AE**:
+        // `call` the tile unlink, `movb $0x0,0x40(%ebx)`, then
+        // `inc` the free counter and `mov %ebx,0x251(%eax,%edx,4)`)
+        // clears the CLASS BYTE AND NOTHING ELSE, and every
+        // `wizext+676` reader resolves its slot RAW (`sub_14E60`,
+        // file 0x2D658 — no class, flags or liveness guard). The port
+        // homes retail's `+48` in `Ent::f26` while the record is a
+        // live class-12 manifestation, and in `Ent::raw48` otherwise;
+        // this is the seam between the two, so the live value has to
+        // cross it here or the freed token's burst is lost NATIVELY
+        // (under replay the retired `mc1_freed_token_burst` import
+        // seat used to hide the loss — the IMPORT-SEAT hazard, round
+        // 98; the seat was deleted once this carried the word).
+        // MC1 only: MC2's class 12 is a different record entirely.
+        if self.ent[i].class64 == 12
+            && !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2)
+            && !no_mc1_token_raw48_native()
+        {
+            self.ent[i].raw48 = Raw48(self.ent[i].f26 as u16);
         }
         self.ent[i].class64 = 0;
         self.free.push(i as u16);
@@ -2860,8 +3517,12 @@ impl Gen {
     /// floor is reached and no neighbor blocks conversion), then
     /// recompute the 1-cell neighborhood. `protect` mode aborts on
     /// building-protected cells and honors protection in the stencil.
-    /// Returns true only via the literal `(0,0)` clamp latch (dead in
-    /// practice; kept faithful).
+    /// Returns true on the protect abort, and — on ANY caller — via the
+    /// SATURATION LATCH: a clamp at 200 or 0 whose `ax`/`ay` are both
+    /// literally zero (:51634/51641). ⚠ That latch is NOT dead: an
+    /// effect whose disc reaches the map origin fires it every time it
+    /// digs that cell to the floor, and [`Gen::dig_disc`] must honour it
+    /// regardless of `protect` (mc1l49's craters, t=33302 onward).
     fn dig_cell(&mut self, ax: i16, ay: i16, delta: i16, protect: bool) -> bool {
         let t = tile(ax as u8, ay as u8);
         let mut saturated = false;
@@ -2976,17 +3637,54 @@ impl Gen {
     /// the event's radius) around the event, height delta `delta`.
     fn dig_disc(&mut self, i: usize, lo: i32, hi: i32, delta: i16, protect: bool) -> bool {
         let e = self.ent[i];
-        let cx = ((e.x as u32 + 128) >> 8) as i32;
-        let cy = ((e.y as u32 + 128) >> 8) as i32;
+        let legacy = no_mc1_dig_abort_latch();
+        // ⭐ THE CENTRE AND THE RING DELTAS ARE SIGNED. `sub_40D30`
+        // reads the event's position with `movsx` (CARPET.EXE
+        // `0x59536`/`0x5953a`: `movsx esi, WORD [edx+0x48]` … `add
+        // 0x80` / `sar 8` — an ARITHMETIC shift), and the ring
+        // iterator `sub_114B0` sign-extends its byte deltas
+        // (`0x29ccc`/`0x29cd8`: `movsx ebx, BYTE PTR [edx]`). The tile
+        // INDEX does not care — it takes the low byte either way — but
+        // `sub_40A10`'s origin latch compares the FULL i16 sum, so an
+        // unsigned widen hides the latch for every event on the wrap
+        // seam. WITNESS mc1l49 t=43541 slot 996: `x 317, y 65295` is
+        // centre (1, −1) to retail and (1, 255) to the old port, and
+        // ring 2's `(−1, +1)` lands the latch on (0, 0) only in the
+        // signed reading.
+        let (cx, cy) = if legacy {
+            (
+                ((e.x as u32 + 128) >> 8) as i32,
+                ((e.y as u32 + 128) >> 8) as i32,
+            )
+        } else {
+            (
+                (e.x as i16 as i32 + 128) >> 8,
+                (e.y as i16 as i32 + 128) >> 8,
+            )
+        };
         let hi = hi.min((e.f80 >> 8) as i32);
         for (dx, dy) in self.ring_cells(lo, hi) {
-            if self.dig_cell(
-                (cx + dx as i32) as i16,
-                (cy + dy as i32) as i16,
-                delta,
-                protect,
-            ) && protect
-            {
+            let (ax, ay) = if legacy {
+                ((cx + dx as i32) as i16, (cy + dy as i32) as i16)
+            } else {
+                (
+                    (cx + dx as i8 as i32) as i16,
+                    (cy + dy as i8 as i32) as i16,
+                )
+            };
+            // ⭐ THE ABORT IS THE CELL'S RETURN, FULL STOP. Retail's
+            // `sub_40D30_41070` (:51711-16) reads `sub_40A10_40D50`'s
+            // byte and returns 1 on ANY nonzero — the `a5`/protect
+            // argument is only forwarded, never tested here (CARPET.EXE
+            // `0x595a9`: `test al,al / je <next cell>`). The callee has
+            // TWO truthy paths: the protect abort (`a4 && angle < 0`)
+            // and the SATURATION LATCH — a clamp at 200 or 0 on the
+            // literal origin cell — and the port's `&& protect` threw
+            // the second one away for the two non-protect diggers
+            // ([`Gen::tick_hill`], [`Gen::tick_ridge_head`]), which is
+            // exactly where it fires. See
+            // [`no_mc1_dig_abort_latch`] for the witness.
+            if self.dig_cell(ax, ay, delta, protect) && (protect || !legacy) {
                 return true;
             }
         }
@@ -4214,7 +4912,7 @@ impl Gen {
         let (mut rx, mut ry) = (0i32, 0i32);
         let mut c = def.offset as usize;
         while rows != 0 {
-            let ctl = self.assets.build_dat[c] as i8;
+            let ctl = self.dmg(c, cx, cy) as i8;
             c += 1;
             if ctl == 0 {
                 y = y.wrapping_add(1);
@@ -4230,7 +4928,7 @@ impl Gen {
                 continue;
             }
             for _ in 0..ctl {
-                let b = self.assets.build_dat[c];
+                let b = self.dmg(c, cx, cy);
                 c += 1;
                 let goal = if b < 0xF {
                     if b > 6 { Some(target) } else { None }
@@ -4340,6 +5038,39 @@ impl Gen {
         }
     }
 
+    /// ⚠ D14 PROBE (remove by inverse edit). `MGC_BUILD_DAT_DAMAGE=
+    /// "cx,cy:off=hex,off=hex"` substitutes bytes for the BUILD?-0.DAT
+    /// image, but ONLY for a paint centred on the named cell. This
+    /// reconstructs retail's *damaged in-memory* build table for one
+    /// castle instance without corrupting every other build in the
+    /// level, so the damage can be attributed on the take.
+    fn dmg(&self, c: usize, cx: u8, cy: u8) -> u8 {
+        static P: std::sync::OnceLock<Option<((u8, u8), Vec<(usize, u8)>)>> =
+            std::sync::OnceLock::new();
+        let p = P.get_or_init(|| {
+            let v = std::env::var("MGC_BUILD_DAT_DAMAGE").ok()?;
+            let (site, rest) = v.split_once(':')?;
+            let (sx, sy) = site.split_once(',')?;
+            let mut out = Vec::new();
+            for kv in rest.split(',').filter(|s| !s.is_empty()) {
+                let (a, b) = kv.split_once('=')?;
+                out.push((
+                    a.trim().parse::<usize>().ok()?,
+                    u8::from_str_radix(b.trim().trim_start_matches("0x"), 16).ok()?,
+                ));
+            }
+            Some(((sx.parse().ok()?, sy.parse().ok()?), out))
+        });
+        if let Some(((sx, sy), list)) = p
+            && *sx == cx
+            && *sy == cy
+            && let Some(&(_, v)) = list.iter().find(|(o, _)| *o == c)
+        {
+            return v;
+        }
+        self.assets.build_dat[c]
+    }
+
     /// One paint pass over build-table row `bt` (the shared tile-type
     /// decode of sub_27D30/sub_285C0 via sub_33800).
     fn paint_build_row(&mut self, bt: usize, cx: u8, cy: u8) {
@@ -4351,7 +5082,7 @@ impl Gen {
         let (mut x, mut y) = (x0, y0);
         let mut c = def.offset as usize;
         while rows != 0 {
-            let ctl = self.assets.build_dat[c] as i8;
+            let ctl = self.dmg(c, cx, cy) as i8;
             c += 1;
             if ctl == 0 {
                 y = y.wrapping_add(1);
@@ -4364,7 +5095,7 @@ impl Gen {
                 continue;
             }
             for _ in 0..ctl {
-                let b = self.assets.build_dat[c];
+                let b = self.dmg(c, cx, cy);
                 c += 1;
                 let t = tile(x, y);
                 match b >> 4 {
@@ -4605,8 +5336,8 @@ impl Gen {
     /// counter = -10; -10..-2 idle; -1 restores 0x08→0x80
     /// (:30363-85). Finish (counter 0, :30419-27): castle sub-state
     /// 2, castle site z = 32*current, perimeter smooth depth 3,
-    /// despawn. (The original also aborts to finish when castle +50
-    /// [rebuild-pending] goes nonzero — field unported, always 0.)
+    /// despawn — which is ALSO where a shaking castle sends it, see
+    /// the `castle_shaking` gate below (:30333).
     fn tick_castle_leveler(&mut self, i: usize) {
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as u8;
@@ -4635,7 +5366,22 @@ impl Gen {
             return;
         }
         let counter = self.ent[i].f26;
-        if counter != 0 {
+        // :30333 — the work body's REAL predicate is
+        // `!castle[+42]->+50 && +26`, and its ELSE arm is the finish.
+        // A blast that shakes the owner castle (`+50 = 30`,
+        // sub_127E0 :17523) therefore ABORTS the levelling where it
+        // stands: the terrain keeps whatever height the translation
+        // had reached and the castle is handed straight to sub-state
+        // 2. Retail follows its own `+42` link; we re-derive the
+        // castle by site, exactly as the m42 painter's twin guard
+        // (:30520) already does — the two agree wherever a live
+        // castle stands on its own site (mc1l49 t=14822: the leveler's
+        // `+42` is 749 and `castle_at_site` finds 749).
+        let castle_shaking = !mc1_no_leveler_shake_gate()
+            && self
+                .castle_at_site(e.x, e.y)
+                .is_some_and(|c| self.ent[c].f50 != 0);
+        if counter != 0 && !castle_shaking {
             let step = (self.ent[i].f44 as i32 - self.ent[i].f28 as i16 as i32) / counter as i32;
             self.ent[i].f28 = (self.ent[i].f28 as i16 as i32 + step) as i16 as u16;
             let add = |g: &mut Self, unstamp: bool| {
@@ -5633,9 +6379,48 @@ impl Gen {
         // (mc2::castle, actions 4/5/6); the `f59` sub-state machine
         // below is MC1's ACTION-4 body. No ground refresh here —
         // sub_470E0 does none.
+        //
+        // ⭐⭐⭐ AND THE LEVELER IS GATED ON THE FREE STACK. `sub_470E0`
+        // opens `result = sub_37710_37AD0(); if (result) { …teardown… }
+        // else { *(BYTE *)(a1 + 70) = 4; }` (:56142-56156), and
+        // `sub_37710_37AD0` is `return *(_DWORD *)(base + 40) + 1;`
+        // (:44061-64) — the FREE-STACK DEPTH (its `+40` is the top
+        // index, −1 when empty; the siblings at :44586 / :45028 read
+        // the same call as `if (… < 16) return 0;` right before
+        // `NewEvent_372C0`). So on an EXHAUSTED POOL retail runs NO
+        // teardown at all: no rung decrement, no ladder reset
+        // (`sub_47C60_47FA0`), no ejector, no fleet re-quota — it only
+        // parks `+70` back to 4, and the settled handler's still-fatal
+        // life parks it straight back to 6. A besieged castle in a
+        // starved world therefore STANDS AT ITS OLD LEVEL WITH ITS
+        // NEGATIVE `act_life` INTACT, absorbing more overkill every
+        // hit, for as long as the pool stays full.
+        //
+        // mc1l48 slot 916 is the exemplar (the port's own pair lane):
+        // t=11609 `f26 2 / max_life 40000 / act_life 3200 / +70 4`,
+        // free depth 475; t=11610 the fatal hit lands `act_life −2000`
+        // and `+70 6`, depth 322; t=11612 depth **0** and the castle is
+        // STILL `f26 2 / max_life 40000 / act_life −2000` — retail's
+        // leveler ran and did nothing. The ungated port tore it down in
+        // the very same pair: `f26 1`, `max_life` `CASTLE_HP[1]` 20000,
+        // `act_life` 20000 − 2000 = 18000, `+136` `CASTLE_CAP[1]`
+        // 10000, and the owner's Create-Castle token (12,16) re-priced
+        // 20000/198 → 10000/99. ⭐ That is the whole "retail runs deeply
+        // negative while the port sits at full life a tier below"
+        // family: the port's ARITHMETIC is already retail's
+        // (`sub_47BD0_47F10`'s `act_life = a3 − min(|overkill|, a3/2)`
+        // is what makes `port_life == port_max_life − |retail_life|`
+        // hold, the a3/2 clamp included) — it is the GATE that was
+        // missing, so every skipped teardown drops the port one more
+        // rung below retail.
+        //
+        // Kill switch `MGC_NO_MC1_LEVELER_POOL_GATE=1` restores the
+        // ungated downgrade.
         if self.ent[i].tick70 == 6 {
             self.ent[i].tick70 = 4;
-            self.castle_downgrade(i);
+            if !self.free.is_empty() || mc1_no_leveler_pool_gate() {
+                self.castle_downgrade(i);
+            }
             return;
         }
         // ⭐ SETTLED — `+70 = 4`, its OWN handler (sub_46DB0 :55978),
@@ -5667,12 +6452,22 @@ impl Gen {
             // the m42 painter, and the capacity ladder (sub_47C60 →
             // sub_47DD0 :56617).
             0 => {
-                // The commit consumes the upgrade request (:56475) —
-                // without the clear, the settled tick's flag check
-                // re-launches the level-up forever.
-                self.ent[i].flags &= !0x40;
+                // ⭐ THE REQUEST BIT SURVIVES A FULL POOL. The clear
+                // is not the entry to sub-state 0 — retail spends it
+                // on exactly two paths: here on the space REJECT
+                // (:56070 `+16 = v2 & 0xBF`, alongside `+48 = 2`) and
+                // inside `sub_47960_47CA0`'s painter guard (:56475).
+                // Clearing it up front made a pool-full tick eat the
+                // request and drop the castle back to `established`
+                // with nothing done. See
+                // [`no_mc1_castle_upgrade_latch`] for the witness.
+                if no_mc1_castle_upgrade_latch() {
+                    self.ent[i].flags &= !0x40;
+                }
                 self.castle_upgrade_preclear(i);
                 if self.ent[i].f26 > 0 && !self.castle_upgrade_space_ok(i) {
+                    // :56070 — the reject spends the request too.
+                    self.ent[i].flags &= !0x40;
                     self.ent[i].f59 = 2;
                     return;
                 }
@@ -5706,6 +6501,11 @@ impl Gen {
                 let Some(p) = self.spawn_creator(42, x, y, site_z) else {
                     return;
                 };
+                // :56475 — the commit consumes the upgrade request,
+                // INSIDE the painter guard. Without the clear the
+                // settled tick's flag check re-launches the level-up
+                // forever.
+                self.ent[i].flags &= !0x40;
                 // The commit binds the owner's wizext+50 (:56484) —
                 // inside the painter-spawn guard, like everything
                 // else in the commit.
@@ -6550,6 +7350,20 @@ impl Gen {
     /// (:30879-81); the castle demolish path's zeroed fake event
     /// falls back to z>>5.
     pub(crate) fn tick_building_collapse(&mut self, i: usize) {
+        // `MGC_COLLAPSE_PROBE=<t0>:<t1>` — THE DEMOLITION LEDGER. Retail
+        // stages the castle-level-down "fake collapse" in POOL SLOT 0
+        // (:56515-24) and `sub_28FE0` spends that record's own `+4`
+        // stream, two draws per knocked wall cell. The recording carries
+        // slot 0's `+4` verbatim, so `LCG-distance(rand@t-1, rand@t)` is
+        // retail's EXACT draw count for the tick — the only oracle that
+        // grades this walk. Prints the port's count beside the walk's
+        // geometry; compare it against the recording with the same LCG.
+        let probe = std::env::var("MGC_COLLAPSE_PROBE").ok().and_then(|v| {
+            let (a, b) = v.split_once(':')?;
+            let t = crate::DEBUG_TICK.load(std::sync::atomic::Ordering::Relaxed);
+            (t >= a.parse::<u64>().ok()? && t <= b.parse::<u64>().ok()?).then_some(t)
+        });
+        let probe_seed = self.ent[i].rand;
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as u8;
         let cy = ((e.y as u32 + 128) >> 8) as u8;
@@ -6570,7 +7384,7 @@ impl Gen {
         // Stream position (the original's v2) — control bytes count.
         let mut pos = 0u32;
         while rows != 0 {
-            let ctl = self.assets.build_dat[c] as i8;
+            let ctl = self.dmg(c, cx, cy) as i8;
             c += 1;
             pos += 1;
             if ctl == 0 {
@@ -6584,7 +7398,7 @@ impl Gen {
                 continue;
             }
             for _ in 0..ctl {
-                let b = self.assets.build_dat[c];
+                let b = self.dmg(c, cx, cy);
                 c += 1;
                 pos += 1;
                 if b != 0 {
@@ -6678,6 +7492,21 @@ impl Gen {
                     );
                 }
             }
+        }
+        if let Some(t) = probe {
+            let end = self.ent[i].rand;
+            let mut n = 0u32;
+            let mut r = probe_seed;
+            while r != end && n < 100_000 {
+                r = r.wrapping_mul(9377).wrapping_add(9439);
+                n += 1;
+            }
+            eprintln!(
+                "[collapse] t={t} slot={i} row={} x0={x0} y0={y0} w={w} h={h} \
+                 rand {probe_seed} -> {} draws={n}",
+                e.f71,
+                self.ent[i].rand
+            );
         }
         self.ent[i].flags |= 0x400;
     }
@@ -6961,6 +7790,47 @@ impl Gen {
     /// {5, 6} plain and (8,0) smoothing pins {8, 9} plain, so the one
     /// byte both skips share is {7}. Blast radius is exactly the two
     /// row-0 cells x=6 and x=7.
+    /// {119} came from mc1l49 t=22193 — NOT a collapse, but a castle
+    /// leveler's perimeter epilogue (`smooth_perimeter` cx=128 cy=0
+    /// half_h=half_w=10 thick=3), whose left column strip x=115..118
+    /// walks row 0 first. Retail smooths (115,0) 136->134, (116,0)
+    /// 130->127 and (117,0) 120->117 (each the exact 3x3 average) and
+    /// then leaves (118,0) at 103 where the average is 975/9 = 108 —
+    /// a skip, not a coincidence. (115,0)/(116,0)/(117,0) smoothing
+    /// pins {115, 116, 117, 118} plain, so {119} is forced. Blast
+    /// radius is the two row-0 cells x=118 and x=119.
+    ///
+    /// {47, 55, 76, 85} came from mc1l49's t=17478 horizon (round 119,
+    /// dig w2) — a `(5,2)slot138:z` head that is a TERRAIN break, not
+    /// an entity one. The bee 138 rides its behavior row's altitude
+    /// floor (`row 14 v_12 = 51`), so its z IS `ground_z(x,y) + 51`;
+    /// at t=16972 a castle leveler's perimeter epilogue
+    /// (`smooth_perimeter` cx=64 cy=0 half_w=17 thick=3) walks row 0 at
+    /// x=44..47 and x=81..84, and the port smoothed (47,0) 124 -> 123
+    /// where retail held 124. Three units of height byte = 3 engine
+    /// units of `interp_plane`, and 506 ticks later the bee's floor
+    /// reads 3992 against retail's 3995. The same tick smooths
+    /// (81,0)/(82,0)/(83,0) exactly as retail does and then skips
+    /// (84,0) where the average is 972/8 = 121: (83,0) smoothing pins
+    /// {83, 84} plain, so {85} is forced. mc1l49 t=15427 does the same
+    /// for {55} ((53,0) smooths -> {53, 54} plain, (54,0) skips) and
+    /// for {76} ((74,0) smooths -> {74, 75} plain, (75,0) skips).
+    ///
+    /// {47} is forced by a SECOND take: mc1l37 t=9561, an unrelated
+    /// leveler epilogue, smooths (44,0) 163 -> 161 and (45,0) 163 ->
+    /// 160 bit-exactly with retail — pinning {44, 45, 46} plain — and
+    /// then skips (46,0), which reads {46, 47}. mc1l49's own witness
+    /// only narrows it to {47, 48}; the intersection is {47}. That
+    /// take independently re-derives {55} ((54,0) skips at t=2740,
+    /// 5730, 9470, 12604…), {76} ((75,0)/(76,0) skip at t=2740, 5802,
+    /// 9470…) and {85} ((84,0) skips at t=9561, 11504, 12816, 14799)
+    /// on terrain with no shared history — four bytes, two takes, no
+    /// contradiction.
+    ///
+    /// ⏭ OPEN: mc1l37 t=12604 also skips (48,0) after smoothing (50,0)
+    /// exactly, which forces a building byte in {48, 49} that no
+    /// witness yet separates. It cannot affect mc1l49 (whose smoother
+    /// never visits (48,0)/(49,0)) and is left unfit.
     ///
     /// The 257 bytes retail's sub_360C0 quad gate reads BELOW the
     /// type plane for row-0 cells (addresses CC0DF..CC1DF — sound-
@@ -6977,6 +7847,11 @@ impl Gen {
         s[63] = 22;
         s[64] = 22;
         s[71] = 22;
+        s[119] = 22;
+        s[47] = 22;
+        s[55] = 22;
+        s[76] = 22;
+        s[85] = 22;
         s
     };
 
@@ -6989,6 +7864,16 @@ impl Gen {
         // negative index resolves through the below-plane shim.
         let read = |idx: i64| -> u8 {
             if idx < 0 {
+                // `MGC_NO_MC1_ROW0_SHIM_119=1` — see
+                // [`mc1_no_row0_shim_119`].
+                if idx == -138 && mc1_no_row0_shim_119() {
+                    return 0;
+                }
+                if matches!(idx + 257, x if x == 47 || x == 55 || x == 76 || x == 85)
+                    && mc1_no_row0_shim_47_55_76_85()
+                {
+                    return 0;
+                }
                 Self::OOB_TYPE_SHIM[(idx + 257) as usize]
             } else {
                 self.t.tile_type[idx as usize]
@@ -7078,6 +7963,10 @@ impl Snap for Ent {
             // used to resume with a zero lease (dig 98-Q20 parked
             // the bump; the v19 wave spent it).
             lease2e,
+            // The raw `+48` shadow is an IMPORT-ONLY lane (the native
+            // path never writes it), so it stays off the wire and the
+            // snapshot version does not move.
+            raw48: _,
             f28,
             f30,
             f32,
@@ -7201,6 +8090,7 @@ impl Snap for Ent {
             f144: r.get()?,
             f26: r.get()?,
             lease2e: Lease2e(r.get()?),
+            raw48: Raw48(0),
             f28: r.get()?,
             f30: r.get()?,
             f32: r.get()?,
@@ -7455,6 +8345,14 @@ impl Gen {
             rival_wanted,
             player_invisible,
             player_rebound,
+            // Bookkeeping the SAVE does not carry, on the
+            // `player_deflect_debit` precedent: `cell` restores as
+            // `usize::MAX`, so the first mover tick after a restore
+            // re-heads the human in his own cell (the right answer
+            // the moment he arrives there, and self-healing on his
+            // next tile crossing). Every conformance import seeds it
+            // outright from the recorded carpet's own `next20`.
+            player_chain: _,
             kills,
             shots,
             hits,
@@ -8106,6 +9004,145 @@ mod tests {
         g.free.push(spares[2] as u16);
         g.castle_tick(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[i].f59, 1, "freed slot: the repaint painter wait");
+    }
+
+    /// **A SHAKING CASTLE ABORTS ITS GROUND LEVELER OUTRIGHT.**
+    /// `sub_28200` (:30333) opens its work body on
+    /// `!castle[+42]->+50 && +26`, and the ELSE arm is the FINISH —
+    /// so a blast that arms the owner castle's damage-response
+    /// countdown (`+50 = 30`, `sub_127E0` :17523) does not pause the
+    /// translation, it ENDS it: the terrain keeps the height the
+    /// translation had reached, the castle is handed straight to
+    /// sub-state 2 and the worker despawns with its counter intact.
+    /// The m42 painter's twin guard (:30520) is only a per-tick
+    /// suspend — the asymmetry is retail's, not a transcription slip.
+    /// Witness: mc1l49 t=14822, leveler slot 929 (`+26` 10, `+42`
+    /// 749), castle 749 `+50 = 30` — retail's `flags` 1026, the
+    /// port's 2.
+    #[test]
+    fn a_shaking_castle_aborts_its_ground_leveler() {
+        // (leveler f26, leveler flags, castle f59) after ONE work tick.
+        let run = |shake: i16| -> (i16, u32, u8) {
+            let mut g = Gen::new(
+                flat_land(8),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                VerbSet::MC1,
+            );
+            let (x, y) = (0x8000u16, 0x8000u16);
+            let c = g.new_event().unwrap();
+            {
+                let e = &mut g.ent[c];
+                e.class64 = 3;
+                e.model65 = 2;
+                e.x = x;
+                e.y = y;
+                e.tick70 = 5;
+                e.f59 = 6; // waiting on the leveler
+            }
+            // A leveler whose current rung sits well above the ground
+            // so the step is unmistakably nonzero.
+            let l = g.spawn_creator(41, x, y, 32 * 40).unwrap();
+            g.ent[l].f71 = 1;
+            g.tick(l, None); // the init arm: +26 = 10, +48 = z>>5
+            assert_eq!(g.ent[l].f26, 10, "init armed the counter");
+            assert_eq!(g.ent[l].f28, 40, "init took the current rung");
+            g.ent[c].f50 = shake;
+            g.tick(l, None); // the work tick under test
+            (g.ent[l].f26, g.ent[l].flags, g.ent[c].f59)
+        };
+
+        let (f26, flags, sub) = run(0);
+        assert_eq!(f26, 9, "a quiet castle: the leveler steps");
+        assert_eq!(flags & 0x400, 0, "…and lives");
+        assert_eq!(sub, 6, "…and the castle stays in its wait state");
+
+        let (f26, flags, sub) = run(30);
+        assert_eq!(f26, 10, "a shaking castle: the counter never steps");
+        assert_eq!(flags & 0x400, 0x400, "…the leveler FINISHES and dies");
+        assert_eq!(sub, 2, "…handing the castle to sub-state 2");
+    }
+
+    /// ⭐⭐⭐ **A STARVED POOL MAKES THE MC1 CASTLE LEVELER DO
+    /// NOTHING AT ALL.** `sub_470E0` (:56142-56) opens the whole
+    /// action-6 teardown on `sub_37710_37AD0()`, which is
+    /// `return *(_DWORD *)(base + 40) + 1;` (:44061-64) — the
+    /// FREE-STACK DEPTH, not a spawn. So on an exhausted pool retail
+    /// runs NO teardown: no rung decrement, no ladder reset
+    /// (`sub_47C60_47FA0`), no ejector — it only parks `+70` back to
+    /// 4, and the settled handler's still-fatal life parks it
+    /// straight back to 6. A besieged castle in a starved world
+    /// therefore STANDS at its old level with its NEGATIVE
+    /// `act_life` intact, absorbing more overkill every hit.
+    /// Witness: mc1l48 slot 916 — t=11610 the fatal hit lands
+    /// (`act_life −2000`, `+70 6`), and at t=11612 with free depth
+    /// **0** the castle is still `f26 2 / max_life 40000 /
+    /// act_life −2000`. The ungated port tore it down in the very
+    /// same pair (`f26 1`, max 20000, life 20000 − 2000 = 18000).
+    /// Kill switch: `MGC_NO_MC1_LEVELER_POOL_GATE=1`.
+    #[test]
+    fn a_starved_pool_makes_the_castle_leveler_do_nothing_at_all() {
+        // (f26, max_life, act_life, f136, tick70) after ONE action-6
+        // dispatch on a castle the fatal hit already parked at +70=6.
+        let run = |starve: bool| -> (i16, u32, i32, i32, u8) {
+            let mut g = Gen::new(
+                flat_land(8),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                VerbSet::MC1,
+            );
+            let (x, y) = (0x8000u16, 0x8000u16);
+            let i = g.new_event().unwrap();
+            let site_z = g.ground_z(x, y) as i16;
+            {
+                let e = &mut g.ent[i];
+                e.class64 = 3;
+                e.model65 = 2;
+                e.x = x;
+                e.y = y;
+                e.z = site_z;
+                e.site_z = site_z;
+                e.f26 = 2; // a level-2 tower…
+                e.max_life = Gen::CASTLE_HP[2];
+                e.act_life = -2000; // …one tick into overkill
+                e.f136 = Gen::CASTLE_CAP[2];
+                e.tick70 = 6; // the LEVELER, parked by the fatal hit
+            }
+            if starve {
+                // Free depth 0 — mc1l48's t=11612 exactly.
+                while g.new_event().is_some() {}
+                assert!(g.free.is_empty(), "the pool really is exhausted");
+            }
+            g.castle_tick(i, crate::patches::WorldPatches::RETAIL);
+            let e = &g.ent[i];
+            (e.f26, e.max_life, e.act_life, e.f136, e.tick70)
+        };
+
+        // The starved arm: the leveler is a no-op but for the park.
+        let (f26, max_life, act_life, cap, tick70) = run(true);
+        assert_eq!(f26, 2, "a starved pool: the rung never steps down");
+        assert_eq!(
+            max_life,
+            Gen::CASTLE_HP[2],
+            "…no ladder reset of the HP row"
+        );
+        assert_eq!(act_life, -2000, "…the negative life stands, intact");
+        assert_eq!(cap, Gen::CASTLE_CAP[2], "…and the capacity rung with it");
+        assert_eq!(tick70, 4, "the ONLY effect: +70 parks back to settled");
+
+        // The same setup with slots to spare: the teardown runs.
+        let (f26, max_life, act_life, cap, tick70) = run(false);
+        assert_eq!(f26, 1, "a live pool: the castle drops a rung");
+        assert_eq!(max_life, Gen::CASTLE_HP[1], "…the HP ladder re-derives");
+        assert_eq!(
+            act_life,
+            Gen::CASTLE_HP[1] as i32 - 2000,
+            "…the overkill is re-deducted from the new max"
+        );
+        assert_eq!(cap, Gen::CASTLE_CAP[1], "…and the capacity rung follows");
+        assert_eq!(tick70, 4, "the park is unconditional either way");
     }
 
     /// **THE BLAST SHAKE COUNTS DOWN TO ONE BEFORE THE REPAINT.**
@@ -8936,6 +9973,62 @@ mod tests {
         );
     }
 
+    /// Round 119 (dig w2, the mc1l49 t=17478 `(5,2)slot138:z` head):
+    /// four more building-classed shim bytes — {47, 55, 76, 85} — each
+    /// forced by a SKIP whose lower byte an adjacent SMOOTH had already
+    /// pinned plain, and each corroborated on a second take. See
+    /// [`Gen::OOB_TYPE_SHIM`].
+    ///
+    /// A row-0 cell (x,0) reads shim `x` and `x + 1`, so byte b blocks
+    /// cells (b-1,0) and (b,0) and nothing else. The test asserts both
+    /// halves: the blocked cells must NOT smooth, and the neighbours
+    /// that pinned the byte's partner plain must still smooth.
+    #[test]
+    fn the_row0_shim_gates_bytes_47_55_76_and_85() {
+        // ONE WORLD PER CELL: the probe cells are three apart in x and
+        // the 3x3 windows overlap, so a shared world would let one
+        // probe's write feed the next one's average.
+        let probe = |x: u8| {
+            let mut g = Gen::new(
+                flat_land(100),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                crate::verbs::VerbSet::MC1,
+            );
+            // Eight cells at 100 and (x,1) at 118, so a smooth writes
+            // (8*100 + 118)/9 = 102 and a skip leaves 100.
+            g.t.height[tile(x, 1)] = 118;
+            g.smooth_cell(tile(x, 0));
+            g.t.height[tile(x, 0)]
+        };
+        // Blocked by shim 47 / 55 / 76 / 85 (the cell BELOW each byte
+        // and the cell AT it).
+        for (x, byte) in [
+            (46u8, 47),
+            (47, 47),
+            (54, 55),
+            (55, 55),
+            (75, 76),
+            (76, 76),
+            (84, 85),
+            (85, 85),
+        ] {
+            assert_eq!(probe(x), 100, "shim byte {byte} must gate ({x},0) off");
+        }
+        // The smooths that FORCED those bytes: mc1l49 t=16972 (83,0),
+        // mc1l37 t=9561 (44,0)/(45,0), t=15427-of-mc1l49 (53,0)/(74,0).
+        // Each pins its own pair {x, x+1} plain, so each must still
+        // take the 3x3 average.
+        for x in [44u8, 45, 53, 74, 83] {
+            assert_eq!(
+                probe(x),
+                102,
+                "({x},0) pins its shim pair plain and must smooth"
+            );
+        }
+    }
+
     /// Shim byte 7, the entry mc1hwl0's THIRD collapse pinned
     /// (t=27767, rival castle 860 at (0,0) knocked level 5 → 4; the
     /// un-stamp rect straddles the x wrap, x 241..=14). Retail's
@@ -8990,6 +10083,68 @@ mod tests {
             g.t.height[tile(5, 0)],
             102,
             "shim bytes 5 and 6 are plain: (5,0) smooths"
+        );
+    }
+
+    /// {119} is the shim entry mc1l49 t=22193 pins (VA CC156, inside
+    /// the weak `dword_CC154`). A castle leveler's perimeter epilogue
+    /// (`smooth_perimeter` cx=128 cy=0 half_h=half_w=10 thick=3) walks
+    /// its left column strip x=115..118 across row 0 first: retail
+    /// smooths (115,0) 136->134, (116,0) 130->127 and (117,0) 120->117
+    /// — each the exact 3x3 average — and then leaves (118,0) at 103
+    /// where the average is 975/9 = 108. (115,0)/(116,0)/(117,0)
+    /// smoothing pins {115, 116, 117, 118} plain, so {119} is forced,
+    /// and a cell (x, 0) reads shim `x` and `x + 1`, so the entry is
+    /// visible ONLY at x = 118 and x = 119.
+    ///
+    /// The blast radius is both of the take's locally-rooted z heads
+    /// (t=22193 slot 947 and t=22291 slot 900; its other 25 z-only
+    /// heads are pair-CLEAN, i.e. inherited): with (118,0)
+    /// wrongly raised to 108 the SAME pass's (117,1) averages
+    /// 1057/9 = 117 instead of 1052/9 = 116 and (118,1) 874/8 = 109
+    /// instead of 868/8 = 108, so the (10,6) standing fire at
+    /// (118.05, 1.69) — which re-seats on `ground_z + f46` every tick,
+    /// `sub_252D0` :28199 — reads z 3499 where retail reads 3491.
+    /// NON-VACUITY: `MGC_NO_MC1_ROW0_SHIM_119=1` fails this test (both
+    /// skips become smooths) and regresses the
+    /// `a-sound-driver-byte-gates-the-row-0-smoother` fixture.
+    #[test]
+    fn shim_byte_119_gates_the_two_row0_cells_that_read_it() {
+        let mut g = Gen::new(
+            flat_land(100),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        // Same construction as `shim_byte_7_...`: one raised cell in a
+        // candidate's 3x3 block moves its average to
+        // (8*100 + 118) / 9 = 102, so "smoothed" and "skipped" are
+        // distinguishable by the height alone. (118,1) sits in the
+        // blocks of (117,0)..(119,0), (120,1) in those of
+        // (119,0)..(121,0).
+        g.t.height[tile(118, 1)] = 118;
+        g.t.height[tile(120, 1)] = 118;
+        // (118,0) reads shim {118, 119}; (119,0) reads shim {119, 120}.
+        // Byte 119 is building-classed, so both decline.
+        g.smooth_cell(tile(118, 0));
+        assert_eq!(g.t.height[tile(118, 0)], 100, "shim byte 119 skips (118,0)");
+        g.smooth_cell(tile(119, 0));
+        assert_eq!(g.t.height[tile(119, 0)], 100, "shim byte 119 skips (119,0)");
+        // Its neighbours on either side read {117,118} and {120,121} —
+        // both plain, so they smooth. This is what pins the skip to
+        // 119 rather than to 118 or 120.
+        g.smooth_cell(tile(117, 0));
+        assert_eq!(
+            g.t.height[tile(117, 0)],
+            102,
+            "shim bytes 117 and 118 are plain: (117,0) smooths"
+        );
+        g.smooth_cell(tile(121, 0));
+        assert_eq!(
+            g.t.height[tile(121, 0)],
+            102,
+            "shim bytes 120 and 121 are plain: (121,0) smooths"
         );
     }
 

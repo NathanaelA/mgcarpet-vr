@@ -45,6 +45,11 @@ pub enum RowKind {
     Field,
     Missing,
     Extra,
+    /// A POSE-CHANNEL lane row (`pose.z`, `pose.eff_pitch`, …) — the
+    /// human's own mover column. Its own kind so that no existing
+    /// `field`-scoped or kind-less rule can reach a pose row by
+    /// accident: a pose rule has to say `"kind": "pose"` out loud.
+    Pose,
 }
 
 #[derive(Deserialize)]

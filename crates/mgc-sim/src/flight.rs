@@ -205,11 +205,131 @@ pub struct Mc1Moved {
 /// `accel_over` = the Accelerate spell's signed factor (±3 held / ±2
 /// released); `knock` = this tick's buffet displacement (direction,
 /// magnitude), already decayed by the caller.
+/// ⭐ THE WIZARD'S `+128` IS NOT A REGISTER — IT IS A GLOBAL, RE-STAMPED
+/// EVERY TICK. `sub_45C90_45FD0`, the class-3 carpet dispatch, opens
+/// with an UNCONDITIONAL `a1x->actSpeed_29923_128 = dword_93A90`
+/// (`reference/remc1/sub_main.cpp:55343`, twin `remc1hw:51411`) before
+/// it calls `sub_46840_46B80` and hence before the mover, and
+/// `dword_93A90` is the file-scope `int dword_93A90 = 80` (:4209,
+/// hw :3913) with **no store anywhere in either decompile** — the same
+/// global that bounds the commanded speed `v_12` at :55766-79, which is
+/// this file's own `±80` target clamp. The human's own constructor
+/// stamps it too (`sub_37820_37BE0` :44189 `= 80`).
+/// ⭐ MEASURED, not assumed: every `class64 == 3` record in the whole
+/// `mc1l48` duel window (2,231 ticks × 1,000 slots) carries `+128 == 80`
+/// for model 0 (the human, slot 681) and model 1 (rivals 706/712), and
+/// `0` for the models that never reach this dispatch (2 = castle, 3).
+/// So `3 * +128 / 2 = 120` is the duel grip's cap for every wizard.
+pub const MC1_WIZ_SPEED_CAP: i16 = 80;
+
+/// The duel grip's per-tick payload — the victim's settled position,
+/// the armed hold distance (`Type_160 +318`) and the caster's `+128`
+/// ([`MC1_WIZ_SPEED_CAP`]). `yaw_drag` carries D12's
+/// `MGC_NO_MC1_DUEL_YAW_DRAG` kill switch into the mover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mc1DuelGrip {
+    /// The victim record's `+72` triple, read BEFORE this move.
+    pub vpos: (u16, u16, i16),
+    /// `Type_160 +318` — `clamp(dist3d, 1024, 3072)` at the last arm.
+    pub hold: u32,
+    /// The caster's `+128`.
+    pub max_speed: i16,
+    /// Apply the heading servo (:55244-46) as well as the step.
+    pub yaw_drag: bool,
+}
+
+/// ⭐ THE DUEL GRIP'S HEADING SERVO — `sub_455D0`'s lock tail
+/// (`reference/remc1/sub_main.cpp:55244-46`), the half of the grip the
+/// port never had:
+///
+/// ```text
+///   v24 = sub_42150_42490(&self+72, &victim+72);            // bearing
+///   v25 = +30 + sub_422A0_425E0(+30, v24, 5, 0x82u);        // cap 130
+///   HIBYTE(v25) &= 7u;  a1x->var_u16_29825_30 = v25;
+/// ```
+///
+/// The write lands on the ENTITY (`+30`), not on the move scratch, so
+/// `sub_45410`'s commit gate can never refuse it; and it sits BELOW
+/// every polar step, so the tick's own translation still uses the
+/// PRE-drag yaw. Both positions are the pre-move `+72` values — the
+/// entity's own position is only committed after this block.
+/// `a3 = 5` is dead (`sub_422A0_425E0` :52689 ignores it).
+pub fn mc1_duel_turn(yaw: u16, sx: u16, sy: u16, vx: u16, vy: u16) -> u16 {
+    let bearing = Gen::angle_between(sx, sy, vx, vy);
+    let turn = Gen::turn_step(yaw, bearing, 0x82);
+    ((yaw as i32 + turn as i32) & 0x7FF) as u16
+}
+
+/// `sub_42340_42680` — the duel's 3-D separation, the operand of BOTH
+/// the release test (:55232) and the closing rate (:55238). ⚠ NOT the
+/// 2-D `Gen::dist2_sq` the port's pre-D18 block used.
+pub fn mc1_duel_dist(spos: (u16, u16, i16), vpos: (u16, u16, i16)) -> i32 {
+    let dx = (vpos.0 as i16).wrapping_sub(spos.0 as i16) as i32;
+    let dy = (vpos.1 as i16).wrapping_sub(spos.1 as i16) as i32;
+    let dz = vpos.2 as i32 - spos.2 as i32;
+    Gen::isqrt((dx * dx + dy * dy + dz * dz) as u32) as i32
+}
+
+/// The duel grip's TRANSLATION (`sub_455D0` :55236-47) — the pose
+/// channel's shadow step, and (through [`mc1_move_duel`]) the world's:
+///
+/// ```text
+///   v21 = sub_42340_42680(&self+72, &victim+72);   // 3-D distance
+///   v22 = 3 * a1x->actSpeed_29923_128 / 2;         // +128, not +126
+///   v23 = (v21 - Type_160+318) / (1024 / v22);     // closing rate
+///   clamp v23 to ±v22
+///   sub_41EC0_42200(&scratch, v24, a1x->var_u16_29827_32, v23);
+/// ```
+///
+/// ⚠ The rate is SIGNED — inside the hold distance retail PUSHES the
+/// caster away — the speed register is `+128` (the commanded max, a
+/// per-tick re-stamp of the global [`MC1_WIZ_SPEED_CAP`]), not the
+/// live `+126`, and the step carries the caster's published AIM PITCH,
+/// not 0. Returns the servoed yaw ([`mc1_duel_turn`]).
+#[allow(clippy::too_many_arguments)]
+pub fn mc1_duel_tail(
+    cand: &mut (u16, u16, i16),
+    yaw: u16,
+    aim_pitch: u16,
+    spos: (u16, u16, i16),
+    vpos: (u16, u16, i16),
+    hold: u32,
+    max_speed: i16,
+) -> u16 {
+    let dist = mc1_duel_dist(spos, vpos);
+    let v22 = 3 * max_speed as i32 / 2;
+    if v22 != 0 {
+        let denom = 1024 / v22;
+        let mut v23 = if denom != 0 { (dist - hold as i32) / denom } else { 0 };
+        v23 = v23.clamp(-v22, v22);
+        let bearing = Gen::angle_between(spos.0, spos.1, vpos.0, vpos.1);
+        Gen::polar_step(cand, bearing, aim_pitch, v23 as i16);
+    }
+    mc1_duel_turn(yaw, spos.0, spos.1, vpos.0, vpos.1)
+}
+
 pub fn mc1_move(
     st: &mut Mc1State,
     inp: &Mc1Input,
     accel_over: Option<f32>,
     knock: Option<(u16, i16)>,
+    ground: &dyn Fn(u16, u16) -> i16,
+    gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> (bool, (u16, u16, i16)),
+) -> Mc1Moved {
+    mc1_move_duel(st, inp, accel_over, knock, None, ground, gate)
+}
+
+/// [`mc1_move`] with `sub_455D0`'s LOCK TAIL in its own seat — the
+/// duel grip runs between the knock add (:55219-25) and the commit
+/// gate (:55249), so the step is gated and z-floored with the rest of
+/// the move exactly as retail's is. See [`mc1_duel_tail`].
+#[allow(clippy::too_many_arguments)]
+pub fn mc1_move_duel(
+    st: &mut Mc1State,
+    inp: &Mc1Input,
+    accel_over: Option<f32>,
+    knock: Option<(u16, i16)>,
+    duel: Option<Mc1DuelGrip>,
     ground: &dyn Fn(u16, u16) -> i16,
     gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> (bool, (u16, u16, i16)),
 ) -> Mc1Moved {
@@ -323,6 +443,27 @@ pub fn mc1_move(
     // the caller's Type_160 emulation).
     if let Some((kdir, kmag)) = knock {
         Gen::polar_step(&mut cand, kdir, 0, kmag);
+    }
+
+    // (e2) THE DUEL GRIP (:55226-48) — retail's lock tail sits HERE,
+    // after the knock mailbox is drained into the scratch and BEFORE
+    // `sub_45410`'s commit gate, so its step is gated and z-floored
+    // with the rest of the move. Both position operands are the
+    // PRE-move `+72` values (the entity is only re-seated at
+    // :55250-52), and the pitch is this tick's published `+32`.
+    if let Some(g) = duel {
+        let servoed = mc1_duel_tail(
+            &mut cand,
+            st.yaw,
+            st.aim_pitch,
+            (st.x, st.y, st.z),
+            g.vpos,
+            g.hold,
+            g.max_speed,
+        );
+        if g.yaw_drag {
+            st.yaw = servoed;
+        }
     }
 
     // (f) commit gate + unconditional z-floor ground+128 (row v_12)
@@ -1857,6 +1998,101 @@ mod tests {
             &never_stuck,
         );
         assert_eq!(st.z, 100, "the roof clamps raw, floor notwithstanding");
+    }
+
+    /// MC1's duel grip in ITS OWN SEAT — `sub_455D0`'s lock tail
+    /// (`reference/remc1/sub_main.cpp:55226-48`). Three laws the
+    /// pre-D18 world block broke: the rate is SIGNED, the cap is
+    /// `3 * +128 / 2 = 120` off the re-stamped global
+    /// ([`MC1_WIZ_SPEED_CAP`]), and the step is INSIDE the move — a
+    /// refusing `sub_45410` discards it with everything else, while
+    /// the heading servo lands on the ENTITY and survives.
+    #[test]
+    fn the_mc1_duel_grip_rides_the_move_and_the_servo_rides_the_entity() {
+        let idle = Mc1Input::default();
+        // Victim 10 tiles due north (`polar_step`'s zero is −y), so
+        // the 3-D separation is 2,560 and the bearing is 0.
+        let vpos = (0x8000u16, 0x8000u16.wrapping_sub(2560), 512i16);
+        let grip = |hold: u32, yaw_drag: bool| Mc1DuelGrip {
+            vpos,
+            hold,
+            max_speed: MC1_WIZ_SPEED_CAP,
+            yaw_drag,
+        };
+        let fresh = |yaw: u16| Mc1State {
+            x: 0x8000,
+            y: 0x8000,
+            z: 512,
+            yaw,
+            ..Default::default()
+        };
+
+        // (a) OUTSIDE the hold: (2560 − 1024) / (1024 / 120) = 192,
+        // clamped to the cap 120 — a full-cap pull, pure −y.
+        let mut st = fresh(0);
+        let (x0, y0, z0) = (st.x, st.y, st.z);
+        mc1_move_duel(
+            &mut st,
+            &idle,
+            None,
+            None,
+            Some(grip(1024, true)),
+            &flat_ground,
+            &open_gate,
+        );
+        assert_eq!((st.x, st.z), (x0, z0), "pitch 0 ⇒ the pull is planar");
+        assert_eq!(st.y, y0.wrapping_sub(120), "the ±120 cap, not ±80");
+
+        // (b) INSIDE the hold the rate goes NEGATIVE and shoves the
+        // caster back out: (2560 − 3072) / 8 = −64.
+        let mut st = fresh(0);
+        let y0 = st.y;
+        mc1_move_duel(
+            &mut st,
+            &idle,
+            None,
+            None,
+            Some(grip(3072, true)),
+            &flat_ground,
+            &open_gate,
+        );
+        assert_eq!(st.y, y0.wrapping_add(64), "inside the hold retail PUSHES");
+
+        // (c) the commit gate refuses: :55249 discards the whole
+        // scratch, duel step included — but `+30` was written on the
+        // entity at :55246 and stands. 1000 → 870 is the 0x82 cap.
+        let mut st = fresh(1000);
+        let (x0, y0, z0) = (st.x, st.y, st.z);
+        mc1_move_duel(
+            &mut st,
+            &idle,
+            None,
+            None,
+            Some(grip(1024, true)),
+            &flat_ground,
+            &|_, p| (false, p),
+        );
+        assert_eq!(
+            (st.x, st.y, st.z),
+            (x0, y0, z0),
+            "a refused move keeps nothing, the grip's step included"
+        );
+        assert_eq!(st.yaw, 870, "the servo is an ENTITY write and survives");
+
+        // (d) D12's kill switch still parks the heading half alone.
+        let mut st = fresh(1000);
+        let y0 = st.y;
+        mc1_move_duel(
+            &mut st,
+            &idle,
+            None,
+            None,
+            Some(grip(1024, false)),
+            &flat_ground,
+            &open_gate,
+        );
+        assert_eq!(st.yaw, 1000, "yaw_drag off ⇒ the servo is parked");
+        assert_ne!(st.y, y0, "…and the translation still runs");
     }
 
     /// `sub_5DE30`'s TRANSPORT (EF:59924-29), block 7 — the half the
