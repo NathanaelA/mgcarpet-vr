@@ -1726,8 +1726,8 @@ pub fn registry() -> Vec<Spec> {
                 on: c.gameplay.patches.map_wide_ball_rolling.on(),
                 faithful: false,
             },
-            desc: "Mana balls roll downhill everywhere (MC1). Retail only rolls \
-                   balls within 24 tiles of you - a period perf save - so \
+            desc: "Mana balls roll downhill everywhere (both games). Retail only \
+                   rolls balls within 24 tiles of you - a period perf save - so \
                    approaching mana wakes it and it visibly runs away \
                    downhill. Balls only; creature wake-up is untouched.",
             ctl: Ctl::Toggle {
@@ -1737,6 +1737,35 @@ pub fn registry() -> Vec<Spec> {
                 descs: [
                     "Balls only roll near you and run away downhill, as retail.",
                     "Every ball rolls to rest, map-wide (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "ball_owner_recolor",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.ball_owner_recolor",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.ball_owner_recolor.on(),
+                faithful: false,
+            },
+            desc: "Mana balls show their current owner's colour everywhere. \
+                   Retail recolours a ball only when it moves, and a settled \
+                   ball only moves within 24 tiles of you, so mana that \
+                   changes hands out of range - a possessed corpse's spheres, \
+                   a rival possessing yours - keeps the old colour until you \
+                   approach it (the minimap is right at once). Drawing only; \
+                   the sim is untouched.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.ball_owner_recolor = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Far-off balls keep the previous owner's colour, as retail draws them.",
+                    "Every ball is drawn in its owner's colour (default).",
                 ],
             },
         },
@@ -2078,7 +2107,8 @@ mod tests {
         // mc2_magic_mine retired 2026-09-04 (session 97) on a player
         // ruling — the mine's trigger is retail's, so the whole
         // detonation column is unconditional too (DEVIATIONS.md).
-        assert_eq!(patches, 8, "eight of the nine patches ship on");
+        // ball_owner_recolor added 2026-09-06 (presentation-only).
+        assert_eq!(patches, 9, "nine of the ten patches ship on");
     }
 
     #[test]

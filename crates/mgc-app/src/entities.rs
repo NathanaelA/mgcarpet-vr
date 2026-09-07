@@ -268,6 +268,7 @@ pub fn billboards_from_poses(
     enhanced_fire: bool,
     enhanced_lightning: bool,
     dweller_invisibility: bool,
+    ball_owner_recolor: bool,
 ) -> Vec<Billboard> {
     let mut out = Vec::new();
     for p in poses {
@@ -296,7 +297,22 @@ pub fn billboards_from_poses(
         if enhanced_lightning && p.class == 9 && p.model == 9 {
             continue;
         }
-        let Some(s) = resolve_pose_sprite(game, p.type_index, &sprite_dims) else {
+        // Patch option `ball_owner_recolor` (presentation-only): a
+        // real (10,39) mana ball draws the sprite family of its
+        // CURRENT owner. Retail re-derives the family only when the
+        // ball moves, and a settled ball moves only inside the
+        // 24-tile awake radius, so mana claimed from afar (a corpse
+        // possession sweeping up the dead wizard's spheres, a rival
+        // possessing yours) keeps the previous owner's colour in the
+        // viewport until you approach it while the minimap is already
+        // right — see `LivePose::owner_type_index`. The sim's own
+        // (graded, hashed) row is untouched either way.
+        let type_index = if ball_owner_recolor {
+            p.owner_type_index.unwrap_or(p.type_index)
+        } else {
+            p.type_index
+        };
+        let Some(s) = resolve_pose_sprite(game, type_index, &sprite_dims) else {
             continue;
         };
         out.push(Billboard {
@@ -2452,6 +2468,7 @@ mod tests {
             class,
             model,
             type_index,
+            owner_type_index: None,
             frame: 0,
             x: 10.0,
             z: 10.0,
@@ -2786,7 +2803,7 @@ mod tests {
             pose(5, 2, false, 43),
         ];
         let conceals = |patch: bool| {
-            billboards_from_poses(GameId::Mc2, &poses, dims, false, false, patch)
+            billboards_from_poses(GameId::Mc2, &poses, dims, false, false, patch, false)
                 .iter()
                 .map(|b| b.conceal)
                 .collect::<Vec<_>>()
@@ -2794,7 +2811,7 @@ mod tests {
         assert_eq!(conceals(false), [true, false, false]);
         assert_eq!(conceals(true), [true, true, false]);
         let any_dims = |_: u16| Some((32u16, 64u16, 0u16));
-        let mc1 = billboards_from_poses(GameId::Mc1, &poses, any_dims, false, false, true);
+        let mc1 = billboards_from_poses(GameId::Mc1, &poses, any_dims, false, false, true, false);
         assert!(mc1.iter().all(|b| !b.conceal), "MC1 never conceals");
     }
 

@@ -897,11 +897,21 @@ pub struct GameplayPatches {
     /// wherever its settle budget expired — mid-hop balls hang in the
     /// air forever; terrain edits bury grounded ones.
     pub ball_ground_track: PatchArm,
-    /// MC1 mana balls roll downhill map-wide. Retail only rolls balls
-    /// within 24 tiles of you (a period perf save), so approaching
-    /// mana visibly "runs away downhill". Balls only — creature
-    /// wake-up is untouched.
+    /// Mana balls roll downhill map-wide, both games. Retail only
+    /// rolls balls within 24 tiles of you (a period perf save), so
+    /// approaching mana visibly "runs away downhill". Balls only —
+    /// creature wake-up is untouched.
     pub map_wide_ball_rolling: PatchArm,
+    /// A mana ball is DRAWN in its current owner's colour everywhere.
+    /// Retail re-derives the ball's sprite family only when the ball
+    /// moves, and a settled ball only moves within 24 tiles of you,
+    /// so mana that changes hands out of range (possessing a dead
+    /// wizard's corpse takes all of their spheres; a rival possessing
+    /// yours) keeps the previous owner's colour in the viewport until
+    /// you approach — the minimap is right at once. Presentation-only,
+    /// hash-silent (the sim's sprite row is graded by conformance and
+    /// stays retail's under both arms).
+    pub ball_owner_recolor: PatchArm,
     /// A possessed dwelling keeps its true footprint. Retail's
     /// owner-flag stamp shrinks it to the flag sprite, so villagers
     /// and defenders spawn walled-in ON the roof and their corpse
@@ -946,6 +956,7 @@ impl Default for GameplayPatches {
             jar_ground_snap: PatchArm::Patched,
             ball_ground_track: PatchArm::Patched,
             map_wide_ball_rolling: PatchArm::Patched,
+            ball_owner_recolor: PatchArm::Patched,
             possessed_footprint: PatchArm::Patched,
             mc2_downgrade_overflow: PatchArm::Patched,
             mc2_dweller_invisibility: PatchArm::Patched,
@@ -964,6 +975,7 @@ impl GameplayPatches {
             jar_ground_snap: PatchArm::Retail,
             ball_ground_track: PatchArm::Retail,
             map_wide_ball_rolling: PatchArm::Retail,
+            ball_owner_recolor: PatchArm::Retail,
             possessed_footprint: PatchArm::Retail,
             mc2_downgrade_overflow: PatchArm::Retail,
             mc2_dweller_invisibility: PatchArm::Retail,
@@ -982,8 +994,9 @@ impl GameplayPatches {
             castle_recast_cost: PatchArm::Patched,
             map_wide_ball_rolling: PatchArm::Retail,
             // Did not exist pre-option (2026-08-08): dwellers drew
-            // plainly.
+            // plainly, balls wore the sim's row.
             mc2_dweller_invisibility: PatchArm::Retail,
+            ball_owner_recolor: PatchArm::Retail,
             ..Self::default()
         }
     }

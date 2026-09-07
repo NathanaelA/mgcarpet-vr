@@ -1240,6 +1240,25 @@ pub struct LivePose {
     pub model: u8,
     /// Row into [`crate::mc1::sprite_stats::SPRITE_STATS`].
     pub type_index: u16,
+    /// The OWNER-derived sprite row of a real (10,39) mana ball —
+    /// `Some(row)` only when it differs from `type_index`. Retail
+    /// re-derives a ball's colour family (`ball_resize`, :29569 /
+    /// EF:26287) on MOVING ticks only, and a settled ball moves only
+    /// inside the 24-tile awake radius, so an ownership write that
+    /// lands from afar — the grave claim sweep (a wizard possessing a
+    /// dead wizard's corpse takes every sphere the grave holds), a
+    /// rival's possess pulse on your mana, the death re-point of a
+    /// dead wizard's spheres onto its grave — leaves the viewport
+    /// sprite on the PREVIOUS owner's family until the human walks
+    /// into wake range, while the minimap (which reads `team`) is
+    /// right at once. Both games; the mc1l0 corpus pins the stale
+    /// row as retail law, so the sim's graded/hashed `type86` is
+    /// never touched. This is the family `team` implies with the
+    /// row's own size class kept — the `ball_owner_recolor` patch
+    /// (presentation-only) draws it instead of `type_index`. Never
+    /// set for the (10,57) fool's sphere (model 57 / action 62):
+    /// wearing the neutral family is its whole design.
+    pub owner_type_index: Option<u16>,
     /// Animation frame (entity offset 88) for the 2..=16 draw types.
     pub frame: u8,
     /// Position, tile units (torus [0, 256)).
@@ -2670,6 +2689,7 @@ impl World {
                 class: e.class64,
                 model: e.model65,
                 type_index: e.type86,
+                owner_type_index: self.ball_owner_type_index(e),
                 frame: e.frame88,
                 x: e.x as f32 / 256.0,
                 z: e.y as f32 / 256.0,
@@ -2819,6 +2839,37 @@ impl World {
     /// [`World::live_poses`]: unclaimed dwellings are skipped
     /// entirely; body segments are state 120; the (10,45) dwelling
     /// life bar denominates against the parked build value (f44).
+    /// [`LivePose::owner_type_index`]: the sprite row `ball_resize`
+    /// WOULD stamp for this (10,39) ball's current owner, keeping the
+    /// size class its row already encodes (MC2's decay gate leaves a
+    /// draining sphere's size stale on purpose — EF:26286 — and this
+    /// is a colour fix, not a size one). Same row arithmetic as
+    /// `ball_resize`: 52 + size wild, 105 + 8·art + size owned, art =
+    /// the team slot (MC1) or `color_art(team)` (MC2). `None` when the
+    /// row already agrees, when the entity is not a real ball, or when
+    /// its row is outside the ball families (nothing to re-derive).
+    fn ball_owner_type_index(&self, e: &Ent) -> Option<u16> {
+        if e.class64 != 10 || e.model65 != 39 || e.tick70 == 62 {
+            return None;
+        }
+        let row = e.type86;
+        let size = match row {
+            52..=59 => row - 52,
+            105..=168 => (row - 105) % 8,
+            _ => return None,
+        };
+        let mc2 = matches!(self.g.verbs.movement, MovementVerb::Mc2);
+        let base = match self.g.owner_team(e.f144) {
+            Some(team) => {
+                let art = if mc2 { crate::mc2::color_art(team) } else { team };
+                105 + 8 * art as u16
+            }
+            None => 52,
+        };
+        let want = base + size;
+        (want != row).then_some(want)
+    }
+
     fn live_poses_mc1(&self, e: &Ent) -> PoseGameBits {
         // Houses (m45): the visible building is painted terrain; the
         // entity billboard is the OWNER FLAG (sprite 177 + color row) —
@@ -26741,6 +26792,129 @@ mod tests {
         w.g.ent[b].z = raised + 500;
         w.tick(away(), PlayerCommand::default());
         assert_eq!(w.g.ent[b].z, raised + 500, "strict keeps the freeze");
+    }
+
+    /// `LivePose::owner_type_index` (the `ball_owner_recolor` patch):
+    /// a ball claimed while SETTLED outside the 24-tile awake radius
+    /// keeps its stale sprite row in the sim (retail law — the intake
+    /// never recolours, only the moving arm does), the pose reports
+    /// the owner-derived row beside it, and walking into wake range
+    /// makes the sim's own row catch up (the pose then reports
+    /// nothing). MC1.
+    #[test]
+    fn ball_owner_recolor_mc1_settled_far_claim() {
+        let mut w = flat_world();
+        let (bx, by) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
+        let gz = w.g.ground_z(bx, by) as i16;
+        let b = w.g.spawn_mana_ball(bx, by, gz).unwrap();
+        for _ in 0..140 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].f58 & 0xFF, 0, "the distant ball settled");
+        let wild = w.g.ent[b].type86;
+        assert!((52..=59).contains(&wild), "wild family: {wild}");
+        let pose = |w: &World| w.live_poses().into_iter().find(|p| p.slot == b as u16).unwrap();
+        assert_eq!(pose(&w).owner_type_index, None, "row and owner agree");
+        // The claim lands from afar (the grave sweep / a possess pulse
+        // — any ch1 owner write on a settled ball).
+        w.g.ent[b].mail[1] = (0, PLAYER_TARGET);
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[b].f144, PLAYER_TARGET, "claimed");
+        assert_eq!(w.g.ent[b].type86, wild, "retail: a settled ball never recolours on intake");
+        let p = pose(&w);
+        assert_eq!(p.team, Some(0), "the minimap sees the new owner at once");
+        assert_eq!(p.owner_type_index, Some(105 + (wild - 52)), "...and so does the patched viewport");
+        // Walking into wake range re-arms the ball; its moving arm
+        // re-derives the row and the pose override disappears.
+        let near = PlayerPose::from_tiles(116.5, 105.0 / 8.0, 110.5, 0.0, 0.0, 0.0);
+        for _ in 0..40 {
+            w.tick(near, PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].type86, 105 + (wild - 52), "retail: approaching recolours it");
+        assert_eq!(pose(&w).owner_type_index, None);
+    }
+
+    /// The MC2 twin of [`ball_owner_recolor_mc1_settled_far_claim`]:
+    /// the sphere's settle gate (EF:26173) skips the re-derive the
+    /// same way, `mc2_awake_pass`'s sphere leg re-arms it inside 24
+    /// tiles, and the owner family routes through `color_art`.
+    #[test]
+    fn ball_owner_recolor_mc2_settled_far_claim() {
+        let mut w = mc2_flat_world();
+        let (bx, by) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
+        let gz = w.g.ground_z(bx, by) as i16;
+        let b = w.g.mc2_spawn_mana_sphere(39, bx, by, gz).unwrap();
+        for _ in 0..140 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].f58 & 0xFF, 0, "the distant sphere settled");
+        let wild = w.g.ent[b].type86;
+        assert!((52..=59).contains(&wild), "wild family: {wild}");
+        let pose = |w: &World| w.live_poses().into_iter().find(|p| p.slot == b as u16).unwrap();
+        assert_eq!(pose(&w).owner_type_index, None);
+        w.g.ent[b].mail[1] = (0, PLAYER_TARGET);
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[b].f144, PLAYER_TARGET, "claimed");
+        assert_eq!(w.g.ent[b].type86, wild, "retail: no intake recolour on a settled sphere");
+        let p = pose(&w);
+        assert_eq!(p.team, Some(0));
+        let own = 105 + 8 * crate::mc2::color_art(0) as u16 + (wild - 52);
+        assert_eq!(p.owner_type_index, Some(own));
+        let near = PlayerPose::from_tiles(116.5, 105.0 / 8.0, 110.5, 0.0, 0.0, 0.0);
+        for _ in 0..40 {
+            w.tick(near, PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].type86, own, "retail: approaching recolours it");
+        assert_eq!(pose(&w).owner_type_index, None);
+    }
+
+    /// The MC2 arm of `map_wide_ball_rolling` (player-ruled both games
+    /// 2026-09-06): `mc2_awake_pass`'s sphere leg re-arms a settled
+    /// sphere far outside the 24-tile radius, and the shared moving
+    /// arm rolls it downhill; the retail arm freezes it for good.
+    #[test]
+    fn map_wide_ball_rolling_rolls_distant_mc2_spheres() {
+        let mut w = mc2_flat_world();
+        let (btx, bty) = (112u8, 110u8);
+        let (bx, by) = (((btx as u16) << 8) + 128, ((bty as u16) << 8) + 128);
+        let gz = w.g.ground_z(bx, by) as i16;
+        let b = w.g.mc2_spawn_mana_sphere(39, bx, by, gz).unwrap();
+        for _ in 0..140 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].f58 & 0xFF, 0, "the distant sphere settled");
+        let base = w.g.t.height[crate::engine::features::tile(btx, bty)];
+        for dx in 0..8u8 {
+            for dy in 0..8u8 {
+                let t = crate::engine::features::tile(
+                    btx.wrapping_add(dx).wrapping_sub(3),
+                    bty.wrapping_add(dy).wrapping_sub(3),
+                );
+                w.g.t.height[t] = base + 6 * (7 - dx);
+            }
+        }
+        let frozen = (w.g.ent[b].x, w.g.ent[b].y);
+        for _ in 0..40 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(
+            (w.g.ent[b].x, w.g.ent[b].y),
+            frozen,
+            "retail arm: a settled distant sphere never moves again"
+        );
+        w.set_patches(crate::patches::WorldPatches {
+            map_wide_ball_rolling: true,
+            ..crate::patches::WorldPatches::RETAIL
+        });
+        for _ in 0..80 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(
+            w.g.ent[b].x > frozen.0,
+            "patched arm: the sphere rolls DOWNHILL (+x): {} -> {}",
+            frozen.0,
+            w.g.ent[b].x
+        );
     }
 
     /// The `map_wide_ball_rolling` patch: a settled ball far outside

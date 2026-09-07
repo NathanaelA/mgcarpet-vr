@@ -4878,7 +4878,18 @@ impl Gen {
             return;
         }
         let e = &self.ent[i];
-        if Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < 0x240_0000 {
+        // Patch option `map_wide_ball_rolling` (player-ruled both games
+        // 2026-09-06): the SPHERE leg re-arms without the 24-tile
+        // radius, exactly like MC1's `mob_awake_pass` ball rows — every
+        // sphere rolls to rest at retail's own 16-of-17 duty cycle
+        // instead of "running away" when the human walks into wake
+        // range. Spheres only (this leg is the whole class-10 walk,
+        // 39/40/57 — the fool's sphere wakes like a real one under
+        // retail and keeps doing so here); the creature gate stays.
+        let ball = e.class64 == 10;
+        if (ball && ctx.patches.map_wide_ball_rolling && !ctx.strict)
+            || Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < 0x240_0000
+        {
             self.ent[i].f58 = 16;
             let mut j = self.ent[i].f54 as usize;
             while j != 0 {

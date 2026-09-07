@@ -1101,7 +1101,15 @@ fn load_level(
                     // and the dweller-invisibility patch flag likewise
                     // (sync_world re-derives with the real flags; the
                     // wraith's unconditional concealment is in already).
-                    entities::billboards_from_poses(game_id, &poses, dims, false, false, false),
+                    entities::billboards_from_poses(
+                        game_id,
+                        &poses,
+                        dims,
+                        false,
+                        false,
+                        false,
+                        false,
+                    ),
                     // No dwelling is claimed at load time, so the
                     // owned-buildings highlight is vacuously off here
                     // (and the blink phase starts low). Icon-swap
@@ -3969,6 +3977,7 @@ impl App {
             enhanced_fire,
             enhanced_lightning,
             self.cfg.gameplay.patches.mc2_dweller_invisibility.on(),
+            self.cfg.gameplay.patches.ball_owner_recolor.on(),
         );
         // The replay GHOST (④): the recorded pose as a translucent
         // wizard-carpet, riding beside the free-running sim — where
@@ -4136,6 +4145,7 @@ impl App {
                 enhanced_fire,
                 enhanced_lightning,
                 self.cfg.gameplay.patches.mc2_dweller_invisibility.on(),
+                self.cfg.gameplay.patches.ball_owner_recolor.on(),
             );
             if self.cfg.render.debug.health_bars {
                 bars = entities::health_bars_from_poses(level.game, &poses, dims);
@@ -9540,6 +9550,7 @@ fn run_screenshot(
             class,
             model,
             type_index: 0,
+            owner_type_index: None,
             frame: 0,
             x,
             z,

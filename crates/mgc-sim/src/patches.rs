@@ -54,11 +54,15 @@ pub struct WorldPatches {
     /// directions. Retail freezes it wherever it is — mid-hop balls
     /// hang in the air, terrain edits bury grounded ones.
     pub ball_ground_track: bool,
-    /// MC1 mana balls run their roll physics map-wide. Retail
+    /// Mana balls run their roll physics map-wide, BOTH games. Retail
     /// re-arms a settled ball's +58 only within the 24-tile awake
-    /// radius of the human (:64352-61), so approaching a downhill
-    /// ball wakes it and it visibly "runs away". Balls only — the
-    /// creature awake gate is untouched.
+    /// radius of the human (MC1 :64352-61; MC2 `sub_68C70`'s sphere
+    /// leg, EF:55526), so approaching a downhill ball wakes it and it
+    /// visibly "runs away". Balls only — the creature awake gate is
+    /// untouched. (MC1-only until 2026-09-06; the MC2 arm was
+    /// player-requested alongside `ball_owner_recolor`, which stays a
+    /// separate option: a settled ball that never wakes still wants
+    /// its owner's colour.)
     pub map_wide_ball_rolling: bool,
     /// A possessed dwelling keeps its footprint extents under the
     /// owner-flag sprite. Retail's sprite stamp (:30808) clobbers

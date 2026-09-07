@@ -39,6 +39,7 @@
     },
     "patches": {
       "ball_ground_track": "patched",
+      "ball_owner_recolor": "patched",
       "castle_latch_bug": "patched",
       "castle_recast_cost": "retail",
       "jar_ground_snap": "patched",
