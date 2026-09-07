@@ -1310,6 +1310,11 @@ fn load_level(
             // eight teams; remc1 sub_48710 :57230/:57234.
             castle: std::array::from_fn(|t| ui_assets.as_ref().and_then(|u| u.map_stamp(58 + t))),
             balloon: std::array::from_fn(|t| ui_assets.as_ref().and_then(|u| u.map_stamp(66 + t))),
+            // The font as map stamps — the Beyond-Sight name labels
+            // (`entities::rival_reveals`).
+            glyphs: (0..=255u8)
+                .map(|b| ui_assets.as_ref().and_then(|u| u.map_glyph(b)))
+                .collect(),
             // Spell icons shrunk to marker size, floating over the
             // jar dot — the expose-jar-spells debug stamps (drawn
             // only when that option is on).
@@ -4190,12 +4195,19 @@ impl App {
             } else {
                 Vec::new()
             };
-            // Beyond-Sight rival position markers (interim for the
-            // retail name labels — DrawText track).
+            // The Beyond-Sight rival reveal: the name labels (+ MC2's
+            // position pixel), gated by the live tier.
             let rival_views = w.rival_views();
-            level
-                .map_dots
-                .extend(entities::rival_markers(&rival_views, w.beyond_sight_tier()));
+            let (reveal_dots, reveal_stamps) = entities::rival_reveals(
+                level.game,
+                &rival_views,
+                w.beyond_sight_tier(),
+                level.mc2_env,
+                &level.palette_rgba,
+                &level.map_icons,
+            );
+            level.map_dots.extend(reveal_dots);
+            level.map_stamps.extend(reveal_stamps);
             // The rival tag's smooth-motion pair: this snapshot and
             // the one before it (drawn lerped by the sub-tick alpha).
             self.rival_tags_prev = std::mem::replace(&mut self.rival_tags_cur, rival_views);

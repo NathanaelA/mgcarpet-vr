@@ -1391,6 +1391,11 @@ pub struct RivalView {
     /// This rival's kill row (victim slots 0-7).
     pub kills: [u16; 8],
     pub invisible: bool,
+    /// MC2 only: the rival's Metamorph manifestation (spell 4) is
+    /// armed — the second thing Beyond Sight's tier gate reads
+    /// (`sub_63570` GameUI.cpp:2219-52; tier ≥ 2 sees through it).
+    /// Presentation-side, hash-silent.
+    pub metamorphed: bool,
 }
 
 /// Minimal live-event view for [`World::debug_pool`].
@@ -2677,7 +2682,7 @@ impl World {
             // skip/map-only, segment-hide states, life-bar
             // denominators, MC2 translucency): per-game bodies below.
             let bits = match self.game {
-                GameId::Mc2 => self.live_poses_mc2(e),
+                GameId::Mc2 => self.live_poses_mc2(i, e),
                 _ => self.live_poses_mc1(e),
             };
             if bits.skip {
@@ -2941,7 +2946,7 @@ impl World {
     /// unclaimed dwellings export as map-only (never skipped);
     /// segment-hide states 0xB4/0xE8..0xEA; the parked-dwelling life
     /// bar denominates against 1000×rate; translucency blend modes.
-    fn live_poses_mc2(&self, e: &Ent) -> PoseGameBits {
+    fn live_poses_mc2(&self, i: usize, e: &Ent) -> PoseGameBits {
         // Houses (m45): MC2 exports the pose as map-only — retail's
         // MAP pass never skips on the claim bit (0xF0F unpossessed
         // dot, GameUI.cpp:1276-95); the claim protocol re-sets sprite
@@ -2989,7 +2994,28 @@ impl World {
         // while the port draws their billboard as a stand-in for the
         // retail particle child it does not implement — see the
         // conformance ledger's open lead.
-        let hidden = e.class64 == 5 && e.flags & 1 != 0;
+        //
+        // The ENEMY MAGIC MINE is the other writer, ported here rather
+        // than in the sim: the mine tick's draw-bit block (`sub_3A8B0`
+        // EF:29848-58) clears bit 0 on the human's own mines and, on
+        // every other wizard's, clears it ONLY while the human's
+        // Beyond-Sight manifestation is armed at tier ≥ 2 — otherwise
+        // sets it. Bit 0 gates the billboard pass (`& 0x21`) and the
+        // mouse pick, so a rival's mine is an unseen trap until "See
+        // All". (Its map dot is own-only regardless: the (10,0x4E)
+        // arm, GameUI.cpp:1320-27.) Kept off the hashed flag word —
+        // the same bit feeds the flood's shove filter (`sub_39FA0`),
+        // an ungraded lane — and evaluated every tick where retail
+        // re-checks on `byte_0x3E_62 & 7 == 0`; the tier is the
+        // spell-5 book token's `f71` while its burst runs
+        // (`beyond_sight_tier`).
+        let enemy_mine = e.class64 == 10
+            && e.model65 == 78
+            && e.f52 != PLAYER_TARGET
+            && e.f52 != 0
+            && e.f52 as usize != i
+            && self.beyond_sight_tier() != Some(2);
+        let hidden = (e.class64 == 5 && e.flags & 1 != 0) || enemy_mine;
         // Class-5 heads + the wizard-family + destructible STRUCTURES
         // — dwellings (10,45), building anchors (10,52), castle stage
         // pieces (10,79).
@@ -12778,10 +12804,12 @@ impl World {
                 },
                 kills: self.kill_tally[r.slot as usize],
                 invisible: r.invisible,
+                metamorphed: false,
             }
         });
         let mc2 = self.mc2_rivals.iter().map(|r| {
             let e = &self.g.ent[r.ent as usize];
+            let mm = r.book.ent[4] as usize;
             RivalView {
                 slot: r.slot,
                 name: crate::mc2::rivals::MC2_RIVAL_NAMES[r.slot as usize],
@@ -12799,6 +12827,7 @@ impl World {
                 },
                 kills: self.kill_tally[r.slot as usize],
                 invisible: r.invisible,
+                metamorphed: mm != 0 && mm < self.g.ent.len() && self.g.ent[mm].f26 > 0,
             }
         });
         mc1.chain(mc2).collect()

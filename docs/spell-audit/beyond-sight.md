@@ -15,18 +15,23 @@ Port cites are `crates/…:line`.
   their name), *except* wizards who are Invisible or Metamorphed.
 - **Tier 1 (L2):** additionally see through **Invisible** (reveal cloaked wizards too).
 - **Tier 2 (L3):** additionally see through **Metamorph** (reveal all wizards) **AND reveal
-  enemy ground CREATURES/monsters on the map** (the `sub_3A8B0` class-5 unit tick clears its
-  own map-hidden bit only when the local player holds Beyond Sight at tier ≥ 2, `EF:29857`).
+  enemy MAGIC MINES in the viewport** (`sub_3A8B0` at `EF:29749` is the class-10 model-78
+  Magic Mine tick — the port's `mc2_mine_tick` — NOT a creature tick as the first pass of this
+  audit claimed; its draw-bit block `EF:29848-58` clears the mine's hidden bit for the human's
+  own mines, and for every other wizard's only while the local Beyond Sight is armed at tier
+  ≥ 2. Bit 0 gates the billboard pass `& 0x21` (GameRenderOriginal.cpp:1936/3157) and the
+  mouse pick (PlayerInput.cpp:1626); the mine's MAP dot is own-only regardless, GameUI:1320-27).
+  Nothing in the engine reveals creatures for Beyond Sight.
 - **Duration scales by tier too:** the armed window is `word_0x18` = **151 / 261 / 361** ticks
   for tiers 0/1/2 (SPELLS.DAT row 12). The port already reproduces this (via `f28`).
 - The effect state handler `sub_6B310` (`EF:57132`) sets **no player flag at all** — it only
   awards XP + drains mana while armed. All reveal logic lives on the READER side (the minimap
   draw and the creature tick), which look up the local player's Beyond-Sight manifestation and
   read its armed timer + tier directly.
-- **GAP:** the port collapses everything to a single `player.beyond_sight: bool` with **no
-  tier**. The app reveals enemy balloons and rival markers on any cast but **always filters out
-  Invisible rivals** (= retail tier 0 only) and **never reveals monsters** (retail tier 2). So
-  all three levels look identical, exactly as reported.
+- **Port (2026-09-07):** `beyond_sight_tier()` exposes the live tier; `entities::rival_reveals`
+  draws the retail NAME labels (font-glyph map stamps, per-game offset/colour) with MC2's
+  position pixel, gated by `sub_63570`'s law (Invisible + the new `RivalView::metamorphed`);
+  `live_poses_mc2` hides a rival's (10,78) mine from the viewport unless the tier is 2. See §3.
 - **No cast sound** (silent) — both retail (`sub_6B310` has no `PrepareEventSound`) and the
   port (cast.rs 0xC arm) agree; nothing to change there.
 
@@ -123,106 +128,63 @@ return 1;                                       // visible
 | 1 (L2) | yes                 | **yes**            | no                 |
 | 2 (L3) | yes                 | yes                | **yes**            |
 
-### 2d. The creature/monster reveal (tier ≥ 2 ONLY) — `sub_3A8B0` (`EF:29856-29861`)
+### 2d. The enemy-mine reveal (tier ≥ 2 ONLY) — `sub_3A8B0` (`EF:29848-58`)
 
-Inside the ground-unit tick `sub_3A8B0` (dispatched from `Events.cpp:2783`; the class-5 mobile
-creature/settler state), each tick an enemy (non-owned) unit re-computes its map-visibility bit:
+`sub_3A8B0` (`EF:29749`, state address `0x21b8b0`) is the **Magic Mine** tick (class 10, model
+78, action 0x55; the port's `mc2_mine_tick`), not a creature tick. Inside its countdown/float
+block each mine re-computes its hidden bit:
 
 ```
-else if (!(a1x->byte_0x3E_62 & 7)) {
-    v9x = Entities[localPlayer.SpellsEnabled[12]];          // local player's beyond-sight
+if (LevelIndex == Entities[word_0x32_50]->playerColorIndex)   // the human's own mine
+    byte[0] &= 0xFE;                                           //   always visible
+else if (!(byte_0x3E_62 & 7)) {
+    v9x = Entities[localPlayer.SpellsEnabled[12]];             // local Beyond Sight
     if (v9x valid && v9x->word_0x2E_46 && v9x->byte_0x46_70 >= 2)
-        a1x->struct_byte_0xc_12_15.byte[0] &= 0xFE;         // clear hidden bit → REVEALED
+        byte[0] &= 0xFE;                                       // tier 2 armed → REVEALED
     else
-        a1x->struct_byte_0xc_12_15.byte[0] |= 1;            // set hidden bit → HIDDEN
+        byte[0] |= 1;                                          // HIDDEN
 }
 ```
 
-`byte[0] & 1` is the **map-hidden flag**: the minimap draw skips any entity with it set
-(`GameUI:1220`, `:1398`, `:1861`, `:2037`; it also drives a class-15 render tint at
-`GameRenderOriginal.cpp:2294`). This is the ONLY site in the engine that keys on `SpellEnabled[12]
-&& tier ≥ 2` — i.e. **L3 is the only tier that reveals enemy monsters/units**, matching the
-player's "L3 also monsters."
+`byte[0] & 1` is the generic hidden bit: the billboard gather/draw skips `& 0x21`
+(GameRenderOriginal.cpp:1936, :3157; NG/HD mirrors), the mouse pick skips it
+(PlayerInput.cpp:1626), and the map's class-5 / class-12 / class-15 arms skip it (GameUI:1220,
+:1398, :1861, :2037). The mine's own map arm (10, 0x4E) is own-only anyway (GameUI:1320-27),
+so tier 2's visible effect is **a rival's mine appears in the 3-D view** (and becomes
+targetable). It is the ONLY site in the engine that keys on `SpellEnabled[12] && tier ≥ 2`.
+
+### 2e. MC1 — `sub_48710` (remc1 :57143-46, :57232-35, :57413-48)
+
+One tier. `v59` = the spell-5 token's burst counter (`+48` of the entity at player data
+`+686`). While it runs: (a) rival BALLOONS (3,3) stamp `[66 + colour]` (:57232-35; castles
+stamp always); (b) for every other player whose wizard entity has `+12 >= 0`, `DrawText(name,
+x + 2, y)` (hires `2x + 2, 2y`) in `byte_99B58[1 + 2·colour]` — NO position dot and NO
+invisibility test (:57413-48). Nothing else reads `v59`. The names are `off_99B68[slot]` —
+Zanzamar (the human's default), Vodor, Gryshnak, Mahmoud, Syed, Raschid, Alhabbal,
+Scheherazade — copied at level init (:49158).
 
 **Duration / armed window:** `word_0x30_48` (= `word_0x18` = 151/261/361 by tier) is loaded as
 the initial cast-timer at arm; the reveal is live only while `word_0x2E_46 > 0`. Higher tiers
 stay revealed **longer** as well as **deeper**. Mana is drained per tick over the window
 (cost / `word_0x18`). **No sound** is played on cast.
 
-## 3. Current port
+## 3. Port (landed 2026-09-07)
 
-- **State:** one `player.beyond_sight: bool` (`crates/mgc-sim/src/mc1/world.rs:150`). Set true
-  on cast (`crates/mgc-sim/src/mc2/cast.rs:784`, spell 0xC arm) + XP award; cleared at cast
-  expiry (`cast.rs:652`). **No tier is stored anywhere.** The MC1 legacy channel mirror at
-  `world.rs:3096` (`5 => beyond_sight = active`) is the same single bool.
-- **Duration:** DOES scale by tier — `mc2_set_spell` loads `e.f28 = word_0x18` (151/261/361) and
-  `mc2_cast_gate` arms `f26 = f28`, expiring via `mc2_cast_tick`/`mc2_cast_expire`. Only the
-  *reveal depth* is flat.
-- **App consumption** (`crates/mgc-app/src/main.rs:1206`, `:1218`):
-  - `entities::map_stamps_from_poses(…, w.beyond_sight(), …)` → balloons (class 3 / model 3)
-    stamped `if p.team == Some(0) || beyond_sight` (`entities.rs:610`). Correct shape for the
-    wizard-balloon reveal, but ungated by tier.
-  - `entities::rival_markers(&w.rival_views(), w.beyond_sight())` (`entities.rs:644-661`) →
-    a 2×2 team-colour dot per rival, but **`.filter(|r| r.alive && !r.invisible)`**: it
-    *unconditionally hides Invisible rivals*. That is retail **tier 0** behaviour applied to
-    every tier.
-- **Monsters:** the port has **no** creature map-reveal path at all — nothing consumes Beyond
-  Sight to un-hide enemy class-5 units.
-- `w.beyond_sight()` returns the bare bool (`world.rs:3437`).
-
-## 4. Gap
-
-| aspect | retail | port | verdict |
-|--------|--------|------|---------|
-| reveal enemy wizard on map | all tiers | any cast | OK (untiered but present) |
-| reveal Invisible wizard | tier ≥ 1 | **never** (`!r.invisible` filter) | **WRONG** — L2/L3 don't work |
-| reveal Metamorphed wizard | tier 2 | n/a (Metamorph unported) | latent — no cloak to pierce yet |
-| reveal enemy monsters/units | tier 2 | **never** | **MISSING** — L3's headline effect |
-| armed-window duration by tier | 151/261/361 | 151/261/361 | OK |
-| cast sound | none | none | OK |
-
-Root cause: a single boolean discards the tier. All three levels are indistinguishable on the
-map exactly as the player reports; the only tier-dependent behaviour that survives is the
-(barely visible) duration.
-
-## 5. Fix data
-
-**State (sim):** replace/augment the bool with the tier. Two viable shapes:
-- add `player.beyond_sight_tier: u8` (0/1/2) alongside a live bool, OR
-- expose the manifestation's live tier directly: `beyond_sight()` returns `Option<u8>` = the
-  tier of `mc2_book.ent[12]` while `f26 > 0`, else `None`.
-
-Set it at the cast-fire site (`cast.rs:783-786`) from `self.g.ent[m].f71` (the live tier), and
-clear at `mc2_cast_expire` (`cast.rs:651-652`). Keep the MC1 `apply_effect` channel
-(`world.rs:3096`) as tier-0/off for MC1 (MC1 has its own Beyond-Sight semantics; do not disturb
-the MC1 goldens — gate the tier field additions behind the same hash-transparency pattern used
-for the spellbook).
-
-**Reveal law (app), by tier `t` = live Beyond-Sight tier (None = not armed):**
-- `None`: reveal only own team (unchanged base map).
-- `t ≥ 0` (armed, any tier): reveal every alive enemy **wizard** balloon + marker/name.
-  - `t == 0`: exclude rivals that are Invisible OR (once ported) Metamorphed.
-  - `t == 1`: **include Invisible rivals**; still exclude Metamorphed.
-  - `t == 2`: include all rivals unconditionally.
-- `t == 2` **only**: additionally reveal enemy **creatures/monsters** — i.e. the class-5 ground
-  units that are otherwise culled from the map. In the port this means: when building the map
-  pose/dot list, stop hiding enemy mobs iff `beyond_sight_tier == 2`.
-
-Concretely:
-- `entities::rival_markers` — change the filter from unconditional `!r.invisible` to
-  `tier >= 1 || !r.invisible` (and drop the metamorph exclusion until Metamorph lands).
-- `entities::map_stamps_from_poses` balloon branch — fine as-is for wizards; no tier change
-  needed for L1 wizard reveal, but the invisible-rival exclusion must live in the marker path
-  (above), keyed on tier.
-- Add a tier-2 branch wherever enemy creatures are excluded from the minimap pose set, un-hiding
-  them (mirror of `EF:29857` clearing `byte[0] & 1`). This is the biggest new wiring.
-
-**State fields referenced (retail):** manifestation `word_0x2E_46` (armed timer),
-`word_0x30_48`/`word_0x18` (duration 151/261/361), `byte_0x46_70` (tier — THE reveal knob);
-target `byte_0x1BF_447` (Invisible) and `SpellEnabled[4]`/`word_0x2E_46` (Metamorph); entity
-`struct_byte_0xc.byte[0] & 1` (map-hidden bit).
-
-**Sounds:** none — Beyond Sight casts silently in retail and in the port; do not add one.
+- **State:** `World::beyond_sight_tier() -> Option<u8>` — MC2 reads the class-15 token
+  `mc2_book.ent[12]`'s `f71` while `f26 > 0`; MC1's bool maps to tier 0.
+  `RivalView::metamorphed` (MC2: the rival's `book.ent[4]` token armed) joins `invisible`.
+- **Map reveal:** `entities::rival_reveals(game, rivals, tier, env, palette, icons)` replaces
+  the interim 2×2 marker dot. MC1: each alive rival's NAME at `+2 px` in `TEAM_COLORS[slot].1`,
+  no cloak test. MC2: `sub_63570`'s gate (tier 0 hides Invisible or Metamorphed, tier 1 hides
+  Metamorphed, tier 2 hides nothing), a 1-px `playersColors[slot][0]` position pixel and the
+  name at `+4 px` in the same colour. Names are runs of `mgc_render::MapStamp`s built from the
+  messaging font (`UiAssets::map_glyph` → `MapIcons::glyphs`); `MapStamp` grew `offset`
+  (screen-space, post-projection, so a label never rotates with the map) and `tint`.
+- **Balloons:** unchanged — `map_stamps_from_poses` stamps `[66 + colour]` for own-or-armed.
+- **Enemy mines:** `live_poses_mc2` skips a (10,78) whose `f52` owner is neither the human nor
+  unresolved unless `beyond_sight_tier() == Some(2)` — presentation-side, so the hashed flag
+  word (which also feeds the flood's shove filter `sub_39FA0`) is untouched.
+- **Duration** 151/261/361 and the silent cast were already right.
 
 ## 6. Confidence, open questions, test
 
@@ -234,16 +196,20 @@ up with retail (L1 = base wizard reveal, L2 = see through Invisible, L3 = see th
 reveal monsters) once "extended vision" is read as "the map now shows enemy positions."
 
 **Open questions:**
-1. **Exactly which entity models route through `sub_3A8B0`** (i.e. which "monsters/units" the L3
-   reveal covers). It is the class-5 ground-unit tick, but the full model set behind state
-   address `0x21b8b0` was not enumerated in this pass — cross-check against the MC2 class-5
-   roster docs before wiring the app's creature-reveal so the un-hide set matches retail.
+1. ~~Which models route through `sub_3A8B0`~~ — resolved: it is the Magic Mine tick (class 10
+   model 78), see §2d. Unverified against the shipped EXE: `byte_0x3E_62 & 7` (the re-check
+   cadence) — the port evaluates every tick.
 2. **"Extended vision" (render draw-distance):** no 3D-render path keys on `SpellEnabled[12]`
    (grepped GameRenderOriginal/NG/HD/GL + ViewPort — zero hits). So retail Beyond Sight does
    **not** extend the 3D view distance; it is purely a minimap reveal. If a recording shows a
    view-distance change, that would contradict the decompile and should be recorded.
 3. **Metamorph interaction** is currently untestable in the port (Metamorph effect unported);
    the tier-2 "see through Metamorph" rung can only be verified once spell 4 lands.
+
+**Playtest conditions (what each tier changes on screen):** tier 1 vs 0 — a rival under
+Invisibility gains its name/pixel on the map; tier 2 vs 1 — a rival under Metamorph gains
+them, AND a rival's Magic Mine becomes visible in the viewport. With no rival cloaked and no
+enemy mine in view, the three tiers look identical by design (only the armed window differs).
 
 **Suggested test:** on an MC2 level with a rival wizard, cast Beyond Sight at each tier (use the
 dev-spells instrument to select tiers) while the rival is (a) plain, (b) Invisible. Assert on the

@@ -145,6 +145,33 @@ pub struct MapStamp {
     /// `(0, 1)` — the flagpole foot; balloon (66-73) = bottom-CENTER
     /// `(0.5, 1)` — the balloon base.
     pub anchor: [f32; 2],
+    /// Screen-space nudge from the anchored point, in the stamp's own
+    /// pixel units (scaled like `w`/`h`), applied AFTER the map
+    /// projection so it never rotates with the map — the retail
+    /// `DrawText(name, x + 2, y)` / `(x + 4, y)` name-label offsets
+    /// (remc1 sub_48710 :57432; remc2 GameUI.cpp:1520) and the glyph
+    /// advance along a label.
+    pub offset: [f32; 2],
+    /// Colour multiplier for the atlas texels — white for the
+    /// palette-baked sprites, the team colour for the white-masked
+    /// font glyphs (DrawText's `color` argument).
+    pub tint: [f32; 4],
+}
+
+impl MapStamp {
+    /// A plain, untinted, unshifted stamp — every sprite marker.
+    pub fn new(x: f32, z: f32, w: u32, h: u32, uv: [f32; 4], anchor: [f32; 2]) -> Self {
+        Self {
+            x,
+            z,
+            w,
+            h,
+            uv,
+            anchor,
+            offset: [0.0, 0.0],
+            tint: [1.0, 1.0, 1.0, 1.0],
+        }
+    }
 }
 
 /// The marching-ants guide line (remc1 :57161-82): a single-pixel mark
@@ -389,12 +416,17 @@ fn project_map_stamps(
                 // — castle (58-65) bottom-LEFT `DrawBitmap(v41,
                 // v42−h)`, balloon (66-73) bottom-CENTER `(v41−w/2,
                 // v42−h)`. uv is atlas texels (ui.wgsl divides).
-                let rect = [scx - st.anchor[0] * w, scy - st.anchor[1] * h, w, h];
+                let rect = [
+                    scx - st.anchor[0] * w + st.offset[0] * scale,
+                    scy - st.anchor[1] * h + st.offset[1] * scale,
+                    w,
+                    h,
+                ];
                 if let Some((rect, uv)) = clip_quad_to(rect, st.uv, bounds) {
                     quads.push(UiQuad {
                         rect,
                         uv,
-                        tint: [1.0, 1.0, 1.0, 1.0],
+                        tint: st.tint,
                     });
                 }
             }
@@ -6188,13 +6220,30 @@ mod tests {
     }
 
     fn stamp_at(x: f32, z: f32) -> MapStamp {
-        MapStamp {
-            x,
-            z,
-            w: 16,
-            h: 15,
-            uv: [0.0, 0.0, 16.0, 15.0],
-            anchor: [0.0, 1.0],
+        MapStamp::new(x, z, 16, 15, [0.0, 0.0, 16.0, 15.0], [0.0, 1.0])
+    }
+
+    /// A stamp's screen `offset` is a post-projection nudge: it
+    /// shifts the quad by `offset · scale` pixels regardless of the
+    /// map's yaw (a name label always reads left-to-right), and the
+    /// tint rides through to the quad.
+    #[test]
+    fn map_stamp_offset_is_screen_space_and_tinted() {
+        let (cx, cy, hx, hy) = (200.0, 200.0, 100.0, 100.0);
+        let base = stamp_at(10.0, 10.0);
+        let mut shifted = base;
+        shifted.offset = [4.0, 0.0];
+        shifted.tint = [0.5, 0.25, 1.0, 1.0];
+        for yaw in [0.0f32, 1.0, 2.5] {
+            let q0 = project_map_stamps(&[base], cx, cy, hx, hy, 10.0, 10.0, yaw, 64.0, false, 1.0, 2.0);
+            let q1 =
+                project_map_stamps(&[shifted], cx, cy, hx, hy, 10.0, 10.0, yaw, 64.0, false, 1.0, 2.0);
+            assert_eq!(q0.len(), 1);
+            assert_eq!(q1.len(), 1);
+            assert!((q1[0].rect[0] - q0[0].rect[0] - 8.0).abs() < 1e-3, "yaw {yaw}");
+            assert!((q1[0].rect[1] - q0[0].rect[1]).abs() < 1e-3, "yaw {yaw}");
+            assert_eq!(q1[0].tint, [0.5, 0.25, 1.0, 1.0]);
+            assert_eq!(q0[0].tint, [1.0, 1.0, 1.0, 1.0]);
         }
     }
 

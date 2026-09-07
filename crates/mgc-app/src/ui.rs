@@ -77,7 +77,7 @@ pub struct UiAssets {
 /// original's `x += GetLetterWidth` walk.
 const GLYPH_SPACING: f32 = 0.0;
 /// Fallback advance for an unmapped byte (source pixels).
-const GLYPH_FALLBACK_ADVANCE: f32 = 6.0;
+pub(crate) const GLYPH_FALLBACK_ADVANCE: f32 = 6.0;
 
 /// Icon treatment when compositing a pane tile — the three original
 /// blit rules (trace §2.4): `DrawBitmap` raw, `DrawTransparentBitmap`
@@ -657,14 +657,36 @@ impl UiAssets {
             66..=73 => [0.5, 1.0], // balloon: bottom-center
             _ => [0.5, 1.0],
         };
-        Some(mgc_render::MapStamp {
-            x: 0.0,
-            z: 0.0,
+        Some(mgc_render::MapStamp::new(
+            0.0,
+            0.0,
             w,
             h,
-            uv: [x as f32, y as f32, w as f32, h as f32],
+            [x as f32, y as f32, w as f32, h as f32],
             anchor,
-        })
+        ))
+    }
+
+    /// One messaging-font glyph as a map stamp (white mask, tinted by
+    /// the caller) plus its advance in source pixels — the Beyond-
+    /// Sight rival NAME labels (retail `DrawText` straight into the
+    /// map buffer: remc1 sub_48710 :57429-48, remc2 GameUI.cpp:1517-
+    /// 21). Anchored top-left at the label origin; the caller strings
+    /// glyphs along by accumulating `offset`. Glyphs draw at atlas
+    /// size (7 px caps) against the 18×23 balloon stamps — the ratio
+    /// retail shows on its 640-frame map. None for a byte the font
+    /// lacks (the caller advances by the fallback width) or an atlas
+    /// without a font.
+    pub fn map_glyph(&self, b: u8) -> Option<(mgc_render::MapStamp, f32)> {
+        let uv = self.glyph_uv.get(b as usize + 1).copied().flatten()?;
+        let (w, h) = (uv[2] as u32, uv[3] as u32);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        Some((
+            mgc_render::MapStamp::new(0.0, 0.0, w, h, uv, [0.0, 0.0]),
+            self.glyph_advance(b),
+        ))
     }
 
     /// Crop a WORLD sprite (frame 0) into fresh rows appended below
@@ -719,14 +741,14 @@ impl UiAssets {
         let scale = (6.0 / sw.max(sh) as f32).min(0.5);
         sw = ((sw as f32 * scale) as u32).max(1);
         sh = ((sh as f32 * scale) as u32).max(1);
-        Some(mgc_render::MapStamp {
-            x: 0.0,
-            z: 0.0,
-            w: sw,
-            h: sh,
-            uv: [0.0, y0 as f32, e.width as f32, e.height as f32],
-            anchor: [0.5, 1.0],
-        })
+        Some(mgc_render::MapStamp::new(
+            0.0,
+            0.0,
+            sw,
+            sh,
+            [0.0, y0 as f32, e.width as f32, e.height as f32],
+            [0.5, 1.0],
+        ))
     }
 
     /// The pre-composited icon-on-slab tile for a spell; `variant`

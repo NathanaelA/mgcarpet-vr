@@ -443,6 +443,11 @@ pub struct MapIcons {
     /// [`Self::jar_icons`]. Player ask 2026-09-07: even the faithful
     /// magenta dot is lost in a sea of dwelling flags.
     pub grave_icons: std::collections::HashMap<u16, mgc_render::MapStamp>,
+    /// The messaging font as map stamps, indexed by ASCII byte:
+    /// (white-masked glyph, advance in source px) — the Beyond-Sight
+    /// rival NAME labels (`rival_reveals`). Empty on an atlas without
+    /// a font (labels drop; the reveal keeps its dots/balloons).
+    pub glyphs: Vec<Option<(mgc_render::MapStamp, f32)>>,
 }
 
 /// Which icon-swap table a dot family belongs in (`map_marker_icons`,
@@ -513,6 +518,20 @@ const MC2_TEAM_DAY: [(u8, u8); 8] = [
     (0x76, 0xA0),
     (0x3D, 0x3A),
 ];
+/// The live `playersColors_E88E0x` pair table for a map type — night
+/// and cave share a table bar the cave's wizard-0 override.
+fn mc2_team_tab(env: Mc2MapEnv) -> [(u8, u8); 8] {
+    match env {
+        Mc2MapEnv::Day => MC2_TEAM_DAY,
+        Mc2MapEnv::Night | Mc2MapEnv::Cave => {
+            let mut t = MC2_TEAM_NIGHT;
+            if env == Mc2MapEnv::Cave {
+                t[0] = (0xE0, 0x58);
+            }
+            t
+        }
+    }
+}
 const MC2_TEAM_NIGHT: [(u8, u8); 8] = [
     (0xA4, 0xAA),
     (0x77, 0x7D),
@@ -558,16 +577,7 @@ fn mc2_map_dots(
     turn: u32,
     icon_swapped: &std::collections::HashSet<u16>,
 ) -> Vec<mgc_render::MapDot> {
-    let team_tab = match env {
-        Mc2MapEnv::Day => MC2_TEAM_DAY,
-        Mc2MapEnv::Night | Mc2MapEnv::Cave => {
-            let mut t = MC2_TEAM_NIGHT;
-            if env == Mc2MapEnv::Cave {
-                t[0] = (0xE0, 0x58);
-            }
-            t
-        }
-    };
+    let team_tab = mc2_team_tab(env);
     // Map-type colours (GameUI.cpp:1043-63): v92 = the unit fill,
     // v91/v90 = building/marker fallbacks.
     let (v92, v91, v90) = match env {
@@ -1795,28 +1805,82 @@ pub fn cap_particle_density(particles: Vec<FireParticle>) -> Vec<FireParticle> {
     kept
 }
 
-/// The Beyond-Sight rival position markers (interim for the retail
-/// name labels, :57413-48): a 2x2 dot in the rival's team color at
-/// each live, non-cloaked rival wizard.
-pub fn rival_markers(
+/// The Beyond-Sight rival reveal — retail's enemy-wizard pass over
+/// the map, run only while the spell is armed (`tier` = the live
+/// tier, `None` = off), both games:
+///
+/// - **MC1** (remc1 sub_48710 :57413-48): every OTHER player whose
+///   wizard is alive gets its NAME drawn at `(x + 2, y)` in the team
+///   pair's odd entry `byte_99B58[1 + 2·colour]` — no dot, and NO
+///   cloak test: an Invisible rival's name shows like any other
+///   (retail has one tier and one reveal).
+/// - **MC2** (remc2 GameUI.cpp:1492-1529, gate `sub_63570` :2219-52):
+///   each alive rival that passes the tier gate plots ONE pixel in
+///   `playersColors[colour][0]` (the bright entry) at its position and
+///   its name at `(x + 4, y)` in the same colour. The gate reads the
+///   Beyond-Sight manifestation's tier byte: tier 0 hides a rival
+///   that is Invisible (`byte_0x1BF_447`) OR Metamorphed (its spell-4
+///   manifestation armed); tier 1 sees through Invisible but not
+///   Metamorph; tier 2 sees everything.
+///
+/// The name is a run of font-glyph stamps strung along by their
+/// advance (`MapIcons::glyphs`), tinted through the level palette;
+/// both are screen-upright like every stamp. Presentation only.
+pub fn rival_reveals(
+    game: GameId,
     rivals: &[mgc_sim::engine::world::RivalView],
-    beyond_sight: Option<u8>,
-) -> Vec<mgc_render::MapDot> {
-    let Some(tier) = beyond_sight else {
-        return Vec::new();
+    tier: Option<u8>,
+    env: Mc2MapEnv,
+    palette: &[[u8; 4]; 256],
+    icons: &MapIcons,
+) -> (Vec<mgc_render::MapDot>, Vec<mgc_render::MapStamp>) {
+    let Some(tier) = tier else {
+        return (Vec::new(), Vec::new());
     };
-    // Tier 0 excludes Invisible rivals; tier ≥ 1 (Mana-Lock sight)
-    // reveals them too (docs/spell-audit/beyond-sight.md).
-    rivals
-        .iter()
-        .filter(|r| r.alive && (tier >= 1 || !r.invisible))
-        .map(|r| mgc_render::MapDot {
-            x: r.x,
-            z: r.z,
-            color: TEAM_COLORS[(r.slot as usize).min(7)].1,
-            size: 2,
-        })
-        .collect()
+    let mut dots = Vec::new();
+    let mut stamps = Vec::new();
+    for r in rivals.iter().filter(|r| r.alive) {
+        let slot = (r.slot as usize).min(7);
+        let (color, x0) = match game {
+            GameId::Mc2 => {
+                let seen = match tier {
+                    0 => !r.invisible && !r.metamorphed,
+                    1 => !r.metamorphed,
+                    _ => true,
+                };
+                if !seen {
+                    continue;
+                }
+                let color = mc2_team_tab(env)[slot].0;
+                dots.push(mgc_render::MapDot {
+                    x: r.x,
+                    z: r.z,
+                    color,
+                    size: 1,
+                });
+                (color, 4.0)
+            }
+            _ => (TEAM_COLORS[slot].1, 2.0),
+        };
+        let tint = pal_ui_rgba(palette, color);
+        let mut cx = x0;
+        for c in r.name.chars() {
+            let b = if c.is_ascii() { c as u8 } else { b'?' };
+            match icons.glyphs.get(b as usize).and_then(|g| g.as_ref()) {
+                Some((g, adv)) => {
+                    let mut st = *g;
+                    st.x = r.x;
+                    st.z = r.z;
+                    st.offset = [cx, 0.0];
+                    st.tint = tint;
+                    stamps.push(st);
+                    cx += adv;
+                }
+                None => cx += crate::ui::GLYPH_FALLBACK_ADVANCE,
+            }
+        }
+    }
+    (dots, stamps)
 }
 
 /// Resolve one type index to a billboard at a world position; skips
@@ -2750,22 +2814,8 @@ mod tests {
 
         // Stamps: the miniature keyed by type row, gated on the
         // toggle, outranked by the debug spell icon.
-        let mini = mgc_render::MapStamp {
-            x: 0.0,
-            z: 0.0,
-            w: 12,
-            h: 12,
-            uv: [0.0, 400.0, 24.0, 24.0],
-            anchor: [0.5, 1.0],
-        };
-        let spell_icon = mgc_render::MapStamp {
-            x: 0.0,
-            z: 0.0,
-            w: 8,
-            h: 8,
-            uv: [64.0, 0.0, 8.0, 8.0],
-            anchor: [0.5, 1.0],
-        };
+        let mini = mgc_render::MapStamp::new(0.0, 0.0, 12, 12, [0.0, 400.0, 24.0, 24.0], [0.5, 1.0]);
+        let spell_icon = mgc_render::MapStamp::new(0.0, 0.0, 8, 8, [64.0, 0.0, 8.0, 8.0], [0.5, 1.0]);
         let mut icons = MapIcons::default();
         icons.jar_icons.insert(42, mini);
         icons.static_icons.insert(7, mini);
@@ -2861,6 +2911,107 @@ mod tests {
         let any_dims = |_: u16| Some((32u16, 64u16, 0u16));
         let mc1 = billboards_from_poses(GameId::Mc1, &poses, any_dims, false, false, true, false);
         assert!(mc1.iter().all(|b| !b.conceal), "MC1 never conceals");
+    }
+
+    fn rival(slot: u8, name: &'static str, invisible: bool, metamorphed: bool) -> mgc_sim::engine::world::RivalView {
+        use mgc_sim::engine::world::RivalView;
+        RivalView {
+            slot,
+            name,
+            alive: true,
+            eliminated: false,
+            x: 10.0,
+            z: 20.0,
+            alt: 0.0,
+            mana: 0,
+            mana_max: 0,
+            life_frac: 1.0,
+            kills: [0; 8],
+            invisible,
+            metamorphed,
+        }
+    }
+
+    fn glyph_icons() -> MapIcons {
+        MapIcons {
+            glyphs: (0..=255u8)
+                .map(|b| {
+                    b.is_ascii_uppercase().then(|| {
+                        (
+                            mgc_render::MapStamp::new(0.0, 0.0, 4, 7, [b as f32, 0.0, 4.0, 7.0], [0.0, 0.0]),
+                            4.0,
+                        )
+                    })
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The Beyond-Sight reveal's tier gate, per game. MC1 has one
+    /// tier and no cloak test (sub_48710 :57413-48); MC2's
+    /// `sub_63570` hides Invisible at tier 0, Metamorph below tier 2.
+    #[test]
+    fn rival_reveal_tier_gate() {
+        let pal = [[0u8, 0, 0, 255]; 256];
+        let icons = glyph_icons();
+        let rivals = [
+            rival(1, "AB", false, false),
+            rival(2, "CD", true, false),
+            rival(3, "EF", false, true),
+        ];
+        let names = |game, tier| {
+            let (dots, stamps) = rival_reveals(game, &rivals, tier, Mc2MapEnv::Day, &pal, &icons);
+            (dots.len(), stamps.len())
+        };
+        // Off: nothing, both games.
+        assert_eq!(names(GameId::Mc1, None), (0, 0));
+        assert_eq!(names(GameId::Mc2, None), (0, 0));
+        // MC1: every alive rival's name (2 glyphs each), no dot.
+        assert_eq!(names(GameId::Mc1, Some(0)), (0, 6));
+        // MC2 tier 0: the plain rival only; tier 1: + Invisible;
+        // tier 2: everyone. One position pixel per revealed rival.
+        assert_eq!(names(GameId::Mc2, Some(0)), (1, 2));
+        assert_eq!(names(GameId::Mc2, Some(1)), (2, 4));
+        assert_eq!(names(GameId::Mc2, Some(2)), (3, 6));
+        // A dead rival never labels.
+        let mut dead = rival(4, "GH", false, false);
+        dead.alive = false;
+        assert_eq!(
+            rival_reveals(GameId::Mc1, &[dead], Some(0), Mc2MapEnv::Day, &pal, &icons).1.len(),
+            0
+        );
+    }
+
+    /// The label geometry: glyphs string along by their advance from
+    /// retail's per-game x offset (MC1 +2, MC2 +4), pinned to the
+    /// rival's tile, tinted with the team colour retail passes to
+    /// DrawText (MC1 the pair's odd entry, MC2 the bright entry —
+    /// which the MC2 position pixel shares).
+    #[test]
+    fn rival_reveal_label_geometry_and_colour() {
+        let mut pal = [[0u8, 0, 0, 255]; 256];
+        pal[TEAM_COLORS[2].1 as usize] = [255, 0, 0, 255];
+        pal[MC2_TEAM_DAY[2].0 as usize] = [0, 255, 0, 255];
+        let icons = glyph_icons();
+        let r = [rival(2, "ABC", false, false)];
+        let (_, s1) = rival_reveals(GameId::Mc1, &r, Some(0), Mc2MapEnv::Day, &pal, &icons);
+        assert_eq!(s1.len(), 3);
+        for (k, st) in s1.iter().enumerate() {
+            assert_eq!((st.x, st.z), (10.0, 20.0));
+            assert_eq!(st.offset, [2.0 + 4.0 * k as f32, 0.0]);
+            assert_eq!(st.uv[0], b"ABC"[k] as f32);
+            assert!(st.tint[0] > 0.99 && st.tint[1] < 0.01, "MC1 tint = the odd team entry");
+        }
+        let (d2, s2) = rival_reveals(GameId::Mc2, &r, Some(0), Mc2MapEnv::Day, &pal, &icons);
+        assert_eq!(s2[0].offset, [4.0, 0.0]);
+        assert!(s2[0].tint[1] > 0.99 && s2[0].tint[0] < 0.01, "MC2 tint = the bright entry");
+        assert_eq!((d2[0].color, d2[0].size), (MC2_TEAM_DAY[2].0, 1));
+        // A byte the font lacks advances by the fallback width.
+        let r = [rival(2, "A-B", false, false)];
+        let (_, s3) = rival_reveals(GameId::Mc1, &r, Some(0), Mc2MapEnv::Day, &pal, &icons);
+        assert_eq!(s3.len(), 2);
+        assert_eq!(s3[1].offset[0], 2.0 + 4.0 + crate::ui::GLYPH_FALLBACK_ADVANCE);
     }
 
     /// The rival tag chrome: MC2 resolves the retail bldgprmbuffer
