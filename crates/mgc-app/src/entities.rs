@@ -438,6 +438,11 @@ pub struct MapIcons {
     /// Icon-swap stamps for the dolmen/shrine/statue statics, keyed
     /// like [`Self::jar_icons`].
     pub static_icons: std::collections::HashMap<u16, mgc_render::MapStamp>,
+    /// Icon-swap stamp for the (10,40) wizard grave — its own
+    /// pile-of-bones sprite (row 65, both games), keyed like
+    /// [`Self::jar_icons`]. Player ask 2026-09-07: even the faithful
+    /// magenta dot is lost in a sea of dwelling flags.
+    pub grave_icons: std::collections::HashMap<u16, mgc_render::MapStamp>,
 }
 
 /// Which icon-swap table a dot family belongs in (`map_marker_icons`,
@@ -448,15 +453,20 @@ pub struct MapIcons {
 /// 2 (sprite 39; its dot is the tree-colored scenery 28, which is
 /// exactly why it deserves an icon); MC2's blinking marker stone
 /// (2,1) and dolmen (2,2). Trees and the sprite-48 trail-marker
-/// stones keep their retail dots.
+/// stones keep their retail dots. Added 2026-09-07 (player ask): the
+/// (10,40) wizard grave, both games — the corpse you possess to
+/// reclaim a dead wizard's mana wears its own bones sprite instead
+/// of a dot indistinguishable from the dwelling flags around it.
 pub enum SwapFamily {
     Jar,
     Static,
+    Grave,
 }
 
 pub fn icon_swap_family(game: GameId, class: u8, model: u8) -> Option<SwapFamily> {
     match (game, class, model) {
         (_, 12 | 15, _) => Some(SwapFamily::Jar),
+        (_, 10, 40) => Some(SwapFamily::Grave),
         (GameId::Mc2, 2, 1 | 2) => Some(SwapFamily::Static),
         (GameId::Mc1 | GameId::Mc1Hw, 2, 1..=3) => Some(SwapFamily::Static),
         _ => None,
@@ -869,6 +879,7 @@ pub fn map_stamps_from_poses(
             // was built for, so anything else keeps its dot.
             (12 | 15, _) if marker_icons => icons.jar_icons.get(&p.type_index),
             (2, _) if marker_icons => icons.static_icons.get(&p.type_index),
+            (10, 40) if marker_icons => icons.grave_icons.get(&p.type_index),
             // (MC2 exit X/O markers are NOT pose-driven — hidden
             // markers must plot too; see `exit_marker_stamps`.)
             _ => None,
@@ -2758,6 +2769,7 @@ mod tests {
         let mut icons = MapIcons::default();
         icons.jar_icons.insert(42, mini);
         icons.static_icons.insert(7, mini);
+        icons.grave_icons.insert(65, mini);
         icons.spell = vec![Some(spell_icon); 26];
         let stamps = |p: LivePose, expose: bool, swap: bool| {
             map_stamps_from_poses(GameId::Mc1, &[p], &icons, false, expose, swap)
@@ -2779,6 +2791,26 @@ mod tests {
         assert_eq!(s[0].uv, mini.uv);
         // An unkeyed static stays dotted, not stamped.
         assert!(stamps(pose(2, 1, false, 8), false, true).is_empty());
+        // The wizard grave resolves through its own table, both games.
+        let s = stamps(pose(10, 40, false, 65), false, true);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].uv, mini.uv);
+        let s = map_stamps_from_poses(
+            GameId::Mc2,
+            &[pose(10, 40, false, 65)],
+            &icons,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(s.len(), 1);
+        assert!(stamps(pose(10, 40, false, 65), false, false).is_empty());
+        // ...and it is a swap family (the capture builds it).
+        assert!(matches!(
+            icon_swap_family(GameId::Mc2, 10, 40),
+            Some(SwapFamily::Grave)
+        ));
+        assert!(icon_swap_family(GameId::Mc2, 10, 39).is_none());
     }
 
     /// The MC2 billboard size law (remc2 GameRenderOriginal.cpp

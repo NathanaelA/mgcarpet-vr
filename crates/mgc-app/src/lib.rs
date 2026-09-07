@@ -774,6 +774,7 @@ fn capture_marker_icons(
         let bucket = match entities::icon_swap_family(level.game, p.class, p.model) {
             Some(entities::SwapFamily::Jar) => &mut level.map_icons.jar_icons,
             Some(entities::SwapFamily::Static) => &mut level.map_icons.static_icons,
+            Some(entities::SwapFamily::Grave) => &mut level.map_icons.grave_icons,
             None => continue,
         };
         if bucket.contains_key(&p.type_index) {
@@ -801,6 +802,7 @@ fn dot_swap_set(level: &LoadedLevel, cfg: &config::Config) -> std::collections::
         return set;
     }
     set.extend(level.map_icons.static_icons.keys().copied());
+    set.extend(level.map_icons.grave_icons.keys().copied());
     if !cfg.render.enhancement.expose_jar_spells {
         set.extend(level.map_icons.jar_icons.keys().copied());
     }
@@ -1345,6 +1347,7 @@ fn load_level(
                 }),
             jar_icons: Default::default(),
             static_icons: Default::default(),
+            grave_icons: Default::default(),
         },
         map_stamps: Vec::new(),
         objective_marks: Vec::new(),
