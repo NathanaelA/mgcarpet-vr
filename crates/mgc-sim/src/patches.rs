@@ -21,30 +21,6 @@
 /// Per-patch switches; `true` = the patched (bug-fixed) arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WorldPatches {
-    /// **MC1/HW's FIRST-CASTLE LOCKOUT — an unpatched retail BUG.**
-    /// Patched = live-law: the cost re-derives from the OWN castle
-    /// every query (homeless → ctor 1000). Retail = the stale stamp:
-    /// the manifestation's cached cost is rewritten at castle
-    /// init/level-up and NEVER on castle death (sub_47C60/sub_47DD0),
-    /// so after ANY castle loss the rebuild is priced at
-    /// `CASTLE_CAP[0]` = **5,000** against a **1,000** starting purse
-    /// — unaffordable until collection pushes the census ceiling past
-    /// it. Player-certified on retail; the lockout may be a deliberate
-    /// period challenge, so the FIX is the opt-in (player-ruled
-    /// 2026-08-08, DEFAULT RETAIL).
-    ///
-    /// ⚠⚠ **THIS IS AN MC1/HW CONCERN.** MC2 does NOT have the
-    /// lockout: its destroy path re-stamps the token at the level-0
-    /// rung (**1,000**) before the record frees, so an MC2 castle
-    /// destroyed by an enemy is immediately rebuildable. MC2 charges
-    /// for teardown through the DESIGNED +3,000 surcharge instead,
-    /// which only a VOLUNTARY demolish latches — that is deliberate
-    /// behaviour, it does NOT ride this switch, and it is faithful
-    /// under BOTH arms (mc2/cast.rs). The one MC2 thing left here is a
-    /// narrow corner: the castle-less RELEASE re-sync in mc2/cast.rs,
-    /// a release edge with no castle and no intervening ladder stamp.
-    /// Do not extend this toggle to cover MC2 design.
-    pub castle_recast_cost: bool,
     /// Class-12 jars re-snap to their tile's ground every tick.
     /// Retail's reshape walk skips class 12 (:51729): terrain shaped
     /// over/under a jar leaves it buried (HW ships several) or
@@ -138,7 +114,6 @@ impl WorldPatches {
     /// world-construction default; what conformance, goldens and
     /// `--record`/`--replay` runs use.
     pub const RETAIL: WorldPatches = WorldPatches {
-        castle_recast_cost: false,
         jar_ground_snap: false,
         ball_ground_track: false,
         map_wide_ball_rolling: false,
@@ -154,8 +129,11 @@ impl WorldPatches {
     /// recordings taped before the `--record` force-retail policy
     /// replay under THIS set — it is the sim their inputs were
     /// recorded against. `map_wide_ball_rolling` did not exist then.
+    /// (`castle_recast_cost`, live-law castle pricing, was part of
+    /// this set until its retirement on 2026-09-07 — player-ruled:
+    /// the lockout is retail's and the relief made the early game
+    /// too easy; such recordings replay under the lockout now.)
     pub const LEGACY: WorldPatches = WorldPatches {
-        castle_recast_cost: true,
         jar_ground_snap: true,
         ball_ground_track: true,
         map_wide_ball_rolling: false,

@@ -1641,33 +1641,6 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Gameplay,
             group: "gameplay · patches",
-            label: "castle_recast_cost",
-            class: Patch,
-            key: None,
-            cli: None,
-            cfg_path: "gameplay.patches.castle_recast_cost",
-            read: |c| Val::Toggle {
-                on: c.gameplay.patches.castle_recast_cost.on(),
-                faithful: false,
-            },
-            desc: "Create Castle pricing after castle loss. Retail never re-prices \
-                   when your castle dies: the recast keeps the last ladder \
-                   price (the first-castle lockout) until collected mana \
-                   raises your ceiling past it. The patch re-derives the \
-                   live price, so a fresh castle always costs 1000.",
-            ctl: Ctl::Toggle {
-                set: |c, v| {
-                    c.gameplay.patches.castle_recast_cost = crate::config::PatchArm::from_on(v)
-                },
-                descs: [
-                    "The retail lockout - maybe a deliberate challenge (default).",
-                    "Live pricing: a fresh castle is always affordable.",
-                ],
-            },
-        },
-        Spec {
-            domain: Gameplay,
-            group: "gameplay · patches",
             label: "jar_ground_snap",
             class: Patch,
             key: None,
@@ -2159,7 +2132,8 @@ mod tests {
         assert_eq!(enh, 0, "no enhancement-class deviation by default");
         assert_eq!(verdict, Fidelity::Faithful);
         // The default-on retail patches count apart and never flip
-        // the verdict (castle_recast_cost ships on its retail arm).
+        // the verdict (castle_recast_cost, the one retail-default
+        // patch, was retired 2026-09-07).
         // castle_death_mana/balloons retired 2026-08-12 — the mc1l0
         // corpus proved the scatter + fleet cull are retail law
         // (sub_470E0's wrapper), so they are unconditional now.
@@ -2168,7 +2142,7 @@ mod tests {
         // detonation column is unconditional too (DEVIATIONS.md).
         // ball_owner_recolor added 2026-09-06 (presentation-only),
         // no_spell_loss + mc1_fix_dragon_tail 2026-09-07.
-        assert_eq!(patches, 11, "eleven of the twelve patches ship on");
+        assert_eq!(patches, 11, "all eleven patches ship on");
     }
 
     #[test]

@@ -883,13 +883,6 @@ impl PatchArm {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GameplayPatches {
-    /// Create Castle pricing after castle loss (all 3 games).
-    /// `retail` (DEFAULT — player-ruled 2026-08-08): the stale cost
-    /// stamp; after your castle dies the recast costs the last
-    /// stamped ladder price (the first-castle lockout — possibly a
-    /// deliberate period challenge). `patched`: live-law pricing; a
-    /// fresh castle is always affordable (1000) when homeless.
-    pub castle_recast_cost: PatchArm,
     /// Spell jars re-snap to the ground every tick. Retail's terrain
     /// reshaping leaves jars buried (HW ships several!) or floating.
     pub jar_ground_snap: PatchArm,
@@ -969,9 +962,6 @@ pub struct GameplayPatches {
 impl Default for GameplayPatches {
     fn default() -> Self {
         Self {
-            // Player-ruled 2026-08-08: the lockout ships as the
-            // authentic default; the fix is the opt-in.
-            castle_recast_cost: PatchArm::Retail,
             jar_ground_snap: PatchArm::Patched,
             ball_ground_track: PatchArm::Patched,
             map_wide_ball_rolling: PatchArm::Patched,
@@ -992,7 +982,6 @@ impl GameplayPatches {
     /// and every faithful fixture runs.
     pub fn retail_all() -> Self {
         Self {
-            castle_recast_cost: PatchArm::Retail,
             jar_ground_snap: PatchArm::Retail,
             ball_ground_track: PatchArm::Retail,
             map_wide_ball_rolling: PatchArm::Retail,
@@ -1011,10 +1000,10 @@ impl GameplayPatches {
     /// before the patches became options. Port recordings taped
     /// before the header carried a patch policy replay under this
     /// (`map_wide_ball_rolling` did not exist then; the castle cost
-    /// was live-law).
+    /// was live-law until that patch's retirement on 2026-09-07 —
+    /// such takes replay under the lockout now, player-accepted).
     pub fn legacy() -> Self {
         Self {
-            castle_recast_cost: PatchArm::Patched,
             map_wide_ball_rolling: PatchArm::Retail,
             // Did not exist pre-option (2026-08-08): dwellers drew
             // plainly, balls wore the sim's row.
@@ -1250,7 +1239,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 25;
+const DEFAULTS_VERSION: u64 = 26;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

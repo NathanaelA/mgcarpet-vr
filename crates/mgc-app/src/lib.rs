@@ -9151,7 +9151,6 @@ fn apply_instruments(
 /// patches in here, and `apply_option` re-applies live.
 fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
     mgc_sim::WorldPatches {
-        castle_recast_cost: p.castle_recast_cost.on(),
         jar_ground_snap: p.jar_ground_snap.on(),
         ball_ground_track: p.ball_ground_track.on(),
         map_wide_ball_rolling: p.map_wide_ball_rolling.on(),

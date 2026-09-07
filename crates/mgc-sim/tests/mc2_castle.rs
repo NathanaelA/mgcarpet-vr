@@ -557,18 +557,16 @@ fn mc2_castle_cost_refreshes_on_downgrade() {
     );
 }
 
-/// The MC2 face of the `castle_recast_cost` patch (DEVIATIONS.md
-/// first-castle lockout). CORRECTED 2026-08-22 by the mc2l3 corpus
+/// The MC2 face of the first-castle lockout (DEVIATIONS.md; the
+/// `castle_recast_cost` patch that once forked it was retired
+/// 2026-09-07). CORRECTED 2026-08-22 by the mc2l3 corpus
 /// (t=265): total castle DEATH walks the destroy's DOWNGRADE, and
 /// `sub_605E0` → `sub_60810` runs the level-0 ladder rung THROUGH
 /// `sub_60780` — the gate-suppressed SetSpell re-prices the token at
 /// the level-0 rung (base 1000) BEFORE the record frees. "Death never
 /// re-stamps" was the same mis-reading the MC1 half of the entry shed
-/// on 2026-08-10 (its teardown stamps CAP[0]). Both arms therefore
-/// converge on a ladder-stamped death; the patch's remaining scope is
-/// the castle-less RELEASE re-sync (a release edge with no castle and
-/// no ladder stamp in between). One world per arm.
-fn mc2_castle_death_cost_arm(patched: bool) {
+/// on 2026-08-10 (its teardown stamps CAP[0]): a ladder-stamped death.
+fn mc2_castle_death_cost() {
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -577,12 +575,6 @@ fn mc2_castle_death_cost_arm(patched: bool) {
         eprintln!("skipping: level-000 has no terrain");
         return;
     };
-    if patched {
-        w.set_patches(mgc_sim::WorldPatches {
-            castle_recast_cost: true,
-            ..mgc_sim::WorldPatches::RETAIL
-        });
-    }
     w.set_dev_spells(true);
 
     let (cx, cy) = clear_spot(&w);
@@ -625,26 +617,18 @@ fn mc2_castle_death_cost_arm(patched: bool) {
     }
     assert!(w.loadout().castle.is_none(), "the demolish razed it");
 
-    // THE +3000 RE-CAST SURCHARGE APPLIES ON BOTH ARMS. This harness
+    // THE +3000 RE-CAST SURCHARGE. This harness
     // demolishes at LEVEL 1 EXACTLY, the one gate that latches
     // retail's `byte_0x1BE_446` (EF:37993-95), and the caster is now
     // castle-less — so `GetSpellManaCost_6D710` (L:1723-26) adds 3000
     // to the tier's base 1000.
-    // ⚠ The arms deliberately AGREE here (player-ruled 2026-08-23c).
-    // `castle_recast_cost` relieves MC1's first-castle LOCKOUT, which
-    // is an unpatched retail BUG; the MC2 surcharge is DESIGNED
-    // behaviour — MC2 re-prices an enemy-destroyed castle at 1000 and
-    // taxes only the demolish you chose. Putting design behind a
-    // bug-relief switch would make the patched arm less faithful for
-    // no gameplay reason, so the surcharge does not fork.
+    // The MC2 surcharge is DESIGNED behaviour (player-ruled
+    // 2026-08-23c) — MC2 re-prices an enemy-destroyed castle at 1000
+    // and taxes only the demolish you chose — so it never rode the
+    // MC1 lockout's (now retired) patch.
     let want = 4_000;
-    assert_eq!(
-        w.mc2_book_view().cost[2],
-        want,
-        "the castle-less rebuild price ({} arm)",
-        if patched { "patched" } else { "retail" }
-    );
-    // Both arms: the death's own downgrade ladder stamped the level-0
+    assert_eq!(w.mc2_book_view().cost[2], want, "the castle-less rebuild price");
+    // The death's own downgrade ladder stamped the level-0
     // rung through the suppressed re-sync (mc2l3 t=265: retail token
     // 10000/99 -> 1000/9 the tick the castle fell) — now priced
     // against the MAILING castle, so the deferral to the post-walk
@@ -657,13 +641,8 @@ fn mc2_castle_death_cost_arm(patched: bool) {
 }
 
 #[test]
-fn mc2_castle_death_reprices_at_the_level0_rung_on_the_retail_arm() {
-    mc2_castle_death_cost_arm(false);
-}
-
-#[test]
-fn mc2_castle_death_reprices_at_the_level0_rung_on_the_patched_arm() {
-    mc2_castle_death_cost_arm(true);
+fn mc2_castle_death_reprices_at_the_level0_rung() {
+    mc2_castle_death_cost();
 }
 
 /// The pane grey-out law (`canSummon`/`canSubSummon`, EF:22503-08 /

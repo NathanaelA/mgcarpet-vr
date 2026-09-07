@@ -1169,10 +1169,11 @@ impl World {
         let base = row.tiers[tier.min(2)].mana_cost;
         if spell == 2 {
             // THE +3000 RE-CAST SURCHARGE (L:1723-26 / L:1776-79) —
-            // UNCONDITIONAL, and deliberately NOT on the
-            // `castle_recast_cost` toggle (player-ruled 2026-08-23c,
-            // reversing the initial ruling once the provenance was
-            // understood). That toggle relieves MC1's first-castle
+            // UNCONDITIONAL, and deliberately NOT on the (since
+            // retired, 2026-09-07) `castle_recast_cost` toggle
+            // (player-ruled 2026-08-23c, reversing the initial ruling
+            // once the provenance was understood). That toggle
+            // relieved MC1's first-castle
             // LOCKOUT, which is an unpatched retail BUG: MC1 never
             // re-stamps the cached price on castle death, so ANY loss
             // prices the rebuild at CAP[0] = 5,000 against a 1,000
@@ -2780,15 +2781,14 @@ impl World {
     /// CASTLE's own pass, both writers now sit at the same slot retail
     /// runs them from. Retail's stamp rides the castle's own HP/CAP
     /// writes, so castle DEATH leaves the old rung cached (the MC2 face
-    /// of the first-castle lockout): under the `castle_recast_cost`
-    /// retail arm the castle-less release skips the re-sync exactly
-    /// like retail; the patched arm re-syncs to the base-cost rebuild.
+    /// of the first-castle lockout): the castle-less release skips
+    /// the re-sync exactly like retail. (The retired
+    /// `castle_recast_cost` patch used to re-sync it to the base-cost
+    /// rebuild here — gone 2026-09-07, player-ruled.)
     fn mc2_castle_lock_release(&mut self, m: usize) {
         self.g.ent[m].f26 = 0;
         self.mc2_cast_expire(2, m);
-        if (self.patches.castle_recast_cost && !self.strict_retail)
-            || self.player_castle().is_some()
-        {
+        if self.player_castle().is_some() {
             let tier = self.g.ent[m].f71;
             self.mc2_set_spell(m, tier);
         }

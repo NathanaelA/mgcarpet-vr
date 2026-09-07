@@ -6587,11 +6587,11 @@ impl World {
                     // so the level-up commit's fresh level (and bind)
                     // is what the same tick's stamp reads (mc1l0
                     // t=563: 10000/99 with the commit, not the
-                    // pre-commit 1000/9). Live under BOTH cost arms
-                    // since the `castle_recast_cost` patch landed:
-                    // the stamp is retail's own state evolution —
-                    // only the READ (spell_cast_cost) forks, so
-                    // hashes and snapshots stay arm-independent
+                    // pre-commit 1000/9). The stamp is retail's own
+                    // state evolution (it stayed arm-independent
+                    // under the retired `castle_recast_cost` patch,
+                    // whose only fork was the spell_cast_cost READ),
+                    // so hashes and snapshots never depended on it
                     // while a castle stands. GATED ON THE BIND, NOT
                     // THE OWNER: retail reads wizext+50, which ONLY
                     // the level-up commit writes (:56484) and the
@@ -8802,9 +8802,10 @@ impl World {
             // every other manifestation carried mana 0 / max_life 300
             // — mc1l42's respawn reads retail's fireball token at
             // `max_life 0, +136 200, +140 40` against exactly that.
-            // The retail arm of the `castle_recast_cost` patch READS
-            // the +136 cache (and the castle tick's re-stamp); the
-            // patched arm live-derives and ignores it.
+            // `spell_cast_cost` READS this +136 cache (and the castle
+            // tick's re-stamp) — the first-castle lockout's stale
+            // stamp, retail law (the `castle_recast_cost` relief
+            // was retired 2026-09-07).
             e.f50 = def.count as i16;
             e.f136 = def.possess_mana as i32;
             e.f140 = def.possess_mana as i32 / def.count.max(1) as i32;
@@ -9407,25 +9408,17 @@ impl World {
     /// cast gate and [`World::loadout`] so the shown dots can never
     /// drift from what a cast actually charges.
     ///
-    /// The `castle_recast_cost` patch forks the spell-16 READ:
-    /// - retail arm (default): the manifestation's +136 cache — which
-    ///   NO teardown ever re-stamps, so a homeless wizard keeps the
-    ///   last stamped ladder price (the player-certified FIRST-CASTLE
-    ///   LOCKOUT, DEVIATIONS.md).
-    /// - patched arm: live-law re-derive — housed → `CAP[level]`,
-    ///   homeless → the ctor 1000, so a fresh castle is always
-    ///   affordable after a loss.
+    /// Spell 16 reads the manifestation's +136 cache — which the
+    /// teardown re-stamps at `CAP[0]` on castle death, so a homeless
+    /// wizard prices the re-cast at 5000 against a 1000 purse: the
+    /// player-certified FIRST-CASTLE LOCKOUT, retail law in every
+    /// arm. (A live-law re-derive used to ride the `castle_recast_cost`
+    /// patch; RETIRED 2026-09-07, player-ruled — DEVIATIONS.md.)
     pub(crate) fn spell_cast_cost(&self, id: usize) -> u32 {
         if id >= SPELL_COUNT {
             return 1;
         }
         if id == 16 {
-            if self.patches.castle_recast_cost && !self.strict_retail {
-                return self
-                    .player_castle()
-                    .map(|c| Gen::CASTLE_CAP[self.g.ent[c].f26.clamp(0, 7) as usize] as u32)
-                    .unwrap_or(SPELLS[16].possess_mana);
-            }
             let m = self.player.owned[16] as usize;
             if m != 0 && m < self.g.ent.len() {
                 let e = &self.g.ent[m];
@@ -23772,18 +23765,16 @@ mod tests {
         );
     }
 
-    /// The `castle_recast_cost` patch, both arms (DEVIATIONS.md "the
-    /// castle-cost stale stamp / first-castle lockout"). While housed
-    /// the stamp and the live law agree (the castle tick re-stamps the
-    /// manifestation's +136 every tick, both arms); at castle death
+    /// The first-castle lockout (DEVIATIONS.md "the castle-cost stale
+    /// stamp"), retail law in every arm since the `castle_recast_cost`
+    /// patch was retired (2026-09-07). While housed the castle tick
+    /// re-stamps the manifestation's +136 every tick; at castle death
     /// retail's teardown re-stamps the token at CAP[0] = 5000
     /// (sub_47A70 :56527-28 → sub_47C60 case 0 — corroborated by the
-    /// cast-phase corpus's token +140 = 49 = 5000/101) — the
-    /// player-certified FIRST-CASTLE LOCKOUT prices at 5000, not the
-    /// stale ladder price — while the patched arm re-derives the ctor
-    /// 1000.
+    /// cast-phase corpus's token +140 = 49 = 5000/101) — so the
+    /// homeless recast prices at 5000, not the stale ladder price.
     #[test]
-    fn first_castle_lockout_stale_stamp_vs_live_law() {
+    fn first_castle_lockout_stale_stamp() {
         let mut w = bare_creature_world(2);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
@@ -23804,7 +23795,7 @@ mod tests {
         assert_eq!(
             w.spell_cast_cost(16),
             cap1,
-            "housed: the stale stamp IS the live law (both arms agree)"
+            "housed: the stale stamp IS the live law"
         );
 
         // Demolish: level 1 -> total destruction, castle-less.
@@ -23835,18 +23826,6 @@ mod tests {
             "retail arm: the death stamp prices the homeless recast"
         );
         assert_eq!(w.loadout().cost[16], cap0, "the HUD dots agree");
-
-        // Patched arm: live-law re-derive — homeless -> the ctor 1000.
-        w.set_patches(crate::patches::WorldPatches {
-            castle_recast_cost: true,
-            ..crate::patches::WorldPatches::RETAIL
-        });
-        assert_eq!(
-            w.spell_cast_cost(16),
-            SPELLS[16].possess_mana,
-            "patched arm: a fresh castle is always affordable"
-        );
-        assert_eq!(w.loadout().cost[16], SPELLS[16].possess_mana);
     }
 
     /// The dispatcher's over-quota cull (:56399-411): when the fleet

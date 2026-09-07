@@ -167,8 +167,8 @@ pub(crate) const MC2_CASTLE_CAP: [i32; 8] =
 /// * **rung 0: 1,000 here vs MC1's 5,000.** This is the load-bearing
 ///   divergence. MC1 stamps its 5,000 on EVERY castle teardown against
 ///   a 1,000 starting purse, which is the accidental FIRST-CASTLE
-///   LOCKOUT (an unpatched retail bug — see `castle_recast_cost` in
-///   docs/DEVIATIONS.md). MC2 re-prices a destroyed castle at this
+///   LOCKOUT (an unpatched retail bug — see the retired
+///   `castle_recast_cost` entry in docs/DEVIATIONS.md). MC2 re-prices a destroyed castle at this
 ///   1,000 and is immediately rebuildable; it charges instead through
 ///   the DELIBERATE +3,000 surcharge, which only a VOLUNTARY demolish
 ///   can latch. Same felt penalty, opposite provenance: MC2 taxes the
