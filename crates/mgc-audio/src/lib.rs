@@ -68,12 +68,20 @@ pub struct Audio {
     /// default-endpoint change — the "sound never comes back after a
     /// long pause" report), so a rebuilt stream starts blank and
     /// must be re-primed (`resend_state`).
-    volumes: (f32, f32),
+    volumes: (f32, f32, f32),
     suspended: bool,
     /// The playing track's decoded payload (Arc-cheap), for replay
     /// after a rebuild — `play_music`'s same-name guard would
     /// otherwise refuse to restart it.
     music_cmd: Option<(Arc<Vec<i16>>, Option<Arc<Vec<i16>>>, u16, u32, bool)>,
+    /// The last STOPPED track's decoded payload, keyed by (name,
+    /// prefer_gm at decode time): a music re-enable (`stop_music`
+    /// then `play_music` of the same track) reuses it instead of
+    /// decoding ~0.5-0.8 s of FLAC on the game thread again
+    /// (player-reported startup lag, 2026-09-08). One entry: it holds
+    /// exactly what was resident while the track played, so a muted
+    /// game costs no more memory than a playing one.
+    music_cache: Option<(String, bool, (Arc<Vec<i16>>, Option<Arc<Vec<i16>>>, u16, u32))>,
     /// Stream watchdog: last observed heartbeat, ticks it has been
     /// stale, and the reopen retry backoff.
     last_beat: u32,
@@ -99,9 +107,10 @@ impl Audio {
             duck_gain: 1.0,
             movie_voices: Vec::new(),
             movie_bank: 0,
-            volumes: (1.0, 1.0),
+            volumes: (1.0, 1.0, 1.0),
             suspended: false,
             music_cmd: None,
+            music_cache: None,
             last_beat: 0,
             stale_ticks: 0,
             reopen_backoff: 0,
@@ -144,14 +153,23 @@ impl Audio {
     }
 
     /// Load an audio bundle directory (`baked/assets/<game>-audio`)
-    /// and select a sample bank (0 = the gameplay bank).
+    /// and select a sample bank (0 = the gameplay bank). Re-selecting
+    /// a bank out of the bundle already loaded (MC2's per-level
+    /// MapType switch, `LevelInit.cpp:23/29/37` — Day 0 / Night 1 /
+    /// Cave 2 — on every level install of a campaign run) costs no
+    /// reload. Voices already playing keep their own sample copies.
     pub fn load_bundle(&mut self, dir: &Path, bank: u32) -> Result<(), String> {
-        let bundle = AudioBundle::load(dir).map_err(|e| e.to_string())?;
+        let bundle = match self.bundle.take() {
+            Some(b) if b.dir.as_path() == dir => b,
+            _ => AudioBundle::load(dir).map_err(|e| e.to_string())?,
+        };
         self.sounds = Sounds::from_bundle(&bundle, bank);
+        // The bundle stays loaded even without the bank: music and
+        // speech do not depend on it.
+        self.bundle = Some(bundle);
         if self.sounds.is_none() {
             return Err(format!("{}: no sample bank {bank}", dir.display()));
         }
-        self.bundle = Some(bundle);
         Ok(())
     }
 
@@ -197,8 +215,11 @@ impl Audio {
     /// top — the loop point is presentation-only). SFX voices are
     /// transient and simply re-fill from the mixer.
     fn resend_state(&mut self) {
-        let (sfx, music) = self.volumes;
-        let _ = self.out.tx.send(output::Cmd::MasterVol { sfx, music });
+        let (sfx, music, speech) = self.volumes;
+        let _ = self
+            .out
+            .tx
+            .send(output::Cmd::MasterVol { sfx, music, speech });
         let _ = self
             .out
             .tx
@@ -416,42 +437,137 @@ impl Audio {
         let Some(track) = index.tracks.iter().find(|t| t.name == name) else {
             return Err(format!("no music track named {name}"));
         };
-        let (file, danger_file) = match &track.gm_file {
-            Some(gm) if self.prefer_gm => (gm, &track.gm_danger_file),
-            _ => (&track.file, &track.danger_file),
+        let (pcm, overlay, channels, sample_rate) = match self.music_cache.take() {
+            Some((cached, gm, payload)) if cached == name && gm == self.prefer_gm => payload,
+            _ => {
+                let (file, danger_file) = match &track.gm_file {
+                    Some(gm) if self.prefer_gm => (gm, &track.gm_danger_file),
+                    _ => (&track.file, &track.danger_file),
+                };
+                let decoded = music::decode_flac(&bundle.dir.join(file))?;
+                let overlay = match danger_file {
+                    Some(f) => Some(music::decode_flac(&bundle.dir.join(f))?.pcm),
+                    None => None,
+                };
+                (decoded.pcm, overlay, decoded.channels, decoded.sample_rate)
+            }
         };
-        let decoded = music::decode_flac(&bundle.dir.join(file))?;
-        let overlay = match danger_file {
-            Some(f) => Some(music::decode_flac(&bundle.dir.join(f))?.pcm),
-            None => None,
-        };
-        self.music_cmd = Some((
-            decoded.pcm.clone(),
-            overlay.clone(),
-            decoded.channels,
-            decoded.sample_rate,
-            looped,
-        ));
+        self.music_cmd = Some((pcm.clone(), overlay.clone(), channels, sample_rate, looped));
         let _ = self.out.tx.send(output::Cmd::Music {
-            pcm: decoded.pcm,
+            pcm,
             overlay,
-            channels: decoded.channels,
-            sample_rate: decoded.sample_rate,
+            channels,
+            sample_rate,
             looped,
         });
         self.music_playing = Some(name.to_string());
         Ok(())
     }
 
+    /// Stop the track. Its decoded payload is kept (one entry) so
+    /// re-enabling the same track is instant — see `music_cache`.
     pub fn stop_music(&mut self) {
         let _ = self.out.tx.send(output::Cmd::StopMusic);
+        if let (Some(name), Some((pcm, overlay, ch, rate, _))) =
+            (self.music_playing.take(), self.music_cmd.take())
+        {
+            self.music_cache = Some((name, self.prefer_gm, (pcm, overlay, ch, rate)));
+        }
         self.music_playing = None;
         self.music_cmd = None;
     }
 
-    /// Master gains, 0..=1.
-    pub fn set_volumes(&mut self, sfx: f32, music: f32) {
-        self.volumes = (sfx, music);
-        let _ = self.out.tx.send(output::Cmd::MasterVol { sfx, music });
+    /// Master gains, 0..=1: sound effects, music, and the narration
+    /// lane (the app ties the last to the sound toggle + sfx gain —
+    /// PLAYER-RULED 2026-09-08, retail has no narration volume).
+    pub fn set_volumes(&mut self, sfx: f32, music: f32, speech: f32) {
+        self.volumes = (sfx, music, speech);
+        let _ = self
+            .out
+            .tx
+            .send(output::Cmd::MasterVol { sfx, music, speech });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The baked MC2 bundle, when present (a bake is not a test
+    /// prerequisite — the test skips without one).
+    fn mc2_dir() -> Option<std::path::PathBuf> {
+        let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../baked/assets/mc2-audio");
+        d.is_dir().then_some(d)
+    }
+
+    /// MC2 selects its sample bank per level by MapType
+    /// (`LevelInit.cpp:23/29/37`: Day 0 / Night 1 / Cave 2), so a
+    /// campaign run re-selects the bank on every level install out
+    /// of the bundle it already holds. Bank 2 alone carries the cave
+    /// drips (65-69); bank 0's firefly slots (43/44) are a silence
+    /// stub. Going 0 → 2 → 0 must track the bank exactly.
+    #[test]
+    fn load_bundle_reselects_the_bank_of_the_loaded_bundle() {
+        let Some(dir) = mc2_dir() else {
+            eprintln!("skip: no baked mc2-audio bundle");
+            return;
+        };
+        let has = |a: &Audio, id: usize| {
+            a.sounds
+                .as_ref()
+                .and_then(|s| s.entries.get(id))
+                .is_some_and(|e| e.is_some())
+        };
+        let mut a = Audio::open();
+        a.load_bundle(&dir, 0).unwrap();
+        assert!(a.has_sounds());
+        assert!(!has(&a, 65), "bank 0 has no drip samples");
+        a.load_bundle(&dir, 2).unwrap();
+        assert!(has(&a, 65), "the cave bank carries Drip1");
+        assert!(has(&a, 69), "… through Drip5");
+        a.load_bundle(&dir, 0).unwrap();
+        assert!(!has(&a, 65), "back on the day bank");
+        assert!(a.bundle.is_some(), "the bundle stays loaded throughout");
+        // A bank the bundle lacks reports it and keeps the bundle for
+        // music/speech.
+        assert!(a.load_bundle(&dir, 99).is_err());
+        assert!(!a.has_sounds());
+        assert!(a.bundle.is_some());
+    }
+
+    /// A music re-enable (stop, then play the same track) reuses the
+    /// stopped track's decoded payload instead of decoding the FLAC
+    /// again on the game thread (the ~0.5-0.8 s startup lag the
+    /// player heard). A different track, or a changed arrangement,
+    /// decodes afresh.
+    #[test]
+    fn music_reenable_reuses_the_stopped_tracks_decode() {
+        let Some(dir) = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../baked/assets/mc1-audio")
+            .is_dir()
+            .then(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../baked/assets/mc1-audio"))
+        else {
+            eprintln!("skip: no baked mc1-audio bundle");
+            return;
+        };
+        let mut a = Audio::open();
+        a.load_bundle(&dir, 0).unwrap();
+        a.play_music("csetup", true).unwrap();
+        let first = a.music_cmd.as_ref().unwrap().0.clone();
+        a.stop_music();
+        assert!(a.music_playing.is_none() && a.music_cmd.is_none());
+        let t = std::time::Instant::now();
+        a.play_music("csetup", true).unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &a.music_cmd.as_ref().unwrap().0),
+            "the same decoded buffer plays again"
+        );
+        assert!(t.elapsed().as_millis() < 50, "no decode: {:?}", t.elapsed());
+        assert!(a.music_cache.is_none(), "the cache entry moved back into play");
+        // The arrangement changed under the cache: decode afresh.
+        a.stop_music();
+        a.set_prefer_gm(false);
+        a.play_music("csetup", true).unwrap();
+        assert!(!Arc::ptr_eq(&first, &a.music_cmd.as_ref().unwrap().0));
     }
 }

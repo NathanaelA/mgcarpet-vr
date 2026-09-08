@@ -78,10 +78,14 @@ pub enum Cmd {
     Duck {
         gain: f32,
     },
-    /// Master gains, 0..=1 linear.
+    /// Master gains, 0..=1 linear. `speech` is the narration lane's
+    /// own gain — the app derives it from the sound toggle + sfx
+    /// gain (PLAYER-RULED: retail offers no volume control over the
+    /// CD narration at all, see docs/DEVIATIONS.md).
     MasterVol {
         sfx: f32,
         music: f32,
+        speech: f32,
     },
     /// Freeze the whole output (game pause: retail suspends ALL
     /// sound). Channels and music hold their positions and the
@@ -135,6 +139,8 @@ pub struct Renderer {
     speech: MusicState,
     sfx_gain: f32,
     music_gain: f32,
+    /// The narration lane's gain (duck-exempt; it is the ducker).
+    speech_gain: f32,
     /// Voiceover duck on music+sfx (speech itself is exempt).
     duck_gain: f32,
     out_rate: f64,
@@ -187,6 +193,7 @@ impl Renderer {
             },
             sfx_gain: 1.0,
             music_gain: 1.0,
+            speech_gain: 1.0,
             duck_gain: 1.0,
             out_rate: f64::from(out_rate),
             // ~2.5 ms release: long enough to remove the step-cut click,
@@ -289,9 +296,10 @@ impl Renderer {
             }
             Cmd::StopSpeech => self.speech.pcm = None,
             Cmd::Duck { gain } => self.duck_gain = gain,
-            Cmd::MasterVol { sfx, music } => {
+            Cmd::MasterVol { sfx, music, speech } => {
                 self.sfx_gain = sfx;
                 self.music_gain = music;
+                self.speech_gain = speech;
             }
             Cmd::Suspend { on } => self.suspended = on,
         }
@@ -456,8 +464,8 @@ impl Renderer {
                         let s = lerp_i16(pcm[at], pcm[nx], frac);
                         (s, s)
                     };
-                    l += sl / 32768.0;
-                    r += sr / 32768.0;
+                    l += sl / 32768.0 * self.speech_gain;
+                    r += sr / 32768.0 * self.speech_gain;
                     self.speech.pos += self.speech.step;
                 }
             }
@@ -709,5 +717,192 @@ impl Output {
 
     pub fn speech_live(&self) -> bool {
         self.speech_live.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+
+    fn peak(buf: &[f32]) -> f32 {
+        buf.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    /// A loud 8-bit square wave (the sample bank's unsigned layout).
+    fn square_u8(n: usize) -> Arc<Vec<u8>> {
+        Arc::new(
+            (0..n)
+                .map(|i| if (i / 20) % 2 == 0 { 255u8 } else { 0 })
+                .collect(),
+        )
+    }
+
+    /// A loud interleaved-stereo 16-bit square wave (a music track).
+    fn square_i16(frames: usize) -> Arc<Vec<i16>> {
+        Arc::new(
+            (0..frames * 2)
+                .map(|i| if ((i / 2) / 20) % 2 == 0 { 20000i16 } else { -20000 })
+                .collect(),
+        )
+    }
+
+    fn play(ch: usize, looped: bool) -> Cmd {
+        Cmd::Play {
+            ch,
+            pcm: square_u8(200_000),
+            sample_rate: 22050,
+            vol: 0x7FFF,
+            pan: 0x7FFF,
+            looped,
+        }
+    }
+
+    fn music() -> Cmd {
+        Cmd::Music {
+            pcm: square_i16(200_000),
+            overlay: None,
+            channels: 2,
+            sample_rate: 22050,
+            looped: true,
+        }
+    }
+
+    /// The runtime "sound off / sound on" toggle is a master-gain
+    /// mute (`Audio::set_volumes(0, _)` then the config gain again):
+    /// a looped ambient voice that rode through the mute, and a fresh
+    /// one-shot requested after it, must both be audible afterwards.
+    #[test]
+    fn sfx_mute_then_unmute_is_audible_again() {
+        let (tx, rx) = channel();
+        let mut r = Renderer::new(rx, 22050);
+        let mut buf = vec![0.0f32; 2 * 512];
+        tx.send(play(0, true)).unwrap();
+        r.render(&mut buf);
+        assert!(peak(&buf) > 0.1, "sanity: the loop plays");
+        tx.send(Cmd::MasterVol {
+            sfx: 0.0,
+            music: 0.0,
+            speech: 0.0,
+        })
+        .unwrap();
+        r.render(&mut buf);
+        assert_eq!(peak(&buf), 0.0, "muted");
+        for _ in 0..2000 {
+            r.render(&mut buf); // ~46 s of silence
+        }
+        tx.send(Cmd::MasterVol {
+            sfx: 0.2,
+            music: 0.2,
+            speech: 0.2,
+        })
+        .unwrap();
+        r.render(&mut buf);
+        assert!(peak(&buf) > 0.01, "the ambient loop is back after unmute");
+        tx.send(play(1, false)).unwrap();
+        r.render(&mut buf);
+        assert!(peak(&buf) > 0.01, "a fresh one-shot plays after unmute");
+        assert_eq!(r.live_mask() & 0b11, 0b11);
+    }
+
+    /// The runtime "music off / music on" toggle is `StopMusic` (the
+    /// declick ramp to silence) followed by master gain 0, then
+    /// `Music` again followed by the gain back — in that order
+    /// (`App::apply_option`). Both
+    /// the settled case (the ramp long finished) and the immediate
+    /// re-toggle (the ramp still running: the `pending` install path)
+    /// must end with the track audible.
+    #[test]
+    fn music_stop_then_restart_is_audible_again() {
+        let (tx, rx) = channel();
+        let mut r = Renderer::new(rx, 22050);
+        let mut buf = vec![0.0f32; 2 * 512];
+        tx.send(music()).unwrap();
+        r.render(&mut buf);
+        assert!(peak(&buf) > 0.1, "sanity: the track plays");
+        // Off.
+        tx.send(Cmd::StopMusic).unwrap();
+        tx.send(Cmd::MasterVol {
+            sfx: 1.0,
+            music: 0.0,
+            speech: 1.0,
+        })
+        .unwrap();
+        for _ in 0..2000 {
+            r.render(&mut buf);
+        }
+        assert_eq!(peak(&buf), 0.0, "silent while off");
+        assert!(r.music.pcm.is_none(), "the release ramp cleared the stream");
+        // On.
+        tx.send(music()).unwrap();
+        tx.send(Cmd::MasterVol {
+            sfx: 1.0,
+            music: 0.2,
+            speech: 1.0,
+        })
+        .unwrap();
+        r.render(&mut buf);
+        assert!(peak(&buf) > 0.01, "the track is back (settled case)");
+        // Off then on again before the ramp finishes: the pending path.
+        tx.send(Cmd::StopMusic).unwrap();
+        tx.send(Cmd::MasterVol {
+            sfx: 1.0,
+            music: 0.0,
+            speech: 1.0,
+        })
+        .unwrap();
+        tx.send(music()).unwrap();
+        tx.send(Cmd::MasterVol {
+            sfx: 1.0,
+            music: 0.2,
+            speech: 1.0,
+        })
+        .unwrap();
+        for _ in 0..4 {
+            r.render(&mut buf);
+        }
+        assert!(peak(&buf) > 0.01, "the track is back (pending path)");
+        assert!(r.music.pending.is_none());
+    }
+
+    /// The narration lane has its own master gain (`MasterVol::speech`
+    /// — the app ties it to the sound toggle + sfx gain, PLAYER-RULED;
+    /// retail has no such control): 0 silences a playing line at once,
+    /// and the clip still runs out on schedule underneath.
+    #[test]
+    fn speech_lane_follows_its_master_gain() {
+        let (tx, rx) = channel();
+        let mut r = Renderer::new(rx, 22050);
+        let mut buf = vec![0.0f32; 2 * 512];
+        tx.send(Cmd::Speech {
+            pcm: square_i16(4096),
+            channels: 2,
+            sample_rate: 22050,
+        })
+        .unwrap();
+        r.render(&mut buf);
+        assert!(peak(&buf) > 0.1, "sanity: the line plays at unity");
+        tx.send(Cmd::MasterVol {
+            sfx: 1.0,
+            music: 1.0,
+            speech: 0.0,
+        })
+        .unwrap();
+        r.render(&mut buf);
+        assert_eq!(peak(&buf), 0.0, "sound off mutes the narration mid-line");
+        assert!(r.speech_live(), "… but the clip keeps running");
+        tx.send(Cmd::MasterVol {
+            sfx: 0.2,
+            music: 1.0,
+            speech: 0.2,
+        })
+        .unwrap();
+        r.render(&mut buf);
+        let p = peak(&buf);
+        assert!(p > 0.05 && p < 0.3, "narration at the sfx gain: {p}");
+        for _ in 0..8 {
+            r.render(&mut buf);
+        }
+        assert!(!r.speech_live(), "the one-shot ended on schedule");
     }
 }

@@ -744,7 +744,8 @@ pub struct AudioConfig {
     pub sound: bool,
     /// Music playback (F2 toggles at runtime, the original's key).
     pub music: bool,
-    /// Master gains, 0..=1 linear.
+    /// Master gains, 0..=1 linear. `sfx_volume` also scales the MC2
+    /// narration (player-ruled; retail has no narration volume).
     pub sfx_volume: f32,
     pub music_volume: f32,
     /// Which MC1 music arrangement plays (multi-column matrix option —
@@ -754,6 +755,8 @@ pub struct AudioConfig {
     /// MC2 objective voiceovers (the redbook speech clips) — the
     /// original's in-game "Speech On/Off" toggle
     /// (`OptionsSettingFlag & 0x40`, remc2 PlayerInput.cpp:1221).
+    /// Unlike retail, narration ALSO needs `sound` on and plays at
+    /// `sfx_volume` (player-ruled 2026-09-08, docs/DEVIATIONS.md).
     pub speech: bool,
     /// Narration subtitles: the ETEXT sentence behind each objective
     /// voiceover, drawn as a top-of-screen overtitle when the cue

@@ -1984,6 +1984,58 @@ struct App {
     exit_confirm: bool,
 }
 
+/// The frontend's (level-less) audio bundle: the game's own
+/// `assets/<game>-audio`, when baked.
+fn frontend_audio_dir(is_mc2: bool) -> Option<PathBuf> {
+    let d = get_baked_directory()
+        .join("assets")
+        .join(if is_mc2 { "mc2-audio" } else { "mc1-audio" });
+    d.is_dir().then_some(d)
+}
+
+/// Open the output device and load the game's audio bundle at
+/// `audio_bank`, primed with the config's gains — the ONE audio
+/// bring-up, shared by the boot (`App::new`) and the lazy runtime
+/// open (`App::ensure_audio`). Any failure degrades to silence,
+/// never to an unplayable game.
+fn open_audio(
+    cfg: &config::Config,
+    is_mc2: bool,
+    audio_dir: Option<&Path>,
+    audio_bank: u32,
+) -> mgc_audio::Audio {
+    let mut a = mgc_audio::Audio::open();
+    a.set_prefer_gm(cfg.audio.arrangement.prefer_gm());
+    if is_mc2 {
+        a.set_mc2_danger_ramp();
+    }
+    if let Some(dir) = audio_dir {
+        if let Err(e) = a.load_bundle(dir, audio_bank) {
+            eprintln!("note: audio bundle: {e}");
+        }
+    } else {
+        eprintln!("note: no audio bundle baked — sound effects disabled (rebake)");
+    }
+    let (sfx, music, speech) = audio_gains(cfg);
+    a.set_volumes(sfx, music, speech);
+    a
+}
+
+/// The three master gains the config resolves to: (sfx, music,
+/// narration). A toggle off = gain 0. The narration lane rides the
+/// SOUND toggle and the sfx gain, on top of its own `speech` toggle —
+/// PLAYER-RULED 2026-09-08 (retail's sound/music toggles leave the CD
+/// narration playing and it has no volume at all; the player wants
+/// one control, see docs/DEVIATIONS.md).
+fn audio_gains(cfg: &config::Config) -> (f32, f32, f32) {
+    let a = &cfg.audio;
+    (
+        if a.sound { a.sfx_volume } else { 0.0 },
+        if a.music { a.music_volume } else { 0.0 },
+        if a.sound && a.speech { a.sfx_volume } else { 0.0 },
+    )
+}
+
 impl App {
     fn new(
         level: Option<LoadedLevel>,
@@ -2007,45 +2059,18 @@ impl App {
         // (the frontend needs music + click samples with no level
         // alive). Any failure degrades to silence, never to an
         // unplayable game.
+        // Booting with BOTH toggles off opens no device at all; the
+        // first runtime re-enable opens it then (`ensure_audio`) — it
+        // used to stay `None` for the whole run, so re-enabling in
+        // the menu was a no-op until a restart (player-reported).
         let mut audio = None;
         if cfg.audio.sound || cfg.audio.music {
-            let mut a = mgc_audio::Audio::open();
-            a.set_prefer_gm(cfg.audio.arrangement.prefer_gm());
-            if is_mc2 {
-                a.set_mc2_danger_ramp();
-            }
             let audio_bank = level.as_ref().map_or(0, |l| l.audio_bank);
             let audio_dir = match &level {
                 Some(l) => l.audio_dir.clone(),
-                None => {
-                    let d = get_baked_directory().join("assets").join(if is_mc2 {
-                        "mc2-audio"
-                    } else {
-                        "mc1-audio"
-                    });
-                    d.is_dir().then_some(d)
-                }
+                None => frontend_audio_dir(is_mc2),
             };
-            if let Some(dir) = &audio_dir {
-                if let Err(e) = a.load_bundle(dir, audio_bank) {
-                    eprintln!("note: audio bundle: {e}");
-                }
-            } else {
-                eprintln!("note: no audio bundle baked — sound effects disabled (rebake)");
-            }
-            a.set_volumes(
-                if cfg.audio.sound {
-                    cfg.audio.sfx_volume
-                } else {
-                    0.0
-                },
-                if cfg.audio.music {
-                    cfg.audio.music_volume
-                } else {
-                    0.0
-                },
-            );
-            audio = Some(a);
+            audio = Some(open_audio(&cfg, is_mc2, audio_dir.as_deref(), audio_bank));
         }
         // Which spell-selection surfaces are live, resolved against
         // the running game (re-resolved on every session install).
@@ -2552,21 +2577,34 @@ impl App {
             .unwrap_or((1280.0, 960.0))
     }
 
+    /// Open the audio device if this run booted without one (both
+    /// toggles off at boot). The bundle and sample bank follow the
+    /// live session's level, else the frontend's. Called on every
+    /// runtime enable; a no-op once open. Music is not started here —
+    /// the `audio.music` apply arm does that right after.
+    fn ensure_audio(&mut self) {
+        if self.audio.is_some() {
+            return;
+        }
+        let is_mc2 = self.is_mc2();
+        let (audio_dir, audio_bank) = match self.session.as_deref() {
+            Some(sess) => (sess.level.audio_dir.clone(), sess.level.audio_bank),
+            None => (frontend_audio_dir(is_mc2), 0),
+        };
+        self.audio = Some(open_audio(
+            &self.cfg,
+            is_mc2,
+            audio_dir.as_deref(),
+            audio_bank,
+        ));
+        println!("audio: device opened");
+    }
+
     /// Push the config's audio gains into the mixer (mute = gain 0).
     fn apply_volumes(&mut self) {
         if let Some(a) = &mut self.audio {
-            a.set_volumes(
-                if self.cfg.audio.sound {
-                    self.cfg.audio.sfx_volume
-                } else {
-                    0.0
-                },
-                if self.cfg.audio.music {
-                    self.cfg.audio.music_volume
-                } else {
-                    0.0
-                },
-            );
+            let (sfx, music, speech) = audio_gains(&self.cfg);
+            a.set_volumes(sfx, music, speech);
         }
     }
 
@@ -2576,9 +2614,15 @@ impl App {
     /// off `self.cfg` every frame/tick need no arm here.
     fn apply_option(&mut self, cfg_path: &str) {
         match cfg_path {
-            "audio.sound" | "audio.sfx_volume" | "audio.music_volume" => self.apply_volumes(),
+            "audio.sound" | "audio.sfx_volume" | "audio.music_volume" | "audio.speech" => {
+                if self.cfg.audio.sound {
+                    self.ensure_audio();
+                }
+                self.apply_volumes();
+            }
             "audio.music" => {
                 if self.cfg.audio.music {
+                    self.ensure_audio();
                     // Restart whichever mode's track applies: the
                     // session level's, or the frontend menu set.
                     let track = match &self.session {
@@ -2968,6 +3012,9 @@ impl App {
             KeyCode::F1 => {
                 self.cfg.audio.sound = !self.cfg.audio.sound;
                 let v = self.cfg.audio.sound;
+                if v {
+                    self.ensure_audio();
+                }
                 println!(
                     "sound: {}{}",
                     onoff(v),
@@ -2982,6 +3029,9 @@ impl App {
             KeyCode::F2 => {
                 self.cfg.audio.music = !self.cfg.audio.music;
                 let v = self.cfg.audio.music;
+                if v {
+                    self.ensure_audio();
+                }
                 println!(
                     "music: {}{}",
                     onoff(v),
@@ -3206,7 +3256,7 @@ impl App {
             // retail EF:41020-29, ported verbatim.
             if let Some(seg) = frame.speech {
                 let lvl = sess.level.level_number;
-                if self.cfg.audio.speech {
+                if self.cfg.audio.sound && self.cfg.audio.speech {
                     let (row, cseg) = if (30..=34).contains(&lvl) {
                         if seg == 9 { (10, 9) } else { (0, 4) }
                     } else {
@@ -3704,6 +3754,20 @@ impl App {
             // suspended/pre-paused.
             if self.paused {
                 a.set_paused(false);
+            }
+            // The level's sample bank (`LoadedLevel::audio_bank`:
+            // MC2's Day 0 / Night 1 / Cave 2 by MapType). The boot
+            // path loads it in `App::new`; a campaign run installs
+            // level after level and used to keep the BOOT bank for
+            // all of them — the frontend boots level-less at bank 0,
+            // so every Night/Cave level played bank 0's 16-byte
+            // silence stub for the firefly calls (ids 43/44) and
+            // found no drip samples (65-69). Same bundle dir: a bank
+            // re-select, no reload.
+            if let Some(dir) = &level.audio_dir
+                && let Err(e) = a.load_bundle(dir, level.audio_bank)
+            {
+                eprintln!("note: audio bundle: {e}");
             }
         }
         self.paused = false;
@@ -4762,6 +4826,7 @@ impl App {
         // the description TEXT rides the deferred map text/overlay
         // work — the map bank's own font glyphs).
         if let Some(lvl) = narrative
+            && self.cfg.audio.sound
             && self.cfg.audio.speech
             && let Some(a) = &mut self.audio
             && let Err(e) = a.play_speech(lvl, 0)

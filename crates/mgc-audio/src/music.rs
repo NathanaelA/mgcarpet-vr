@@ -1,6 +1,12 @@
-//! FLAC music playback: decode a bundle track fully (a few MB — MC1
-//! songs and MC2's ~45 s redbook cues both decode in tens of ms) and
-//! hand the PCM to the output stream.
+//! FLAC music playback: decode a bundle track fully and hand the PCM
+//! to the output stream. The tracks are NOT small: 44.1 kHz stereo,
+//! 46 MB of PCM per MC1 song and up to 87 MB per MC2 map track, each
+//! with a same-length danger stem — measured 2026-09-08 (release):
+//! ~0.45 s for an MC1 track+stem, ~0.8 s for MC2's. The decode runs
+//! on the game thread (a level load hides it; `Audio::play_music`
+//! keeps the last stopped track decoded so a music re-enable does
+//! not pay it again). claxon's block reader is only ~15% faster than
+//! `samples()` — not worth the code.
 
 use std::path::Path;
 use std::sync::Arc;

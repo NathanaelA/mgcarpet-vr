@@ -1449,7 +1449,8 @@ pub fn registry() -> Vec<Spec> {
                 text: format!("{:.1}", c.audio.sfx_volume),
                 faithful: "1.0",
             },
-            desc: "Sound-effect master gain.",
+            desc: "Sound-effect master gain — the MC2 narration rides it too \
+                   (the original has no narration volume).",
             ctl: Ctl::Slider {
                 get: |c| c.audio.sfx_volume,
                 set: |c, v| c.audio.sfx_volume = v,
@@ -1528,10 +1529,15 @@ pub fn registry() -> Vec<Spec> {
                 faithful: true,
             },
             desc: "MC2 objective voiceovers (the CD speech clips) — the \
-                   original's in-game Speech option.",
+                   original's in-game Speech option. Narration also follows \
+                   the sound toggle and the sfx volume (the original's \
+                   sound/music switches leave it playing, at one volume).",
             ctl: Ctl::Toggle {
                 set: |c, v| c.audio.speech = v,
-                descs: ["Objectives arrive silently.", "The narrator speaks."],
+                descs: [
+                    "Objectives arrive silently.",
+                    "The narrator speaks (when sound is on, at the sfx volume).",
+                ],
             },
         },
         Spec {
