@@ -36,9 +36,13 @@
 //!   meteor shot / whirlwind seed — docs/traces/mc2-class9-m3-m26.md)
 //!   are pre-locked at the avatar via mc2_arm_proj (retail
 //!   self-acquires on tick 1 — the proj module's acquisition APPROX).
-//! - The case-0xE global wipe writes byte[1]|=0x20 on every entity —
-//!   an unmapped render-side bit (name-inferred); we apply the
-//!   life/maxLife=140 reset and skip the bit.
+//! - (RETIRED 2026-09-10, dig 126G: the case-0xE reset's
+//!   `byte[1] |= 0x20` is NOT a render bit — it is the sphere DECAY
+//!   channel, port flag bit 13, and it is now written. The old note
+//!   read: "The case-0xE global wipe writes byte[1]|=0x20 on every
+//!   entity — an unmapped render-side bit (name-inferred); we apply
+//!   the life/maxLife=140 reset and skip the bit." ⭐⭐⭐ A COMMENT
+//!   CLAIMING A LANE IS PRESENTATION IS A DIG LEAD.)
 //! - Retail's per-list scans (dword_38531 buckets) are pool
 //!   slot-order scans — the mobs.rs list APPROX.
 //! - The case-7 HURL-AWAY beam moves the human via the shared knock
@@ -87,10 +91,152 @@ const ANIM_FRAMES_343: i16 = 5;
 const ANIM_FRAMES_344: i16 = 15;
 const ANIM_FRAMES_345: i16 = 20;
 
+/// A/B kill-switch for THE PYRAMID'S HIGH-BYTE FACING SNAP: set
+/// `MGC_NO_MC2_PYRAMID_SNAP_HIGH_BYTE` to restore the pre-dig
+/// behaviour, where `sub_222B0`'s `bucket >= 0xD` arm added the
+/// decompile's literal `+ 6` to the player's yaw instead of the
+/// shipped `add ah,0x6` (+1536). See the write site in
+/// [`Gen::mc2_pyramid_face`] for the citations.
+fn no_mc2_pyramid_snap_high_byte() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_SNAP_HIGH_BYTE").is_some())
+}
+
+/// A/B kill-switch for THE PYRAMID'S FLANK-PICK PARITY: set
+/// `MGC_NO_MC2_PYRAMID_FLANK_FRAME_PARITY` to restore the pre-dig
+/// behaviour, where `sub_222B0`'s case-2 arm picked its ±512 flank
+/// from the entity's own `byte_0x3E_62` (`f63`) instead of the
+/// GLOBAL `FrameTimingIndex_26`. See the write site in
+/// KILL SWITCH (`MGC_NO_MC2_DOOM_BEAM_ONESHOT=1`) for the (5,10)
+/// pyramid's HURL-AWAY BEAM transport: set it to restore the pre-dig
+/// `Gen::player_knock` route (magnitude clamped to ±128, decayed
+/// −4/tick, still shoving twenty ticks after the burst). Law ON =
+/// retail's one-shot POSITION write.
+fn no_mc2_doom_beam_oneshot() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DOOM_BEAM_ONESHOT").is_some())
+}
+
+/// KILL SWITCH (`MGC_NO_MC2_CITADEL_DEVOUR=1`) for the SECOND, and
+/// until now UNPORTED, call path into `sub_21F60` — the one that runs
+/// from `UpdateEntities_57730`'s own tail, one statement after
+/// `sub_585D0` (LAW 26):
+///
+/// ```c
+///   sub_585D0();
+///   if (D41A0_0.word_0x3654A)
+///       sub_21F60(Entities_EA3E4[D41A0_0.word_0x3654A]);   // EF:40471-73
+/// ```
+///
+/// `NETHERW.EXE` file 0x7C2A7-0x7C2CD (VA 0x57AA7): `e8 24 0b 00 00`
+/// call 0x7CDD0 (the re-floor), then `a1 a0 41 00 00` /
+/// `66 8b b0 4a 65 03 00` (`si = D41A0_0.word_0x3654A`) /
+/// `66 85 f6` / `74 13` / `8b 3c 85 e4 a3 01 00` /
+/// `57` / `e8 93 a4 fc ff` call 0x46760 = `sub_21F60`. An `e8 rel32`
+/// scan of the shipped EXE finds EXACTLY TWO callers of 0x46760 —
+/// 0x4586A (inside `sub_21AB0`, the pyramid's own tick, which is the
+/// only one the port had) and 0x7C2C8 (this one). ⭐⭐⭐ A LAW ON ONE
+/// CALL PATH IS NOT LANDED.
+///
+/// `word_0x3654A` is the slot of the building whose BLDGPRM id is 68
+/// (`sub_49A30`, EF:32848-51) — mc2l24's Vissuluth citadel. The
+/// recording is the witness: `D41A0_0 @0x3654A` reads **169** from
+/// t≈7950 to the end of the take, and slot 169 is the `(10,45)`
+/// building at (10240, 54272) with `b46 = 68`, `apitch = aroll =
+/// 4992`. No other MC2 take in the corpus ever sets it (mc2l0, l1,
+/// l3, l4, l15, l30 all read 0 for every sampled tick, 2026-09-10).
+///
+/// ⚠ THE ARG IS NOT THE PYRAMID, AND `sub_21F60` BRANCHES ON THAT.
+/// Its first act is `v17 = a1->class != 5 || a1->model != 10`
+/// (file 0x46797 `80 78 3f 05` / 0x4679D `80 78 40 0a`): the
+/// EuclideanDist ≤ 0xC00 CYLINDER at 0x46825 is the `!v17` (pyramid)
+/// arm, which is the only one [`World::mc2_pyramid_devour`] models.
+/// For any other devourer the test is a BBOX through
+/// `CompareAxisWithShift_106F0` (0x34EF0) with the DEVOURER'S OWN
+/// `array_0x52_82` — `abs(dx) < a.apitch + b.apitch &&
+/// abs(dy) < a.aroll + b.aroll`, STRICT `<` (0x34F1B `7d 29` jnl,
+/// 0x34F3A `7d 0a`) — against `{5120, 5120}` on the projectile
+/// (0x4683D `b9 00 14 00 00`), or against the player castle's own
+/// extents for the model-10 castle-build shot. And it never sets the
+/// trip `v19` on that arm (0x468EE writes `[ebp-8]` only), which is
+/// moot here because the tail call DISCARDS the return.
+fn no_mc2_citadel_devour() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CITADEL_DEVOUR").is_some())
+}
+
+/// [`Gen::mc2_pyramid_face`] for the citations.
+fn no_mc2_pyramid_flank_frame_parity() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_FLANK_FRAME_PARITY").is_some())
+}
+
+/// A/B kill-switch for THE DEAD-PLAYER BARRAGE FREEZE: set
+/// `MGC_NO_MC2_PYRAMID_DEAD_PLAYER_GATE` to restore the pre-dig
+/// behaviour, where `sub_21AB0` fired (and burned its repeat count)
+/// even with the human wizard's pool record dead. See the gate in
+/// [`World::mc2_pyramid_do_summon`] for the citations.
+fn no_mc2_pyramid_dead_player_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_DEAD_PLAYER_GATE").is_some())
+}
+
+/// A/B toggle for `KillAllCreatures_1B5F0`'s CHAIN MEMBERSHIP: set
+/// `MGC_NO_MC2_KILL_ALL_CHAIN_MEMBERS` to restore the old whole-pool
+/// walk, which re-stamped already-dead creatures every tick of the
+/// apocalypse. See the law note at the call site.
+fn no_mc2_kill_all_chain_members() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_KILL_ALL_CHAIN_MEMBERS").is_some())
+}
+
+/// KILL SWITCH (`MGC_NO_MC2_DOOM_SPHERE_DECAY_BIT=1`) for THE CASE-0xE
+/// SPHERE RESET'S DECAY BIT: set it to restore the pre-dig behaviour,
+/// where the pyramid's death re-lifed every `dword_38523` sphere to
+/// 140 but left `byte[1] & 0x20` clear, so [`Gen::ball_decay_tail`]
+/// never armed and the spheres sat at life 140 FOREVER. Law ON =
+/// retail's `or dl, 0x20`. See the write site in the 0xE arm.
+fn no_mc2_doom_sphere_decay_bit() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DOOM_SPHERE_DECAY_BIT").is_some())
+}
+
+/// A/B kill-switch for THE REBOUND TAIL'S `word_0x2E_46` HOME: set
+/// `MGC_NO_MC2_DEVOUR_REBOUND_AT_2E` to restore the pre-dig read,
+/// which took `f26` off whatever record the book's spell-8 index
+/// pointed at — right only for a live class-15 token, wrong for every
+/// other class the death's boolean-`1` marker dereferences to. See the
+/// tail of [`World::mc2_pyramid_devour`] for the citations.
+fn no_mc2_devour_rebound_at_2e() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DEVOUR_REBOUND_AT_2E").is_some())
+}
+
+/// A/B kill-switch for THE PYRAMID'S PROJECTILES CARRY NO TARGET LOCK:
+/// set `MGC_NO_MC2_PYRAMID_PROJ_NO_LOCK` to restore the pre-dig
+/// behaviour, where `mc2_arm_proj` copied the pyramid's own
+/// `word_0x96_150` onto the newborn. See
+/// [`Gen::mc2_pyramid_arm_tail`] for the citations.
+fn no_mc2_pyramid_proj_no_lock() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_PROJ_NO_LOCK").is_some())
+}
+
+/// A/B kill-switch for THE PYRAMID'S BEHAVIOUR ROW: set
+/// `MGC_NO_MC2_PYRAMID_BEHAVIOR_ROW` to restore the pre-dig row 107 —
+/// the decompile's `&str_D7BD6[107]` (EF:34021), which in the port's
+/// verbatim `str_D7BD6` extract is the ALL-ZERO terminator row
+/// (`v_2`/`v_16`/`v_26`/`v_28`/`v_30` all 0). Law ON = the shipped
+/// EXE's row 105. See [`Gen::mc2_spawn_doomsday`] for the citations.
+fn no_mc2_pyramid_behavior_row() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_BEHAVIOR_ROW").is_some())
+}
+
 impl Gen {
     /// `sub_4BD00` (EF:33965) — the pyramid ctor MINUS the map gate
     /// (`byte_0x2FED2 & 2` lives on World — the spawn seam checks
-    /// it). No ctor RNG. Sprite 341, behavior row 107, huge life,
+    /// it). No ctor RNG. Sprite 341, behavior row 105, huge life,
     /// ground-clamped, ShiftRot(1024, 1280), extent yaw 512.
     pub(crate) fn mc2_spawn_doomsday(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
@@ -114,7 +260,53 @@ impl Gen {
             if crate::mc2::roster::mc2_class5_w36_legacy() {
                 e.f56 = 1;
             }
-            e.row156 = 107;
+            // ⭐⭐⭐ ROW 105, NOT THE DECOMPILE'S 107 — AND 107 IS THE
+            // ALL-ZERO TERMINATOR ROW. remc2 renders the ctor's row
+            // store as `v2x->dword_0xA0_160x = &str_D7BD6[107]`
+            // (EF:34021), but its OWN byte-offset comment on that line
+            // (`unk_D7BD6[0xe4e]` = 3662) is not even a multiple of the
+            // 34-byte row stride, so the index is a hand-conversion
+            // slip. THE SHIPPED EXE SETTLES IT: `sub_4BD00` at VA
+            // 0x4BD64 (`NETHERW.EXE` file 0x70564) is
+            // `c7 83 a0 00 00 00 c8 89 00 00` =
+            // `mov dword [ebx+0xA0], 0x89C8`, and
+            // (0x89C8 − 0x7BD6) / 34 = 3570 / 34 = 105 exactly.
+            // A scan of EVERY `mov dword [reg+0xA0], imm32` in the
+            // shipped binary — 72 stores, 39 distinct values (plus
+            // one `…, 0` null store) — decodes to an INTEGER index on
+            // that same base/stride, spanning rows 59..=106, so the
+            // base and the 34-byte stride are settled. Row 107 is
+            // written NOWHERE: the four bytes `base + 34·107` =
+            // 0x8A0C do not occur anywhere in the file at all.
+            // (remc2's other high-row site, EF:20562's
+            // `&str_D7BD6[106]` in `sub_2A7F0`, IS right: VA 0x2A912
+            // stores 0x89EA = base + 34·106 — and remc2's own data
+            // label two lines later, `off_D89EA`, is that very row.)
+            //
+            // The port's `BEHAVIOR` extract is verbatim, so index 107
+            // is the table's ALL-ZERO row: `v_2` (turn cap) 0, `v_16`
+            // (roughness fence) 0, `v_20` 0, `v_26` 0, `v_28` (the
+            // class-3 LOCK RANGE) 0, `v_30` 0, flags 0 — against row
+            // 105's 5 / 20 / 0xFFFFFFFF / 4 / 6400 / 512 / 0x7.
+            //
+            // RETAIL'S OWN RECORDING IS THE SECOND WITNESS: the
+            // `.mgcr` carries `dword_0xA0` verbatim, and the importer
+            // decodes it as `(ptr − base160)/34 + 59`. mc2l24's
+            // pyramid is born into slot 5 at t=44380 with
+            // `ptr_a0 = 2791880`, base160 = 2790316 ⇒ (1564/34) + 59 =
+            // 105. That is why every `--start t−1` pair arm read 105
+            // while the free run stamped 107: the pair importer seats
+            // the row off retail's pointer and the ctor never runs.
+            //
+            // The measured consequence (mc2l24 t=44600): with `v_28`
+            // 0 the pyramid-owned (9,26) whirlwind seed's one-shot
+            // acquisition (`sub_67CB0`, [`Gen::mc2_autoaim`] via
+            // [`Gen::mc2_owner_lock_range`]) finds NO candidate — the
+            // human sits 5,000 units out, inside 6400 and outside 0 —
+            // so the seed keeps its launch attitude (yaw 312, pitch
+            // 2033) and flies straight where retail locks the avatar
+            // and snaps to 280 / 26.
+            e.row156 = if no_mc2_pyramid_behavior_row() { 107 } else { 105 };
             e.f58 = 64; // byte_0x39_57 awake
             e.f66 = 3; // xtype
             e.f26 = 0;
@@ -135,7 +327,39 @@ impl Gen {
     /// `sub_221F0` (EF:13662) — set the pyramid sprite, applying the
     /// animated rows' state-timer override (see [`ANIM_FRAMES_343`]).
     pub(crate) fn mc2_pyramid_sprite(&mut self, i: usize, idx: u16) {
-        self.mc2_set_sprite(i, idx);
+        // ⭐⭐ THE PYRAMID RE-SPRITES WITH THE INDEX-ONLY SETTER — IT
+        // MUST NOT RE-DERIVE ITS HALF-EXTENT QUAD. `sub_221F0`'s
+        // first act is `SetEntityIndex_49C90(a1x, a2)` (EF:13666),
+        // NOT the `AndRot` twin. Shipped `NETHERW.EXE`, sub_221F0's
+        // prologue at linear 0x221DA (file 0x469F0):
+        //     53 56 57 55        push ebx/esi/edi/ebp
+        //     89 e5              mov  ebp,esp
+        //     8b 7d 14           mov  edi,[ebp+0x14]   ; entity
+        //     8b 75 18           mov  esi,[ebp+0x18]   ; index
+        //     0f bf de           movsx ebx,si
+        //     53 57              push ebx / push edi
+        //     e8 8a 7a 02 00     call 0x49c7a          ; SetEntityIndex
+        // — 0x49C7A is the PLAIN setter. Its `AndRot` twin enters at
+        // 0x49CBA, calls the SAME 0x49C7A (`e8 ad ff ff ff` at
+        // 0x49CC8) and only THEN stamps the quad from the particle
+        // row (0x49CDB.. `mov [esi+0x52],ax` / `[esi+0x54]`, the
+        // rotSpeed_8/2 and speed_6/2 halves). The pyramid never
+        // reaches that second half, so the boss keeps the ctor's
+        // `ShiftRot(1024, 1280)` + extent yaw 512 for its whole life.
+        // The port reached for `mc2_set_sprite` (the AndRot twin) —
+        // exactly the trap [`Gen::mc2_set_sprite_index`]'s own doc
+        // comment warns about — and row 341's authored pair
+        // (rotSpeed_8 1200, speed_6 1714) re-derived the quad to
+        // 600 / 857 on every state change.
+        // WITNESS mc2l24 slot 5, 168 pair segments t=44,538..52,732
+        // whose ONLY divergence is `applied_yaw` retail 512 port 600
+        // + `applied_pitch` retail 1024 port 857 — the second-largest
+        // single family left on the take.
+        if crate::mc2::mobs::no_mc2_pyramid_sprite_keeps_rot() {
+            self.mc2_set_sprite(i, idx);
+        } else {
+            self.mc2_set_sprite_index(i, idx);
+        }
         let frames = match idx {
             343 => ANIM_FRAMES_343,
             344 => ANIM_FRAMES_344,
@@ -218,7 +442,31 @@ impl Gen {
             return;
         }
         if bucket >= 0xD {
-            self.ent[i].f30 = ctx.pyaw.wrapping_add(6) & 0x7FF;
+            // ⭐⭐⭐ THE SNAP IS +1536, NOT +6 — A HAND-CONVERSION
+            // ERROR IN THE DECOMPILE THAT THE PORT INHERITED.
+            // EF:13716 reads `a1x->yaw_0x1C_28 = v1x->yaw_0x1C_28 +
+            // 6;` and its own commented-out original two lines above
+            // gives the game away: `//LOWORD(v1) = *(x_WORD *)(v1 +
+            // 28); //BYTE1(v1) += 6;`. It is a HIGH-BYTE add.
+            // Shipped `NETHERW.EXE`, linear 0x22306 (file 0x46B1C):
+            //     66 8b 40 1c   mov  ax,[eax+0x1c]   ; player yaw
+            //     80 c4 06      add  ah,0x6          ; += 0x600 = 1536
+            //     66 89 43 1c   mov  [ebx+0x1c],ax
+            //     e9 a9 00 00 00  jmp 0x223bf         ; -> and [ebx+0x1d],0x7
+            // — compare the SIBLING snap eight bytes earlier
+            // (0x222F4 `05 80 01 00 00  add eax,0x180`), which really
+            // is a plain +384, and the case-2 roll write at 0x2235B
+            // (`80 c4 04  add ah,0x4` = +1024), where the port already
+            // folded the high-byte add into its 512/1536 pair. Only
+            // this arm was copied literally.
+            // WITNESS mc2l24 slot 5, t=44,574: the boss holds yaw 1890
+            // and the human (slot 116) yaw 202, so the bucket is 13.
+            // Retail writes 202 + 1536 = 1738; the port wrote 202 + 6
+            // = 208. Same at t=44,578 (101 -> 1637), 44,582 (2037 ->
+            // 1525), 44,585 (1947 -> 1435), 44,588 (1855 -> 1343) and
+            // 44,594 (1669 -> 1157) — every one exact.
+            let snap = if no_mc2_pyramid_snap_high_byte() { 6 } else { 1536 };
+            self.ent[i].f30 = ctx.pyaw.wrapping_add(snap) & 0x7FF;
             return;
         }
         match self.ent[i].f69 {
@@ -227,11 +475,43 @@ impl Gen {
             }
             2 => {
                 // ±512 alternating by frame parity, then hold (mode 1).
-                let side = if self.ent[i].f63 & 1 == 0 {
-                    512u16
+                // ⭐⭐ THE PARITY IS THE GLOBAL FRAME COUNTER, NOT THE
+                // ENTITY'S OWN `byte_0x3E_62`. EF:13738-45 reads
+                // `x_D41A0_BYTEARRAY_4_struct.FrameTimingIndex_26 & 1`
+                // — the same counter the port models as
+                // `World::mc2_turn` (world.rs's objective-9 frame gate
+                // `!(FrameTimingIndex_26 & 0xF)`, EF:40852). Shipped
+                // `NETHERW.EXE`, linear 0x22343 (file 0x46B59):
+                //     8b 15 a4 41 00 00  mov  edx,[0x41a4]
+                //     f6 42 1a 01        test BYTE [edx+0x1a],0x1
+                //     74 07              jz   0x22356
+                //     ba 00 02 00 00     mov  edx,0x200      ; +512
+                //     eb 05              jmp  0x2235b
+                //     ba 00 fe ff ff     mov  edx,0xfffffe00 ; -512
+                //     66 8b 40 1c        mov  ax,[eax+0x1c]  ; player yaw
+                //     80 c4 04           add  ah,0x4         ; += 1024
+                //     01 d0              add  eax,edx
+                //     66 89 43 20        mov  [ebx+0x20],ax  ; roll
+                // i.e. `pyaw + 1024 ± 512` = the port's own {512, 1536}
+                // pair — only the SELECTOR was wrong. `MobCtx::mc2_turn`
+                // is captured at the tick TOP and retail's counter is
+                // read POST-increment (world.rs's own bump order, and
+                // the m27 branch-bolt perturb's identical `+ 1`), so
+                // the live parity is `ctx.mc2_turn + 1`.
+                // WITNESS mc2l24 slot 5. t=44,532: pyaw 890, turn
+                // 44,537 -> live 44,538 (even) -> +512 -> roll 1402,
+                // retail 1402; the old `f63 & 1` read 151 (odd) and
+                // wrote 890 + 1536 = 378. t=44,589: pyaw 1824, turn
+                // 44,594 -> live 44,595 (odd) -> +1536 -> roll 1312,
+                // retail 1312; the old read f63 208 (even) -> 288.
+                // Both exactly 1024 (180°) out — the boss turned to
+                // the wrong flank on every state-4 entry.
+                let parity = if no_mc2_pyramid_flank_frame_parity() {
+                    (self.ent[i].f63 & 1) as u32
                 } else {
-                    1536
+                    ctx.mc2_turn.wrapping_add(1) & 1
                 };
+                let side = if parity == 0 { 512u16 } else { 1536 };
                 self.ent[i].f34 = ctx.pyaw.wrapping_add(side) & 0x7FF;
                 self.ent[i].f69 = 1;
             }
@@ -266,6 +546,61 @@ impl Gen {
         if self.ent[i].act_life < 10 {
             self.ent[i].act_life = 8;
         }
+    }
+}
+
+impl Gen {
+    /// `sub_21AB0`'s SHARED `if (v33x)` ARMING TAIL — the four
+    /// PROJECTILE cases (1 = the (9,0) bolt, 2 = the (9,9) lightning
+    /// beam, 8 = the (9,26) whirlwind seed, 9 = the (9,3) meteor shot)
+    /// all fall into one block (EF:13491-13508), and it writes FIVE
+    /// fields and calls `sub_5EF70` — **and it does NOT write
+    /// `word_0x96_150`**. Every other launch thunk in the engine does
+    /// (`sub_1CC20` EF:9700 `v5x->word_0x96_150 = a1x->word_0x96_150;`
+    /// and its five siblings); the pyramid's does not, so its
+    /// projectiles are born TARGETLESS and acquire on their own.
+    ///
+    /// NETHERW.EXE file 0x466E7-0x46739 is the whole block — five
+    /// stores and one call, no `[edx+0x96]` anywhere:
+    ///
+    /// ```text
+    ///   466e7  85 d2              test edx,edx        ; v33x
+    ///   466e9  74 51              jz   0x4673c
+    ///   466eb  8b 75 ec           mov  esi,[ebp-0x14] ; v31x = the avatar
+    ///   466ee  83 c6 4c           add  esi,0x4c
+    ///   466f2  8d 7b 4c           lea  edi,[ebx+0x4c] ; the pyramid
+    ///   466fa  66 89 42 1a        mov  [edx+0x1a],ax  ; id_0x1A_26
+    ///   466fe  e8 dd 62 03 00     call 0x7c9e0        ; sub_581E0 tan2
+    ///   0670b  66 89 42 1c        mov  [edx+0x1c],ax  ; yaw
+    ///   0670f  e8 fc 62 03 00     call 0x7ca10        ; sub_58210 radix_tan
+    ///   46717  66 89 42 1e        mov  [edx+0x1e],ax  ; pitch
+    ///   46721  88 42 42           mov  [edx+0x42],al  ; xsubtype = avatar model
+    ///   46731  88 42 41           mov  [edx+0x41],al  ; xtype = avatar class
+    ///   46734  e8 37 d0 03 00     call 0x83770        ; sub_5EF70(avatar)
+    /// ```
+    ///
+    /// Contrast the SUMMON arm (cases 3..=6, `v35x`), which DOES stamp
+    /// the lock — `v35x->word_0x96_150 = playerIndex` (EF:13413) — and
+    /// which the port already reproduces. The asymmetry is retail's.
+    ///
+    /// WITNESS (mc2l24 t=45470 -> 45471, the pair lane): the pyramid's
+    /// case-2 (9,9) beam is re-fired at the avatar. Retail's beam
+    /// enters `sub_66750` with `word_0x96_150 == 0`, so `sub_66610`'s
+    /// acquire block (EF:63583) runs, elects slot 377 (a (5,25) on the
+    /// ground) and re-aims yaw 189 / pitch 102 (DOWN); it marches four
+    /// steps and lays 32 trail nodes. The port inherited the pyramid's
+    /// own lock (`PLAYER_TARGET`), the acquire gate refused, and the
+    /// beam kept the launcher's pitch 2007 (UP at the carpet), marched
+    /// ten steps and laid 81 nodes — 24 more free-stack pops than
+    /// retail, so every later birth in the tick landed one slot off.
+    ///
+    /// `sub_5EF70` is the avatar's danger poke; it is on all FOUR
+    /// cases in retail, and the port had it on 8/9 only.
+    pub(crate) fn mc2_pyramid_arm_tail(&mut self, p: usize) {
+        if !no_mc2_pyramid_proj_no_lock() {
+            self.ent[p].f146 = 0;
+        }
+        self.mc2_danger_poke(PLAYER_TARGET);
     }
 }
 
@@ -462,11 +797,63 @@ impl World {
                         self.mc2_kill_all_creatures();
                         // The life reset walks `dword_38523` — the SPHERE
                         // family (10, 39/40/57) — not the whole pool
-                        // (EF:12847-54). The byte[1]|=0x20 render bit is
-                        // skipped — see module doc.
+                        // (EF:12847-54).
+                        //
+                        // ⭐⭐⭐ `byte[1] |= 0x20` IS NOT A RENDER BIT —
+                        // IT IS THE DECAY CHANNEL. The module doc used
+                        // to call it "an unmapped render-side bit
+                        // (name-inferred)" and skip it; port flag bit 13
+                        // is the very channel [`Gen::ball_decay_tail`]
+                        // (mc1::combat, the MC2 sphere mover's tail
+                        // EF:26289-307) and the balloon-pick refusal
+                        // (mc2::castle, EF:61009) already read, and
+                        // which mc2::morph's mana rain already sets.
+                        // Without it the apocalypse spheres are re-lifed
+                        // to 140 and then NEVER count down — no fade, no
+                        // expiry, and a balloon fleet that will happily
+                        // fly for them.
+                        //
+                        // EF:12848-54:
+                        //   for (ix = ...dword_38523; ix > Entities[0]; ix = ix->next_0)
+                        //   { v19 = ix->struct_byte_0xc_12_15.byte[1];
+                        //     ix->maxLife_0x4 = 140;
+                        //     ix->struct_byte_0xc_12_15.byte[1] = v19 | 0x20;
+                        //     ix->life_0x8 = ix->maxLife_0x4; }
+                        //
+                        // Shipped `NETHERW.EXE`, the case-0xE arm of
+                        // `sub_21AB0` — the loop that follows the
+                        // KillAllCreatures call at file 0x45BA6
+                        // (`e8 45 a2 ff ff` -> 0x3FDF0, the same call
+                        // site the chain-members fixture already cites),
+                        // whose head loads `dword_38523` at 0x45BB0
+                        // (`8b 80 7b 96 00 00`) and whose back-edge is
+                        // 0x45BE1 `77 e0`. Body, file 0x45BC3-0x45BD8
+                        // (VA 0x213C3; file = VA + 0x24800):
+                        //   0x45BC3 `8a 50 0d`             mov dl,[eax+0xD]
+                        //   0x45BC6 `c7 40 04 8c 00 00 00` mov [eax+4],140
+                        //   0x45BCD `80 ca 20`             or  dl,0x20
+                        //   0x45BD0 `88 50 0d`             mov [eax+0xD],dl
+                        //   0x45BD3 `8b 50 04`             mov edx,[eax+4]
+                        //   0x45BD6 `89 50 08`             mov [eax+8],edx
+                        // (`eax+0xC` is the flags word, so `+0xD` is
+                        // byte[1] and `0x20` there is bit 13 = 0x2000.)
+                        //
+                        // WITNESS — mc2l24 t=52751->52752, the pyramid's
+                        // death tick: retail's slot 7 `(10,39)` reads
+                        // `max_life 300 -> 140, life 300 -> 139,
+                        // flags 12 -> 8204` (8204 = 12 | 0x2000) and
+                        // `flags.b1_decay20 0 -> 1`. The 139 is not a
+                        // second constant: the sphere's OWN mover runs
+                        // later in the same tick (slot 7 > the pyramid's
+                        // slot 5) and the freshly-armed decay tail takes
+                        // the first tick off. ~274 records carried the
+                        // off-by-one.
                         for e in self.g.ent.iter_mut().skip(1) {
                             if e.class64 == 10 && matches!(e.model65, 39 | 40 | 57) {
                                 e.max_life = 140;
+                                if !no_mc2_doom_sphere_decay_bit() {
+                                    e.flags |= 0x2000;
+                                }
                                 e.act_life = 140;
                             }
                         }
@@ -576,9 +963,125 @@ impl World {
             }
             self.g.ent[j].flags |= 0x400;
         }
-        // The Rebound trip (EF:13616-18).
+        // The Rebound trip (EF:13616-18):
+        //
+        // ```c
+        //   v7 = v16x->…SpellsEnabled_0x333_819x.SpellEnabled[8];
+        //   if (v7 && Entities_EA3E4[v7]->word_0x2E_46 > 0) v19 = 1;
+        // ```
+        //
+        // ⭐⭐ AND THE INDEX IS ROUTINELY A MARKER, NOT A SLOT — the
+        // same law `mc2_owner_castle_token` carries: the wizard death
+        // handler `sub_5E310` stamps a boolean **1** into every
+        // occupied book slot, so after the human dies this arm
+        // dereferences POOL SLOT 1, whatever sits there. Retail reads
+        // raw bytes at @0x2E; ours are HOMED PER CLASS
+        // (`port_ent_lanes_mc2`'s `f2e` arm), and `f26` is @0x2E only
+        // on a class-15 manifestation. Reading `f26` unconditionally
+        // read a DIFFERENT PHYSICAL FIELD the moment the marker
+        // pointed anywhere else.
+        // MEASURED (mc2l24 t=45560, `--start 45559`): the human dies
+        // at t=45559 and `spell_ent[8]` goes 42 -> 1 (the marker);
+        // pool slot 1 is a `(14,1)` whose @0x2E is **0** — retail does
+        // not trip and holds `word_0x2C_44` 0x42 — while our `f26`
+        // there is **15** (the record's own @0x10 scratch), so the
+        // port tripped bit 0 and carried 0x43 for the rest of the
+        // take.
         let m8 = self.mc2_book.ent[8] as usize;
-        devoured || (m8 != 0 && self.g.ent[m8].f26 > 0)
+        let rebound = m8 != 0 && {
+            let e = &self.g.ent[m8];
+            let at2e = if no_mc2_devour_rebound_at_2e() {
+                e.f26
+            } else if e.class64 == 3 && e.model65 == 2 {
+                e.f59 as i16 // the castle's @0x2E
+            } else if e.class64 == 15 {
+                e.f26
+            } else if e.class64 == 5 {
+                e.lease()
+            } else {
+                e.f46
+            };
+            at2e > 0
+        };
+        devoured || rebound
+    }
+
+    /// The BLDGPRM-68 building — the port's stand-in for retail's
+    /// `D41A0_0.word_0x3654A` (`sub_49A30` EF:32850 sets it at the
+    /// id-68 spawn, EF:28180 clears it at that building's raze). The
+    /// port banks the id on the entity itself (`f71 = bldg`,
+    /// `mc2_spawn_building`), so the live record IS the register.
+    ///
+    /// ⚠ ONE KNOWN DIFFERENCE, and it is an APPROX not a law: retail's
+    /// global is a RAW SLOT INDEX that survives the building's death —
+    /// on mc2l24 slot 169 is recycled into a `(9,9)` by t=49336 and
+    /// @0x3654A still reads 169, so retail keeps devouring around
+    /// whatever now occupies the slot (the MC2-reads-out-of-bounds
+    /// class). A live-record lookup stops at the citadel's death. The
+    /// faithful fix is a `u16` world register with an import seat off
+    /// `RetailMc2 @0x3654A`, the way LAW 6 seated @0x36546.
+    pub(crate) fn mc2_doom_citadel(&self) -> Option<usize> {
+        (1..self.g.ent.len()).find(|&i| {
+            let e = &self.g.ent[i];
+            e.class64 == 10 && e.model65 == 45 && e.f71 == 68 && e.flags & 0x400 == 0
+        })
+    }
+
+    /// `sub_21F60`'s `v17 == true` arm, driven from `UpdateEntities`'
+    /// tail on [`World::mc2_doom_citadel`] — see
+    /// [`no_mc2_citadel_devour`] for the bytes and the call-path scan.
+    /// Same devourable subtype set and same effects as the pyramid's
+    /// arm ((10,0) absorb owned by the devourer + despawn, and the
+    /// Castle-spell cancel on the model-10 shot); only the geometry
+    /// differs, and the return is discarded.
+    pub(crate) fn mc2_citadel_devour(&mut self, a: usize) {
+        if no_mc2_citadel_devour() {
+            return;
+        }
+        let (ax, ay, sx, sy, own) = {
+            let e = &self.g.ent[a];
+            (e.x, e.y, e.f80 as i16 as i32, e.f82 as i16 as i32, e.id24)
+        };
+        for j in 1..self.g.ent.len() {
+            let (sub, x, y, z) = {
+                let e = &self.g.ent[j];
+                if e.class64 != 9 || e.flags & 0x400 != 0 {
+                    continue;
+                }
+                (e.model65, e.x, e.y, e.z)
+            };
+            // The model-10 castle-build shot is measured against the
+            // PLAYER'S CASTLE (EF:13580-88), everything else against
+            // the projectile itself with the {5120, 5120} default.
+            let (tx, ty, hx, hy) = if sub == 10 {
+                match self.player_castle() {
+                    Some(c) => {
+                        let e = &self.g.ent[c];
+                        (e.x, e.y, e.f80 as i16 as i32, e.f82 as i16 as i32)
+                    }
+                    None => (x, y, 5120, 5120),
+                }
+            } else if DEVOUR_SUBTYPES.contains(&sub) {
+                (x, y, 5120, 5120)
+            } else {
+                continue;
+            };
+            let dx = ((tx.wrapping_sub(ax)) as i16 as i32).abs();
+            let dy = ((ty.wrapping_sub(ay)) as i16 as i32).abs();
+            if dx >= sx + hx || dy >= sy + hy {
+                continue;
+            }
+            if sub == 10 {
+                let m = self.mc2_book.ent[2] as usize;
+                if m != 0 {
+                    self.g.ent[m].f26 = 0;
+                }
+            }
+            if let Some(s) = self.g.mc2_spawn_fire(x, y, z) {
+                self.g.ent[s].id24 = own;
+            }
+            self.g.ent[j].flags |= 0x400;
+        }
     }
 
     /// `sub_21490` (EF:12886) — the phase-bit attack driver. Returns
@@ -742,18 +1245,34 @@ impl World {
     fn mc2_pyramid_pick_summon(&mut self, i: usize) {
         // sub_223E0's population counts over the class-5 buckets
         // (live + bucketed: life >= 0, action not a corpse state).
+        // ⭐⭐ THE POPULATION COUNTS ARE CHAIN LENGTHS. NETHERW.EXE
+        // 0x46bf8 / 0x46c1a / 0x46c3c all load `0x9603(%ecx)` —
+        // `bytearray_38403x[0]`, the MODEL-0 head — and 0x46c5e loads
+        // `0x9667(%ecx)` = +0x64 = chain[25]; each `mov (%eax),%eax`
+        // walks `next_0` and increments. The only body test in the four
+        // loops is 0x46c66 `80 78 45 c8  cmpb $0xc8,0x45(%eax)` — the
+        // action-200 skip on chain 25. Membership is the tick-top
+        // rebuild's ([`Gen::mc2_roster`]); the port's live `flags &
+        // 0x400` / `act_life` / action re-reads are not retail's.
         let count = |g: &Gen, m: u8, excl_200: bool| -> usize {
-            g.ent
+            if crate::engine::features::no_mc2_mob_chain_predicate() {
+                return g
+                    .ent
+                    .iter()
+                    .skip(1)
+                    .filter(|e| {
+                        e.class64 == 5
+                            && e.model65 == m
+                            && e.flags & 0x400 == 0
+                            && e.act_life >= 0
+                            && !matches!(e.tick70, 0xB4 | 0xE8 | 0xEA)
+                            && !(excl_200 && e.tick70 == 200)
+                    })
+                    .count();
+            }
+            g.mc2_roster(m)
                 .iter()
-                .skip(1)
-                .filter(|e| {
-                    e.class64 == 5
-                        && e.model65 == m
-                        && e.flags & 0x400 == 0
-                        && e.act_life >= 0
-                        && !matches!(e.tick70, 0xB4 | 0xE8 | 0xEA)
-                        && !(excl_200 && e.tick70 == 200)
-                })
+                .filter(|&&s| !(excl_200 && g.ent[s as usize].tick70 == 200))
                 .count()
         };
         // bit1 cleared on every entry (EF:13122).
@@ -862,6 +1381,56 @@ impl World {
     /// along the pyramid yaw at z+768; creatures step 1792 further
     /// at the stride bearing (NOT from the raw center).
     fn mc2_pyramid_do_summon(&mut self, i: usize, ctx: &MobCtx) {
+        // ⭐⭐⭐ THE WHOLE BARRAGE — THE REPEAT-COUNT DECREMENT
+        // INCLUDED — IS GATED ON THE HUMAN WIZARD'S POOL RECORD BEING
+        // LIVE. `sub_21AB0` opens by loading `Entities[playerIndex]`
+        // and bailing to its epilogue on any of THREE clauses
+        // (EF:13312, shipped `NETHERW.EXE` file 0x462E7-0x4631A,
+        // linear 0x21AE7; the whole function body is inside the
+        // `if`):
+        //
+        // ```text
+        //   462e7  8b 04 85 e4a30100  mov  eax,[Entities + eax*4]
+        //   462ee  8b 3d e4a30100     mov  edi,[Entities]
+        //   462f7  39 f8              cmp  eax,edi
+        //   462f9  0f 86 57040000     jbe  0x46756   ; ptr <= Entities[0] -> EXIT
+        //   462ff  83 78 08 00        cmpl [eax+0x8],0
+        //   46303  0f 8c 4d040000     jl   0x46756   ; life_0x8 < 0   -> EXIT
+        //   46309  f6 40 0d 04        testb [eax+0xd],0x4
+        //   4630d  0f 85 43040000     jne  0x46756   ; byte[1]&4 reap -> EXIT
+        //   46313  66 8b 53 24        mov  dx,[ebx+0x24]   ; word_0x24_36
+        //   46317  66 85 d2           test dx,dx
+        //   4631a  0f 86 1c040000     jbe  0x4673c   ; count == 0
+        // ```
+        //
+        // 0x46756 is the epilogue — the `word_0x24_36--` at 0x4631d
+        // is never reached — so a dead player FREEZES the count where
+        // it stands instead of burning it. `e8 rel32` scan of the
+        // shipped EXE: `sub_21AB0` has exactly ONE caller (0x45A91 =
+        // the action's `case 9`, EF:12791), so this is the whole law.
+        //
+        // Our human lives outside the pool (and in conformance import
+        // its slot is a zeroed husk), so `ctx.pdead` — the same
+        // `life_0x8 < 0` read every other follower/leader site takes
+        // through the ctx — stands in for the pool read; the pyramid
+        // is walked long before the carpet slot, so the mid-walk
+        // republish is moot here.
+        //
+        // MEASURED (mc2l24, pair lane, `--start t-1` local arms): the
+        // human's record goes `life 410 -> -1190` during t=45558; the
+        // recorded pyramid (slot 5) burns `word_0x24_36` 7/5/4/3/2
+        // over t=45553..45558 and then FREEZES at 2 from t=45559 on,
+        // while the port kept firing one `(9,0)` a tick. Every extra
+        // fireball pops the free stack from slot 5 — the FIRST walk
+        // position in the tick — so the whole tick's allocation
+        // sequence slid one slot: at t=45560 the (10,76) firestorm's
+        // hub took 17 and its 25 satellites 18..78 where retail put
+        // the hub on 214 and the ring on 17..70 (pair 45559->45560,
+        // 139 field rows + one extra entity), and at t=45559 the
+        // (10,1) death blast took 24 instead of 855.
+        if ctx.pdead && !no_mc2_pyramid_dead_player_gate() {
+            return;
+        }
         if self.g.ent[i].f38 == 0 {
             return;
         }
@@ -886,6 +1455,7 @@ impl World {
                     self.g.ent[p].f69 = 0;
                     self.g.ent[p].row156 = 62;
                     self.g.mc2_arm_proj(p, i, PLAYER_TARGET, tpos);
+                    self.g.mc2_pyramid_arm_tail(p);
                     self.g.snd(15, i);
                 }
             }
@@ -899,6 +1469,7 @@ impl World {
                     self.g.ent[p].f69 = 23;
                     self.g.ent[p].row156 = 62;
                     self.g.mc2_arm_proj(p, i, PLAYER_TARGET, tpos);
+                    self.g.mc2_pyramid_arm_tail(p);
                     self.g.snd(23, i);
                 }
             }
@@ -994,7 +1565,24 @@ impl World {
                 let f = (self.g.ent[i].f52 as i32 - 80).clamp(10, 1024) as u16;
                 self.g.ent[i].f52 = f;
                 let away = Gen::angle_between(ex, ey, ctx.px, ctx.py);
-                self.g.player_knock = (away, f as i16);
+                if no_mc2_doom_beam_oneshot() {
+                    self.g.player_knock = (away, f as i16);
+                } else {
+                    // The PRE-DIG route is the `else` arm: retail
+                    // writes the player's POSITION here (EF:13444-55,
+                    // `NETHERW.EXE` 0x46682 MoveEntity / 0x4668e
+                    // moveTest / 0x466dc CopyEntityPosition) and never
+                    // touches `moveBoost_0x1E_30`, which the port's
+                    // `take_knock_step` would have clamped to ±128 and
+                    // decayed −4/tick for twenty ticks past the burst.
+                    // Consumed at the carpet's own walk slot — see
+                    // `World::step_player_flight_mc2`.
+                    self.g.player_hurl = crate::engine::features::PlayerHurl {
+                        armed: true,
+                        bearing: away,
+                        dist: f as i16,
+                    };
+                }
             }
             sel @ (8 | 9) => {
                 // Case 8 = the (9,26) whirlwind seed, case 9 = the
@@ -1016,7 +1604,7 @@ impl World {
                         e.f71 = if sel == 8 { 3 } else { 10 };
                     }
                     self.g.mc2_arm_proj(p, i, PLAYER_TARGET, tpos);
-                    self.g.mc2_danger_poke(PLAYER_TARGET);
+                    self.g.mc2_pyramid_arm_tail(p);
                     self.g.snd(15, i);
                 }
             }
@@ -1030,6 +1618,31 @@ impl World {
     fn mc2_kill_all_creatures(&mut self) {
         for e in self.g.ent.iter_mut().skip(1) {
             if e.class64 != 5 || e.model65 == 10 {
+                continue;
+            }
+            // ⭐⭐⭐ IT WALKS THE PER-MODEL CHAINS, NOT THE POOL —
+            // `for (entity = bytearray_38403x[index]; entity >
+            // Entities[0]; entity = entity->next_0)` (EF:8678/8685),
+            // twenty-nine chains, and the tick-top sweep that REBUILDS
+            // them (EF:40277-93) refuses a class-5 record on four
+            // counts: `if (life_0x8 < 0) continue;` and
+            // `actionIndex_0x45_69` 0xB4 / 0xE8 / 0xEA. So a creature
+            // that is ALREADY DEAD is off every chain and the
+            // apocalypse's 70-tick kill-all never touches it again —
+            // neither its `life_0x8 = -1` nor its `word_0x24_36`
+            // killer stamp.
+            //
+            // The port walked the whole pool, so it re-stamped every
+            // corpse once a tick for seventy ticks. mc2l24 t=52751-53,
+            // slots 602 and 603 (two (5,25) minis at action 205, life
+            // -4 from their last mailbox): retail holds -4 across the
+            // whole apocalypse, the port wrote -1 every tick — and
+            // `MGC_WRITE_TRACE=602` names the writer as slot 5, the
+            // (5,10) pyramid at action 80, which is this call site
+            // (`bits & 4`, doomsday.rs's kill-all countdown).
+            if !no_mc2_kill_all_chain_members()
+                && (e.act_life < 0 || matches!(e.tick70, 0xB4 | 0xE8 | 0xEA))
+            {
                 continue;
             }
             if e.model65 == 27 {

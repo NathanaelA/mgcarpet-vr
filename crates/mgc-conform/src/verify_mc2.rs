@@ -99,6 +99,40 @@ pub(crate) fn mc2_jitter_ground() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_MC2_JITTER_GROUND").is_some())
 }
 
+/// ⭐⭐⭐ THE CARPET'S GROUND PROBE RUNS AT ITS OWN WALK SLOT, SO A
+/// HIGHER-SLOT TERRAFORM OF THE SAME TICK IS INVISIBLE TO IT.
+/// `sub_5D530` calls `getTerrainAlt_10C40(&predictedAxis)`
+/// (`NETHERW.EXE` file 0x81e57 `push 0x1b398` / 0x81e5f `call
+/// 0x35440` = VA 0x10C40 -> `sub_B5C60_getTerrainAlt2`) and folds the
+/// result into BOTH the climb-band authority (`altDiff`,
+/// 0x81e6a..0x81e82) and the post-gate floor clamp. This arm installed
+/// measured terrain@N+1 and handed the mover THAT, so every same-tick
+/// terraform reached the carpet a tick early — while the MC1 arm has
+/// always phased its ground per cell by the PORT's own mid-walk
+/// witness ([`crate::verify::midwalk_ground`], verify.rs, ungated).
+/// The law here is simply that same oracle.
+///
+/// WITNESS (mc2l24, 2026-09-10): the (10,42) painter at slot 701 —
+/// above the human's slot 116 — lowers the height plane 2-3 units per
+/// tick under the carpet at t=26209+ and t=26354+. One height byte is
+/// 32 engine units, so terrain@N vs @N+1 is tens of units of
+/// authority: at t=26209 `h(81,136)` is 49 at the carpet's slot and 47
+/// after the painter => `getTerrainAlt` 1550 vs 1486 => `altDiff` -232
+/// vs -168 => `eff_pitch` 94 (retail) vs 68 (what this arm reported).
+/// terrain@N reproduces retail to the unit on every row of both
+/// clusters. The converse also exists — mc2l0 t=5306 and mc2l3 t=243
+/// (the castle BUILD00 painter) terraform BELOW the carpet's slot and
+/// retail sees those writes the same tick — which is why the phase is
+/// PER CELL and a flat "always @N" costs rows there (measured: mc2l0
+/// 22380 -> 22374, mc2l1 18405 -> 18400, mc2l3 22355 -> 22337
+/// bit-exact pose pairs).
+///
+/// `MGC_NO_MC2_CARPET_GROUND_AT_N=1` restores the terrain@N+1 probe.
+pub(crate) fn no_mc2_carpet_ground_at_n() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CARPET_GROUND_AT_N").is_some())
+}
+
 /// W2-6 A/B (`MGC_MC2_MIDWALK_GROUND=1`): use the MC1 arm's
 /// port-witnessed per-cell phase oracle for the MC2 pose lane's ground
 /// image instead of the raised-phase reconstruction.
@@ -471,10 +505,19 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     }
                     // The POSE CHANNEL (crate::pose_lane): shadow-step
                     // the faithful mover over the human's own motion
-                    // column. Terrain probes run on the MEASURED
-                    // terrain@N+1 (same phase argument as the MC1
-                    // arm; the pending-block re-apply at the loop top
-                    // is idempotent — deltas carry absolute values).
+                    // column. The world takes measured terrain@N+1
+                    // (the pending-block re-apply at the loop top is
+                    // idempotent — deltas carry absolute values), but
+                    // the MOVER's own ground closure is handed
+                    // terrain@N: the carpet probes `getTerrainAlt` at
+                    // its own walk slot, so a higher-slot terraform of
+                    // the same tick is invisible to it (see
+                    // [`no_mc2_carpet_ground_at_n`]). ⚠ THE OLD
+                    // COMMENT HERE CLAIMED "the same phase argument as
+                    // the MC1 arm" — the MC1 arm has ALWAYS used the
+                    // port-witnessed per-cell oracle
+                    // ([`crate::verify::midwalk_ground`], verify.rs,
+                    // ungated); only this arm was hard-wired to N+1.
                     if !args.no_pose_lane {
                         // W2-6: the ORACLE's two port-side witnesses —
                         // the height plane as the walk crossed the
@@ -483,7 +526,13 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         // cloned BEFORE the measured@N+1 re-install
                         // below. Same three inputs the MC1 arm feeds
                         // `midwalk_ground`.
-                        let on = mc2_jitter_ground();
+                        // The three witnesses the per-cell phase
+                        // oracle needs (see
+                        // [`no_mc2_carpet_ground_at_n`]): the port's
+                        // plane AS ITS WALK CROSSED THE CARPET, its
+                        // settled post-tick plane, and measured@N.
+                        let law = !no_mc2_carpet_ground_at_n();
+                        let on = mc2_jitter_ground() || law;
                         let snap = world.take_midtick_ground_snapshot().filter(|_| on);
                         let h_post: Option<Vec<u8>> =
                             snap.is_some().then(|| world.planes().height.clone());
@@ -538,7 +587,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         // terraform moves more) takes the HIGHER
                         // endpoint. `MGC_MC2_MIDWALK_GROUND=1` selects
                         // the MC1 oracle instead, for A/B.
-                        let ground_mid: Option<Vec<u8>> = if mc2_midwalk_ground() {
+                        let ground_mid: Option<Vec<u8>> = if law || mc2_midwalk_ground() {
                             match (snap, h_start, h_post, crate::verify::measured_planes(&timg)) {
                                 (Some(snap), Some(h0), Some(post), Some((h1, _, _, _))) => {
                                     Some(crate::verify::midwalk_ground(snap, &h0, &post, h1))

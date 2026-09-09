@@ -106,6 +106,12 @@ pub struct PoseLane {
     /// not the recorded one. Counted, never applied; zero across the
     /// corpus as measured (round 119).
     pub manif_expiry_above: u64,
+    /// Pairs whose step carried the doomsday pyramid's hurl-away
+    /// beam ([`doom_beam_mc2`]) — a pre-mover absolute pose edit.
+    pub doom_beam: u64,
+    /// Pairs whose step was LIFTED by `sub_585D0`, the post-walk
+    /// wizard floor re-clamp (see [`no_mc2_wizard_post_walk_floor`]).
+    pub post_floor: u64,
     /// Which mover the run exercised (report label).
     arm: &'static str,
 }
@@ -113,7 +119,7 @@ pub struct PoseLane {
 // The stick-filter inversion and consumed-knock reconstruction laws
 // moved to the shared recovery home (mgc_formats::recover) so the
 // app's `--replay` shares one implementation with the harness.
-pub(crate) use mgc_formats::recover::{consumed_knock, recover_stick};
+pub(crate) use mgc_formats::recover::{consumed_knock, recover_stick, recover_stick_slowed};
 
 /// ⭐⭐⭐ THE KNOCK THAT IS ARMED AND SPENT INSIDE ONE TICK IS ZERO IN
 /// BOTH SNAPSHOTS — and `moveBoost` is a HIT REGISTER, not a rare
@@ -183,6 +189,136 @@ fn spent_knock_mc2(
         return None;
     }
     Some((dir1 & 0x7FF, mag))
+}
+
+/// ⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT LANDED — THE POST-WALK WIZARD
+/// FLOOR RE-CLAMP NEVER REACHED THE POSE LANE'S SHADOW MOVER.
+///
+/// `sub_585D0` (`NETHERW.EXE` file 0x7CDD0 = VA 0x585D0, EF:40735-51)
+/// is the LAST statement of `UpdateEntities_57730` (its ONE caller,
+/// file 0x7c2a7, immediately after the ascending `Entities[1..1000]`
+/// dispatch loop): it walks the tick-top class-3 chain `dword_38519`
+/// (0x7cde2 `mov 0x9677(%ebx),%ebx`, 0x9677 = 38519), keeps
+/// `model_0x40_64 == 0` only (0x7cdf4 `cmpb $0x0,0x40(%ebx)` /
+/// 0x7cdf8 `jne`) and RAISES z to `getTerrainAlt(&pos) + clr`:
+/// 0x7cdfa `lea 0x4c(%ebx),%eax` / 0x7cdfe `call 0x35440`
+/// (`getTerrainAlt_10C40`) / 0x7ce04 `movswl 0x50(%ebx),%ecx` /
+/// 0x7ce08 `lea (%eax,%esi,1),%edx` / 0x7ce0e `cmp %edx,%ecx` /
+/// 0x7ce10 `jge` (skip) / 0x7ce14 `mov %ax,0x50(%ebx)`. `esi` comes
+/// from 0x7cddb `movswl 0x84a6,%esi` = `str_D7BD6[66].word_160_0xc_12`
+/// — row 66 HARD-CODED whatever the map type, value 256.
+///
+/// The SIM has run this since the mc2l0 t=7408 witness (see
+/// `World::step`'s "`sub_585D0` — THE POST-WALK WIZARD GROUND
+/// RE-FLOOR" block). The pose channel's shadow mover — a SECOND CALL
+/// PATH, it never calls `World::step` — did not, so it graded the
+/// carpet against `sub_5D530`'s in-walk clamp alone.
+///
+/// BRIEF Q REFUTED (mc2l24 t=26296..26306, 2026-09-10). The human's
+/// Gravity Well II drops a (10,67) flood/quake whose birth slot is
+/// 396 in BOTH pools — retail's `explain 26295` births it there and
+/// the port's own walk writes `h(83,136)` at slot 396 too — so the
+/// token does NOT sit on the wrong side of the carpet's slot 116 and
+/// the port's dispatch order is faithful. `sub_39040`'s action-72
+/// dome ramp raises that cell 1-2 per tick for the 11 ticks its
+/// `dword_0x10_16` counts 11 -> 1, and BOTH games' carpets read the
+/// stale ground inside their own dispatch; retail's tick then ends
+/// with this re-clamp and the port's pose lane did not, so
+/// `pose.z` read 1280 vs 1300 … 1520 vs 1573.
+///
+/// LAW 20's converse witness (the (10,42) painter LOWERING the plane
+/// at t=26209/26354) is untouched: this clamp is a `max`, so a tick
+/// that digs the ground away can only be seen through the mid-walk
+/// oracle. That is the whole reason the phase is per cell AND the
+/// re-clamp exists.
+///
+/// `MGC_NO_POSE_MC2_POST_WALK_FLOOR=1` restores the single clamp.
+fn no_mc2_wizard_post_walk_floor() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_POSE_MC2_POST_WALK_FLOOR").is_some())
+}
+
+/// `sub_585D0`'s body, as a value: RAISE ONLY, to `ground + 256`.
+/// The clearance is retail's `str_D7BD6[66].word_160_0xc_12` — row
+/// 66 is read outright at file 0x7cddb whatever the map type, and
+/// both carpet rows carry 256 ([`flight::Mc2Row::OPEN`] /
+/// [`flight::Mc2Row::CAVE`]).
+pub(crate) fn post_walk_floor_mc2(z: i16, ground: i16) -> i16 {
+    let floor = (ground as i32 + flight::Mc2Row::OPEN.clearance as i32)
+        .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    z.max(floor)
+}
+
+/// KILL SWITCH (`MGC_NO_POSE_DOOM_BEAM=1`) for [`doom_beam_mc2`] —
+/// the doomsday pyramid's hurl-away beam. Law ON by default.
+fn no_pose_doom_beam() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_POSE_DOOM_BEAM").is_some())
+}
+
+/// ⭐⭐⭐ THE DOOMSDAY PYRAMID HURLS THE PLAYER BY WRITING HIS
+/// POSITION, AT ITS OWN POOL SLOT — IT IS NOT A `moveBoost` KNOCK.
+/// Both recorded knock lanes stay 0 for the whole beam, so
+/// [`consumed_knock`] and [`spent_knock_mc2`] have nothing to
+/// reconstruct from and the shadow steps a carpet retail threw.
+///
+/// `sub_21AB0` case 7 (EF:13427-56), reached from state 9 of the
+/// (5,10)'s machine:
+///
+/// ```text
+///   if (a1x->subSpellIndex_0x2A_42 & 2) { sub_5C800(v31x, 6);
+///        D41A0_0.word_0x36546 = 1024; a1x->subSpellIndex_0x2A_42 &= 0xFD; }
+///   D41A0_0.word_0x36546 -= 80;
+///   if (D41A0_0.word_0x36546 < 10)   D41A0_0.word_0x36546 = 10;
+///   if (D41A0_0.word_0x36546 > 1024) D41A0_0.word_0x36546 = 1024;
+///   predictedAxis_EB398ar = v31x->position_0x4C_76;              // the PLAYER
+///   v18 = Maths::sub_581E0_maybe_tan2(&a1x->position_0x4C_76, v17);
+///   MoveEntity_57FA0(&predictedAxis_EB398ar, v18, 0, D41A0_0.word_0x36546);
+///   if (moveTest_5D0A0(v31x)) {
+///       v20 = v19x->dword_0xA0_160x->word_160_0xc_12;            // row clearance
+///       v21 = getTerrainAlt_10C40(&predictedAxis_EB398ar);
+///       if (predictedAxis_EB398ar.z < v21 + v20)
+///           predictedAxis_EB398ar.z = v19x->dword_0xA0_160x->word_160_0xc_12 + v21;
+///       CopyEntityPosition_57CF0(v31x, &predictedAxis_EB398ar);
+///   }
+/// ```
+///
+/// The pyramid is slot 5 and the carpet 116, so the shove lands
+/// BEFORE `sub_5D530`: it edits the mover's STARTING pose and the
+/// carpet's own step runs on top of it. Only the POSITION is copied —
+/// `moveTest`'s cave steer-assist yaw is discarded, which is why
+/// `pose.yaw` stays bit-exact right through a beam window.
+///
+/// ⭐ THE RAMP IS A GLOBAL AND THE CAPTURE HOLDS IT
+/// ([`RetailMc2::doom_beam`], `D41A0_0 + 0x36546`) — no
+/// reconstruction. The FIRE PREDICATE is the repeat counter
+/// `word_0x24_36` (@0x24): `sub_21AB0`'s head guard is
+/// `if (v3) a1x->word_0x24_36 = v3 - 1`, case 7 arms 24, and state 8
+/// falls through to the first shot in the same tick, so a burst reads
+/// 0 → 23 → 22 → … → 0 and every decrement is one beam.
+///
+/// mc2l24 witness: t=44653..44676 (24 pairs), ramp
+/// 944, 864, …, 64, 10 × 12, bearing ≈ 371 — exactly the measured
+/// `retail − port` displacement (859, −390), (789, −350), …, (9, −3).
+fn doom_beam_mc2(pst: &RetailMc2, st: &RetailMc2, hx: u16, hy: u16) -> Option<(u16, i16)> {
+    if no_pose_doom_beam() || st.doom_beam == 0 {
+        return None;
+    }
+    for (slot, p1) in st.ents.iter().enumerate() {
+        // `byte_0x43_67` is the case selector sub_21AB0 switches on.
+        if p1.class3f != 5 || p1.model40 != 10 || p1.b43 != 7 || p1.life < 0 {
+            continue;
+        }
+        let p0 = pst.ents.get(slot)?;
+        if p1.f24.wrapping_add(1) != p0.f24 && !(p0.f24 == 0 && p1.f24 == 23) {
+            continue;
+        }
+        return Some((
+            mgc_sim::flight::angle_between(p0.x, p0.y, hx, hy),
+            st.doom_beam as i16,
+        ));
+    }
+    None
 }
 
 /// `MGC_POSE_DUEL_LIVE=1` — the kill switch for the recorded-opponent
@@ -616,9 +752,23 @@ impl PoseLane {
             self.gate(GATE_DEBUFF);
             return Ok(());
         }
+        // ⚠ SECOND CALL PATH. The free-run harness inverts the stick
+        // in `recover::recover_pair_mc2`; this pair shadow has its
+        // own copy, and the web-slow scale has to come off in BOTH or
+        // the law is only half landed. Inert while [`GATE_DEBUFF`] is
+        // armed (the gate refuses every pair this could move) — it is
+        // what makes `MGC_POSE_GRADE_DEBUFF=1` grade a slowed pair
+        // correctly instead of reporting the harness's own error.
+        // ⚠ AND THE SCALE IS THE ONE THE FILTER RAN UNDER, not tick
+        // N's END latch — `mgc_formats::recover::pair_move_speed`.
+        let ms_eff = mgc_formats::recover::pair_move_speed(
+            p0.move_speed,
+            p1.move_speed,
+            p1.move_speed_ctr,
+        );
         let (Some(sx), Some(sy)) = (
-            recover_stick(p0.roll_acc as i16, p1.roll_acc as i16),
-            recover_stick(p0.pitch_acc as i16, p1.pitch_acc as i16),
+            recover_stick_slowed(p0.roll_acc as i16, p1.roll_acc as i16, ms_eff),
+            recover_stick_slowed(p0.pitch_acc as i16, p1.pitch_acc as i16, ms_eff),
         ) else {
             self.gate(GATE_STICK);
             return Ok(());
@@ -692,6 +842,29 @@ impl PoseLane {
             mobilize_ctr: p0.mobilize_ctr,
             ..Default::default()
         };
+        // The pyramid's hurl-away beam runs at ITS slot, before the
+        // carpet's — a pre-mover pose edit, the same phase shape as
+        // [`Self::manif_speed_expiry_mc1`] one column over.
+        if let Some((bearing, dist)) = doom_beam_mc2(pst, st, s.x, s.y) {
+            self.doom_beam += 1;
+            let mut pred = (s.x, s.y, s.z);
+            flight::move_entity(&mut pred, bearing, 0, dist);
+            let out = world.player_mc2_gate((s.x, s.y, s.z), pred);
+            if out.wet {
+                ext.water_ctr += 1; // moveTest's waterCounter++ (EF:59480)
+            }
+            if let Some((p, _steer)) = out.pass {
+                let g = match ground_mid {
+                    Some(h) => World::ground_z_on_plane(h, p.0, p.1),
+                    None => world.ground_z_engine(p.0, p.1),
+                } as i32;
+                let clr = ext.row.clearance as i32;
+                let z = (p.2 as i32).max(g + clr);
+                s.x = p.0;
+                s.y = p.1;
+                s.z = z.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            }
+        }
         // The magnitude lane first; the WITHIN-TICK SPEND
         // ([`spent_knock_mc2`]) when it has nothing to read.
         let knock = consumed_knock(p0.knock_mag, p0.knock_dir, p1.knock_mag, p1.knock_dir).or_else(
@@ -748,6 +921,21 @@ impl PoseLane {
             &|cur, prop| world.player_mc2_gate(cur, prop),
             &|pos, latched| world.player_mc2_stuck(pos, latched),
         );
+        // `sub_585D0`, the post-walk wizard floor re-clamp (see
+        // [`no_mc2_wizard_post_walk_floor`]) — the SIM's own copy of
+        // this law lives at the tail of `World::step`. The mover's
+        // clamp above rode the carpet's mid-walk ground image; this
+        // one rides the SETTLED plane (`world`'s planes hold
+        // measured@N+1 by the time this runs) and only ever raises,
+        // so a terraform at ANY slot of the tick reaches the carpet
+        // on that tick's boundary.
+        if !no_mc2_wizard_post_walk_floor() {
+            let z = post_walk_floor_mc2(s.z, world.ground_z_engine(s.x, s.y));
+            if z != s.z {
+                self.post_floor += 1;
+                s.z = z;
+            }
+        }
         // DIG5 PROBE (`MGC_POSE_TRACE=<t0>-<t1>`): the shadow step's
         // own inputs and outputs beside the recorded landing.
         if let Some((a, b)) = pose_trace_window() {
@@ -928,6 +1116,43 @@ impl PoseLane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⭐⭐⭐ THE POST-WALK WIZARD FLOOR RE-CLAMP ONLY EVER RAISES —
+    /// which is exactly why it and the carpet's own mid-walk ground
+    /// phase (LAW 20) are BOTH laws instead of contradicting each
+    /// other.
+    ///
+    /// `sub_585D0` (`NETHERW.EXE` 0x7cdd0; the clamp at
+    /// 0x7ce0e `cmp %edx,%ecx` / 0x7ce10 `jge` — SKIP when the
+    /// carpet already sits at or above `ground + 256`). Both numbers
+    /// below are recorded, not invented:
+    ///
+    /// - mc2l0 t=7408->7409: the (10,42) build painter at slot 168
+    ///   RAISES the ground under the human (slot 152) from 1777 to
+    ///   1928. The mover's own clamp, reading the plane as the walk
+    ///   crossed slot 152, lands the carpet at 1777+256 = 2033;
+    ///   retail's boundary is 2184 = 1928+256.
+    /// - The converse (mc2l24 t=26209/26354, LAW 20's witness): a
+    ///   painter that DIGS the ground away leaves the carpet where
+    ///   the mid-walk clamp put it — the re-clamp must not lower it.
+    #[test]
+    fn the_post_walk_wizard_floor_only_raises() {
+        // The raise: the tick's terraform lifted the ground under a
+        // carpet the mover had already floored one tick low.
+        assert_eq!(post_walk_floor_mc2(2033, 1928), 2184);
+        // Idempotent once it has fired.
+        assert_eq!(post_walk_floor_mc2(2184, 1928), 2184);
+        // A carpet ABOVE the floor is untouched — this is not a
+        // second ground snap.
+        assert_eq!(post_walk_floor_mc2(4096, 1928), 4096);
+        // And a tick that LOWERED the ground under the carpet leaves
+        // the mid-walk value standing (the LAW 20 converse).
+        assert_eq!(post_walk_floor_mc2(2033, 1777), 2033);
+        // mc2l24 t=26296, the Gravity Well dome: ground 1044 at the
+        // carpet's own slot, 1044+256 = 1300 = retail's boundary z,
+        // where the mover's stale read had produced 1280.
+        assert_eq!(post_walk_floor_mc2(1280, 1044), 1300);
+    }
 
     /// A pool holding one human carpet at 681 and one class-12
     /// machine at `slot`, owned by him.

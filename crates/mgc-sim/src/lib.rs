@@ -25,6 +25,12 @@ pub mod verbs;
 
 pub use patches::WorldPatches;
 
+/// The whirlwind camera-roll CRANK COUNT channel — harness telemetry
+/// for the replay driver's stick recovery (see
+/// [`mc2::tail::mc2_ww_crank_count_law`]). Never read by simulation
+/// logic; the same contract as [`DEBUG_TICK`].
+pub use mc2::tail::{mc2_ww_crank_count_law, reset_whirl_cranks, whirl_cranks};
+
 /// Debug-trace tick correlation for env-gated probes (MGC_*_TRACE):
 /// harness-side consumers stamp the recording tick here so sim-side
 /// eprintlns can label themselves. Never read by simulation logic.

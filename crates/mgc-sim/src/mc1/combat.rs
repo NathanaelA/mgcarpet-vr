@@ -106,6 +106,15 @@ pub(crate) fn no_mc2_area_window() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AREA_WINDOW").is_some())
 }
 
+/// `MGC_NO_MC2_AREA_WINDOW_CH34=1` — the A/B arm for the SAME window
+/// gate on `sub_10C80`'s ch3/ch4 (steal/duel) arm, which returns
+/// before the ring pass and so never inherited it. Set it to restore
+/// the pre-dig pure-AABB human probe on those two channels.
+pub(crate) fn no_mc2_area_window_ch34() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AREA_WINDOW_CH34").is_some())
+}
+
 /// A/B toggle for the MC2 POSSESSION-PULSE FORCE FLAG: set
 /// `MGC_NO_MC2_CLAIM_PULSE_FORCE` to restore the pre-dig behaviour,
 /// where the (10,12) WEAK claim pulse broadcast its ctor's `+44`
@@ -887,7 +896,39 @@ impl Gen {
                     count += 1;
                 }
             }
-            if id != PLAYER_TARGET && self.player_overlap(i, ctx) && self.player_mail[ch].1 == 0 {
+            // ⭐⭐⭐ AND THE WINDOW GATE BELONGS HERE TOO — THE SAME
+            // FUNCTION, TWO ARMS, ONE GATED. The ch1+ ring pass below
+            // already carries it (session 96's `mc2 ||` law); this
+            // early-returning ch3/ch4 arm never got it, and it is the
+            // arm that walks `mapEntityIndex` MOST literally — the
+            // loop 20 lines up is a bare 2r+1 square of tile chains,
+            // so the human, being a pool record in retail, is
+            // unreachable from outside it however well the AABB
+            // overlaps. The AABB is the SECOND gate, never the first.
+            //
+            // mc2l24 t=7913: the newborn (10,25) Steal-Mana burst at
+            // slot 351 stands at (32128, 29312) with pitch 512, so
+            // `v10 = 2` and the window is tiles x 124..=128; the
+            // carpet, which moved at its OWN walk slot 116 earlier in
+            // this very tick, is linked at (31723 >> 8) = **123** —
+            // one tile short — while its box (|Δx| 405 < 512 + 121,
+            // |Δy| 385, |Δz| 606 < 512 + 100) says yes on all three
+            // axes. Retail's burst finds nobody and keeps its life
+            // (8 → 7); the port billed the human, and
+            // `mc2_blast25_tick`'s `hits != 0 ⇒ act_life = 0` killed
+            // the burst on its first tick.
+            let player_in_window = no_mc2_area_window()
+                || no_mc2_area_window_ch34()
+                || {
+                    let (ptx, pty) = ((ctx.px >> 8) as u8, (ctx.py >> 8) as u8);
+                    (-r..=r).any(|dx| (cx + dx) as u8 == ptx)
+                        && (-r..=r).any(|dy| (cy + dy) as u8 == pty)
+                };
+            if id != PLAYER_TARGET
+                && player_in_window
+                && self.player_overlap(i, ctx)
+                && self.player_mail[ch].1 == 0
+            {
                 self.player_mail[ch] = (amt, id);
                 count += 1;
             }

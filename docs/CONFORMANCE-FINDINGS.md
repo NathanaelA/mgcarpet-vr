@@ -904,6 +904,60 @@ post-fix).
 
 ## Resolved
 
+- **ROUND 126 (2026-09-10) — mc2l24 CERTIFIED MODULO REGISTERED DEVIATIONS; SIX
+  CAPTURE RULES RETIRED.** Third mc2l24 wave (rounds 124-125 before it: 7,505 → 55
+  segments). Fourteen Opus digs, thirteen laws (every one under an `MGC_NO_*` switch, cited
+  to NETHERW.EXE bytes; two also to CARPET.EXE), three unit pins for round-125 laws, five new
+  fixtures. `replay --segmented`: **55 → 20 segments = the seed + 19 roster-excused, excess
+  resets 35 → 0, horizon END**; `--resync-deviations` END; plain horizon 7962 → 19591, now
+  capped by the first `mc2l24-hydra-v34-parity` boundary (player: closer look in a future
+  session — neither ratified nor retired). Gate: 1144 tests, 521/521 fixtures, corpus sweep
+  byte-identical on 29 of 30 takes. Laws, in landing order: the funnel walk follows the wizard
+  only when HIS OWN tile word changed (`CopyEntityPosition_57CF0` compares the record's own
+  tile bytes, 0x7c4fe/0x7c505 — the ring-cell test re-walked a tile's head for a fourth
+  visit); the m28 chase ranges its strike to the PREDICTED point `v23x` (0x4FC0E/0x4FC1E); the
+  apocalypse reset arms the sphere DECAY bit (0x45BCD `80 ca 20`; the module doc had called it
+  render-side, so the spheres never faded — a native fix too); the orphan chain-child reap
+  FALLS THROUGH to the follow (0x3FECD `je` skips only the call — MC1's `segment_follow`
+  already carried it; −22 segments); the pyramid ctor stamps behaviour row 105 (0x70564 imm
+  0x89C8), not remc2's 107 = the zero row; the respawn teleport (`sub_5C950`, input pass) is on
+  the player record before the entity walk; the crank witness in `recover.rs` is the veto
+  latch, not "f30 changed"; a slow stamped ahead of the carpet scales the same tick's pose
+  filter (0x81d8b; the recorded `move_speed_ctr` 7/8 discriminates); `byte[3]&0x40` (the
+  pyramid's render-arm gate) and the freed record's behaviour row gain import seats;
+  `sub_68D50`'s refusal and Shield III's decrement-before-call run on the IMPORT path too (the
+  four mc2l24 regen `capture` rules were excusing exactly this in the pair lane and never
+  touched the replay lane); the MC2 rival life regen floors at −1 like MC1 (0x37489 /
+  CARPET 0x2BCEE); a PAUSED MC2 frame still runs `PlayerEvents` and bumps the frame counters
+  (0x6BD83, 0x76485-0x764a8), so `mc2_turn` no longer freezes across pauses. RETIRED
+  (player-ruled, zero pair-lane hits measured before and after on every declared take):
+  `mc2l24-player-mana-regen`, `mc2l24-player-life-regen`, `mc2l24-wizard-mana-regen`,
+  `mc2l24-wizard-life-regen`, `mc2-lightning-blast-churn`, `mc2-cast-timing-extra` — any
+  future `player.mana`/`(3,0) mana` row on mc2l24 now reads UNEXPLAINED, as it should.
+  Lessons: a comment claiming a lane is swept, presentation-only or unwitnessable was the
+  dig lead FIVE times; "a law on one call path is not landed" now has a CROSS-GAME form and a
+  LIVE-vs-IMPORT form; a cut fixture can fail where the take passes when the law rides an
+  INPUT folded from earlier ticks (the respawn pin is a unit test for that reason).
+  Unlanded leads: the (9,1) possession bolt's invented `f34 = f30`; five ungraded ctor
+  constants at t=12601; the wizard's cave-map behaviour row 104; the
+  `castle_upgrade_space_ok`/`mc2_castle_space_scan` sibling difference.
+  **ADDENDUM, same day — THE HYDRA v34 RULING RELITIGATED (dig 126O, player-directed).** The
+  frame arithmetic is exact: `sub_29A90`'s `[ebp-0x10]` and `sub_2AF10`'s `[ebp-0xc]` are the
+  same absolute stack dword on every m27 dispatch path (E−48 on 0xD9, E−60 on 0xDA/0xDB), and
+  the mover's turn-search flag is a BYTE write (0x4F85E / 0x4F8F3) into a slot the branch
+  machine reads as a DWORD, so the flag decides only the parity. Landed as
+  `MGC_NO_M27_V34_RESIDUE` (`m27_move` publishes `(V34_ENTRY & !0xFF) | flag`); it is
+  applicable at 2 of the 63 witnessed boundaries — mc2l24 19591/19627, exactly the plain-horizon
+  cap — and correct at both: plain horizon 19591 → 33371, segmented 20 → 18. The other 61 are a
+  REAL floor, now on a per-tick trace: the identical port-visible signature (body 5, 0xDA, no
+  scan, no clobber, f71 = 0) is odd at 35668 and even at 34652, and the same signature is odd on
+  mc2l22 and even on mc2l24 — the residue is the previous entity handler's stack leavings, which
+  only a byte-accurate stack emulation of the whole walk could model. Both rule notes amended,
+  the `V34_ENTRY` deviation rewritten, the stale "`setting_30` unmodeled" line corrected. The new
+  mc2l24 plain head (33372, `(5,27)` slot 135 `rand speed x y z`) is dig W's separate family —
+  clean in the pair lane, dirty in the free run — and the mc2l24 rule's tick list should be split
+  when it is dug.
+
 - **ROUND 120 (2026-09-08) — THE mc1l48-nodeath WAVE: FIVE LAWS, ONE CORRECTED
   REGISTRATION, ONE BANKED LEAD.** The player re-recorded mc1l48 with **zero
   permadeaths** (`mc1l48-nodeath`, 47,918 ticks, terrain verified IDENTICAL), and this

@@ -422,17 +422,72 @@ impl Gen {
         }
     }
 
+    /// A/B toggle for the ORPHAN-REAP FALL-THROUGH law (dig 126-F):
+    /// `MGC_NO_MC2_CHILD_ORPHAN_FALLTHROUGH=1` restores the pre-126
+    /// body — the invented early `return` after the orphan reap.
+    fn child_orphan_fallthrough_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| {
+            std::env::var_os("MGC_NO_MC2_CHILD_ORPHAN_FALLTHROUGH").is_none()
+        })
+    }
+
     /// `sub_1B6B0` (EF:8696) — the m0/m3 child tick (state 0xE8):
     /// awake = rigid follow at -f56 behind the parent along the
     /// exact 3D bearing + own damage intake; asleep = every 4th
-    /// phase snap onto the parent. Parent gone/not-a-creature →
-    /// orphan reap (the MC1 worm port's precedent for
-    /// DisableEntityDrawing04).
+    /// phase snap onto the parent.
+    ///
+    /// ⭐ THE ORPHAN REAP IS NOT AN EARLY RETURN. Retail marks the
+    /// child and CARRIES ON with the follow, using the (already
+    /// freed, class-0) parent record's STALE pose. Shipped
+    /// `NETHERW.EXE` file **0x3FEB0** (LE VA 0x1B6B0):
+    /// ```text
+    /// 3FEBE  66 8b 73 32     mov  si,[ebx+0x32]      ; parent index
+    /// 3FEC2  8b 34 b5 ..     mov  esi,[esi*4+0x1A3E4]; Entities[idx]
+    /// 3FEC9  80 7e 3f 05     cmp  byte [esi+0x3f],5  ; class == 5 ?
+    /// 3FECD  74 09           je   0x3FED8            ; -> the follow
+    /// 3FECF  53              push ebx
+    /// 3FED0  e8 3b c8 03 00  call 0x57F10            ; the reap
+    /// 3FED5  83 c4 04        add  esp,4
+    /// 3FED8  8a 53 39        mov  dl,[ebx+0x39]      ; byte_0x39_57
+    /// 3FEDB  8d 7e 4c        lea  edi,[esi+0x4c]     ; parent pose
+    /// ```
+    /// The `je` skips ONLY the call; 0x3FED8 is the common tail, and
+    /// `esi` (the class-0 parent) is what `lea edi,[esi+0x4c]` feeds
+    /// the follow. `DisableEntityDrawing04_57F10` (file 0x7C710) is
+    /// `mov eax,[ebp+8] / or byte [eax+0x0d],4 / ret` — `flags |=
+    /// 0x400` and nothing else; it never returns for its caller.
+    /// The index-0 arm is the same code: retail dereferences
+    /// `Entities[0]` (the sentinel, class 0), reaps, and follows it.
+    ///
+    /// mc2l24 t=51332→51333 is the witness. Vissuluth's worm chain
+    /// dies link by link — the reap mark walks one link per tick and
+    /// the tick-top reaper frees the previous link. At 51333 head
+    /// 732 is freed (class3f 5 → 0) and link 727 is reap-flagged; the
+    /// port stopped there, but retail still runs 727's follow (x/y/z
+    /// 9932,53440,2324 → 9933,53456,2308 — exactly `f36`=98 behind
+    /// 732's stale 9941,53522,2235) AND drains its mailbox (life
+    /// 2400 → 2000, f26 0 → 853, mail0.src 853 → 0). Skipping that
+    /// froze one link per tick for the whole chain, which is the
+    /// t=51333..51354 cluster: 22 one-tick segments.
+    ///
+    /// ⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT LANDED — here in its
+    /// CROSS-GAME form. MC1's identical body-segment follow
+    /// ([`World::segment_follow`], `sub_19550` :21116-17) already
+    /// carried this law, comment and all ("FALLS THROUGH — the
+    /// orphan still follows the stale leader slot this tick");
+    /// only the MC2 sibling grew the invented `return`. The
+    /// `l == 0` term below is redundant (slot 0 is the scratch
+    /// record, `class64 == 0 != 5`, so it reaps and follows the
+    /// scratch pose exactly as MC1 documents) and is kept only so
+    /// the kill switch reproduces the pre-126 body byte for byte.
     pub(crate) fn mc2_child_tick(&mut self, i: usize) {
         let l = self.ent[i].f52 as usize;
         if l == 0 || self.ent[l].class64 != 5 {
             self.ent[i].flags |= 0x400;
-            return;
+            if !Self::child_orphan_fallthrough_law() {
+                return;
+            }
         }
         let (lx, ly, lz) = (self.ent[l].x, self.ent[l].y, self.ent[l].z);
         if self.ent[i].f58 != 0 {
@@ -458,6 +513,76 @@ impl Gen {
         } else if self.ent[i].f63 & 3 == 0 {
             self.move_relink(i, lx, ly, lz);
             self.ent[i].f30 = self.ent[l].f30;
+        }
+    }
+
+    /// A/B toggle for the m0 PHASE-7 WRAPPER TABLE law (dig 124-G):
+    /// `MGC_NO_MC2_M0_PHASE7_CONTROLLED=1` restores the pre-124 body —
+    /// the wrapper physics on the stage-HELD seam only, and only for
+    /// StageVar2 1..=10.
+    fn m0_phase7_table_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M0_PHASE7_CONTROLLED").is_none())
+    }
+
+    /// `sub_1F300` (EF:11352) — the m0 STATE-0x07 WRAPPER's tail, i.e.
+    /// everything after the shared `sub_1D5D0(a2x, 0)` leg. Shipped
+    /// `NETHERW.EXE` file **0x43B00** (LE VA 0x1F300, dispatch-table
+    /// entry 0x200300):
+    /// ```text
+    /// 1F30A  e8 c1 e2 ff ff        call 0x1D5D0          ; the legs
+    /// 1F30F  8a 43 49              mov  al,[ebx+0x49]    ; StageVar2
+    /// 1F312  fe c8                 dec  al
+    /// 1F317  3c 10                 cmp  al,0x10
+    /// 1F319  77 1f                 ja   0x1F33A          ; -> ret
+    /// 1F320  2e ff 24 85 b8 f2 ..  jmp  [cs:eax*4+0xF2B8]
+    /// 1F328  e8 92 fd ff ff        call 0x1F0C0          ; dodge
+    /// 1F331  e8 09 fd ff ff        call 0x1F040          ; bob
+    /// 1F33A  5d 5b c3              ret
+    /// ```
+    /// and the 17-entry table at file 0x43AB8 (LE 0x1F2B8) reads,
+    /// for StageVar2 = 1..0x11:
+    /// `328 328 328 328 328 328 328 328 328 328 | 33A 33A | 328 328 |
+    ///  33A | 328 | 331`
+    /// — so **1..0xA, 0xD, 0xE, 0x10 → dodge+bob; 0xB/0xC/0xF →
+    /// nothing; 0x11 → BOB ONLY**.
+    ///
+    /// ⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT LANDED. The port had this
+    /// tail on the stage-HELD seam alone ([`World::mc2_held_tick`],
+    /// kinds 1..=10) — but `sub_1F300` IS the model-0 `8m+7` handler,
+    /// so the CONTROLLED kinds reach it through exactly the same
+    /// wrapper: 0xD Summon-Army, 0xE alliance, 0x10 pyramid-home and
+    /// 0x11 pyramid SPIN-UP all take the ambient physics too.
+    /// mc2l24's Vissuluth worms are the witness: a (5,0) head at
+    /// StageVar2 **17** rises on `sub_1E320`'s launch flight while
+    /// `sub_1F040` adds `dword_0x10_16` to z every tick and drops the
+    /// velocity by 5. t=50700 slot 226 — retail z 981 → 1097 and
+    /// velocity 120 → 115, where the port committed only the move
+    /// core's −4 (z 977, velocity untouched at 120). Its first child
+    /// segment then reads the wrong parent z and mis-pitches, which
+    /// is where the family SURFACES ([`Gen::mc2_child_tick`]).
+    /// The selector is read AFTER the legs, exactly as retail does
+    /// (`sub_1E320` flips 0x11 → 0x10 on its last tick, and the
+    /// wrapper then runs the 0x10 arm — dodge included).
+    pub(crate) fn m0_phase7_physics(&mut self, i: usize) {
+        if self.ent[i].model65 != 0 {
+            return;
+        }
+        if !Self::m0_phase7_table_law() {
+            // Pre-124 body: the held seam's 1..=10 arm only.
+            if matches!(self.ent[i].site_z, 1..=10) {
+                self.m0_dodge(i);
+                self.m0_bob(i);
+            }
+            return;
+        }
+        match self.ent[i].site_z {
+            1..=10 | 13 | 14 | 16 => {
+                self.m0_dodge(i);
+                self.m0_bob(i);
+            }
+            17 => self.m0_bob(i),
+            _ => {}
         }
     }
 
@@ -1684,7 +1809,11 @@ impl Gen {
                 best = Some((slot, d2));
             }
         };
-        consider(ctx.px, ctx.py, PLAYER_TARGET);
+        // The out-of-pool human takes the roster's ENTRY test
+        // (`life >= 0` at tick top) — see `m27_scan_life_law`.
+        if !ctx.pdead_top || !Self::m27_scan_life_law() {
+            consider(ctx.px, ctx.py, PLAYER_TARGET);
+        }
         if Self::m27_scan_roster_law() {
             for c in 0..self.wiz_chain.visible_len() {
                 let j = self.wiz_chain.list[c] as usize;
@@ -2030,7 +2159,10 @@ impl Gen {
         // inside the draw-B arm) and TWO readers (0x4E401, 0x4E452),
         // and NO initialiser anywhere in the body. It therefore
         // CARRIES from one branch of the f54 chain to the next.
-        let mut v34: u32 = Self::m27_v34_seed();
+        let mut v34: u32 = match self.m27_v34_slot.0.take() {
+            Some(f) if Self::m27_v34_residue_law() => f,
+            _ => Self::m27_v34_seed(),
+        };
         while br != 0 {
             let next = self.ent[br].f54 as usize;
             if self.ent[br].tick70 == BRANCH_STATE {
@@ -2038,6 +2170,12 @@ impl Gen {
             }
             br = next;
         }
+        // The body's own frame re-occupied both dwords: a published
+        // same-walk leaving does not survive past this body. (What
+        // `sub_29A90` itself leaves — its final `v34` on one dword, its
+        // projectile byte on the other — is not modelled; the next
+        // body reads the seed.)
+        self.m27_v34_slot.2 = None;
     }
 
     /// A/B toggle for the wander draw's behaviour-row read (dig
@@ -2079,6 +2217,368 @@ impl Gen {
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(V34_ENTRY)
         })
+    }
+
+    /// ⭐⭐⭐ BOTH FLAG WRITES ARE **BYTE** WRITES INTO A DWORD SLOT.
+    /// `88 75 f4` (file 0x4F85E, `MOV r/m8,r8`) and `c6 45 f4 01`
+    /// (0x4F8F3, `MOV r/m8,imm8`) touch ONLY byte 0 — and so does
+    /// `sub_2AF10`'s own read, `80 7d f4 00` (0x4F920, `CMP r/m8,imm8`).
+    /// `sub_29A90` then reads the slot as a FULL DWORD (`8b 55 f0`,
+    /// 0x4E401) and tests it three ways: `test edx,edx` and the SIGNED
+    /// `83 fa 04  cmp edx,4` (0x4E43F) see all four bytes, while only
+    /// `f6 45 f0 01  test byte [ebp-0x10],1` (0x4E452) — the parity —
+    /// sees the byte the mover wrote. So a turn-search decides the
+    /// PARITY BIT and nothing else: the upper three bytes stay
+    /// residue, which is why the `!= 0` / `> 4` arms must keep
+    /// `V34_ENTRY`'s magnitude. (Writing a bare 0/1 instead measured
+    /// mc2l22 END -> horizon 46488 and mc2l24 devs 0 -> 2: a `v34`
+    /// of 0 sends the branch into the wizard-scan arm retail never
+    /// takes, and a `v34` of 1 stops it stamping `f71 = 4`.)
+    fn m27_v34_byte(flag: u32) -> u32 {
+        (Self::m27_v34_seed() & !0xFF) | flag
+    }
+
+    /// A/B toggle for the M27 `v34` PAD-RESIDUE law (round 127):
+    /// `MGC_NO_M27_V34_PAD_RESIDUE` restores (a) the unsigned `> 4`
+    /// test and (b) the mover's flag write over the SEED's upper
+    /// bytes, and (c) silences the (10,34) teleporter pad's stack
+    /// leaving (`World::mc2_portal_tick`).
+    ///
+    /// ⭐⭐⭐ THE `> 4` TEST IS SIGNED. NETHERW.EXE 0x4E43F `83 fa 04
+    /// cmp edx,4` is followed by 0x4E442 `7e 04 jle` — a SIGNED
+    /// branch — so a residue with bit 31 set (a sign-extended
+    /// negative word) is `!= 0`, is NOT `> 4`, and its low bit alone
+    /// decides the wander draw. The port compared as `u32`, which
+    /// sent every such residue into the `f71 = 4` arm.
+    ///
+    /// ⭐⭐⭐ THE (10,34) TELEPORTER PAD LEAVES ITS OWN `y` IN THE SLOT.
+    /// `sub_35390` (file 0x59B90: 4 pushes + `sub esp,0x10`, frame
+    /// W-8..W-36) ends every ALIVE tick with `push esi / call
+    /// getTerrainAlt_10C40` (0x59D13-14, arg at W-40, return at W-44);
+    /// `getTerrainAlt` (0x35440: `push ebp / mov ebp,esp`, W-48) then
+    /// pushes `movsx eax, WORD [edx+2]` — the pad's OWN `position.y`,
+    /// sign-extended — at **W-52** (0x3544A `50`), the exact dword
+    /// `sub_29A90` reads as `[ebp-0x10]` on the 0xD9 path. Nothing
+    /// dispatched after the pad on mc2l24 (idle risers, idle switches
+    /// with a mis-aligned phase, the 0xE9/0xEA chain members — which
+    /// the walk never calls at all, `str_D4C48ar[5]` rows 233/234 carry
+    /// a NULL handler) reaches that depth, so a hydra body walked after
+    /// the pad reads `sext16(pad.y)`. mc2l24 t=33370: two hydras are
+    /// born in one tick (bodies 5 and 95, the pad at slot 66 between
+    /// them); on their first tick the branches with `f63 & 7 == 0`
+    /// (7 and 23 of body 5, 135 and 159 of body 95) all enter the
+    /// state-1 arm on the residue — retail stamps `f71 = 4` on 7 and
+    /// 23 (pre-walk residue, positive) and leaves 135/159 in state 1
+    /// with the wander draw taken (pad y 43392 → −22144: nonzero,
+    /// even, not > 4). The port stamped all four.
+    /// The pad's EXPIRE tick (`life` 1 → 0) ends with
+    /// `PrepareEventSound(idx, -1, 20)` instead — three args at
+    /// W-40..W-48, return address at W-52 = linear 0x216415.
+    fn m27_v34_pad_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_V34_PAD_RESIDUE").is_none())
+    }
+
+    /// The mover's flag write is a BYTE store into whatever the slot
+    /// holds: keep the LIVE residue's upper three bytes (the pad's
+    /// sign-extended `y`, or the seed when nothing is published).
+    fn m27_v34_flag(&self, flag: u32) -> u32 {
+        if Self::m27_v34_pad_law() {
+            let cur = self.m27_v34_slot.0.unwrap_or_else(Self::m27_v34_seed);
+            (cur & !0xFF) | flag
+        } else {
+            Self::m27_v34_byte(flag)
+        }
+    }
+
+    /// `cmp edx,4 / jle` (0x4E43F-42): signed.
+    pub(crate) fn m27_v34_gt4(v34: u32) -> bool {
+        if Self::m27_v34_pad_law() {
+            (v34 as i32) > 4
+        } else {
+            v34 > 4
+        }
+    }
+
+    /// The residue value the (10,34) pad's expire tick leaves: the
+    /// return address of `call PrepareEventSound_6E450` at file
+    /// 0x59C10 (next instruction 0x59C15 → linear 0x216415).
+    pub(crate) const M27_V34_PAD_EXPIRE: u32 = 0x0021_6415;
+
+    /// `World::mc2_portal_tick`'s seam: publish what `sub_35390` left
+    /// at W-52 for the rest of this walk.
+    pub(crate) fn m27_v34_publish_pad(&mut self, i: usize, expired: bool) {
+        if !Self::m27_v34_pad_law() {
+            return;
+        }
+        let v = if expired {
+            Self::M27_V34_PAD_EXPIRE
+        } else {
+            self.ent[i].y as i16 as i32 as u32
+        };
+        self.m27_v34_publish_word(v);
+    }
+
+    /// A handler left `v` on the 0xD9-path dword (W-52) and a
+    /// positive even stack/pointer value one frame deeper (W-64).
+    pub(crate) fn m27_v34_publish_word(&mut self, v: u32) {
+        self.m27_v34_slot.0 = Some(v);
+        self.m27_v34_slot.1 = true;
+        self.m27_v34_slot.2 = None;
+    }
+
+    /// A handler left an entity-pool or stack POINTER on the slot:
+    /// positive, even, far above 4 — the seed's own class, so the
+    /// seed stands in (`None`).
+    pub(crate) fn m27_v34_publish_pointer(&mut self) {
+        self.m27_v34_slot.0 = None;
+        self.m27_v34_slot.1 = false;
+        self.m27_v34_slot.2 = None;
+    }
+
+    /// A/B toggle for the M27 `v34` BUILDING-RESIDUE law (round 128):
+    /// `MGC_NO_M27_V34_BUILDING_RESIDUE` silences the (10,45) village
+    /// building's stack leaving (`Gen::mc2_house_tick`).
+    ///
+    /// ⭐⭐⭐ EVERY (10,45) ACTION-0x34 TICK ENDS WITH `getTerrainAlt(
+    /// &position)`, AND ITS HELPER PUSHES THE WALK'S ESI ON W-64.
+    /// `AddHouse0A_2D_38330` (file 0x5CB30, `53 56 57 55 89 e5`, no
+    /// locals) funnels every arm — idle, hit, dead-to-53, claim — into
+    /// its tail at 0x5CD9C: `lea eax,[ebx+0x4c] / push eax` (W-24) /
+    /// `call getTerrainAlt_10C40` (return W-28). `getTerrainAlt`
+    /// (0x35440) is `push ebp` (W-32), `push sext(y)` (W-36), `push
+    /// sext(x)` (W-40), `call 0xDA460` (return W-44), and the
+    /// interpolator's prologue is `push ebp / mov ebp,esp / push ebx /
+    /// push ecx / push edx / push esi / push edi` = W-48..W-68 — so
+    /// **W-52 = EBX = the building's own record pointer** (the 0xD9
+    /// path's dword: a positive even address, the seed's class) and
+    /// **W-64 = ESI** (the 0xD8/0xDA/0xDB dword).
+    /// ⭐⭐⭐ ESI IS THE WALK'S OWN 29. `UpdateEntities_57730` (0x7BF30)
+    /// zeroes esi at 0x7C1AE for its 29-roster `sub_12500` pre-walk
+    /// loop (`inc esi / cmp esi,0x1d / jl`, 0x7C1E0-E4) and never
+    /// writes it again until AFTER the walk (`mov si,[eax+0x3654a]`,
+    /// 0x7C2B1); every callee in between saves and restores it
+    /// (Watcom's esi is callee-saved: `sub_68BF0` 0x8D3F1, `sub_159E0`
+    /// 0x3A1E1, `sub_12780` 0x36F81, every handler prologue), so each
+    /// entity handler is entered with ESI = 29. The building tick
+    /// keeps it — `CompareEvent08_38B00` (0x5D300..0x5D367) and the
+    /// claim/sound/sprite callees never load esi — EXCEPT on two arms
+    /// that load a pointer into it: the non-lethal hit with an
+    /// occupant to pop (`mov esi,[0x1a3e4]` = `Entities_EA3E4[0]` at
+    /// 0x5CBDD, run whenever `dword_0x10 > 2`) and the periodic
+    /// population spawn's `lea esi,[ebx+0x4c]` (0x5CD5D, inside the
+    /// `rand % minSpeed >` branch). `SetMaxDistance_5C8D0` saves esi
+    /// (0x810D1) and its `sub_583F0` leaves an EVEN saved ebp on W-64
+    /// that the tail's ESI push then overwrites.
+    /// So a hydra body on the 0xDA path walked after a quiet village
+    /// building reads **29**: nonzero, `> 4`, ODD — `f71 = 4` stamped
+    /// and the wander draw SKIPPED. mc2l22's body 98 sits behind
+    /// thirteen (10,45) buildings (the last at slot 93), and all 19
+    /// registered boundaries (53911..55088) are exactly that outcome
+    /// on state-0 head-of-chain branches; the port's even seed
+    /// stamped 4 and drew.
+    fn m27_v34_building_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_V34_BUILDING_RESIDUE").is_none())
+    }
+
+    /// The walk's ESI: `UpdateEntities_57730`'s pre-walk chain counter
+    /// after its 29 rosters (`cmp esi,0x1d`).
+    pub(crate) const M27_V34_WALK_ESI: u32 = 29;
+
+    /// `Gen::mc2_house_tick`'s seam: `esi_pointer` = this tick loaded
+    /// a record pointer into ESI (the hit-with-occupants arm or the
+    /// population spawn), so the deeper dword holds an even address of
+    /// the seed's class instead of the walk's 29.
+    pub(crate) fn m27_v34_publish_building(&mut self, esi_pointer: bool) {
+        if !Self::m27_v34_building_law() {
+            return;
+        }
+        // W-52: the terrain helper's saved EBX = the building's record
+        // pointer.
+        self.m27_v34_slot.0 = None;
+        self.m27_v34_slot.1 = false;
+        // W-64: its saved ESI.
+        self.m27_v34_slot.2 = if esi_pointer {
+            None
+        } else {
+            Some(Self::M27_V34_WALK_ESI)
+        };
+    }
+
+    /// A/B toggle for the M27 `v34` SWITCH-RESIDUE law (round 127):
+    /// `MGC_NO_M27_V34_SWITCH_RESIDUE` silences the class-11 switch
+    /// handlers' stack leavings (`World::mc2_switch_probe` /
+    /// `mc2_switch_repeating`).
+    ///
+    /// ⭐⭐⭐ THE (11,0..3) SWITCH PROBE LEAVES ITS OWN `y` TOO. All four
+    /// handlers (`sub_6F030`/`sub_6F070`/`sub_6F0B0`/`sub_6F100`, file
+    /// 0x93830/0x93870/0x938B0/0x93900) are `push ebx / push ebp / mov
+    /// ebp,esp` (ebp = W-12) and call `InitSwitchChainZaxisAndSound_
+    /// 6F850` with two args (W-16/W-20, return W-24); the probe
+    /// (0x94050) pushes ebx/esi/ebp (ebp = W-36). Past its `f63 & 7`
+    /// gate it walks the tick-top class-3 roster `dword_38519`, and for
+    /// every model-0 member calls `CompareAxisWithShift_10750` (args
+    /// W-40/W-44, return W-48) whose first push (0x34F50 `53`) drops
+    /// the MEMBER POINTER on W-52; when no member matches, the walk
+    /// ends with `getTerrainAlt_10C40(&position)` (EF:44870 — arg
+    /// W-40, return W-44, `push ebp` W-48) whose `movsx y` push lands
+    /// on W-52 LAST. So: a trip leaves a pointer (the seed's class), a
+    /// quiet probe leaves `sext16(switch.y)` — with or without a live
+    /// human. mc2l24 walk 41397→41398: switch 75 (phase 40, y 24448 →
+    /// positive even) sits between the slot-66 pad and body 95, so the
+    /// body's aligned branch 124 read 24448, not the pad's −22144, and
+    /// retail stamped `f71 = 4`; switch 79 (y 28032) does the same at
+    /// 41681 and 41713.
+    /// The REARM arm (`dword_0x10_16 != 0`, EF:54419) calls `sub_6F8E0`
+    /// (0x940E0: four pushes, ebp = W-40) which, for the first player
+    /// row, does `push edi / push edx / call CompareAxisWithShift` at
+    /// 0x94108 — the return address 0x9410D (linear 0x25090D, ODD) lands
+    /// on W-52 every rearm tick, no phase gate.
+    fn m27_v34_switch_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_V34_SWITCH_RESIDUE").is_none())
+    }
+
+    /// The return address `sub_6F8E0`'s player loop leaves on the
+    /// slot: `call 0x34f50` at file 0x94108 → 0x9410D → linear
+    /// 0x25090D.
+    pub(crate) const M27_V34_SWITCH_REARM: u32 = 0x0025_090D;
+
+    /// `World::mc2_switch_probe`'s seam (actions 0..=3 only — the
+    /// (11,12)/(11,31) marker handlers reach the probe from a
+    /// different frame): `tripped` = a roster member matched.
+    pub(crate) fn m27_v34_publish_switch_probe(&mut self, i: usize, tripped: bool) {
+        if !Self::m27_v34_switch_law() || self.ent[i].tick70 > 3 {
+            return;
+        }
+        if tripped {
+            self.m27_v34_publish_pointer();
+        } else {
+            let y = self.ent[i].y as i16 as i32 as u32;
+            self.m27_v34_publish_word(y);
+        }
+    }
+
+    /// `World::mc2_switch_repeating`'s rearm seam.
+    pub(crate) fn m27_v34_publish_switch_rearm(&mut self) {
+        if Self::m27_v34_switch_law() {
+            self.m27_v34_publish_word(Self::M27_V34_SWITCH_REARM);
+        }
+    }
+
+    /// A/B toggle for the M27 SCAN-ROSTER-LIFE law (round 127):
+    /// `MGC_NO_M27_SCAN_ROSTER_LIFE` puts the out-of-pool human back
+    /// into `sub_2A6F0`'s walk while dead.
+    ///
+    /// ⭐⭐ THE BRANCH'S WIZARD SCAN WALKS `dword_38519`, THE TICK-TOP
+    /// CLASS-3 ROSTER (EF:20466), and that roster is built with
+    /// `life_0x8 >= 0` (EF:39975) — a DEAD wizard is not on it. Retail's
+    /// human is a pool record and takes that test for free; ours is a
+    /// ctx pose and must take the roster's ENTRY condition here
+    /// (`pdead_top`, the value the roster was built with — not
+    /// `pdead`, the live sign). No invisibility test: `sub_2A6F0` has
+    /// none. mc2l24 walk 35492→35493: the human has been a corpse
+    /// since ≈35145 (action 3, life −347); body 5's branch 61 draws
+    /// `v34 = 0` (draw #B & 7) on an aligned phase and scans — retail
+    /// finds nobody and stays in state 1 (speed 112 → 128), the port
+    /// locked the corpse (`f71` 2, target 116) and entered the whip.
+    fn m27_scan_life_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_SCAN_ROSTER_LIFE").is_none())
+    }
+
+
+    /// A/B toggle for the M27 `v34` AIM-RESIDUE law (round 128):
+    /// `MGC_NO_M27_V34_AIM_RESIDUE` restores the pre-2026-09-10 body,
+    /// where the 0xDA aim pass merely CLOBBERED the slot back to the
+    /// seed (even, > 4) — which stamped `f71 = 4` on every state-0
+    /// branch that read it.
+    ///
+    /// ⭐⭐⭐ THE 0xDA AIM PASS LEAVES `target.y − body.y` ON THE v34
+    /// SLOT. `sub_29710` (file 0x4DF10, `53 56 57 55 89 e5 83 ec 04`,
+    /// ebp = W-20, esp = W-24) runs, on `f63 & 0x1F == 0` with a live
+    /// target and a mover code other than 4: `sub_581E0` (tan2,
+    /// 0x4DFD9), `sub_582B0` (0x4DFEE), `sub_2AED0` (the pose,
+    /// 0x4E015) and LAST `sub_583F0_distance_3d` (0x4E02F: `push esi`
+    /// W-28, `push eax` W-32, return W-36). `sub_583F0` (0x7CBF0:
+    /// `push ebx/esi/ebp` W-40..W-48) computes `ax = t.x − b.x`,
+    /// `bx = b.y`, `ax = t.y`, `sub eax,ebx` (0x7CC0B) and keeps that
+    /// 32-bit difference in EBX (0x7CC0D `mov ebx,eax`), pushes the
+    /// squared sum (W-52) and calls the isqrt at 0x96F7A (return
+    /// W-56), whose prologue is `push ebp` (W-60) / `push ebx`
+    /// (**W-64**) / `push ecx` / `push edx`. W-64 is `sub_29A90`'s
+    /// `[ebp-0x10]` on the 0xDA path (`m27_v34_residue_law`), and no
+    /// later call before the chain machine goes that deep (`sub_2AED0`
+    /// is two pushes). The mover ran BEFORE the aim pass and committed
+    /// the step, so `b.y` is the body's post-move y; the target's is
+    /// its tick-top value for anything walked after the body.
+    /// The upper halves of the registers ride along: `eax` was
+    /// `lea eax,[ebx+0x4c]` (the body's position pointer) and `ebx`
+    /// the body pointer, so the difference is `((rec+0x4c)>>16 −
+    /// rec>>16) << 16 + (t.y − b.y)` — the carry term is 0 unless the
+    /// record straddles a 64K line (pool base 0x35CE1E on both
+    /// recorded runs: slots 76, 466, 856).
+    /// mc2l24 walk 41656→41657: body 95 (`f63` 96) steps to y 22852
+    /// against the human at y 20940 → −1912: nonzero, NOT > 4, EVEN.
+    /// Retail keeps branch 145 in state 1 and takes the wander draw;
+    /// the port's clobbered seed (0x1000002A, > 4) stamped `f71 = 4`,
+    /// which surfaced one tick later as the 41657→41658 x/y/z/rand
+    /// boundary (`b46` is ungraded).
+    fn m27_v34_aim_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_V34_AIM_RESIDUE").is_none())
+    }
+
+    /// Retail's entity-pool base (`Entities_EA3E4[0]` + 168), recovered
+    /// from the recorded `next_0` pointers of mc2l24 and mc2l22 (both
+    /// 0x35CE1E). Used ONLY for the 64K-line carry of the aim residue.
+    pub(crate) const MC2_RETAIL_POOL_BASE: u32 = 0x0035_CE1E;
+
+    /// `sub_583F0`'s EBX at its isqrt call: the 32-bit `t.y − b.y`
+    /// with the pointer halves' difference carried in.
+    pub(crate) fn m27_v34_aim_word(body: usize, body_y: u16, target_y: u16) -> u32 {
+        let rec = Self::MC2_RETAIL_POOL_BASE.wrapping_add(168 * body as u32);
+        let hi = ((rec.wrapping_add(0x4c)) >> 16).wrapping_sub(rec >> 16);
+        (hi << 16).wrapping_add((target_y as u32).wrapping_sub(body_y as u32))
+    }
+
+    /// A/B toggle for the M27 `v34` SLOT-WRITER law (dig 126O):
+    /// `MGC_NO_M27_V34_RESIDUE` restores the pure `V34_ENTRY` constant.
+    ///
+    /// ⭐ THE FRAME ARITHMETIC. Let `W` be `esp` at the entity walk's
+    /// indirect `call` (after the one pushed entity pointer). Every m27
+    /// body handler is dispatched from that one site, so `W` is the same
+    /// for all of them.
+    ///
+    /// * `sub_29400` (0xD8, file 0x4DC00 `53 56 57 55 89 e5 83 ec 04`)
+    ///   and `sub_29710` (0xDA, file 0x4DF10, same prologue): `ebp = W-20`,
+    ///   one pushed arg (`53` at 0x4DE54 / 0x4E071) ⇒ `sub_29A90`'s `ebp
+    ///   = W-48` and its `[ebp-0x10]` sits at **W-64**.
+    /// * `sub_29670` (0xD9, file 0x4DE70 `53 55 89 e5`, NO locals):
+    ///   `ebp = W-12` ⇒ `sub_29A90`'s `[ebp-0x10]` sits at **W-52**.
+    /// * `sub_29890` (0xDB, file 0x4E090) delegates to `sub_29670` one
+    ///   frame deeper, which puts that path back on **W-64**.
+    ///
+    /// `sub_2AF10` is called with TWO args from `sub_29670` (`6a 01 53`
+    /// at 0x4DEA3, `e8` at 0x4DEA6) and from `sub_29710` (`50 53` at
+    /// 0x4DF55, `e8` at 0x4DF57); its own prologue reserves 0x1c
+    /// (0x4F710 `53 56 57 55 89 e5 83 ec 1c`), so its `ebp` is
+    /// `caller_ebp - 28` and `[ebp-0xc]` lands at `caller_ebp - 40`.
+    /// For `sub_29670` (no locals) that is W-52; for `sub_29710`
+    /// (`sub esp,4`) it is W-64 — **the v34 slot on both paths, exactly.**
+    ///
+    /// ⚠ The scan flag is the ONLY writer the port can prove. On the
+    /// arms where `sub_2AF10` returns without reaching 0x4F848 the slot
+    /// keeps whatever an EARLIER ENTITY's handler left at that absolute
+    /// address (`sub_2A6B0`, the other call on both paths, is a LEAF —
+    /// file 0x4EEB0..0x4EEEB — so nothing inside the m27 handler itself
+    /// touches it). That residue is a REGISTERED FLOOR, not a lane:
+    /// see `conformance/known-deviations.json` `mc2l22-hydra-v34-parity`
+    /// / `mc2l24-hydra-v34-parity` and dig 126O's 63-boundary scorecard.
+    fn m27_v34_residue_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_V34_RESIDUE").is_none())
     }
 
     fn m27_drive_branch(&mut self, body: usize, br: usize, ctx: &MobCtx, v34c: &mut u32) {
@@ -2136,7 +2636,7 @@ impl Gen {
                 if self.ent[body].f58 != 0 {
                     if self.ent[br].f63 & 7 == 0 {
                         if v34 != 0 {
-                            if v34 > 4 {
+                            if Self::m27_v34_gt4(v34) {
                                 self.ent[br].f71 = 4;
                             }
                         } else if let Some(t) = self.m27_wizard_scan(br, ctx) {
@@ -2621,12 +3121,26 @@ impl Gen {
                         v7 += 91;
                     }
                 }
+                // ⭐⭐⭐ THE ONE WRITER OF `sub_29A90`'s `v34` SLOT THAT
+                // IS NOT STACK RESIDUE (dig 126O). `sub_2AF10`'s
+                // `[ebp-0xc]` is the SAME absolute stack address as
+                // `sub_29A90`'s `[ebp-0x10]` on every one of the four
+                // dispatch paths, so a turn-search that RUNS leaves its
+                // own 0/1 flag in the slot the branch machine then reads
+                // as `v34`. NETHERW.EXE: `88 75 f4` (file 0x4F85E) zeroes
+                // it on entry to the ±91 scan, `c6 45 f4 01` (0x4F8F3)
+                // sets it when a heading is found, `80 7d f4 00` (0x4F920)
+                // is the read that picks code 3 (`c6 45 fc 03`, 0x4F931)
+                // over code 4 (`c6 45 fc 04`, 0x4F937). See
+                // `m27_v34_residue_law` for the frame arithmetic.
                 if let Some(cand) = found {
                     self.ent[body].f34 = cand;
                     turned = true;
                     code = 3;
+                    self.m27_v34_slot.0 = Some(self.m27_v34_flag(1));
                 } else {
                     code = 4;
+                    self.m27_v34_slot.0 = Some(self.m27_v34_flag(0));
                 }
             } else {
                 turned = true;
@@ -2683,7 +3197,22 @@ impl Gen {
     /// m27 states 0xD8-0xDF (EF:19443-19736 verbatim; branches and
     /// tier-2 segments never reach here — the world loop leaves
     /// 0xE9/0xEA undispatched like retail's null table entries).
+    /// A pad-published residue is the 0xD9-path dword (W-52). The
+    /// 0xD8/0xDA/0xDB handlers read one frame deeper (W-64), where
+    /// the pad's `getTerrainAlt` left `sub_B5C60`'s saved `ebp` — a
+    /// positive, even stack address, the seed's class — so a body on
+    /// any other path drops the pad value and reads the seed.
+    pub(crate) fn m27_v34_enter(&mut self, i: usize) {
+        if self.ent[i].tick70 != M27_BASE + 1 {
+            // The deeper dword: what a same-walk writer published
+            // there (`.2`), else the seed's class.
+            self.m27_v34_slot.0 = self.m27_v34_slot.2;
+        }
+        self.m27_v34_slot.1 = false;
+    }
+
     pub(crate) fn m27_tick(&mut self, i: usize, ctx: &MobCtx) {
+        self.m27_v34_enter(i);
         match self.ent[i].tick70 - M27_BASE {
             // 0xD8 — emerge/teleport sequencer on the f26 phase.
             0 => {
@@ -2735,6 +3264,22 @@ impl Gen {
                 let (x, y) = (self.ent[i].x, self.ent[i].y);
                 let g = self.ground_z(x, y) as i16;
                 self.move_relink(i, x, y, g);
+                // ⭐ THE 0xD8 TAIL RE-OCCUPIES THE SLOT. `sub_29400`
+                // (0x4DC00, ebp = W-20, esp = W-24) ends EVERY arm with
+                // `push eax / call getTerrainAlt_10C40` (0x4DE4B-4C:
+                // arg W-28, return W-32); `getTerrainAlt` pushes ebp
+                // (W-36), y (W-40), x (W-44) and calls 0xDA460 (return
+                // W-48), whose prologue pushes ebp/ebx/ecx/edx/esi/edi
+                // on W-52..W-72 — so W-64, this path's `[ebp-0x10]`,
+                // holds EDX = `mov edx,[ebp+0x8]` (0x35443), the
+                // position POINTER: positive, even, the seed's class.
+                // A same-walk leaving (the building's 29) never reaches
+                // a 0xD8 body. mc2l22 22098/22226/46464/46496/53167:
+                // body 98 emerging behind thirteen village buildings,
+                // retail stamps 4 and takes the draw.
+                if Self::m27_v34_building_law() {
+                    self.m27_v34_slot.0 = None;
+                }
                 self.m27_drive(i, ctx);
             }
             // 0xD9 — the main brain.
@@ -2780,6 +3325,16 @@ impl Gen {
                     _ => {}
                 }
                 let commit = self.ent[i].f71 == 0;
+                // ⭐ The 0xDA handler is the ONE m27 path with calls
+                // BELOW `sub_2AF10` that re-occupy the v34 slot: the
+                // aim/range helpers at file 0x4DFB1 / 0x4DFD9 / 0x4DFEE
+                // / 0x4E015 / 0x4E02F and the pose set at 0x4E05C are
+                // all TWO-arg calls from `esp = ebp-4`, which puts their
+                // callee frames straight over W-64. When any of them
+                // runs, the mover's flag is gone again and the read is
+                // back on the registered floor.
+                let mut v34_clobber = false;
+                let mut v34_aim: Option<u32> = None;
                 let v2 = self.m27_move(i, commit);
                 if v2 == 4 {
                     // (m27_move already armed 216.)
@@ -2789,9 +3344,19 @@ impl Gen {
                         (e.x, e.y, e.z)
                     };
                     if self.ent[i].f63 & 3 == 0 && v2 != 3 && self.ent[i].f71 == 0 {
+                        v34_clobber = true;
                         self.ent[i].f34 = Self::angle_between(x, y, tpos.0, tpos.1);
                     }
                     if self.ent[i].f63 & 0x1F == 0 {
+                        v34_clobber = true;
+                        // The LAST deep call of this block is the
+                        // range test's `sub_583F0` → isqrt, whose
+                        // saved `ebx` is `target.y − body.y` (the
+                        // body's POST-MOVE y: the mover committed
+                        // above). See `m27_v34_aim_word`.
+                        if Self::m27_v34_aim_law() {
+                            v34_aim = Some(Self::m27_v34_aim_word(i, y, tpos.1));
+                        }
                         let row = &BEHAVIOR[self.ent[i].row156 as usize];
                         let yaw = Self::angle_between(x, y, tpos.0, tpos.1);
                         if Self::angdist(self.ent[i].f30, yaw) <= row.v_30 as u16 {
@@ -2813,6 +3378,16 @@ impl Gen {
                     self.m27_pose(i, 315);
                     self.ent[i].f146 = 0;
                     self.ent[i].f71 = 0;
+                    v34_clobber = true;
+                }
+                if let Some(v) = v34_aim {
+                    // The aim pass ran: its range test's leaving is
+                    // what the chain machine reads, whatever the
+                    // `f63 & 3` tan2 or the mover left before it.
+                    self.m27_v34_slot.0 = Some(v);
+                    self.m27_v34_slot.1 = false;
+                } else if v34_clobber {
+                    self.m27_v34_slot.0 = None;
                 }
                 self.m27_drive(i, ctx);
             }

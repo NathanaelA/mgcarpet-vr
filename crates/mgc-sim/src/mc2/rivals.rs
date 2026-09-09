@@ -451,6 +451,26 @@ fn no_rival_shield3_predecrement() -> bool {
     })
 }
 
+/// A/B toggle for **THE RIVAL LIFE REGEN FLOORS AT −1, EXACTLY LIKE
+/// THE MC1 TWIN**: set `MGC_NO_MC2_RIVAL_LIFE_FLOOR` to restore the
+/// pre-dig behaviour, where [`World::mc2_rival_alive`]'s regen step
+/// applied only the `maxLife` CEILING and no floor. `sub_12A70`
+/// (EF:5427-5430) is `life += lifeRegen; if (life < -1) life = -1;
+/// if (life > maxLife) life = maxLife;` — shipped `NETHERW.EXE`
+/// file 0x37478 (`0f bf 80 63 01 00 00` movsx eax,[eax+0x163]),
+/// 0x3747f `01 c1`, 0x37481 `89 4b 08`, **0x37484 `83 f9 ff` cmp
+/// ecx,-1 / 0x37487 `7d 07` jge / 0x37489 `c7 43 08 ff ff ff ff`
+/// mov dword [ebx+8],-1**, then the ceiling at 0x37490-0x3749a.
+/// The MC1 twin `sub_132B0` carries the identical shape at
+/// `CARPET.EXE` file 0x2BCE9 `83 f9 ff` / 0x2BCEC `7d 07` /
+/// 0x2BCEE `c7 43 0c ff ff ff ff` (MC1's `life` sits at +0xC, MC2's
+/// at +0x8), and [`World::rival_alive_tick`] has ported it as
+/// `.clamp(-1, max)` all along — this column was the laggard.
+fn no_mc2_rival_life_floor() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_LIFE_FLOOR").is_some())
+}
+
 /// A/B toggle for THE FALL VELOCITY THAT IS NEVER RESET: set
 /// `MGC_NO_RIVAL_FALL_CARRY` to restore the pre-dig behaviour, where
 /// the lethal branch of `mc2_rival_alive` stamped `f46 = 0` (the
@@ -1289,6 +1309,7 @@ impl std::hash::Hash for BrakeWord {
 /// One live MC2 rival: the player-extension subset the AI machinery
 /// needs. Position/yaw/life live on the pool entity (class 3 model 1).
 #[derive(Hash)]
+#[derive(Clone)]
 pub(crate) struct Mc2Rival {
     /// Player color (1..=7); color 0 = the human, never a rival.
     pub slot: u8,
@@ -2513,8 +2534,17 @@ impl World {
             // mana clamp, and shares its `v2` at-castle test with the
             // mana half already written above.
             let max = self.g.ent[i].max_life as i32;
+            // ⭐ AND THE FLOOR IS RETAIL'S TOO. EF:5427-5430 is
+            // `life += lifeRegen; if (life < -1) life = -1; if (life >
+            // maxLife) life = maxLife;` — the port had the `+=` and the
+            // ceiling and stopped one statement short. The MC1 twin
+            // (`rival_alive_tick`, `.clamp(-1, max)`, remc1 :17992-98)
+            // has carried both bounds since its own dig. Byte-proved on
+            // BOTH shipped binaries — see
+            // [`no_mc2_rival_life_floor`].
+            let floor: i32 = if no_mc2_rival_life_floor() { i32::MIN } else { -1 };
             let e = &mut self.g.ent[i];
-            e.act_life = (e.act_life + self.mc2_rivals[ri].life_delta).min(max);
+            e.act_life = (e.act_life + self.mc2_rivals[ri].life_delta).clamp(floor, max);
             self.mc2_rivals[ri].life_delta = if at_castle || at_shrine {
                 max / 200
             } else {

@@ -649,6 +649,7 @@ impl AiState {
 /// model 1); carried mana rides the entity's f140 mirror for the
 /// census.
 #[derive(Hash)]
+#[derive(Clone)]
 pub(crate) struct Rival {
     /// Player slot (1..=7); slot 0 = the human, never a Rival.
     pub slot: u8,

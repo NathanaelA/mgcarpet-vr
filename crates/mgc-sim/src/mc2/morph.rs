@@ -36,6 +36,19 @@ use super::sin_lut::SIN_DB750;
 use crate::engine::features::{Gen, tile};
 use crate::mc1::mobs::MobCtx;
 
+/// A/B toggle for the APOCALYPSE MANA-RAIN ARMING (`sub_32CF0`,
+/// EF:24042-71): set `MGC_NO_MC2_RAIN_ARM` to restore the pre-dig
+/// behaviour, where each rain sphere was born one full launch step
+/// OUT of the summit, at `max(ground+96, summit z)`, with no
+/// `actSpeed`/`yaw`/`roll`/`axis_0x9A.z` arming and with the
+/// `SetManaSphereColorAndRot_36920` owner-derive + per-size rotation
+/// constants instead of the colour-rolled `SetEntityIndexAndRot_49CD0`
+/// family. See the write-up at [`Gen::mc2_summit91_tick`].
+fn no_mc2_rain_arm() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RAIN_ARM").is_some())
+}
+
 /// `x_WORD_727B0` (Maths:647-676), the Heron-sqrt seed table: entry n
 /// = `round(2^(n/2))` for the highest set bit n. Only the first 32
 /// entries are real (the decompile's tail is bled code bytes, never
@@ -526,6 +539,7 @@ impl Gen {
     /// computed then discarded — see the module header; every other
     /// XP source is wired through the `mc2_cast_xp` mail).
     pub(crate) fn mc2_summit91_tick(&mut self, i: usize) {
+        let armed = !no_mc2_rain_arm();
         for _ in 0..3 {
             let (x, y, z) = {
                 let e = &self.ent[i];
@@ -539,20 +553,31 @@ impl Gen {
             // ~128..255/tick then falls under −16/tick gravity. Without
             // it the rain sprayed flat along the ground.
             let apex = (self.ent_rand(i) & 0x7F) as i16 + 128;
-            let _color = self.ent_rand(i) % 9; // the variant roll (draw kept)
+            let color = (self.ent_rand(i) % 9) as i32 - 1; // `v7 = rand % 9 - 1`
             let mana = (self.ent_rand(i) % 0xA00) as i32 + 1;
             let yaw = (self.ent_rand(i) & 0x7FF) as u16;
             if self.free.len() <= 200 {
                 continue; // the pool cushion (deliberate: retail has none)
             }
-            // Spawn one launch step out (retail's first flight tick
-            // — our ±64/tick ball clamp would otherwise hold the
-            // three coincident at the summit and the merge pass
-            // would absorb them into one).
+            // ⭐ THE THROW IS A SCRATCH VECTOR, NOT A DISPLACEMENT.
+            // `v1x->axis_0x9A_154x = a1x->position; MoveEntity_57FA0(
+            // &axis_0x9A, yaw, 0, actSpeed); axis_0x9A.x -= pos.x;
+            // axis_0x9A.y -= pos.y;` (EF:24065-70) steps a COPY of the
+            // summit position and keeps only the delta — the sphere
+            // itself is born AT the summit, and `axis_0x9A.z` keeps the
+            // summit's z (only x/y are differenced), which is why every
+            // recorded rain sphere reads `dest_z` = the emitter z.
             let mut lp = (x, y, z);
             Self::polar_step(&mut lp, yaw, 0, speed);
-            let gz = (self.ground_z(lp.0, lp.1) + 96) as i16;
-            if let Some(s) = self.spawn_mana_ball(lp.0, lp.1, gz.max(z)) {
+            // `v1x->position.z = getTerrainAlt(&v1x->position) + 96`
+            // (EF:24071) — sampled at the SPHERE's own (= the summit's)
+            // x/y, with no clamp of any kind.
+            let (sx, sy, sz) = if armed {
+                (x, y, (self.ground_z(x, y) + 96) as i16)
+            } else {
+                (lp.0, lp.1, ((self.ground_z(lp.0, lp.1) + 96) as i16).max(z))
+            };
+            if let Some(s) = self.spawn_mana_ball(sx, sy, sz) {
                 let e = &mut self.ent[s];
                 e.max_life = 140;
                 e.act_life = 140;
@@ -566,7 +591,48 @@ impl Gen {
                 e.f46 = apex; // vertical launch (word_0x2C_44, EF:24052)
                 e.dest_x = lp.0.wrapping_sub(x); // the throw velocity delta
                 e.dest_y = lp.1.wrapping_sub(y);
-                self.ball_resize(s);
+                if armed {
+                    // `actSpeed_0x82_130` (EF:24042-48), `pitch = 0`,
+                    // `yaw = roll = rand & 0x7FF` (EF:24063-65) and
+                    // `axis_0x9A.z` (EF:24067) — the four arming
+                    // writes the port dropped, which is why every
+                    // recorded rain sphere read heading 0 / speed 32
+                    // (the `CreateManaSphere_500C0` ctor defaults).
+                    e.f126 = speed;
+                    e.f30 = yaw;
+                    e.f32 = 0;
+                    e.f34 = yaw;
+                    e.site_z = z;
+                }
+                if armed {
+                    // `SetEntityIndexAndRot_49CD0(v1x, v8 + v9)`
+                    // (EF:24060-61): the rain picks its own family by
+                    // a RANDOM COLOUR ROLL and takes the particle-param
+                    // extents — it does NOT run
+                    // `SetManaSphereColorAndRot_36920`'s owner derive
+                    // + per-size rotation constant. `v9 =
+                    // GetManaSphereIndexFromId_36A50(rand % 9 - 1)` =
+                    // 52 on the -1 arm, else `105 + 8 *
+                    // TransformPlayerColorIndex(colour)`.
+                    let base: u16 = if color < 0 {
+                        52
+                    } else {
+                        105 + 8 * crate::mc2::color_art(color as u8) as u16
+                    };
+                    // `manaSphereSizeTable_DB538` (EF:2600), the same
+                    // eight-class ladder `ball_resize` walks.
+                    const SIZES: [i32; 7] = [256, 512, 1024, 2048, 4096, 9192, 18384];
+                    let mut size = 7u16;
+                    for (k, t) in SIZES.iter().enumerate() {
+                        if mana <= *t {
+                            size = k as u16;
+                            break;
+                        }
+                    }
+                    self.mc2_set_sprite(s, base + size);
+                } else {
+                    self.ball_resize(s);
+                }
             }
         }
         // (the 26-row XP flood — deferred, module-doc APPROX)

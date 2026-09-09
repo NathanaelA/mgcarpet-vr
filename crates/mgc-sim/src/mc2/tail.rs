@@ -65,6 +65,16 @@ fn no_mc2_ww_midring() -> bool {
 /// victim (shipped `NETHERW.EXE` 0x57ea3 `mov bx,[ebx+0x16]`, the
 /// loop's increment, is AFTER the call at 0x57e7b).
 /// A/B toggle for the AURA's `w7A` GUARD: set
+/// A/B kill-switch for THE FIRE-ORB SATELLITE'S CLONED `word_0x2C_44`:
+/// set `MGC_NO_MC2_ORB_SATELLITE_F44` to restore the pre-dig
+/// behaviour, where each (10,77) satellite kept `new_event`'s default
+/// `word_0x2C_44 = 100` instead of the hub's 0. See the clone block in
+/// [`Gen::mc2_spawn_fire_orb`] for the citations.
+fn no_mc2_orb_satellite_f44() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ORB_SATELLITE_F44").is_some())
+}
+
 /// `MGC_NO_AURA_CLAIM_W7A_GUARD` to restore the pre-dig behaviour,
 /// where `sub_38D80`'s `if (!word_0x7A_122)` (EF:28364) was modelled
 /// against the claim map alone and missed the `mail[4]` half of the
@@ -102,6 +112,132 @@ fn mc2_ww_reap_skip() -> bool {
 pub(crate) fn no_mc2_ww_human_grab() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_HUMAN_GRAB").is_some())
+}
+
+/// A/B toggle for `sub_33340`'s UNCONDITIONAL victim tail on the human
+/// wizard: set `MGC_NO_MC2_WW_TAIL_BAND` to restore the pre-dig
+/// behaviour, where the cave-ceiling clamp and `sub_580E0` float band
+/// (EF:24382-94) ran on the GRAB arms only. Retail runs
+/// `MoveEntity_57FA0` / the clamp / `sub_580E0` / `CopyEntityPosition`
+/// on EVERY visit that survives `sub_33810`, the mid ring included —
+/// the four arms all fall through to the same tail.
+fn no_mc2_ww_tail_band() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_TAIL_BAND").is_some())
+}
+
+/// A/B toggle for the MID RING's publish protocol: set
+/// `MGC_NO_MC2_WW_MIDRING_ABS` to restore the pre-dig behaviour, where
+/// a mid-ring visit published a heading + one 96-unit step
+/// ([`crate::engine::features::PlayerWhirl::grab`] = `None`) — a
+/// channel that can carry exactly ONE visit, so retail's second
+/// mid-ring visit of the same tick (the ring walk re-finds a victim
+/// `CopyEntityPosition_57CF0` carried into a cell it has not reached
+/// yet) was silently dropped, along with the z the tail band writes.
+fn no_mc2_ww_midring_abs() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_MIDRING_ABS").is_some())
+}
+
+/// A/B toggle for the HUMAN'S RELINK CONTINUATION in the whirlwind
+/// lift walk: set `MGC_NO_MC2_WW_HUMAN_RELINK_WALK` to restore the old
+/// behaviour, where the human's per-cell visit ended the cell instead
+/// of handing the walker the chain of the tile he was just relinked
+/// into. See the law note at the call site.
+fn no_mc2_ww_human_relink_walk() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_HUMAN_RELINK_WALK").is_some())
+}
+
+/// A/B toggle for `sub_33340`'s FAR-BAND VISIT on the human wizard:
+/// set `MGC_NO_MC2_WW_TAIL_PUBLISH` to restore the pre-dig behaviour,
+/// where a visit that seized nothing published nothing — so the
+/// unconditional tail's `sub_580E0` float band was computed and thrown
+/// away. Retail's far arm on an UNGRABBED victim is `testb $0x10,0xf(%ebx)`
+/// / `je 0x57df8` (`NETHERW.EXE` 0x57db4/0x57db8): straight into the
+/// tail, where `MoveEntity_57FA0` is a no-op (`v30 = 0`) and the BAND
+/// plus `CopyEntityPosition_57CF0` are the entire point of the visit.
+fn no_mc2_ww_tail_publish() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_TAIL_PUBLISH").is_some())
+}
+
+/// A/B toggle for the human's RANK inside the whirlwind's per-cell
+/// chain walk: set `MGC_NO_MC2_WW_HUMAN_CHAIN_ORDER` to restore the
+/// pre-dig placement, where his arm ran AFTER the whole cell's chain
+/// (the code's own comment called it an approximation). Retail's
+/// wizard is an ordinary linked record, so `sub_33340`'s walker
+/// reaches him at his own seat; the port already tracks that seat as
+/// [`crate::engine::features::PlayerChain`] (his chain SUCCESSOR in
+/// his own cell), seeded at the carpet's walk slot by
+/// `Gen::player_relink` and spliced by `Gen::unlink`.
+fn no_mc2_ww_human_chain_order() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_HUMAN_CHAIN_ORDER").is_some())
+}
+
+/// A/B toggle for the wizard's RELINK **TEST** inside `sub_33340`'s
+/// walk: set `MGC_NO_MC2_WW_HUMAN_MOVE_TEST` to restore the pre-dig
+/// test, which asked whether his new tile differs from the RING CELL
+/// `(tx, ty)` instead of from the tile HE HIMSELF occupied when the
+/// arm started. See the law note at the call site.
+fn no_mc2_ww_human_move_test() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_HUMAN_MOVE_TEST").is_some())
+}
+
+/// A/B toggle for the wizard's OWN relink inside `sub_33340`'s walk:
+/// set `MGC_NO_MC2_WW_HUMAN_SEAT_RELINK` to restore the pre-dig
+/// behaviour, where his seat ([`crate::engine::features::PlayerChain`])
+/// was reseeded only at the carpet's walk slot, so a visit that
+/// carried him into another tile left the seat naming the tile he had
+/// LEFT — and every later arrival at it was refused.
+fn no_mc2_ww_human_seat_relink() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_HUMAN_SEAT_RELINK").is_some())
+}
+
+/// ⭐⭐⭐ THE CRANK COUNT LAW. `sub_33340` cranks
+/// `roll_0x155_341 += 28` once per visit that reaches the `v40` block
+/// (`NETHERW.EXE` 0x57c67..0x57c8d), and its disc walk reaches the
+/// same victim more than once whenever `CopyEntityPosition_57CF0`
+/// carries it into a cell the walk has not reached yet. The port used
+/// to publish `min(1)` of them, because the harness's stick inversion
+/// (`mgc-formats::recover`) un-cranked the recorded `roll_acc` by
+/// exactly ONE 28 and a second port-side crank would land 28 high.
+/// With the replay driver counting the visits (a throwaway trial step)
+/// and handing the number to the recovery, the cap comes off and the
+/// port applies what retail did. Set `MGC_NO_MC2_WW_CRANK_COUNT` to
+/// restore the one-crank pair: `min(1)` here AND the fixed `28` in the
+/// recovery.
+pub fn mc2_ww_crank_count_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_CRANK_COUNT").is_none())
+}
+
+/// How many 28-unit camera-roll cranks the whirlwind column has handed
+/// the human carpet since [`reset_whirl_cranks`]. Harness telemetry
+/// ONLY — the replay driver trial-steps a clone, reads this, and
+/// re-recovers the stick with the true count (see
+/// `mgc_formats::recover::recover_pair_mc2_k`). Never read by
+/// simulation logic; the same contract as [`crate::DEBUG_TICK`].
+pub static WHIRL_CRANKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Zero the crank telemetry (call before a step).
+pub fn reset_whirl_cranks() {
+    WHIRL_CRANKS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Read the crank telemetry (call after a step).
+pub fn whirl_cranks() -> u8 {
+    WHIRL_CRANKS.load(std::sync::atomic::Ordering::Relaxed).min(255) as u8
+}
+
+/// Book cranks as a consume site applies them.
+pub(crate) fn note_whirl_cranks(n: u8) {
+    if n != 0 {
+        WHIRL_CRANKS.fetch_add(n as u32, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl Gen {
@@ -908,9 +1044,31 @@ impl Gen {
                 // 30 and subSpell to 180 AFTER this returns, which is
                 // itself the proof that the clone happens here and now,
                 // and the tier sweep in the take varies these values.
-                let (id, rand, life, act_spd, min_spd, max_spd) = {
+                // ⭐ AND THE SAME CLONE CARRIES `word_0x2C_44`. The
+                // shipped `AddFireSpheres_4F2A0` copies the WHOLE
+                // 168-byte record — `NETHERW.EXE` file 0x73B57
+                // `b9 2a000000 mov ecx,0x2a` / 0x73B5C
+                // `8b 75 fc mov esi,[ebp-4]` (the HUB) / 0x73B5F
+                // `89 c7 mov edi,eax` (the new satellite) / 0x73B61
+                // `f3 a5 rep movsl` = 42 dwords = 0xA8, the record
+                // stride the same function divides by at 0x73B6C
+                // (`be a8000000 mov esi,0xa8`) — and the hub's own
+                // ctor has already stored ZERO there: 0x73B1B
+                // `66 c7 43 2c 0000  movw $0x0,0x2c(%ebx)`
+                // (EF:35989 `entity->word_0x2C_44 = 0`, the clone at
+                // EF:35997). The loop's only overrides are 0x40/0x45/
+                // 0x32/0x34/0x3E/0x43/0x44, so @0x2C reaches the
+                // satellite as 0 while OUR satellites kept
+                // `new_event`'s default 100 (features.rs `+44 = 100`).
+                // MEASURED (mc2l24 t=45560, `dump-state --port
+                // --start 45559`): retail's satellite at slot 17 holds
+                // `f2c` 0, the port 100 — 25 records a firestorm.
+                // ⚠ UNGRADED: `f2c` is not in `verify_mc2.rs`'s
+                // compared field list, so this lane can only take a
+                // unit test (`the_fire_orb_satellites_clone_the_hub_f44`).
+                let (id, rand, life, act_spd, min_spd, max_spd, ring_w) = {
                     let e = &self.ent[h];
-                    (e.id24, e.rand, e.act_life, e.f126, e.f128, e.f130)
+                    (e.id24, e.rand, e.act_life, e.f126, e.f128, e.f130, e.f44)
                 };
                 let e = &mut self.ent[s];
                 e.class64 = 10;
@@ -924,6 +1082,9 @@ impl Gen {
                 e.f128 = min_spd;
                 e.f130 = max_spd;
                 e.f140 = 70;
+                if !no_mc2_orb_satellite_f44() {
+                    e.f44 = ring_w;
+                }
                 e.f56 = 1;
                 e.flags = (e.flags & !0x9) | 1;
                 e.f52 = prev as u16;
@@ -1466,14 +1627,58 @@ impl Gen {
         let mut hseized = false;
         let mut hmid: Option<u16> = None;
         let mut hact80 = false;
+        // ⭐ ANY visit that survived `sub_33810` — the tail runs on all
+        // four arms, so even a far-band visit that seizes nothing is a
+        // POSITION WRITE (`CopyEntityPosition_57CF0`).
+        let mut hvisited = false;
         // Dig Q6 — one `roll_0x155_341 += 28` per visit that reaches
         // the `v40` block, i.e. exactly where `hact80` is raised.
         let mut hcrank: u8 = 0;
         for (dx, dy) in self.ring_cells(0, 12) {
             let tx = (cx.wrapping_add((dx as i8) as i16)) as u8;
             let ty = (cy.wrapping_add((dy as i8) as i16)) as u8;
-            let mut j = self.map_entity[crate::engine::features::tile(tx, ty)] as usize;
+            let cell_t = crate::engine::features::tile(tx, ty);
+            let mut j = self.map_entity[cell_t] as usize;
+            // ⭐⭐⭐ THE WIZARD HAS A RANK IN THIS CHAIN, AND IT IS NOT
+            // "LAST". `sub_33340`'s walker is a plain chain walk and
+            // retail's carpet is an ordinary linked record, so the
+            // wizard is visited WHERE HE SITS — his rank decides
+            // whether the victims behind him are walked from his OLD
+            // tile or, once `CopyEntityPosition_57CF0` has relinked
+            // him, from his NEW one (the law dig I landed as
+            // `MGC_NO_MC2_WW_HUMAN_RELINK_WALK`). The port carries him
+            // out of pool but DOES track the seat:
+            // `Gen::player_chain` is `(cell, next)` — his chain
+            // SUCCESSOR — seeded by `Gen::player_relink` at the
+            // carpet's own walk slot (which is where retail's relink
+            // happens) and spliced by `Gen::unlink` when that
+            // successor leaves. So stop the walk in front of
+            // `player_chain.next`, run his arm there, and resume.
+            // `next == 0` is the chain TAIL, which is the old
+            // after-the-chain placement and still correct.
+            let mut seat_matched = false;
+            let mut seat_block = usize::MAX;
+            let mut resume = 0usize;
+            'cell: loop {
             while j != 0 {
+                if human_law
+                    && !no_mc2_ww_human_chain_order()
+                    && seat_block != j
+                    && self.player_chain.next as usize == j
+                    && self.player_chain.cell
+                        == crate::engine::features::tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8)
+                {
+                    // His seat: he precedes this record. Break out,
+                    // run the arm below, and come back here. ⚠ NOT a
+                    // one-per-cell latch — a victim relinked in FRONT
+                    // of him hands the walker his seat a second time,
+                    // which is the whole point of the relink walk;
+                    // `seat_block` suppresses only the immediate
+                    // re-entry at the record we are resuming into.
+                    resume = j;
+                    seat_matched = true;
+                    break;
+                }
                 let next = self.ent[j].next20 as usize;
                 let c = &self.ent[j];
                 let victim = match c.class64 {
@@ -1645,14 +1850,31 @@ impl Gen {
                 } else {
                     self.ent[j].next20 as usize
                 };
+                seat_block = usize::MAX;
             }
             // ── THE HUMAN'S VISIT TO THIS CELL ────────────────────────
-            // Run AFTER the tile chain: retail's wizard sits somewhere
-            // in that chain and we cannot know where, so the position
-            // in the cell's order is an approximation (it only matters
-            // against OTHER victims sharing the cell — the victims do
-            // not read each other).
-            if human_law && (hp.0 >> 8) as u8 == tx && (hp.1 >> 8) as u8 == ty {
+            // Reached either at his own seat (the `resume` break
+            // above) or, when `player_chain.next` is 0, as the chain
+            // TAIL — which is where this block always used to run.
+            // ⚠ THE SEAT IS A POINTER POSITION, NOT A CELL TEST. Once
+            // the walker has followed a relinked victim out of the ring
+            // cell (`self.ent[j].next20` after `CopyEntityPosition`),
+            // `tx`/`ty` no longer name the tile it is walking — so the
+            // seat path must NOT be gated on them. Only the TAIL path
+            // (no seat in this chain) still asks whether he is in the
+            // ring cell at all.
+            if human_law
+                && (resume != 0
+                    || (!seat_matched
+                        && (hp.0 >> 8) as u8 == tx
+                        && (hp.1 >> 8) as u8 == ty))
+            {
+                hvisited = true;
+                // ⭐⭐⭐ HIS OWN TILE AT THE HEAD OF THE ARM — the only
+                // thing `CopyEntityPosition_57CF0` compares
+                // (EF:40584, `NETHERW.EXE` 0x7c4fe/0x7c505). See the
+                // relink note in the tail below.
+                let (otx, oty) = ((hp.0 >> 8) as u8, (hp.1 >> 8) as u8);
                 let d2 = Self::dist2_sq(ex, ey, hp.0, hp.1) as i64;
                 // `v38`/`v34` — 56 and 384 for the human (`0x57c04 mov
                 // eax,0x38`, `0x57c19 mov eax,0x180`), against the
@@ -1762,7 +1984,7 @@ impl Gen {
                 if v30 != 0 {
                     Self::polar_step(&mut pred, swirl & 0x7FF, 0, v30);
                 }
-                if banded {
+                if banded || !no_mc2_ww_tail_band() {
                     // EF:24382-94 — the cave ceiling clamp and then
                     // `sub_580E0(&pred, getTerrainAlt(&pred),
                     // word_0xc, word_0xa, v37)`. ⚠ Applied on the GRAB
@@ -1782,6 +2004,34 @@ impl Gen {
                     Self::mc2_alt_core(&mut pred.2, galt, hrow.clearance, float);
                 }
                 hp = pred;
+                // ⭐⭐⭐ AND `CopyEntityPosition_57CF0` RELINKS *HIM*
+                // TOO. The tail's last call (`0x57e7b`) is the same
+                // one every pooled victim gets: tile-word compare
+                // (0x7c4fb), UNLINK (0x7c50d), AddEventToMap
+                // (0x7c518) — so a visit that carries the wizard into
+                // another tile makes him that tile's chain HEAD, and
+                // his seat is a live thing for the rest of the walk.
+                // The port reseeded `Gen::player_chain` only at the
+                // carpet's own walk slot, so after an inner lift
+                // teleported him onto the eye the seat still named the
+                // tile he had left and every later arrival at it was
+                // refused.
+                //
+                // WITNESS (mc2l24 t=8033, head 200): the inner lift
+                // puts him on the eye (30124, 25678) = cell 25717 and
+                // latches the grab, a near-grab then lands
+                // (30182, 25792); `player_chain` still read
+                // `(25461, 0)` — the cell BEFORE the teleport, tail of
+                // that chain — so when victim 146 relinked
+                // 25973 -> 25717, in FRONT of him, the walker skipped
+                // his seat. Retail takes that third visit: one more
+                // `+114` z (5316 -> 5430), one more `+56` yaw
+                // (926 -> 982) and one more 128-step
+                // (30182, 25792) -> (30240, 25906) — its own
+                // `sqrt(58² + 114²) = 127.9`.
+                if !no_mc2_ww_human_seat_relink() {
+                    self.player_relink(hp.0, hp.1);
+                }
                 if bill {
                     // `v39 = 1` ⇒ `v31++` and `sub_11900(a1x, ix, 0,
                     // v26)` (0x57e98-0x57e9b) — the SINGLE/INVERSE
@@ -1798,10 +2048,140 @@ impl Gen {
                         self.mail_write_single(MailTarget::Player, 0, amt, id);
                     }
                 }
+                // ⭐⭐⭐ THE HUMAN IS ON THE TILE CHAIN, SO HIS RELINK
+                // HANDS THE WALKER HIS NEW CELL. Retail's per-cell walk
+                // is `for (ix = Entities[map[cell]]; ix != Entities[0];
+                // ix = Entities[ix->oldMapEntity_0x16_22])`
+                // (EF:24283-85) and the increment `mov bx,[ebx+0x16]`
+                // sits at `NETHERW.EXE` file 0x57ea3, AFTER
+                // `CopyEntityPosition_57CF0` at 0x57e7b — the SAME law
+                // the pooled body's `j = self.ent[j].next20` already
+                // carries. The human wizard is an ordinary class-3
+                // pool record ON THAT CHAIN, so when his own visit
+                // moves him into another tile the relink puts him at
+                // that tile's head and the walker walks THAT chain
+                // next, re-visiting every victim already parked there.
+                // We carry him out of pool, so the chain has to be
+                // handed over explicitly.
+                //
+                // mc2l24 t=8058 is the witness and it names its own
+                // proof: retail's slot 310 (a (5,25)) ends the tick
+                // with `prev18 = 116` — the HUMAN immediately in front
+                // of it in cell (120,98)'s chain — after whirl 200's
+                // inner lift teleported both onto the eye. That second
+                // visit is one more `yaw += 204` (1189 -> 1393, the
+                // port stopped at 1189), one more LCG step (42071 ->
+                // 48022 -> 13877, the port stopped at 48022) and one
+                // more z re-lift (2903 -> 2961 -> 3019, the port
+                // stopped at 2961) — and the second draw is what
+                // clears `768 + rand % 768` (821 against 1174), which
+                // is why retail latches `byte[3] |= 0x10` and copies
+                // `word_0x30_48 = yaw` while the port never grabs.
+                // t=8000 slot 133 (a (5,17)) is the same shape at
+                // three visits instead of two: `yaw` 1640 -> 204 =
+                // 1640 + 3*204 (the port lands 0 = 1640 + 2*204),
+                // `rand` three LCG steps to 51206 (the port two, to
+                // 60103) and z 2640 -> 2853 in three +71 lifts.
+                if !no_mc2_ww_human_relink_walk() {
+                    let ntx = (hp.0 >> 8) as u8;
+                    let nty = (hp.1 >> 8) as u8;
+                    // ⭐⭐⭐ "HE MOVED" IS A TEST ON **HIS OWN** TILE, NOT
+                    // ON THE RING CELL — and the note directly above
+                    // this one already says why ("the seat is a
+                    // pointer position, not a cell test"), for the
+                    // ENTRY test alone. `CopyEntityPosition_57CF0`
+                    // (EF:40584, `NETHERW.EXE` file 0x7c4f0) compares
+                    // the RECORD'S OWN tile bytes and nothing else —
+                    // `0x7c4fe mov al,[edi+0x4d]` / `0x7c501 cmp
+                    // al,[edx]` (edx = &pos->x + 1) and `0x7c505 mov
+                    // al,[edi+0x4f]` / `0x7c508 cmp al,[esi+0x3]`,
+                    // both equal ⇒ `0x7c50b jz 0x7c529`, the plain
+                    // `movsd`/`movsw` position copy with NO relink;
+                    // otherwise `0x7c50e call 0x7c650` (unlink) +
+                    // `0x7c518 call 0x7c570` (AddEventToMap, head
+                    // insert). It never sees the walker's cell. Once
+                    // the seat path has followed a chain OUT of
+                    // `(tx, ty)`, the ring cell is no longer the tile
+                    // he is standing in, so testing his new tile
+                    // against `(tx, ty)` fires the relink-follow on a
+                    // wizard WHO NEVER LEFT HIS TILE: the walker is
+                    // handed that tile's HEAD and re-walks every
+                    // victim already parked there.
+                    //
+                    // WITNESS mc2l24 t=7999->8000, head 10 (a (10,71)
+                    // funnel), slot 133 (a (5,17)). Retail's walk
+                    // reaches 133 THREE times: `yaw` 1640 -> 204 =
+                    // 1640 + 3*204 (`0x57c0b mov eax,0xcc`), `rand`
+                    // 43625 -> 51206 = three 9377x+9439 steps, `z`
+                    // 2640 -> 2853 = three +71 lifts. The port took a
+                    // FOURTH (yaw 408, rand 51365, z 2924): after the
+                    // walker followed him out of ring cell (122,88)
+                    // into (121,89) and ran his seat visit there, his
+                    // near-grab left him at (31215,23010) — still tile
+                    // (121,89) — and the `(tx, ty)` test read that as
+                    // a move, restarting (121,89) at its head, which
+                    // was the just-relinked 133. Retail's walker reads
+                    // his UNCHANGED `oldMapEntity_0x16_22`
+                    // (`0x57ea3 mov bx,[ebx+0x16]`) and carries on at
+                    // his successor — which is exactly `resume`.
+                    let (btx, bty) = if no_mc2_ww_human_move_test() {
+                        (tx, ty)
+                    } else {
+                        (otx, oty)
+                    };
+                    if ntx != btx || nty != bty {
+                        // He left the cell: the walker follows HIM,
+                        // so the seat we broke out of is abandoned.
+                        resume = 0;
+                        j = self.map_entity[crate::engine::features::tile(ntx, nty)] as usize;
+                        // ⚠ AND HE IS NOT RE-VISITED ON ARRIVAL.
+                        // `AddEventToMap` puts him at the HEAD of the
+                        // new chain, so retail's walker reads HIS
+                        // `oldMapEntity_0x16` — the tile's previous
+                        // head — and carries on from there. With the
+                        // seat now naming that very record (his own
+                        // relink just wrote it), the seat test would
+                        // otherwise fire again the instant we arrive
+                        // and hand him an extra visit: mc2l1 t=283 and
+                        // mc2l30 t=2986 both break exactly that way.
+                        seat_block = j;
+                        continue 'cell;
+                    }
+                }
+            }
+            // He stayed in the cell: pick the chain back up at the
+            // record his seat sits in front of.
+            if resume != 0 {
+                seat_block = resume;
+                j = resume;
+                resume = 0;
+                continue 'cell;
+            }
+            break;
             }
         }
-        // ── PUBLISH THE HUMAN'S SEIZURE ──────────────────────────────
-        if human_law && (hseized || hmid.is_some()) {
+        // ── PUBLISH THE HUMAN'S SEIZURE ────────────────────────
+        // ⭐⭐⭐ EVERY VISIT IS A POSITION WRITE, NOT ONLY A SEIZING
+        // ONE. `sub_33340`'s FAR arm on an ungrabbed victim
+        // (`0x57db4 f6 43 0f 10` `testb $0x10,0xf(%ebx)` /
+        // `0x57db8 74 3e` `je 0x57df8`) jumps straight into the
+        // unconditional tail: `MoveEntity_57FA0(&pred, …, v30 = 0)` is
+        // a no-op, nothing on the victim is touched — and then the cave
+        // clamp, `sub_580E0` (`0x57e6d`) and `CopyEntityPosition_57CF0`
+        // (`0x57e7b`) run anyway. The BAND is the whole content of that
+        // visit: it floors the victim at `getTerrainAlt(pred) +
+        // row.word_0xc`, which for the carpet's row is ground + 256.
+        // The port computed it and threw it away, because it only
+        // published a seizure.
+        //
+        // WITNESS (mc2l24 t=7914, the take's head after laws 11+12):
+        // three funnels visit the wizard. Head 12 is FAR (d² = 3,963,650
+        // ≥ 0x310000) and ungrabbed, so it seizes nothing — but the
+        // ground under (31723, 29697) is 1590 and the band lifts z
+        // 1818 -> **1846**, which is retail's recorded z to the unit.
+        // The port published nothing and held 1818.
+        let hpublish = hseized || hmid.is_some() || (hvisited && !no_mc2_ww_tail_publish());
+        if human_law && hpublish {
             if hstop {
                 // `byte[1] |= 8` — consumed (and cleared) by the veto
                 // at the head of `sub_5D530` (`NETHERW.EXE` 0x81d39
@@ -1816,11 +2196,25 @@ impl Gen {
             } else {
                 self.ent[cs].flags &= !F_GRABBED;
             }
+            // ⭐⭐⭐ THE MID RING PUBLISHES THE RESOLVED ABSOLUTE POSE.
+            // Retail's four arms all fall through to the SAME tail —
+            // `MoveEntity_57FA0(&pred, word_0x30_48, 0, v30)`, the cave
+            // clamp, `sub_580E0` and `CopyEntityPosition_57CF0`
+            // (EF:24375-95) — so the mid ring writes an absolute
+            // position with a banded z, and a ring walk that reaches
+            // the victim twice writes it twice. The heading+step
+            // channel could carry one visit and no z at all; the ring
+            // column above has already resolved every visit into
+            // `hp`/`hyaw`, so hand that over instead. (This is the
+            // `min` the Q7 note said would "come straight back out".)
+            let abs = hseized
+                || (hmid.is_some() && !no_mc2_ww_midring_abs())
+                || (hvisited && !no_mc2_ww_tail_publish());
             self.player_whirl = crate::engine::features::PlayerWhirl {
                 armed: true,
                 heading: hmid.unwrap_or(0),
-                step: if hseized { 0 } else { 96 },
-                grab: if hseized {
+                step: if abs { 0 } else { 96 },
+                grab: if abs {
                     Some((hp.0, hp.1, hp.2, hyaw))
                 } else {
                     None
@@ -1845,7 +2239,20 @@ impl Gen {
                 // resolved absolute pose whenever the mid ring is
                 // visited more than once, at which point this `min`
                 // comes straight back out.
-                bumps: if hseized { hcrank } else { hcrank.min(1) },
+                // ⚠ STILL `min(1)` ON THE MID RING, AND NOT BECAUSE OF
+                // THE CHANNEL: `recover_pair_mc2` un-cranks the
+                // recorded `roll_acc` by exactly ONE 28 before
+                // inverting the stick filter (mgc-formats
+                // `recover.rs`, `let crank = |acc| ... 28`), so a
+                // second crank the port applies is one the recovery
+                // never removed and lands 28 high. The extra visits
+                // are absorbed into the recovered cursor; the POSE is
+                // what the port has to carry, and `abs` now does.
+                bumps: if hseized || mc2_ww_crank_count_law() {
+                    hcrank
+                } else {
+                    hcrank.min(1)
+                },
             };
         }
         // The player arm — the tornado SWAY (retail `sub_33340`'s
@@ -2540,6 +2947,234 @@ mod tests {
             mc2_sprite_ext: Vec::new(),
         };
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    /// ⭐⭐⭐ EVERY ARM OF `sub_33340`'s VICTIM BODY FALLS THROUGH THE
+    /// SAME TAIL, THE MID RING INCLUDED — so a mid-ring visit writes
+    /// an ABSOLUTE, BANDED position, not just a heading.
+    ///
+    /// The shipped `NETHERW.EXE` settles it by control flow: the four
+    /// arms all reach `0x57df8`, and the MID RING's own exit is
+    /// `0x57d59 c7 45 d4 60 00 00 00` (`movl $0x60,-0x2c(%ebp)` —
+    /// `v30 = 96`) followed by `0x57d60 e9 93 00 00 00`
+    /// (`jmp 0x57df8`). The tail is
+    /// `0x57e0b call 0x7c7a0` (`MoveEntity_57FA0`),
+    /// `0x57e10 mov 0x41b6,%cl` / `test cl,cl` / `je 0x57e45` (the
+    /// cave-ceiling clamp, `0x57e26 call 0x35460` = `sub_10C60` less
+    /// the victim's own `0x58` fov at `0x57e22`),
+    /// `0x57e5e call 0x35440` (`getTerrainAlt_10C40`) feeding
+    /// `0x57e6d call 0x7c8e0` (`sub_580E0`, the float band, with the
+    /// victim row's `word_0xa`/`word_0xc` read at `0x57e4f`/`0x57e54`)
+    /// and finally `0x57e7b call 0x7c4f0`
+    /// (`CopyEntityPosition_57CF0`). EF:24375-95.
+    ///
+    /// ⚠ THIS LAW HAS NO FIXTURE HOME. The carpet's pose lives in
+    /// `flight::Mc1State`, out of the pool, so `verify-deltas`' field
+    /// channel cannot see it and its POSE CHANNEL is a shadow mover
+    /// that never runs a funnel (measured on mc2l24 t=7910..8080: both
+    /// channels are byte-identical with the law on and off). Only the
+    /// free run sees it. Corpus receipt: `mc2l24` t=7913, whirlwind
+    /// head 327 at eye (32406, 29591) mid-ringing the carpet TWICE as
+    /// the walk carries it from cell (124,116) to (123,116) —
+    /// retail lands (31723, 29697, 1818) yaw 2035, the port landed
+    /// (31739, 29792, 1767) yaw 2033 with the heading+step channel
+    /// and lands (31722, 29698, 1820) with this one.
+    #[test]
+    fn the_mid_ring_publishes_an_absolute_banded_pose() {
+        let mut g = flat_gen();
+        // Two cells in ring 0: the head's own, and one two tiles east
+        // — far enough out to be the MID RING (d2 >= 0x40000) while
+        // still a cell the disc walk names.
+        g.assets.rings[0] = vec![(0u8, 0u8), (2u8, 0u8)];
+
+        let head = g.new_event().expect("head slot");
+        let pinned = g.new_event().expect("pinned human seat");
+        let (hx, hy) = (40u16 * 256, 40u16 * 256);
+        {
+            let e = &mut g.ent[head];
+            e.class64 = 10;
+            e.model65 = 22;
+            e.id24 = 159; // NOT the player: your own funnel never sways you
+            e.x = hx;
+            e.y = hy;
+            e.z = 400;
+            e.dest_x = hx; // the eye (`axis_0x9A_154x`)
+            e.dest_y = hy;
+            e.f50 = 400;
+            e.f140 = 20;
+        }
+        {
+            let e = &mut g.ent[pinned];
+            e.class64 = 3;
+            e.model65 = 0;
+            e.id24 = crate::mc1::mobs::PLAYER_TARGET;
+        }
+        g.mc2_pinned = crate::engine::features::Mc2Pinned(pinned as u16);
+
+        // 532 units east of the eye: cell (cx+2, cy), d2 = 283_024,
+        // inside 3_211_264 and outside 0x40000 — the mid ring. The z
+        // starts BELOW the band's floor so the tail has work to do.
+        let (px, py) = (hx + 532, hy);
+        let ctx = crate::mc1::mobs::MobCtx {
+            px,
+            py,
+            pz: 0,
+            pyaw: 0,
+            pmana: 1000,
+            pmana_max: 1000,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        g.mc2_whirlwind_lift(head, &ctx);
+
+        let w = g.player_whirl;
+        assert!(w.armed, "the mid ring must arm the seizure");
+        let (gx, gy, gz, gyaw) = w.grab.expect(
+            "the MID RING publishes the RESOLVED ABSOLUTE pose \
+             (`CopyEntityPosition_57CF0`, EF:24395). `None` here means \
+             the heading+step channel is back, which can carry one \
+             visit and no z at all.",
+        );
+        assert_eq!(w.step, 0, "an absolute payload has nothing left to step");
+        assert_eq!(
+            gyaw,
+            Gen::angle_between(hx, hy, px, py).wrapping_add(591) & 0x7FF,
+            "the mid ring's absolute heading (EF:24354-55 / 0x57d51-55)"
+        );
+        // The 96-unit step along that heading, then the band.
+        let mut want = (px, py, 0i16);
+        Gen::polar_step(&mut want, gyaw, 0, 96);
+        assert_eq!((gx, gy), (want.0, want.1), "one 96-unit swirl step");
+        let galt = g.ground_z(gx, gy) as i16;
+        assert_eq!(
+            gz,
+            galt.wrapping_add(crate::flight::Mc2Row::OPEN.clearance),
+            "`sub_580E0` (0x57e6d) floors the victim at ground + the \
+             row clearance on EVERY visit, not just the grabbed ones — \
+             a z of 0 here means the band is back on the GRAB arms only"
+        );
+    }
+
+    /// ⭐⭐⭐ `CopyEntityPosition_57CF0` RELINKS THE **WIZARD** TOO,
+    /// SO HIS SEAT IS RESEEDED INSIDE `sub_33340`'s OWN WALK (round
+    /// 125, dig A round 5 — LAW 32; this is its owed unit pin).
+    ///
+    /// The funnel's victim tail ends in the same
+    /// `CopyEntityPosition_57CF0` every pooled victim gets
+    /// (`NETHERW.EXE` 0x57e7b `call 0x7c4f0`), and that helper's whole
+    /// body is a tile-word compare followed by an UNLINK +
+    /// `AddEventToMap` head-insert (0x7c4fe/0x7c505 the compare,
+    /// 0x7c50b `jz` the no-relink path, 0x7c50e unlink, 0x7c518
+    /// re-add). Retail's carpet is an ordinary linked class-3 record,
+    /// so a visit that carries the wizard into another tile makes him
+    /// that tile's chain HEAD there and then — his seat is a live
+    /// thing for the rest of the walk, not something re-derived once
+    /// per turn.
+    ///
+    /// The port carries him out of pool and tracks the seat as
+    /// [`crate::engine::features::PlayerChain`], which used to be
+    /// reseeded ONLY at the carpet's own walk slot
+    /// (`Gen::player_relink` from `World::adopt_walk_pose`). So after
+    /// a funnel visit moved him the seat still named the tile he had
+    /// LEFT, and every later arrival at his new one was refused —
+    /// mc2l24 t=8033 (head 200): the inner lift puts him on the eye
+    /// (30124, 25678) = cell 25717 and `player_chain` still read
+    /// (25461, 0), so when victim 146 relinked 25973 → 25717 in FRONT
+    /// of him the walker skipped his seat and he lost a third visit
+    /// (one more +114 z, one more +56 yaw, one more 128-step).
+    ///
+    /// ⚠ NO FIXTURE HOME, for the same reason the mid-ring pin above
+    /// has none: the carpet's pose and its seat both live outside the
+    /// pool, so `verify-deltas` cannot see either. Measured on the
+    /// free run only (mc2l24 −3 segments, mc2l1/mc2l30 to END).
+    /// `MGC_NO_MC2_WW_HUMAN_SEAT_RELINK=1` must FAIL the last assert.
+    ///
+    /// The rig is one NEAR-GRABBED visit (`0x57d65 mov ecx,0x80`) in
+    /// the funnel's own ring cell, with the wizard parked 6 units
+    /// short of that tile's east edge so the 128-unit swirl step
+    /// carries him over it.
+    #[test]
+    fn the_wizards_own_relink_reseats_him_inside_the_funnel_walk() {
+        use crate::engine::features::tile;
+        let mut g = flat_gen();
+
+        let head = g.new_event().expect("head slot");
+        let pinned = g.new_event().expect("pinned human seat");
+        let (hx, hy) = (40u16 * 256, 40u16 * 256);
+        {
+            let e = &mut g.ent[head];
+            e.class64 = 10;
+            e.model65 = 22;
+            e.id24 = 159; // NOT the player: your own funnel never sways you
+            e.x = hx;
+            e.y = hy;
+            e.z = 400;
+            e.dest_x = hx; // the eye (`axis_0x9A_154x`)
+            e.dest_y = hy;
+            e.f50 = 400;
+            e.f140 = 20;
+        }
+        {
+            let e = &mut g.ent[pinned];
+            e.class64 = 3;
+            e.model65 = 0;
+            e.id24 = crate::mc1::mobs::PLAYER_TARGET;
+            // `byte[3] & 0x10` — the grab latch, banked on the human's
+            // own pinned record; already GRABBED, so the visit takes
+            // the near arm and its 128-unit step.
+            e.flags |= F_GRABBED;
+            // `word_0x30_48` — the latched swirl heading the tail
+            // steps along. 512 = due EAST.
+            e.f50 = 512;
+        }
+        g.mc2_pinned = crate::engine::features::Mc2Pinned(pinned as u16);
+
+        // 250 units east of the eye: same tile (40, 40) — the ring
+        // cell the disc walk names — and only 6 units short of its
+        // edge. d² = 62,500, well under the 0x310000 far gate.
+        let (px, py) = (hx + 250, hy);
+        assert_eq!(((px >> 8) as u8, (py >> 8) as u8), (40, 40), "rig: his tile");
+        // His seat as the carpet's own walk slot would have seeded it.
+        g.player_relink(px, py);
+        assert_eq!(g.player_chain.cell, tile(40, 40), "rig: the seat pre-walk");
+
+        let ctx = crate::mc1::mobs::MobCtx {
+            px,
+            py,
+            pz: 400,
+            pyaw: 0,
+            pmana: 1000,
+            pmana_max: 1000,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        g.mc2_whirlwind_lift(head, &ctx);
+
+        // Where the near-grab arm leaves him: 128 units along the
+        // latched swirl, i.e. over the tile boundary into (41, 40).
+        let mut want = (px, py, 400i16);
+        Gen::polar_step(&mut want, 512, 0, 128);
+        let (ntx, nty) = ((want.0 >> 8) as u8, (want.1 >> 8) as u8);
+        assert_eq!(
+            (ntx, nty),
+            (41, 40),
+            "rig: the 128-unit step (0x57d65) must CROSS the tile edge"
+        );
+        assert_ne!(tile(ntx, nty), tile(40, 40), "rig: a real relink");
+        assert_eq!(
+            g.player_chain.cell,
+            tile(ntx, nty),
+            "`CopyEntityPosition_57CF0` (0x57e7b -> 0x7c518 AddEventToMap) \
+             makes him the NEW tile's chain head inside the walk — a seat \
+             still naming (40, 40) here is the pre-dig behaviour, where \
+             every later arrival at his real cell was refused"
+        );
     }
 
     /// ⭐⭐⭐ `sub_11900` AND THE AREA WRITER ARE EXACT INVERSES, AND

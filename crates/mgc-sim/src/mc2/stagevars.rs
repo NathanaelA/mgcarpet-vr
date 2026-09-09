@@ -728,7 +728,33 @@ impl World {
     /// The referenced MODEL is extinct — no live class-5 instance
     /// (mirrors the type-7 objective oracle: skip the corpse/multipart
     /// phases and despawn-marked slots).
-    fn mc2_model_extinct(&self, model: u8) -> bool {
+    pub(crate) fn mc2_model_extinct(&self, model: u8) -> bool {
+        // ⭐⭐⭐ EXTINCTION IS A NULL CHAIN HEAD, NOT A POOL SCAN.
+        // NETHERW.EXE 0x36fcc-0x36fe0, sub_12780's `&2` arm:
+        //   36fcc  31 c9                   xor  %ecx,%ecx
+        //   36fce  8b 35 a4 41 00 00       mov  0x41a4,%esi
+        //   36fd4  66 8b 48 04             mov  0x4(%eax),%cx    <- watch model
+        //   36fd8  83 bc 8e 03 96 00 00 00 cmpl $0x0,0x9603(%esi,%ecx,4)
+        //   36fdf  75 1a                   jne  0x36ffc          <- alive: no latch
+        // i.e. `!bytearray_38403x[watch_model]` (EF:5178) and nothing
+        // else. The head is the TICK-TOP rebuild's
+        // ([`Gen::mc2_roster`]), so the live `act_life`/action/`flags
+        // & 0x400` re-reads the port carried were wrong in both
+        // directions — the reap flag in particular is not retail's
+        // test at all here (it IS retail's test on the `&2`-CLEAR
+        // pointer arm three instructions below, 0x36ff1 `f6 41 0d 04`
+        // — which is why the port's conflation looked plausible).
+        // ⚠ The raw HEAD, not `visible()`: a mid-tick NewEvent reuse
+        // severs the WALK (`TickChain::cut`) but leaves the head
+        // pointer standing, so a severed chain is not extinct.
+        if !crate::engine::features::no_mc2_mob_chain_predicate() {
+            return self
+                .g
+                .mob_chains
+                .list
+                .get(model as usize)
+                .is_none_or(|v| v.is_empty());
+        }
         !self.g.ent.iter().skip(1).any(|e| {
             e.class64 == 5
                 && e.model65 == model
@@ -842,16 +868,14 @@ impl World {
         // port stopped at the settle and held 1781/75, and the two
         // fresh (9,9) bolts the human aimed at the chain that same
         // tick were born on the wrong pitch because of it.
-        if matches!(self.g.ent[i].site_z, 1..=10) {
-            match self.g.ent[i].model65 {
-                21 => self.g.m21_jump(i),
-                0 => {
-                    self.g.m0_dodge(i);
-                    self.g.m0_bob(i);
-                }
-                _ => {}
-            }
+        if matches!(self.g.ent[i].site_z, 1..=10) && self.g.ent[i].model65 == 21 {
+            self.g.m21_jump(i);
         }
+        // m0's arm is the FULL `sub_1F300` jump table, shared with the
+        // CONTROLLED seam ([`Gen::m0_phase7_physics`]) — the held legs
+        // can leave StageVar2 on 0xD/0xE/0x10/0x11 too, and retail
+        // reads the selector after them.
+        self.g.m0_phase7_physics(i);
         // ⭐⭐⭐ **AND m21's WRAPPER ENDS IN A MODE RE-APPLY.**
         // `sub_26470` (EF:16963-65) closes with `if (actionIndex !=
         // 175) sub_268F0(a1x, actionIndex + 88)` — an IDENTITY on the
@@ -1721,6 +1745,12 @@ impl World {
             216 => self.g.ent[i].site_z = 15,
             _ => {}
         }
+        // The 0xDF held handler's LAST call before `sub_29A90` is the
+        // pose set `sub_2AED0` (file 0x4E163, two args from `esp = ebp`),
+        // whose frame re-occupies the v34 slot — so the mover's flag
+        // never survives this path (dig 126O).
+        self.g.m27_v34_slot.0 = None;
+        self.g.m27_v34_slot.1 = false;
         self.g.m27_drive(i, ctx);
     }
 }

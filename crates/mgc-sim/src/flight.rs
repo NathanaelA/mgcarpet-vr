@@ -122,6 +122,15 @@ pub fn angle_between(ax: u16, ay: u16, bx: u16, by: u16) -> u16 {
     crate::engine::features::Gen::angle_between(ax, ay, bx, by)
 }
 
+/// `MoveEntity_57FA0` — the engine's polar step, exposed for boundary
+/// drivers that displace the human's pose OUTSIDE the mover. The
+/// doomsday pyramid's hurl-away beam (`sub_21AB0` case 7, EF:13444)
+/// is one: it runs at the PYRAMID's pool slot and rewrites the
+/// player's position before `sub_5D530` ever sees it.
+pub fn move_entity(pos: &mut (u16, u16, i16), yaw: u16, pitch: u16, dist: i16) {
+    crate::engine::features::Gen::polar_step(pos, yaw, pitch, dist);
+}
+
 impl Mc1State {
     /// Seed the integer state from tile-space floats (spawn/level
     /// hand-off; the reverse mapping runs after every move).
@@ -142,6 +151,17 @@ impl Mc1State {
         let v = self.aim_pitch as i32;
         (if v > 1024 { v - 2048 } else { v }) as i16
     }
+}
+
+/// A/B toggle for the whirlwind crank's PHASE against `sub_5D530`'s
+/// stop veto: set `MGC_NO_MC2_WW_CRANK_BEFORE_VETO` to restore the
+/// pre-dig placement, where the staged `Mc2Ext::whirl_bumps` drain sat
+/// BELOW the `byte[1] & 8` early return (`NETHERW.EXE` 0x81d39) and a
+/// vetoed tick therefore lost the crank the funnel had already stored
+/// at 0x57c86.
+fn no_mc2_ww_crank_before_veto() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_CRANK_BEFORE_VETO").is_some())
 }
 
 /// One tick of player commands for the faithful mover, mapped from
@@ -817,6 +837,50 @@ pub fn mc2_move(
         st.act_speed = v;
     }
 
+    // ---- the FRAME-HEAD half, ABOVE `sub_5D530`'s early return ----
+    // (0) pose: the filtered delta (EF:38060-66, ÷4 toward zero),
+    // slow-scaled while the web slow is active (EF:59622-30), then
+    // yaw as a RATE and the published absolute aim pitch.
+    let dr = ((2 * inp.stick_x as i32 - st.roll_f as i32) / 4) as i16;
+    let dp = ((2 * inp.stick_y as i32 - st.pitch_f as i32) / 4) as i16;
+    // ⭐⭐⭐ THE FUNNEL'S CRANK LANDS BETWEEN THE INPUT PASS AND THE
+    // MOVER — AND THE STOP VETO DOES NOT SWALLOW IT.
+    // `rollDelta_0x4_4` is computed in `PlayerEvents_51BB0`
+    // (EF:38336-37 / `NETHERW.EXE` 0x77480 `movsx eax,byte [eax+0x3]`
+    // — the stick is a signed BYTE — then `movsx edx,[ecx+0x155]` and
+    // `mov [ecx+0x4],ax`) from the accumulator AS IT STOOD AT THE
+    // FRAME HEAD; `sub_33340` then cranks that accumulator by 28 per
+    // seizure at the funnel's own slot (0x57c86) — a DIRECT STORE into
+    // `[ebx+0xa4] -> +0x155`, nowhere near `sub_5D530`; `sub_5D530`
+    // finally adds the stored delta (0x81d6d). The port fuses the
+    // input pass into the mover, so the crank has to be folded in
+    // HERE, after `dr` is taken off the un-cranked value.
+    //
+    // ⚠ AND *ABOVE* THE VETO. `sub_5D530`'s `byte[1] & 8` early exit
+    // (0x81d39, the epilogue jump) skips `roll += rollDelta` — it
+    // cannot skip a store the FUNNEL already made at its own slot. The
+    // inner-lift arm raises BOTH on the same visit (`byte[1] |= 8` at
+    // 0x57ca3 / 0x57ca6 and the crank at 0x57c86), so the vetoed tick
+    // is exactly the tick that used to lose its crank. mc2l1 t=283 is
+    // that tick to the unit: the recorded human record takes
+    // `flags 525 -> 268435981` (`byte[3] |= 0x10`, the inner lift's
+    // grab latch at 0x57d2c), `rand 50933 -> 47348` (the latch's own
+    // `9377v + 9439` draw), `yaw 1522 -> 1578` (+56 = `v38`) and
+    // `word_0x30_48 = 1578` (0x57d30-34) — a textbook inner lift — and
+    // `roll_acc 183 -> 211` is the crank ALONE, with the vetoed
+    // `rollDelta` contributing nothing. It was the take's last
+    // deviation. Set `MGC_NO_MC2_WW_CRANK_BEFORE_VETO` to restore the
+    // swallowed crank.
+    if !no_mc2_ww_crank_before_veto() {
+        let mut cranks = std::mem::take(&mut ext.whirl_bumps);
+        while cranks > 0 {
+            if st.roll_f < 256 {
+                st.roll_f = st.roll_f.wrapping_add(28);
+            }
+            cranks -= 1;
+        }
+    }
+
     // `sub_5D530`'s early return — everything from here down is
     // inside retail's `else` (see [`Mc1Input::mc2_stop`]). The
     // caller owns the `byte[1] &= 0xF7` clear.
@@ -825,27 +889,14 @@ pub fn mc2_move(
     }
 
     // ---- sub_5D530 (EF:59610), statement order ----
-    // (0) pose: the filtered delta (EF:38060-66, ÷4 toward zero),
-    // slow-scaled while the web slow is active (EF:59622-30), then
-    // yaw as a RATE and the published absolute aim pitch.
-    let dr = ((2 * inp.stick_x as i32 - st.roll_f as i32) / 4) as i16;
-    let dp = ((2 * inp.stick_y as i32 - st.pitch_f as i32) / 4) as i16;
-    // ⭐⭐⭐ THE FUNNEL'S CRANK LANDS BETWEEN THE INPUT PASS AND THE
-    // MOVER. `rollDelta_0x4_4` is computed in `PlayerEvents_51BB0`
-    // (EF:38336-37 / `NETHERW.EXE` 0x77480 `movsx eax,byte [eax+0x3]`
-    // — the stick is a signed BYTE — then `movsx edx,[ecx+0x155]` and
-    // `mov [ecx+0x4],ax`) from the accumulator AS IT STOOD AT THE
-    // FRAME HEAD; `sub_33340` then cranks that accumulator by 28 per
-    // seizure at the funnel's own slot (0x57c86); `sub_5D530` finally
-    // adds the stored delta (0x81d6d). The port fuses the input pass
-    // into the mover, so the crank has to be folded in HERE, after
-    // `dr` is taken off the un-cranked value.
-    let mut cranks = std::mem::take(&mut ext.whirl_bumps);
-    while cranks > 0 {
-        if st.roll_f < 256 {
-            st.roll_f = st.roll_f.wrapping_add(28);
+    if no_mc2_ww_crank_before_veto() {
+        let mut cranks = std::mem::take(&mut ext.whirl_bumps);
+        while cranks > 0 {
+            if st.roll_f < 256 {
+                st.roll_f = st.roll_f.wrapping_add(28);
+            }
+            cranks -= 1;
         }
-        cranks -= 1;
     }
     if ext.move_speed > 0 {
         st.roll_f += ext.slow_scale(dr as i32) as i16;
@@ -1728,6 +1779,70 @@ mod tests {
             &open_gate2,
             &never_stuck,
         )
+    }
+
+    /// ⭐⭐⭐ THE CLIMB-BAND AUTHORITY IS A TERRAIN READ, SO ITS PHASE
+    /// IS THE CARPET'S OWN WALK SLOT. `sub_5D530` probes
+    /// `getTerrainAlt_10C40(&predictedAxis)` (`NETHERW.EXE` file
+    /// 0x81e57 `push 0x1b398` / 0x81e5f `call 0x35440` = VA 0x10C40)
+    /// and folds it straight into `altDiff` (0x81e6a `movsx edx,word
+    /// [0x1b39c]` / 0x81e71 `cwde` / 0x81e76-7a `sub/sub/shl 10` /
+    /// 0x81e82 `idiv ecx`), clamped ±256 (0x81e89-0x81ea2), then
+    /// `eff_pitch = trunc(tempPitch·−altDiff / 256)` on the two climb
+    /// quadrants (0x81ed6 / 0x81f13). One HEIGHT BYTE of terrain is 32
+    /// engine units, so a same-tick terraform the carpet cannot yet
+    /// see moves the published effective pitch by tens of units.
+    ///
+    /// RETAIL MEASUREMENT (recordings/mc2l24.mgcr pair 26209→26210,
+    /// 2026-09-10). The human at (20753, 35039, 2342), `act_speed`
+    /// −80, `pitch_acc` 105, stick_y 49, band 1024 — a nose-down
+    /// reverse, i.e. the `actSpeed < 0 && tempPitch > 0` ramped arm.
+    /// The (10,42) painter at slot 701 — ABOVE the human's slot 116 —
+    /// lowers the cell (81,136) neighbourhood by 2 height bytes that
+    /// tick: `getTerrainAlt` is 1550 at the carpet's slot and 1486
+    /// once the painter has run. Retail published `eff_pitch` 94; the
+    /// post-painter plane yields 68, which is exactly what the pose
+    /// lane reported before it was phased to terrain@N.
+    #[test]
+    fn mc2_climb_band_authority_is_phased_at_the_carpets_own_slot() {
+        let at = |g: i16| {
+            let mut st = Mc1State {
+                x: 20753,
+                y: 35039,
+                z: 2342,
+                yaw: 577,
+                roll_f: -4,
+                pitch_f: 105,
+                aim_pitch: 105,
+                eff_pitch: 105,
+                act_speed: -80,
+                tgt_speed: -80,
+                ..Default::default()
+            };
+            let mut ext = Mc2Ext::default();
+            let inp = Mc1Input {
+                stick_x: -8,
+                stick_y: 49,
+                ..Default::default()
+            };
+            mc2_move(
+                &mut st,
+                &mut ext,
+                &inp,
+                None,
+                None,
+                None,
+                &|_, _| g,
+                &no_ceiling,
+                &open_gate2,
+                &never_stuck,
+            );
+            (st.aim_pitch, st.eff_pitch)
+        };
+        // The published aim pitch is terrain-blind: 105 + trunc((2·49 −
+        // 105)/4) = 104 either way. Only the AUTHORITY fold moves.
+        assert_eq!(at(1550), (104, 94), "terrain@N (the carpet's slot)");
+        assert_eq!(at(1486), (104, 68), "terrain@N+1 (after the painter)");
     }
 
     #[test]

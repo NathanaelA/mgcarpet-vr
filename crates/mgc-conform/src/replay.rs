@@ -220,7 +220,7 @@ fn roster_excuse(
 /// The chained human flight state — the driver's copy of what
 /// `Simulation` owns in the app (integer carpet + MC2 channels + the
 /// Accelerate expiry edge).
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Chain {
     s: Mc1State,
     ext: Mc2Ext,
@@ -812,6 +812,10 @@ struct RStats {
     segs: Vec<Segment>,
     gates: BTreeMap<&'static str, u64>,
     stick_unrec: u64,
+    /// Pairs whose stick was recovered a SECOND time because the port
+    /// counted a whirlwind crank total other than 1 (the historical
+    /// assumption) — see the trial step in the MC2 loop.
+    crank_repass: u64,
     respawns: u64,
     suicides: u64,
     equips: u64,
@@ -1150,6 +1154,13 @@ impl RStats {
                 out,
                 "   stick-unrecoverable pairs (centered stick fed): {}",
                 self.stick_unrec
+            );
+        }
+        if self.crank_repass > 0 {
+            let _ = writeln!(
+                out,
+                "   whirlwind crank re-recoveries (port counted != 1): {}",
+                self.crank_repass
             );
         }
         let _ = writeln!(
@@ -2500,11 +2511,7 @@ fn run_mc2(
 
         // ---- input for the pair pt → t, all from the recording
         // (the shared recovery laws — mgc_formats::recover) ----
-        let rec = recover::recover_pair_mc2(&pst, &st, respawn, tick.input.as_ref());
-        let stick_ok = rec.stick_ok();
-        if !stick_ok {
-            stats.stick_unrec += 1;
-        }
+        let mut rec = recover::recover_pair_mc2(&pst, &st, respawn, tick.input.as_ref());
         let mut inp = mc1_mover_input(rec.move_byte, rec.stick());
         inp.mc2_park = rec.mc2_park;
         // ⭐⭐ THE SPEED COMMAND IS NOT AN INPUT, IT IS A REGISTER —
@@ -2568,6 +2575,59 @@ fn run_mc2(
             ..PlayerCommand::default()
         };
 
+        // ⭐⭐⭐ THE CRANK COUNT COMES FROM THE SIMULATION, NOT FROM A
+        // GUESS. `sub_33340` adds 28 to `roll_0x155_341` once per
+        // visit that reaches the `v40` block (`NETHERW.EXE`
+        // 0x57c67..0x57c8d), and its disc walk reaches the same victim
+        // more than once whenever `CopyEntityPosition_57CF0` carries
+        // it into a cell the walk has not got to yet. The recovery has
+        // to undo exactly those 28s before inverting the stick filter,
+        // and the recorded pair CANNOT count them — mc2l24 t=7913
+        // inverts to a legal signed-byte cursor for k=1 (72) and for
+        // k=2 (14) alike, and to none at all for k=0. So: trial-step a
+        // THROWAWAY CLONE with k=1, ask the port how many cranks it
+        // actually handed the carpet, and if that is not 1, recover
+        // again with the true count and run the REAL step on it.
+        // Deterministic, and rare — the trial only fires on a pair
+        // whose own witness (`whirl_crank`: the funnel's write to the
+        // human's `word_0x30_48`) says a funnel held the wizard.
+        //
+        // ⚠ THE CLONE IS THE WHOLE POINT: the first step never touches
+        // the live world, so nothing has to be undone and no side
+        // effect (restart latch, cheat book, ktrace arm, sound) is
+        // double-counted.
+        if rec.whirl_crank
+            && !args.pose_only
+            && mgc_sim::mc2_ww_crank_count_law()
+            && !recover::paused_turn_mc2(&pst, &st)
+        {
+            let mut trial_world = world.clone();
+            let mut trial_ch = ch.clone();
+            mgc_sim::reset_whirl_cranks();
+            step_mc2(&mut trial_world, &mut trial_ch, inp, cmd);
+            let k = mgc_sim::whirl_cranks();
+            if k != 1 {
+                let alt = recover::recover_pair_mc2_k(&pst, &st, respawn, tick.input.as_ref(), k);
+                // ⚠ NEVER TRADE A RECOVERABLE CURSOR FOR AN
+                // UNRECOVERABLE ONE. A count the port got WRONG (its
+                // funnel missed a visit retail made) must not also
+                // cost the pair its whole stick — mc2l1 t=283 is
+                // exactly that pair: retail cranked, the port's ring
+                // walk reached the carpet zero times, and k=0 inverts
+                // to a cursor of 148 (out of the signed byte).
+                if alt.stick_ok() || !rec.stick_ok() {
+                    rec = alt;
+                    inp = mc1_mover_input(rec.move_byte, rec.stick());
+                    inp.mc2_park = rec.mc2_park;
+                    stats.crank_repass += 1;
+                }
+            }
+            mgc_sim::reset_whirl_cranks();
+        }
+        let stick_ok = rec.stick_ok();
+        if !stick_ok {
+            stats.stick_unrec += 1;
+        }
         mgc_sim::DEBUG_TICK.store(tick.t, std::sync::atomic::Ordering::Relaxed);
         if args.pose_only {
             pose_only_pair_mc2(

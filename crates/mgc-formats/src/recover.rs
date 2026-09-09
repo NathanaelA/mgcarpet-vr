@@ -24,7 +24,7 @@
 //!   the press with the recentre witness ([`Mc2RespawnWitness`]), MC1
 //!   has no latch and keeps the ±1-tick caveat (docs/RECORDING.md).
 
-use crate::mgcr::{Notify, ObsMc1, RetailMc1, RetailMc2};
+use crate::mgcr::{Notify, ObsMc1, RetailEntMc2, RetailMc1, RetailMc2};
 
 /// A retail CHEAT fired by the recorded player — control opcode 30
 /// (`0x1E`), `param1` = the discriminant below. Both engines bind the
@@ -191,6 +191,14 @@ pub fn no_mc2_whirl_roll_crank() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WHIRL_ROLL_CRANK").is_some())
 }
 
+/// `MGC_NO_MC2_WW_VETO_WITNESS=1` restores the pre-dig witness for the
+/// whirlwind crank — the SWIRL HEADING EDGE alone
+/// (`word_0x30_48` changed), which misses every near-arm seizure.
+pub fn no_mc2_ww_veto_witness() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_VETO_WITNESS").is_some())
+}
+
 /// Invert the stick filter across one recorded tick: find a stick
 /// value whose increment `(2·stick − acc)/4` (trunc toward zero, the
 /// :49018 law) lands the accumulator exactly on acc@N+1. The mover
@@ -216,6 +224,72 @@ pub fn recover_stick(acc_n: i16, acc_n1: i16) -> Option<i16> {
         }
         let s = (n + a) / 2;
         if (-128..=127).contains(&s) && best.is_none_or(|b| s.abs() < (b as i32).abs()) {
+            best = Some(s as i16);
+        }
+    }
+    best
+}
+
+/// `MGC_NO_MC2_SLOW_STICK_INVERT=1` — restore the un-scaled stick
+/// inversion (the pre-2026-09-09 behaviour) on a web-slowed carpet.
+pub fn no_mc2_slow_stick_invert() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SLOW_STICK_INVERT").is_some())
+}
+
+/// ⭐⭐⭐ THE STICK INVERSION HAS A *SCALE* TO UNDO AS WELL AS A SECOND
+/// WRITER. [`recover_stick`] inverts `acc += trunc((2·stick − acc)/4)`,
+/// but `sub_5D530` does not add that delta raw while the WEB SLOW is
+/// latched: EF:59622-30 folds it through `(v · (4 − moveSpeed))/4`
+/// (`Mc2Ext::slow_scale`, the same round-toward-zero fold the speeds
+/// take). ⭐ VERIFIED IN THE SHIPPED `NETHERW.EXE`, not just the
+/// decompile — file offsets and bytes:
+///   `0x81d5f 8a b1 4c 01 00 00`  `mov dh,[ecx+0x14c]` (moveSpeed_0x14C_332)
+///   `0x81d65 84 f6 75 1e`        `test dh,dh` / `jne` — the ZERO branch is the RAW add
+///   `0x81d8b ba 04 00 00 00`     `mov edx,4`
+///   `0x81d90 29 c2`              `sub edx,eax`        (4 − moveSpeed)
+///   `0x81d92 0f bf 41 04`        `movsx eax,[ecx+4]`  (rollDelta_0x4_4)
+///   `0x81d96 0f af d0`           `imul edx,eax`
+///   `0x81d99 89 d0 c1 fa 1f c1 e2 02 1b c2 c1 f8 02`  the trunc-toward-zero `/4` idiom
+///   `0x81da8 0f bf 81 55 01 00 00` `movsx eax,[ecx+0x155]` / `01 d0` / store (roll_acc, +341)
+/// pitch's twin runs at `0x81db8..0x81df2` on `[ecx+0x157]` (pitch_acc, +343).
+/// So on a slowed carpet the recorded accumulator step is the
+/// SCALED one and inverting the unscaled law recovers the wrong
+/// cursor — the port then re-scales that wrong cursor and lands a few
+/// units off, every tick, on BOTH pose accumulators.
+///
+/// Witness, mc2l24 t=15551→15552 with `moveSpeed = 1` (k = 3):
+/// `roll_acc −5 → 1` (Δ +6) and the recorded `rollDelta_0x4_4` is 8 —
+/// `trunc(8·3/4) = 6`, retail's own scaled step. The old inversion
+/// read Δ +6 as a RAW step, recovered stick 10, and the mover then
+/// scaled *that*: `trunc((2·10 + 5)/4) = 6`, `trunc(6·3/4) = 4`,
+/// `roll_f = −1` — the exact value the port reported. Same tick,
+/// `pitch_acc 17 → 14` recovers stick 1 → `dp = −3` → scaled −2 →
+/// `pitch_f = 15` against retail's 14.
+///
+/// `move_speed` is the value at the END of tick N, because the
+/// slow/mobilize decay walk is `sub_5D530`'s block 8
+/// (`Mc2Ext::tick_debuffs`) — it runs AFTER the pose filter, so tick
+/// N+1's filter reads N's latch.
+///
+/// The search is a plain 256-wide sweep of the signed-byte cursor
+/// (`0x77482 movsx eax,byte [eax+0x3]`) rather than an algebraic
+/// preimage, because the scale is lossy; `move_speed == 0` reduces to
+/// [`recover_stick`] exactly (same domain, same smallest-|stick|
+/// tie-break), which is what keeps every un-slowed take byte-identical.
+pub fn recover_stick_slowed(acc_n: i16, acc_n1: i16, move_speed: u8) -> Option<i16> {
+    if move_speed == 0 || no_mc2_slow_stick_invert() {
+        return recover_stick(acc_n, acc_n1);
+    }
+    let a = acc_n as i32;
+    let k = 4 - (move_speed as i32);
+    let mut best: Option<i16> = None;
+    for s in -128i32..=127 {
+        let raw = (2 * s - a) / 4;
+        if a + (raw * k) / 4 != acc_n1 as i32 {
+            continue;
+        }
+        if best.is_none_or(|b| s.abs() < (b as i32).abs()) {
             best = Some(s as i16);
         }
     }
@@ -411,6 +485,12 @@ pub fn mc2_ring_cast(mb: u32, ring_cursor: u8) -> Option<u8> {
 pub struct RecoveredPair {
     pub stick_x: Option<i16>,
     pub stick_y: Option<i16>,
+    /// MC2 only: this pair carries the whirlwind's camera-roll crank
+    /// witness (the funnel wrote the HUMAN's `word_0x30_48` across the
+    /// pair). The stick inversion has to guess how MANY 28s to undo;
+    /// [`recover_pair_mc2_k`] takes the count, and this flag tells the
+    /// caller a trial step is worth running to find it.
+    pub whirl_crank: bool,
     /// The consumed move/fire byte driving the pair's mover (bits 1/2
     /// speed, 4/8 strafe, 0x10/0x20 fire) — record N on MC1, N+1 on
     /// MC2 (the per-game stamp phase, module doc).
@@ -670,11 +750,175 @@ pub fn mc2_pair_cmd_speed(
     (prev_cmd + 16 * dir).clamp(-80, 80)
 }
 
+/// `MGC_NO_MC2_STEAL_NOT_A_REBIND=1` — the A/B arm for the
+/// world-took-it discriminator in [`recover_pair_mc2`]. Set it to
+/// restore the pre-dig behaviour, where every recorded hand-pointer
+/// clear replayed as a pane UNBIND command.
+fn mc2_steal_not_a_rebind_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_STEAL_NOT_A_REBIND").is_some())
+}
+
+/// `MGC_NO_MC2_ROLL_DELTA_CAPTURE=1` — restore the pre-dig stick
+/// inversion for the ROLL axis, which un-cranked the recorded
+/// `roll_acc` by a GUESSED number of 28s instead of reading the
+/// tick's own `rollDelta_0x4_4` out of the capture.
+pub fn no_mc2_roll_delta_capture() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ROLL_DELTA_CAPTURE").is_some())
+}
+
+/// `MGC_NO_MC2_SLOW_STAMP_PHASE=1` — restore the pre-dig reading of
+/// [`pair_move_speed`], which always handed the stick inversion tick
+/// N's END latch and so missed a slow stamped INSIDE tick N+1.
+fn no_mc2_slow_stamp_phase() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SLOW_STAMP_PHASE").is_some())
+}
+
+/// ⭐⭐⭐ THE SCALE THE PAIR'S POSE FILTER RAN UNDER IS NOT ALWAYS
+/// TICK N'S LATCH — A WEB LANDING *INSIDE* TICK N+1 RAISES IT FIRST.
+/// `moveSpeed` lives at `[ebx+0xa4] -> +0x14c` and THREE sites touch
+/// it in one tick, in this order:
+///   1. `sub_38E70`, the SLOW debuff stamp (`NETHERW.EXE` file
+///      0x5d6ae `mov dh,[eax+0x14c]` / 0x5d6b4 `cmp dh,3`, reached
+///      through the class-3 / model-0 wizard test at 0x5d694 `cmp [ebx+0x3f],3` / 0x5d69e `cmp [ebx+0x40],0`)
+///      — it runs at the STAMPING record's own walk slot, which for a
+///      web projectile is ahead of the carpet's;
+///   2. `sub_5D530`'s POSE FILTER reads it at 0x81d5f
+///      (`mov dh,[ecx+0x14c]`), branches at 0x81d65 `test dh,dh` and,
+///      on the slowed arm, scales `rollDelta` by `4 - moveSpeed`
+///      (0x81d8b `mov edx,4` / 0x81d90 `sub edx,eax` / 0x81d92
+///      `movsx eax,[ecx+4]` / 0x81d96 `imul` / the 0x81d99
+///      trunc-toward-zero `/4` / 0x81da8 load + 0x81db1 store of
+///      `+0x155`);
+///   3. `sub_5D530`'s DECAY WALK, six hundred bytes further down at
+///      0x8216e-0x821ae (`mov al,[edx+0x14c]` / `je` / `mov
+///      ah,[edx+0x14d]` / `dec ah` / store / `jne` / `dec ch` on
+///      `+0x14c` / `mov byte [eax+0x14d],8`) — [`Mc2Ext::tick_debuffs`].
+///
+/// So the filter's operand is `pre + (a stamp landed ahead of the
+/// carpet ? 1 : 0)`, and the DECAY that the old note keyed off
+/// happens strictly after it. The recorded END pair names which of
+/// the two happened, because the decay always leaves `+0x14d` one
+/// below what the stamp wrote: a level that ROSE across the pair with
+/// `move_speed_ctr == 7` at N+1 is a stamp that beat the mover
+/// (`slow_hit` wrote 8, `tick_debuffs` took it to 7); the same rise
+/// with `ctr == 8` is a stamp that landed BEHIND the carpet's slot
+/// and did not touch this tick's filter.
+///
+/// WITNESS (mc2l24 t=8699, the take's free-run horizon after wave
+/// 126's `MGC_NO_MC2_WW_HUMAN_MOVE_TEST`): `move_speed 0 -> 1`,
+/// `move_speed_ctr 0 -> 7`, `roll_acc -23 -> -28`, and the capture's
+/// own `rollDelta_0x4_4` is -7 — `trunc(-7*3/4) = -5`, retail's
+/// scaled step under k = 3. Inverting with the END latch of tick N
+/// (0, i.e. unscaled) recovers cursor -22 and a raw `dr` of -5; the
+/// mover then scales THAT (`trunc(-5*3/4) = -3`) and lands `roll_f`
+/// -26 — the port's reported value to the unit. Inverting with 1
+/// recovers cursor -26, whose `dr` is exactly the recorded -7, and
+/// the mover lands -28.
+pub fn pair_move_speed(pre: u8, post_ms: u8, post_ctr: u8) -> u8 {
+    if !no_mc2_slow_stamp_phase() && post_ms > pre && post_ctr == 7 {
+        post_ms
+    } else {
+        pre
+    }
+}
+
+/// The 28-unit total `sub_33340` added to `roll_0x155_341` across one
+/// tick, given the accumulator as the frame head saw it and the number
+/// of crank visits. Retail re-tests `< 256` before EVERY add
+/// (`NETHERW.EXE` 0x57c7a `cmp $0x100,%cx` / 0x57c7f `jge 0x57c8d`,
+/// inside the per-visit `v40` block), so this is a ladder, not `28*k`.
+pub fn crank_units(acc: i16, k: u8) -> i16 {
+    let mut v = acc as i32;
+    let mut n = k;
+    while n > 0 {
+        if v < 256 {
+            v += 28;
+        }
+        n -= 1;
+    }
+    (v - acc as i32) as i16
+}
+
+/// ⭐⭐⭐ THE CRANK'S WITNESS IS THE VETO LATCH, NOT THE SWIRL HEADING.
+/// Did `sub_33340` crank the WIZARD's `roll_0x155_341` across this
+/// recorded pair?
+///
+/// `sub_33340` writes the victim's `word_0x30_48` on only TWO of its
+/// arms — the FAR one (`NETHERW.EXE` file 0x57d51 `66 89 53 30`, taken
+/// when the squared range is >= 0x40000: 0x57c96 `81 7d e0 00 00 04 00`
+/// / 0x57c9d `0f 8d 9a 00 00 00`) and the near arm's SUCCESSFUL grab
+/// roll (0x57d30 `66 8b 43 1c` / 0x57d34 `66 89 43 30`) — but the
+/// 28-unit crank at 0x57c86 (`66 89 b0 55 01 00 00`, under 0x57c7a
+/// `66 81 f9 00 01` / 0x57c7f `7d 0c`) sits ABOVE that split, so every
+/// near-arm visit whose grab roll FAILS cranks the accumulator and
+/// leaves `word_0x30_48` exactly as it was. The swirl-heading EDGE is
+/// therefore the FAR arm's witness only.
+///
+/// What the near arm DOES leave is the mover-veto one-shot: 0x57ca3
+/// `8a 43 0d` / 0x57ca6 `0c 08` / 0x57cab `88 43 0d` = `byte[1] |= 8`
+/// = `flags & 0x800`, the bit the pool importer already reads as
+/// `F_STOP`. The GRABBED arm (0x57c58 `8a 4b 0f`, 0x57c5e
+/// `f6 c1 10` + 0x57c61 `0f 85 fe 00 00 00` -> 0x57d65) sets the same
+/// bit at 0x57d78 `88 53 0d` WITHOUT cranking, so that disjunct is gated on
+/// the grab latch `flags & 0x1000_0000` (`byte[3] & 0x10`, set at
+/// 0x57d2c `80 4b 0f 10`) being CLEAR at the frame head — the very
+/// word `cl` is loaded from.
+///
+/// `[ebp-4]`, the flag the crank arm tests at 0x57c67
+/// `80 7d fc 00` / 0x57c6b `74 29`, is set at 0x57bf3 `c6 45 fc 01`
+/// iff `class3f == 3` (0x57bd8 `8a 53 3f` / 0x57be8 `80 fa 03`) and
+/// `model40 == 0` (0x57bed `80 7b 40 00`) — this predicate's existing
+/// clause, read out of the shipped bytes.
+///
+/// Measured on mc2l24, three heads, all three the SAME defect:
+/// t=44613 (`roll_acc` -147 -> -97 = `rollDelta` 22 + 28, `f30`
+/// 1390 -> 1390, `flags` 269 -> 2317), t=46814 (174 -> 206 = 4 + 28,
+/// `f30` 1369 -> 1369, `flags` 525 -> 2573) and t=50677
+/// (205 -> 186 = -47 + 28, `f30` 1810 -> 1810, `flags` 525 -> 2573).
+/// Without the disjunct the inversion absorbs retail's own crank into
+/// the cursor and the port's funnel then cranks AGAIN: `pose.roll_f`
+/// -69 against -97 and 214 against 186 to the unit; at t=46814 the
+/// doubled +32 needs a cursor of 151 and the pair simply reports
+/// STICK-UNRECOVERABLE. Set `MGC_NO_MC2_WW_VETO_WITNESS` to restore
+/// the heading-edge-only witness.
+pub fn mc2_crank_witness(p: &RetailEntMc2, c: &RetailEntMc2) -> bool {
+    p.class3f == 3
+        && p.model40 == 0
+        && ((c.f30 != 0 && c.f30 != p.f30)
+            || (!no_mc2_ww_veto_witness()
+                && c.flags & 0x800 != 0
+                && p.flags & 0x1000_0000 == 0))
+}
+
+/// [`recover_pair_mc2_k`] with the historical ONE-crank assumption.
 pub fn recover_pair_mc2(
     pst: &RetailMc2,
     st: &RetailMc2,
     respawn: bool,
     input_end: Option<&serde_json::Value>,
+) -> RecoveredPair {
+    recover_pair_mc2_k(pst, st, respawn, input_end, 1)
+}
+
+/// ⭐⭐⭐ THE CRANK COUNT IS AN ARGUMENT, NOT A CONSTANT. `sub_33340`
+/// cranks once per visit that reaches the `v40` block, and its disc
+/// walk reaches the same victim more than once whenever
+/// `CopyEntityPosition_57CF0` carries it into a cell the walk has not
+/// reached yet (mc2l24 t=7913: head 327 mid-rings the carpet in cells
+/// (124,116) and (123,116) on one pass). The pair alone CANNOT count
+/// them — both k=1 and k=2 invert to a legal signed-byte cursor there
+/// — so the SIMULATION counts them and hands the number back; see
+/// `mgc-conform`'s replay driver (throwaway trial step, then
+/// re-recover).
+pub fn recover_pair_mc2_k(
+    pst: &RetailMc2,
+    st: &RetailMc2,
+    respawn: bool,
+    input_end: Option<&serde_json::Value>,
+    crank_k: u8,
 ) -> RecoveredPair {
     let pp = &pst.players[pst.local_player as usize];
     let cp = &st.players[st.local_player as usize];
@@ -699,8 +943,41 @@ pub fn recover_pair_mc2(
             }
         })
     };
-    let left = rebind(0, pp.hand_left, cp.hand_left);
-    let right = rebind(1, pp.hand_right, cp.hand_right);
+    // ⭐⭐⭐ A HAND POINTER THAT MOVES IS NOT ALWAYS A COMMAND. The
+    // m26 wraith's SPELL-STEAL (`sub_69300`, EF:55811-24) writes
+    // `SpellEnabled[model] = 0`, clears the book pointer
+    // `spell_ent[s]`, and then unequips EVERY hand holding that
+    // model — all three from the WRAITH's own dispatch, with no
+    // player input anywhere. Reading the resulting `hand_left`
+    // 0 → −1 as a pane UNBIND replays `mc2_select_spell(255, …)`
+    // BEFORE the walk, so `sub_69300`'s port twin then finds an empty
+    // hand and takes its `spell < 0` abort — the jar never detaches,
+    // and the steal's whole round trip (the action-78 arc out and the
+    // re-bind on landing) is missing. The end state of the tick looks
+    // right, which is why this hid: only the JAR's record diverges.
+    //
+    // The discriminator is in the recorded closure and needs no
+    // heuristic: a pane unbind NEVER clears `spell_ent[s]` (+0x719),
+    // and the steal always does. Same shape covers the death-drop.
+    //
+    // mc2l24 t=5206: wraith slot 193 rolls 5 on the %63 hijack,
+    // retail detaches the class-15 record at slot 6 (action 0 → 78,
+    // snapped onto the carpet at (31639, 25796, 1725)) and returns it
+    // to the book 13 ticks later at t=5219 — the take's next two
+    // segment heads, both of them.
+    let world_took = |prev: i16, cur: i16| -> bool {
+        !mc2_steal_not_a_rebind_off()
+            && cur < 0
+            && (0..26i16).contains(&prev)
+            && pp.spell_ent[prev as usize] != 0
+            && cp.spell_ent[prev as usize] == 0
+    };
+    let left = (!world_took(pp.hand_left, cp.hand_left))
+        .then(|| rebind(0, pp.hand_left, cp.hand_left))
+        .flatten();
+    let right = (!world_took(pp.hand_right, cp.hand_right))
+        .then(|| rebind(1, pp.hand_right, cp.hand_right))
+        .flatten();
     // ⭐⭐ A TIER SWAP IS A SELECT THAT MOVES NO HAND POINTER. The
     // pane commits every pick through the same handler (PlayerAction
     // 0x1F/0x20, EF:37898-928: persist the tier, bind the quick-slot,
@@ -821,9 +1098,11 @@ pub fn recover_pair_mc2(
     // cranks the SAME accumulator by 28 on every NOT-YET-GRABBED visit
     // (`sub_33340` EF:24344-46 / `NETHERW.EXE` 0x57c86, and `sub_5D530`
     // reads that very word at 0x81d6d / 0x81df9). The seizure's own
-    // fingerprint is in the recorded pool: those arms write the swirl
-    // heading into the victim's `word_0x30_48` (0x57d51) every tick
-    // they hold you, and nothing else writes the HUMAN's +30.
+    // fingerprint is in the recorded pool — but ⚠ NOT ONLY in the
+    // swirl heading: the claim that these arms write `word_0x30_48`
+    // (0x57d51) "every tick they hold you" is FALSE, and the near arm
+    // leaves the mover-veto latch instead. [`mc2_crank_witness`] owns
+    // the predicate and cites the bytes.
     // Without this, mc2l1 t=272/273/277/279/283/1343/1344 invert to NO
     // stick at all — retail's +35 at t=272 is outside the signed-byte
     // range the input pass reads (0x77482 `movsx eax,byte [eax+0x3]`)
@@ -833,11 +1112,11 @@ pub fn recover_pair_mc2(
     // ⚠ ONE crank, not a count: the grabbed arms skip the `v40` block
     // (0x57c61 `jnz 0x57d65`) and a repeat visit inside one tick is not
     // separable from the recorded pair here. See the dig note.
-    let whirl_crank = matches!((pst.ents.get(ci), st.ents.get(ci)), (Some(p), Some(c))
-        if c.f30 != 0 && c.f30 != p.f30 && p.class3f == 3 && p.model40 == 0);
+    let whirl_crank = matches!((pst.ents.get(ci), st.ents.get(ci)),
+        (Some(p), Some(c)) if mc2_crank_witness(p, c));
     let crank = |acc: i16| -> i16 {
-        if whirl_crank && acc < 256 && !no_mc2_whirl_roll_crank() {
-            28
+        if whirl_crank && !no_mc2_whirl_roll_crank() {
+            crank_units(acc, crank_k)
         } else {
             0
         }
@@ -853,12 +1132,54 @@ pub fn recover_pair_mc2(
             || (c.x.wrapping_sub(p.x) as i16).unsigned_abs() > 2048
             || (c.y.wrapping_sub(p.y) as i16).unsigned_abs() > 2048);
     let cur_speed = st.ents.get(ci).map_or(0, |c| c.speed);
+    // ⭐⭐⭐ THE TICK'S OWN `rollDelta` IS IN THE CAPTURE — STOP GUESSING.
+    // `PlayerEvents_51BB0` stores `rollDelta_0x4_4` at the player
+    // struct's +4 (`NETHERW.EXE` 0x77480 `movsx eax,byte [eax+0x3]` /
+    // `movsx edx,[ecx+0x155]` / `mov [ecx+0x4],ax`) and the recorder
+    // captures it: `RetailMc2`'s `roll_delta`, which until now only
+    // `explain` ever read. The delta recorded at N+1 is the delta tick
+    // N+1 used, so the filter inverts against `acc + rollDelta`
+    // EXACTLY and the whirlwind crank never enters the arithmetic at
+    // all. Measured on mc2l24 t=7913..7919, seven consecutive ticks:
+    // `roll_acc[N+1] == ladder(roll_acc[N] + rollDelta[N+1], k)` with
+    // k = 2,1,1,2,2,3,2 — and t=7919's k=2 is a pair the un-cranking
+    // inversion CANNOT reach (its ladder saturates at 257 from
+    // `acc0 = 229`, yielding dr = -19 where the truth is -47).
+    // ⚠ SCOPED TO THE WHIRLWIND TICKS, AND THAT SCOPE IS THE LAW.
+    // Read unconditionally it is a −175-segment REGRESSION on mc2l24
+    // (925 vs 750 segments, measured 2026-09-10): the inversion targets
+    // the ACCUMULATOR, which is right whenever the input pass is its
+    // only writer — death-fall decay (`sub_5E8C0`, EF:60577-87), paused
+    // ticks where the stored delta is stale, and every ordinary tick
+    // agree with `acc1 - acc0` exactly. `rollDelta` is only the INPUT
+    // PASS'S SHARE of the move, so it wins precisely where a second
+    // writer (the funnel's 0x57c86 store) is also moving the
+    // accumulator and the count of its 28s is not recoverable from the
+    // pair. Fall back to the inversion when no signed byte reproduces
+    // the recorded delta (a slow-scaled or clipped capture).
+    // The scale `sub_5D530`'s pose filter actually ran under — see
+    // [`pair_move_speed`]: a web stamped ahead of the carpet's slot
+    // raises `+0x14c` BEFORE the filter reads it at 0x81d5f.
+    let ms_eff = pair_move_speed(pp.move_speed, cp.move_speed, cp.move_speed_ctr);
+    let roll_from_delta = (whirl_crank && !no_mc2_roll_delta_capture())
+        .then(|| {
+            recover_stick_slowed(
+                pp.roll_acc as i16,
+                (pp.roll_acc as i16).wrapping_add(cp.roll_delta),
+                ms_eff,
+            )
+        })
+        .flatten();
     RecoveredPair {
-        stick_x: recover_stick(
-            pp.roll_acc as i16,
-            (cp.roll_acc as i16).wrapping_sub(crank(pp.roll_acc as i16)),
-        ),
-        stick_y: recover_stick(pp.pitch_acc as i16, cp.pitch_acc as i16),
+        whirl_crank,
+        stick_x: roll_from_delta.or_else(|| {
+            recover_stick_slowed(
+                pp.roll_acc as i16,
+                (cp.roll_acc as i16).wrapping_sub(crank(pp.roll_acc as i16)),
+                ms_eff,
+            )
+        }),
+        stick_y: recover_stick_slowed(pp.pitch_acc as i16, cp.pitch_acc as i16, ms_eff),
         move_byte: mb,
         fire_left,
         fire_right,
@@ -1352,5 +1673,210 @@ mod whirl_crank_tests {
         // cranked answer reproduces retail's mover.
         assert_eq!(recover_stick(33, 67), Some(85));
         assert_eq!(recover_stick(33, 67 - 28), Some(29));
+    }
+
+    /// ⭐⭐⭐ THE WEB SLOW SCALES THE POSE FILTER, SO THE INVERSION HAS
+    /// TO UNSCALE IT. `sub_5D530` adds `slow_scale(dr)`, not `dr`
+    /// (EF:59622-30, `(v · (4 − moveSpeed))/4` round-toward-zero), so
+    /// on a slowed carpet the RECORDED accumulator step is already
+    /// scaled and inverting the raw law recovers the wrong cursor —
+    /// which the mover then scales a second time.
+    ///
+    /// mc2l24 t=15551 → 15552, `moveSpeed = 1` (the recorded player
+    /// block's `+332`; `move_speed_ctr` walks 4 → 3 across the pair).
+    /// Retail: `roll_acc −5 → 1`, and the recorded `rollDelta_0x4_4`
+    /// is **8** — `trunc(8·3/4) = 6`, exactly the step taken.
+    /// `pitch_acc 17 → 14` on a raw −4 (`trunc(−4·3/4) = −3`).
+    ///
+    /// ⚠ NON-VACUITY: this pair is INVISIBLE to the fixture suite —
+    /// the pose PAIR channel's `GATE_DEBUFF` refuses every web-slowed
+    /// pair, so only the SEGMENTED free-run lane (and
+    /// `MGC_POSE_GRADE_DEBUFF=1`) can see the law at all. A recording
+    /// fixture anchored at head−1 would be vacuous; this is the pin.
+    #[test]
+    fn the_web_slow_scale_comes_off_the_stick_inversion() {
+        // move_speed 0 is the identity — every un-slowed take is
+        // byte-identical to the old inversion.
+        for (a, b) in [(167i16, 174i16), (33, 67), (-5, 1), (17, 14), (155, 139)] {
+            assert_eq!(recover_stick_slowed(a, b, 0), recover_stick(a, b));
+        }
+        // The mc2l24 t=15552 roll lane. The OLD answer, 10, is what
+        // the port replayed — and it lands on −1, not retail's 1.
+        assert_eq!(recover_stick(-5, 1), Some(10));
+        let slow = |s: i32, acc: i32, m: i32| acc + ((2 * s - acc) / 4) * (4 - m) / 4;
+        assert_eq!(slow(10, -5, 1), -1, "the replayed (wrong) cursor");
+        let sx = recover_stick_slowed(-5, 1, 1).expect("a slowed cursor exists");
+        assert_eq!(slow(sx as i32, -5, 1), 1, "the recovered cursor reproduces retail");
+        // …and the same tick's pitch lane, where the old answer was 1.
+        assert_eq!(recover_stick(17, 14), Some(1));
+        assert_eq!(slow(1, 17, 1), 15, "the replayed (wrong) cursor");
+        let sy = recover_stick_slowed(17, 14, 1).expect("a slowed cursor exists");
+        assert_eq!(slow(sy as i32, 17, 1), 14, "the recovered cursor reproduces retail");
+        // Every reachable slow level round-trips, both signs, across
+        // the accumulator's live band.
+        for m in 1u8..=3 {
+            for acc in [-300i16, -37, -5, 0, 17, 199, 255, 301] {
+                for s in -128i32..=127 {
+                    let k = 4 - m as i32;
+                    let a = acc as i32;
+                    let end = a + ((2 * s - a) / 4) * k / 4;
+                    if let Ok(end16) = i16::try_from(end) {
+                        let got = recover_stick_slowed(acc, end16, m)
+                            .expect("the forward image is always invertible");
+                        let a2 = acc as i32;
+                        assert_eq!(
+                            a2 + ((2 * got as i32 - a2) / 4) * k / 4,
+                            end,
+                            "m={m} acc={acc} s={s} -> {got}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    /// ⭐⭐⭐ THE CRANK IS A LADDER, NOT A MULTIPLY, AND THE PAIR ALONE
+    /// CANNOT COUNT IT. `sub_33340` re-tests `< 256` before every add
+    /// (`NETHERW.EXE` 0x57c7a `cmp $0x100,%cx` / 0x57c7f `jge 0x57c8d`
+    /// — inside the per-visit `v40` block, so the test is per visit),
+    /// which is why [`crank_units`] walks instead of multiplying.
+    ///
+    /// The second half is the reason the count has to come from the
+    /// SIMULATION: mc2l24 t=7913 records `roll_acc` 31 -> 87, and both
+    /// k=1 and k=2 invert to a legal signed-byte cursor (72 and the
+    /// smallest-magnitude 14), while k=0 does not exist at all. The
+    /// recording cannot choose; the port's own ring walk can, and does
+    /// (two mid-ring visits as `CopyEntityPosition_57CF0` carries the
+    /// carpet from cell (124,116) to (123,116)).
+    #[test]
+    fn the_whirl_crank_is_a_ladder_and_the_pair_cannot_count_it() {
+        assert_eq!(crank_units(31, 0), 0);
+        assert_eq!(crank_units(31, 1), 28);
+        assert_eq!(crank_units(31, 2), 56);
+        // The `< 256` gate stops the ladder mid-climb — 240 takes one
+        // more 28 (to 268) and then no more, so three visits still
+        // only bank 28.
+        assert_eq!(crank_units(240, 1), 28);
+        assert_eq!(crank_units(240, 3), 28);
+        assert_eq!(crank_units(256, 4), 0);
+
+        // mc2l24 t=7913: 31 -> 87. k=0 is impossible (the cursor is a
+        // signed byte, 0x77482 `movsx eax,byte [eax+0x3]`), k=1 and
+        // k=2 are both legal — the ambiguity the trial step resolves.
+        let target = |k: u8| (87i16).wrapping_sub(crank_units(31, k));
+        assert_eq!(recover_stick(31, target(0)), None, "k=0 needs a cursor of 128");
+        assert_eq!(recover_stick(31, target(1)), Some(72));
+        assert_eq!(recover_stick(31, target(2)), Some(14));
+    }
+
+    /// ⭐⭐⭐ A WIZARD HELD BY A FUNNEL WHOSE SWIRL HEADING DID NOT
+    /// CHANGE STILL GETS CRANKED. The three mc2l24 heads this pins are
+    /// the SAME tick shape: the near arm seizes, sets the mover-veto
+    /// one-shot (`flags & 0x800`) and cranks — and never touches
+    /// `word_0x30_48`, because its grab roll failed
+    /// (`NETHERW.EXE` 0x57d2c/0x57d34 is the only near-arm writer).
+    /// See [`mc2_crank_witness`] for the byte-level derivation.
+    ///
+    /// ⚠ NON-VACUITY: every `assert` below flips under
+    /// `MGC_NO_MC2_WW_VETO_WITNESS=1` — the three `witness` rows read
+    /// FALSE and the three `recover_stick` rows then invert against
+    /// the un-cranked accumulator, which is the exact arithmetic the
+    /// port replayed (and, at t=46814, cannot replay at all).
+    #[test]
+    fn a_held_wizard_is_cranked_even_when_the_swirl_heading_repeats() {
+        // (p.f30, c.f30, p.flags, c.flags) as recorded on the human,
+        // slot 116, at each head.
+        let pair = |pf30: u16, cf30: u16, pflags: u32, cflags: u32| {
+            let mut p = RetailEntMc2 { class3f: 3, model40: 0, ..RetailEntMc2::default() };
+            let mut c = p;
+            p.f30 = pf30;
+            c.f30 = cf30;
+            p.flags = pflags;
+            c.flags = cflags;
+            (p, c)
+        };
+        // mc2l24 t=44613, 46814, 50677 — the heading never moves, the
+        // veto latch appears, the grab latch is clear at the head.
+        for (pf30, cf30, pflags, cflags) in
+            [(1390u16, 1390u16, 269u32, 2317u32), (1369, 1369, 525, 2573), (1810, 1810, 525, 2573)]
+        {
+            let (p, c) = pair(pf30, cf30, pflags, cflags);
+            assert!(mc2_crank_witness(&p, &c), "the near-arm seizure is a crank");
+        }
+        // …and the tick AFTER the grab latch lands is NOT a crank:
+        // the grabbed arm (0x57d65..0x57d78) sets the same 0x800 and
+        // skips the `v40` block. mc2l24 t=44617: flags 268437773 on
+        // BOTH sides, `roll_acc` 65523 -> 65523 with `rollDelta` 0.
+        let (p, c) = pair(1369, 1369, 268437773, 268437773);
+        assert!(!mc2_crank_witness(&p, &c), "an already-grabbed wizard is not cranked");
+        // A pair with neither witness (mc2l24 t=46813: flags
+        // 269 -> 525, no 0x800, heading parked) stays out.
+        let (p, c) = pair(1369, 1369, 269, 525);
+        assert!(!mc2_crank_witness(&p, &c), "0x100 is not the veto bit");
+        // A rival wizard is class 3 model 0 too, but a non-wizard
+        // record never reaches 0x57bf3's `[ebp-4] = 1`.
+        let mut p = RetailEntMc2 { class3f: 5, model40: 20, ..RetailEntMc2::default() };
+        p.flags = 525;
+        let mut c = p;
+        c.flags = 2573;
+        assert!(!mc2_crank_witness(&p, &c), "only class 3 model 0 is cranked");
+
+        // The arithmetic the witness buys, at the three heads. Each
+        // row is `roll_acc[N] -> roll_acc[N+1]` with the recorded
+        // `rollDelta_0x4_4`: the cranked target is `acc + rollDelta`,
+        // and the UN-cranked one is what the port inverted instead.
+        // t=44613: -147 -> -97, rollDelta 22.
+        assert_eq!(recover_stick(-147, -147 + 22), Some(-28));
+        assert_eq!(recover_stick(-147, -97), Some(27), "the crank absorbed into the cursor");
+        // t=50677: 205 -> 186, rollDelta -47.
+        assert_eq!(recover_stick(205, 205 - 47), Some(7));
+        assert_eq!(recover_stick(205, 186), Some(63), "the crank absorbed into the cursor");
+        // t=46814: 174 -> 206, rollDelta 4. Un-cranked, the step is
+        // +32 and NO signed byte reaches it — the pair was reported
+        // stick-unrecoverable and the pose lane gated.
+        assert_eq!(recover_stick(174, 174 + 4), Some(95));
+        assert_eq!(recover_stick(174, 206), None, "+32 needs a cursor of 151");
+        // …and the ladder confirms the recorded step is one crank:
+        for (acc, delta, end) in [(-147i16, 22i16, -97i16), (205, -47, 186), (174, 4, 206)] {
+            assert_eq!(acc + delta + crank_units(acc + delta, 1), end);
+        }
+    }
+
+    /// ⭐⭐⭐ A WEB STAMPED AHEAD OF THE CARPET SCALES THE SAME TICK'S
+    /// POSE FILTER. `+0x14c` has three writers per tick and they run
+    /// in this order: `sub_38E70`'s SLOW STAMP at the stamping
+    /// record's own walk slot (`NETHERW.EXE` file 0x5d6ae `mov
+    /// dh,[eax+0x14c]` / 0x5d6b4 `cmp dh,3`), `sub_5D530`'s POSE
+    /// FILTER read at 0x81d5f, and `sub_5D530`'s DECAY WALK at
+    /// 0x8216e-0x821ae. Reading the pair's END latch — right for the
+    /// decay — is wrong for the stamp, and the recorded
+    /// `move_speed_ctr` says which happened (`slow_hit` writes 8,
+    /// `tick_debuffs` immediately takes it to 7).
+    ///
+    /// mc2l24 t=8699 is the take's free-run horizon and it closes on
+    /// exactly this: `move_speed 0 -> 1`, `move_speed_ctr 0 -> 7`,
+    /// `roll_acc -23 -> -28`, capture `rollDelta_0x4_4` = -7.
+    #[test]
+    fn a_slow_stamped_ahead_of_the_carpet_scales_the_same_ticks_filter() {
+        assert_eq!(pair_move_speed(0, 1, 7), 1, "the stamp beat the mover (ctr 8 -> 7)");
+        assert_eq!(pair_move_speed(0, 1, 8), 0, "the stamp landed behind the carpet's slot");
+        assert_eq!(pair_move_speed(1, 0, 0), 1, "the decay walk runs AFTER the filter");
+        assert_eq!(pair_move_speed(2, 1, 8), 2, "a decay to a still-live level, same rule");
+        assert_eq!(pair_move_speed(1, 1, 3), 1, "a steady level is its own answer");
+        assert_eq!(pair_move_speed(3, 3, 7), 3, "a stamp at the cap moves nothing");
+
+        // The forward law, `sub_5D530` 0x81d8b-0x81db1.
+        let slow = |s: i32, acc: i32, m: i32| acc + ((2 * s - acc) / 4) * (4 - m) / 4;
+        let ms = pair_move_speed(0, 1, 7);
+        // The OLD reading (tick N's END latch, 0) inverts the UNSCALED
+        // law, recovers a cursor whose `dr` is -5, and the mover then
+        // scales THAT: roll_f -26, the port's reported value.
+        let old = recover_stick_slowed(-23, -28, 0).expect("an unslowed cursor exists");
+        assert_eq!((2 * old as i32 + 23) / 4, -5);
+        assert_eq!(slow(old as i32, -23, 1), -26, "the value the port reported");
+        // The law's reading recovers the cursor whose `dr` is the
+        // RECORDED -7 and lands retail's -28.
+        let sx = recover_stick_slowed(-23, -28, ms).expect("a slowed cursor exists");
+        assert_eq!((2 * sx as i32 + 23) / 4, -7, "the recorded rollDelta_0x4_4");
+        assert_eq!(slow(sx as i32, -23, 1), -28, "retail's roll_acc at mc2l24 t=8699");
     }
 }

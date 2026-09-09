@@ -852,7 +852,22 @@ fn mc2_cave_behaviors_and_goldens() {
             // over, and is re-pinned only now that its cause is named.
             // (C and D carried forward under ROUND 109's two laws above.)
             0x03410c90208a9e8c,
-            0xc11ac6c4af76bf67,
+            // Checkpoint D re-pinned 2026-09-10 (A/B/C hold BYTE-FOR-
+            // BYTE) for THE (10,77) FIRE-ORB SATELLITE'S CLONED @0x2C —
+            // the SAME CLASS as checkpoint A's 2026-09-02 fire-ctor
+            // re-pin above. `AddFireSpheres_4F2A0`'s satellite is a
+            // whole-record `rep movsl` off the hub (`NETHERW.EXE`
+            // 0x73B57-0x73B61, 42 dwords = the 0xA8 stride), and the
+            // hub's ctor stored ZERO at @0x2C (0x73B1B
+            // `66 c7 43 2c 0000`, EF:35989), so all 25 satellites
+            // reach the pool with 0 where ours kept `new_event`'s
+            // `+44 = 100`. Witness: mc2l24 t=45560, retail slot 17
+            // `f2c` 0 / port 100.
+            // A/B-ATTRIBUTED: `MGC_NO_MC2_ORB_SATELLITE_F44=1`
+            // reproduces the previous pin (0xc11ac6c4af76bf67) exactly
+            // with wave 125's other laws still in, and the OBSERVABLE
+            // projection below holds all four unchanged.
+            0x0a717b6bbb39a15f,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );

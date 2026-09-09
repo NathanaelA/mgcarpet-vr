@@ -2267,6 +2267,16 @@ pub struct RetailMc2 {
     /// below — the adjacency pins base AND stride, so this needed no
     /// re-record (the `+0x154` lesson again).
     pub objectives: [[u8; 11]; 8],
+    /// `D41A0_0.word_0x36546` — the DOOMSDAY PYRAMID'S HURL-AWAY BEAM
+    /// ramp (`sub_21AB0` case 7, EF:13427-40): armed to 1024 on the
+    /// burst's first tick (`subSpellIndex_0x2A_42 & 2`), then stepped
+    /// `-= 80` every beam tick with a floor of 10 and a ceiling of
+    /// 1024, and handed straight to `MoveEntity_57FA0` as the distance
+    /// the PLAYER'S OWN POSITION is shoved outward. A GLOBAL, not
+    /// entity state — one word, adjacent to the `stages_0x3654C`
+    /// table decoded right below, so it needed no re-record.
+    /// mc2l24 t=44654..44677: 944, 864, …, 64, 10, 10, …
+    pub doom_beam: u16,
     /// The LIVE StageVar table `StageVars2_0x365F4[11]` (LS:249), raw
     /// 8-byte rows: [kind, flags, chain, cadence, payload×4]. Runtime
     /// lanes (FIRED &4, kind-7 arm &0x18, the cadence counter, kind-6
@@ -2595,6 +2605,7 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
             }
             ob
         },
+        doom_beam: u16_(d, 0x36546),
         stagevars: {
             let mut sv = [[0u8; 8]; 11];
             for (i, row) in sv.iter_mut().enumerate() {

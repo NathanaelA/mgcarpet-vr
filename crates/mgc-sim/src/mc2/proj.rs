@@ -249,6 +249,17 @@ fn no_mc2_aim_charm_filter() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AIM_CHARM_FILTER").is_some())
 }
 
+/// A/B toggle for THE ACQUISITION SCORER'S HUMAN RAISE: set
+/// `MGC_NO_MC2_AIM_HUMAN_RAISE` to restore the pre-dig behaviour,
+/// where [`Gen::mc2_aim_scan`] scored the out-of-pool human at his RAW
+/// z while `sub_68490`'s own `sub_65580`/`sub_655A0` bracket lifts
+/// every pool candidate by `array_0x52_82.yaw` — see the citation at
+/// the human arm of the wizard walk.
+fn no_mc2_aim_human_raise() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AIM_HUMAN_RAISE").is_some())
+}
+
 fn no_fireball_lock_clear() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_FIREBALL_LOCK_CLEAR").is_some())
@@ -262,6 +273,16 @@ fn no_fireball_lock_clear() -> bool {
 fn no_stale_debuff_knock() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_STALE_DEBUFF_KNOCK").is_some())
+}
+
+/// A/B toggle for the STAGGER stamp's slow-level gate (`sub_38E70`,
+/// EF:28411-13): set `MGC_NO_MC2_STAGGER_LEVEL_GATE` to restore the
+/// pre-dig behaviour, where a (10,65) landing on an ALREADY-slowed
+/// wizard still armed the −80 kick and still stepped the stamp's own
+/// `9377x+9439` stream for the grunt.
+fn no_stagger_level_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_STAGGER_LEVEL_GATE").is_some())
 }
 
 /// The virtual projectile the acquisition scan scores from — either
@@ -785,7 +806,41 @@ impl Gen {
             // 32789 == (9377*55670 + 9439) mod 2^16 — the port took
             // EXACTLY ONE draw where retail took none. Slot 481
             // repeats it at t=377→378 (retail 51603 / port 38482).
-            let already_stunned = paralyze && self.mc2_mobilize.0 != 0;
+            // ⭐⭐⭐ THE STAGGER STAMP HAS THE SAME "ALREADY DEBUFFED"
+            // GATE — IT IS JUST A DIFFERENT REGISTER. `sub_38E70`
+            // (action 0x46, the (10,65)) is `sub_38F70` with
+            // `moveSpeed_0x14C_332` where the paralyze reads
+            // `mobilizeCounter_0x14E_334`, and it splits the arm in
+            // two (EF:28404-21, shipped EXE 0x5d6ae-0x5d6f6):
+            //     if (moveSpeed < 3u) {                 // 0x5d6b4 cmp dh,3
+            //         if (!moveSpeed) {                 // 0x5d6bd test dh,dh
+            //             moveBoost_0x1E_30 = -80;      // 0x5d6c1
+            //             rand = 9377*rand + 9439;      // 0x5d6c7/0x5d6cd
+            //             PrepareEventSound(.., (rand&3)+54);
+            //         }
+            //         SetPaletteModification(.., 3, 171*++moveSpeed/3+85);
+            //     }
+            //     moveSpeedCounter_0x14D_333 = 8;       // 0x5d74d
+            // So the KICK, THE LCG STEP AND THE GRUNT fire only on the
+            // level-0 → 1 transition; the counter refresh is
+            // unconditional and the level saturates at 3.
+            //
+            // mc2l24 is the corpus witness FIVE TIMES — and those are
+            // ALL of the take's (10,65) `rand` rows, every other
+            // landing hitting a clean wizard and agreeing. t=10775 slot 580,
+            // 10898 slot 500, 11526 and 11531 slot 336, 13759 slot 491:
+            // port = f(retail) exactly for f = 9377x+9439 mod 2^16
+            // (f(25861) = 24836, f(45595) = 62426, f(8003) = 14850,
+            // f(9406) = 63581, f(11470) = 19053), and the capture shows
+            // the human ALREADY webbed at each one (`move_speed 1 -> 2`,
+            // and `2 -> 3` at 11531; `move_speed_ctr` refreshed to 8)
+            // with `knock_mag` still decaying +4/tick — retail never
+            // re-armed the −80.
+            let already_stunned = if paralyze {
+                self.mc2_mobilize.0 != 0
+            } else {
+                !no_stagger_level_gate() && self.mc2_slow.0 != 0
+            };
             if !already_stunned {
                 let grunt = 54 + (self.ent_rand(i) & 3) as u8;
                 self.snd_player(grunt);
@@ -864,7 +919,17 @@ impl Gen {
                     self.mc2_melee_write(PLAYER_TARGET, amt, id);
                 }
             } else {
+                // The queue push stays unconditional: retail's
+                // `moveSpeedCounter = 8` (0x5d74d) sits OUTSIDE the
+                // `< 3` gate and [`crate::flight::Mc2Ext::slow_hit`]
+                // already models exactly that (`if move_speed < 3 {
+                // move_speed += 1 } move_speed_ctr = 8`). Only the
+                // MIRROR needs retail's ceiling, because it is the
+                // operand the next stamp's gate reads.
                 self.mc2_debuffs.slow = self.mc2_debuffs.slow.saturating_add(1);
+                if self.mc2_slow.0 < 3 {
+                    self.mc2_slow.0 += 1;
+                }
             }
         } else {
             let v = victim as usize;
@@ -3508,6 +3573,34 @@ impl Gen {
                         as u32,
                 ) as i64;
                 if d <= wiz_range {
+                    // ⭐⭐⭐ THE SCORER'S RAISE LIFTS THE HUMAN TOO — AND
+                    // THE PITCH CONE IS INSIDE IT. `sub_68490`
+                    // (EF:55450) opens with `sub_65580(a2x)` and undoes
+                    // it with `sub_655A0(a2x)` on ALL FOUR exit paths
+                    // (EF:55463/55472/55478/55484), so BOTH the tan
+                    // pitch and the ±0x71 cone test that gates it run
+                    // on `z + array_0x52_82.yaw`. Only the castle twin
+                    // `sub_685D0` scores raw. The port raised pool
+                    // candidates (`Ent::aim_z`) but handed the
+                    // out-of-pool human his RAW pose here, so the human
+                    // was rejected by the pitch cone a full box too low
+                    // — a law landed on the LOCK (`sub_655C0`, below)
+                    // and missed on the SCORER, the same function's
+                    // other call path.
+                    // mc2l24 t=45473->45474: the pyramid's (9,9)
+                    // lightning at (10721, 54123, 768) pitch 2013 scores
+                    // the human at (11248, 52468, 256): raw z gives
+                    // want_pitch 92, `arc_err` 127 > 0x71 → REJECTED and
+                    // the beam flew on at the launch attitude 134/2013,
+                    // laying 40 nodes and detonating at z 1098. The
+                    // raised 356 gives want_pitch 75, `arc_err` 110 ≤
+                    // 0x71 → retail's lock (`word_0x96_150` 116, yaw 99 /
+                    // pitch 75) and the blast at the carpet, z 346.
+                    let hz = if no_mc2_aim_human_raise() {
+                        hz
+                    } else {
+                        hz + crate::mc1::combat::PLAYER_HH as i16
+                    };
                     consider(self, &mut best, PLAYER_TARGET, (hx, hy, hz), yc, wiz_pc);
                 }
             }

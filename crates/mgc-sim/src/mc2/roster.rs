@@ -53,9 +53,125 @@ fn m2_player_lift() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_M2_PLAYER_LIFT").is_none())
 }
 
+/// ⭐ THE m21 WATER SPLASH IS SPAWNED AT RETAIL'S GLOBAL SCRATCH AXIS,
+/// NOT AT THE WALKER — see [`Gen::m21_jump`] for the shipped bytes.
+/// `MGC_NO_MC2_SPLASH_PRED_AXIS=1` restores the pre-2026-09-10 port
+/// behaviour (spawn at the walker's own position).
+pub(crate) fn mc2_splash_pred_axis_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SPLASH_PRED_AXIS").is_none())
+}
+
 const M2_BASE: u8 = 16;
 const M9_BASE: u8 = 72;
 
+/// A/B toggle for the m28 POSE-SETTER's `byte[0]` LAW: set
+/// `MGC_NO_M28_POSE_FLAGS` to restore the pre-dig `sub_2B860`, which
+/// wrote the row/sprite/speed of all three poses and NOT ONE of the
+/// three `struct_byte_0xc_12_15.byte[0]` stores retail makes there.
+/// Shipped `NETHERW.EXE`, `sub_2B860` = file **0x50060** (VA 0x2B860):
+///   pose 1 — `8a 63 0c` / `80 e4 f6` / `88 e2` / `80 ca 08` /
+///            `88 53 0c`            (file 0x50085-0x500a2)
+///   pose 2 — `8a 73 0c` / `80 e6 f6` / `88 73 0c` / `80 c9 08` /
+///            `88 4b 0c`            (file 0x500df-0x50107)
+///   pose 3 — `8a 6b 0c` / `80 cd 01` / `88 e8` / `24 f7` /
+///            `88 43 0c`            (file 0x5017e-0x50194)
+/// i.e. poses 1/2 write `byte[0] = (byte[0] & 0xF6) | 8` and pose 3
+/// writes `byte[0] = (byte[0] | 1) & 0xF7` (EF:21319/21331/21347).
+/// Bit 0 is the HIDDEN bit `sub_68C70`'s proximity-wake refuses
+/// (`mc2_awake_one`, EF:55515) and bit 3 the collide/damage bit; so a
+/// port m28 stuck at `byte[0] = 5` never re-wakes after its first
+/// swing — `byte_0x39_57` freezes at 0 and every class-9 auto-aim
+/// scan (`sub_67CB0`, EF:54811/54917/54964/54992) skips it forever.
+/// All four retail call sites (VA 0x2B29C/0x2B482/0x2B64A/0x2B72E,
+/// an `e8 rel32` scan of the shipped EXE) go through this one thunk,
+/// which is [`Gen::m28_pose`]'s four callers here.
+pub(crate) fn no_m28_pose_flags() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M28_POSE_FLAGS").is_some())
+}
+/// A/B toggle for the m28 STRIKE-ARM FALL-THROUGH law: set
+/// `MGC_NO_M28_STRIKE_FALLTHROUGH` to restore the pre-dig
+/// `sub_2B260`, whose `byte_0x46_70` switch RETURNED from arms 3 and
+/// 7 instead of running on into 4 and 8 the same tick.
+/// `case 3:` ends `PrepareEventSound_6E450(…, 38)` and then
+/// `goto LABEL_35` — the shipped EXE has NO epilogue there: file
+/// **0x4FCB4** `e8 97 2f 04 00` (the sound call) is followed at
+/// **0x4FCBC** by `83 7b 10 00` / `0f 8e 6f 01 00 00`
+/// (`if (dword_0x10_16 <= 0) sub_2BA50(6)`), which is LABEL_35 — the
+/// arm-4 body (EF:21123-31 `case 3: … goto LABEL_35;`).
+/// `case 7:` likewise ends `sub_2BA50(a1x, 8u)` at file **0x4FEFD**
+/// and falls straight into LABEL_76 at **0x4FF05** `53` /
+/// `e8 b5 01 ff ff` (`sub_1B8C0`, the move core) — EF:21186-89.
+/// Without the arm-3 fall-through the port's m28 spends its whole
+/// wind-up tick doing nothing: no move, and no `±56` swing crank, so
+/// every subsequent heading trails retail's by exactly 56.
+pub(crate) fn no_m28_strike_fallthrough() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M28_STRIKE_FALLTHROUGH").is_some())
+}
+/// A/B toggle for the m28 STRIKE-ANIMATION LENGTH law: set
+/// `MGC_NO_M28_STRIKE_FRAMES` to restore the pre-dig `sub_2B860`
+/// pose 2, which hard-coded `dword_0x10_16 = 16`, never wrote
+/// `word_0x2C_44`, hard-coded the melee window as `4..=12`, and
+/// zeroed the swing's `subSpellIndex_0x2A_42` (`f44`) — retail zeroes
+/// `word_0x2C_44`, a DIFFERENT word, so the port's brute lost its
+/// 2000-damage swing on its first wind-up and never got it back.
+/// Retail (EF:21335-40): `word_0x2C_44 = 0` … then
+/// `dword_0x10_16 = GetAnimationByIndex(animations_E9C08, v5)
+/// ->CountOfFrames_16; word_0x2C_44 = dword_0x10_16`, and the melee
+/// gate is `word_0x2C_44 - 3 > dword_0x10_16 && dword_0x10_16 > 3`
+/// (EF:21157; shipped EXE file **0x4FD45** `0f bf 43 2c` /
+/// `8b 73 10` / `83 e8 03` / `39 f0` / `7e 1b` / `83 fe 03` /
+/// `7e 16`) — NOT a literal `4..=12`. The recording witnesses the
+/// frame count directly: mc2l24 t=28346 and t=28661 both step slot
+/// 10's `word_0x2C_44` to **24** with `dword_0x10_16` landing on 23
+/// after the same tick's arm-4 decrement, and the melee latch
+/// (`byte_0x46_70` 4 -> 5) fires at t=28671 with `dword_0x10_16` =
+/// 14 — outside the port's `4..=12`.
+pub(crate) fn no_m28_strike_frames() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M28_STRIKE_FRAMES").is_some())
+}
+/// The m28 strike animation's frame count — retail's
+/// `GetAnimationByIndex(animations_E9C08x, *(int16_t *)&x_BYTE_D9F50[0x5b6])
+/// ->CountOfFrames_16`, witnessed as 24 on mc2l24 (see
+/// [`no_m28_strike_frames`]).
+const M28_STRIKE_FRAMES: i16 = 24;
+/// A/B toggle for the m28 CHASE STRIKE-RANGE law: set
+/// `MGC_NO_M28_STRIKE_RANGE_PRED` to restore the pre-dig
+/// `sub_2B260` arm 2, which measured the strike range to the
+/// TARGET'S OWN position. Retail measures it to `v23x` — the STACK
+/// COPY of the target's position already stepped 768 units along the
+/// TARGET's yaw (`MoveEntity_57FA0(&v23x, v25x->yaw_0x1C_28, 0,
+/// 768)`, EF:21076), i.e. the very point the chase is already
+/// steering at one line later (EF:21078 `roll_0x20_32 =
+/// sub_581E0_maybe_tan2(&a1x->position_0x4C_76, &v23x)`) and the only
+/// thing `v23x` ever holds — retail never re-reads
+/// `v25x->position_0x4C_76` in this arm.
+/// The shipped EXE settles it. `v23x` is `[ebp-0x1c]`: built at file
+/// **0x4FB2B** `8d 7d e4` (`lea edi,[ebp-0x1c]`) with the 6-byte
+/// position copy `a5` / `66 a5`, then stepped by
+/// **0x4FB49** `e8 52 cc 02 00` (`sub_57FA0`). The range test pushes
+/// **0x4FC0E** `8d 45 e4 50` (`lea eax,[ebp-0x1c]`; push) and
+/// `8d 43 4c 50` (`lea eax,[ebx+0x4c]` = SELF; push) into
+/// **0x4FC16** `e8 b5 d0 02 00` (`EuclideanDistXY_584D0`) and
+/// compares **0x4FC1E** `3d 00 40 2a 00` (`cmp eax,0x2a4000` =
+/// 2768896). The pushed pointer is the PREDICTED point; `[ebx+0x4c]`
+/// is self, and `v25x->position_0x4C_76` is never pushed.
+/// Witness — mc2l24 pair t=28659->28660, slot 10 (5,28) action 226:
+/// self (12199,45030), target = human slot 116 at (14407,44745) yaw
+/// 1479. Raw target d2 = 2208² + 285² = 4,956,489 — no strike (what
+/// the port did: `dword_0x10_16` 5 -> 4, `byte_0x46_70` stays 2).
+/// Predicted point = (13651,44879), d2 = 1452² + 151² = 2,131,105 <
+/// 2,768,896 — retail takes `sub_2BA50(a1x, 3u)`: `byte_0x46_70`
+/// 2 -> 3 and `dword_0x10_16` 4 -> **0** (the recording's
+/// `scratch10` 5 -> 0 at t=28660), and the swing arm runs at
+/// t=28661. Same shape on slot 11 at t=29795->29796.
+pub(crate) fn no_m28_strike_range_pred() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M28_STRIKE_RANGE_PRED").is_some())
+}
 /// A/B toggle for the Summon-Army `(10,72)` RING-NODE law: set
 /// `MGC_NO_SUMMON_NODES` to restore the pre-dig behaviour, where
 /// `sub_51800`'s node ring was collapsed to a direct class-5 creature
@@ -805,13 +921,30 @@ impl Gen {
             (e.x, e.y, e.z)
         };
         let mut best: Option<(usize, i32)> = None;
-        for (j, c) in self.ent.iter().enumerate().skip(1) {
-            if c.class64 == 5
-                && c.model65 == sel
-                && c.act_life >= 0
-                && c.flags & 0x400 == 0
-                && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
-            {
+        // ⭐⭐ THE FOOD SCAN WALKS THE TICK-TOP ROSTER CHAIN, NOT THE
+        // POOL. Both bodies load `bytearray_38403x[16/4]`, `[48/4]`
+        // and `[52/4]` — models 4, 12, 13, exactly this `sel` — and
+        // chase `next_0` (sub_203D0 EF:12225/12243/12263, sub_20940
+        // EF:12418/12435/12454). The loop body is the two distance
+        // tests and NOTHING else; see [`Gen::mc2_roster`].
+        if crate::engine::features::no_mc2_mob_chain_predicate() {
+            for (j, c) in self.ent.iter().enumerate().skip(1) {
+                if c.class64 == 5
+                    && c.model65 == sel
+                    && c.act_life >= 0
+                    && c.flags & 0x400 == 0
+                    && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+                {
+                    let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                    if d2 <= range && best.is_none_or(|(_, bd)| d2 < bd) {
+                        best = Some((j, d2));
+                    }
+                }
+            }
+        } else {
+            for k in 0..self.mc2_roster(sel).len() {
+                let j = self.mc2_roster(sel)[k] as usize;
+                let c = &self.ent[j];
                 let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
                 if d2 <= range && best.is_none_or(|(_, bd)| d2 < bd) {
                     best = Some((j, d2));
@@ -1990,19 +2123,37 @@ impl Gen {
             let e = &self.ent[i];
             (e.x, e.y, e.id24)
         };
-        for c in self.ent.iter().skip(1) {
-            if c.class64 == 5
-                && c.model65 == 15
-                && c.id24 != id
-                && c.act_life >= 0
-                && c.flags & 0x400 == 0
-                && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
-                && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < 256
-                && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < 256
-            {
-                let away = Self::angle_between(c.x, c.y, ex, ey);
-                self.ent[i].f34 = away;
-                break;
+        // ⭐⭐ RETAIL WALKS `bytearray_38403x[a1x->model]`, NOT THE POOL
+        // (sub_24190, EF:15301-11): the ONLY body tests are `id !=
+        // self` and the two 256 boxes. See [`Gen::mc2_roster`].
+        if crate::engine::features::no_mc2_mob_chain_predicate() {
+            for c in self.ent.iter().skip(1) {
+                if c.class64 == 5
+                    && c.model65 == 15
+                    && c.id24 != id
+                    && c.act_life >= 0
+                    && c.flags & 0x400 == 0
+                    && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+                    && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < 256
+                    && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < 256
+                {
+                    let away = Self::angle_between(c.x, c.y, ex, ey);
+                    self.ent[i].f34 = away;
+                    break;
+                }
+            }
+        } else {
+            let model = self.ent[i].model65;
+            for k in 0..self.mc2_roster(model).len() {
+                let c = &self.ent[self.mc2_roster(model)[k] as usize];
+                if c.id24 != id
+                    && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < 256
+                    && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < 256
+                {
+                    let away = Self::angle_between(c.x, c.y, ex, ey);
+                    self.ent[i].f34 = away;
+                    break;
+                }
             }
         }
         if self.ent[i].f30 == self.ent[i].f34 || self.mc2_rand(i) % 0x14 <= 10 {
@@ -3911,12 +4062,45 @@ impl Gen {
                     self.ent[i].f71 = 0; // lifted off the surface
                 }
             } else if self.ent[i].z == ground {
-                // Grounded on a water tile → wade + (10,5) splash
-                // (retail spawns it at the walker's predicted axis —
-                // the committed position here, one step apart at most).
+                // Grounded on a water tile → wade + (10,5) splash.
+                //
+                // ⭐⭐⭐ THE SPLASH IS NOT SPAWNED AT THE WALKER. Retail
+                // pushes the GLOBAL scratch axis, not `&a1x->position`
+                // — and this function never writes that global, so the
+                // splash lands wherever the LAST ENTITY TO COMMIT A
+                // MOVE THIS TICK went (`Gen::mc2_pred_axis`). Shipped
+                // `NETHERW.EXE`, file 0x4AFAD-0x4AFC7 (VA 0x267AD, the
+                // region rule file = VA + 0x24800; EF:17131):
+                //   4afad: 0f bf 43 50     movsx eax,[ebx+0x50]   ; z
+                //   4afb1: 39 f0           cmp   eax,esi          ; ground
+                //   4afb3: 75 23           jne   0x4afd8
+                //   4afb5: 6a 05           push  0x5              ; model
+                //   4afb7: 6a 0a           push  0xa              ; class
+                //   4afb9: 68 98 b3 01 00  push  0x1b398          ; &predictedAxis
+                //   4afbe: c6 43 46 0a     mov   BYTE [ebx+0x46],0xa
+                //   4afc2: e8 c9 39 02 00  call  0x6e990          ; _4A190
+                // Contrast the three sites just above it — 0x4af26,
+                // 0x4af71, 0x4af96 — which all do `lea eax,[ebx+0x4c];
+                // push eax` for the walker's OWN position. The
+                // immediate 0x1b398 is the same global m15's wander
+                // writes at file 0x48A18/0x48A50 (`push 0x1b398` into
+                // `MoveEntity_57FA0` then `CopyEntityPosition_57CF0`).
+                //
+                // WITNESS (mc2l24 t=27275, `explain`): slot 377 (5,21)
+                // wades at (44906, 38618) and the port put its splash
+                // there; retail's slot 778 (10,5) is BORN at (19072,
+                // 34928, z 512) — the exact post-move position of slot
+                // 305, the (5,15) guard that ticked earlier in the very
+                // same tick. The tile-chain links prove the order:
+                // 778's `@0x16` = 305 (the cell's previous head) and
+                // 305's `@0x18` = 778.
                 self.ent[i].f71 = 10;
-                let z = self.ent[i].z;
-                self.mc2_spawn_splash(x, y, z);
+                let (sx, sy, sz) = if crate::mc2::roster::mc2_splash_pred_axis_law() {
+                    self.mc2_pred_axis.0
+                } else {
+                    (x, y, self.ent[i].z)
+                };
+                self.mc2_spawn_splash(sx, sy, sz);
             }
             if attack { 66 } else { 40 }
         } else {
@@ -4393,20 +4577,38 @@ impl Gen {
                 e.id24,
             )
         };
-        for c in self.ent.iter().skip(1) {
-            if c.class64 == 5
-                && c.model65 == model
-                && c.id24 != id
-                && c.act_life >= 0
-                && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
-                && c.flags & 0x400 == 0
-                && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < span
-                && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < span
-                && (ez as i32 - c.z as i32).abs() < zspan
-                && ez >= c.z
-            {
-                self.ent[i].z = ez.wrapping_add(16);
-                return true;
+        // ⭐⭐ `bytearray_38403x[a1x->model]` again (EF:18424) — the
+        // body is `id != self`, three boxes and `z >= ix->z`, with no
+        // liveness question of its own ([`Gen::mc2_roster`]).
+        if crate::engine::features::no_mc2_mob_chain_predicate() {
+            for c in self.ent.iter().skip(1) {
+                if c.class64 == 5
+                    && c.model65 == model
+                    && c.id24 != id
+                    && c.act_life >= 0
+                    && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+                    && c.flags & 0x400 == 0
+                    && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < span
+                    && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < span
+                    && (ez as i32 - c.z as i32).abs() < zspan
+                    && ez >= c.z
+                {
+                    self.ent[i].z = ez.wrapping_add(16);
+                    return true;
+                }
+            }
+        } else {
+            for k in 0..self.mc2_roster(model).len() {
+                let c = &self.ent[self.mc2_roster(model)[k] as usize];
+                if c.id24 != id
+                    && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < span
+                    && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < span
+                    && (ez as i32 - c.z as i32).abs() < zspan
+                    && ez >= c.z
+                {
+                    self.ent[i].z = ez.wrapping_add(16);
+                    return true;
+                }
             }
         }
         false
@@ -5463,23 +5665,46 @@ impl Gen {
         match mode {
             1 => {
                 self.ent[i].row156 = 93;
+                if !no_m28_pose_flags() {
+                    // `byte[0] = (byte[0] & 0xF6) | 8` — file 0x50085.
+                    self.ent[i].flags = (self.ent[i].flags & !9) | 8;
+                }
                 self.mc2_set_sprite(i, 292);
                 self.mc2_shift_rot(i, 85, 42);
                 self.ent[i].f126 = self.ent[i].f130;
             }
             2 => {
                 self.ent[i].row156 = 93;
-                self.ent[i].f44 = 0;
+                if no_m28_strike_frames() {
+                    // ⚠ MIS-HOMED: retail's `word_0x2C_44 = 0` here is
+                    // NOT `subSpellIndex_0x2A_42` (`f44`), which holds
+                    // the 2000-damage swing `sub_1CED0` passes to
+                    // `sub_11900` (EF:9793) and which `sub_4D1D0`
+                    // stamps once at birth (EF:34751).
+                    self.ent[i].f44 = 0;
+                }
+                if !no_m28_pose_flags() {
+                    // `byte[0] &= 0xF6` then `|= 8` — file 0x500df.
+                    self.ent[i].flags = (self.ent[i].flags & !9) | 8;
+                }
                 self.ent[i].f126 = self.ent[i].f128;
                 self.mc2_set_sprite(i, 291);
                 self.mc2_shift_rot(i, 384, 768);
-                // dword_0x10_16 = the strike animation length; the
-                // retail count comes from the anim bank (deliberate 16).
-                self.ent[i].f26 = 16;
+                // `dword_0x10_16 = anim->CountOfFrames_16`, then
+                // `word_0x2C_44 = dword_0x10_16` (EF:21338-39).
+                self.ent[i].f26 = if no_m28_strike_frames() {
+                    16
+                } else {
+                    M28_STRIKE_FRAMES
+                };
             }
             _ => {
                 self.ent[i].f58 = 0;
                 self.ent[i].row156 = 94;
+                if !no_m28_pose_flags() {
+                    // `byte[0] = (byte[0] | 1) & 0xF7` — file 0x5017e.
+                    self.ent[i].flags = (self.ent[i].flags | 1) & !8;
+                }
                 self.ent[i].f126 = self.ent[i].f128 - 28; // 92
             }
         }
@@ -5497,13 +5722,28 @@ impl Gen {
 
     /// `sub_2B7E0` (:21273): only one m28 strikes at a time.
     fn m28_strike_taken(&self, i: usize) -> bool {
-        self.ent.iter().enumerate().skip(1).any(|(j, c)| {
-            j != i
-                && c.class64 == 5
-                && c.model65 == 28
-                && c.flags & 0x400 == 0
-                && matches!(c.f71, 3 | 4 | 5)
-                && c.tick70 == M28_BASE + 2
+        // ⭐⭐ `v1x = bytearray_38403x[112 / 4]` — the MODEL-28 chain
+        // head, loaded once and chased through `next_0` (EF:21279-92).
+        // The body tests `v1x != a1x`, `actionIndex == 226` and
+        // `byte_0x46_70 ∈ {3,4,5}`; model, class, life and the reap
+        // flag came from the tick-top rebuild ([`Gen::mc2_roster`]).
+        // ⚠ Model 28 is ABOVE the MC1-sized (20) test helper's cap, so
+        // an MC2 test must build its chains with
+        // `rebuild_mob_chains_mc2`.
+        if crate::engine::features::no_mc2_mob_chain_predicate() {
+            return self.ent.iter().enumerate().skip(1).any(|(j, c)| {
+                j != i
+                    && c.class64 == 5
+                    && c.model65 == 28
+                    && c.flags & 0x400 == 0
+                    && matches!(c.f71, 3 | 4 | 5)
+                    && c.tick70 == M28_BASE + 2
+            });
+        }
+        self.mc2_roster(28).iter().any(|&s| {
+            let j = s as usize;
+            let c = &self.ent[j];
+            j != i && matches!(c.f71, 3 | 4 | 5) && c.tick70 == M28_BASE + 2
         })
     }
 
@@ -5533,6 +5773,60 @@ impl Gen {
                     self.ent[i].f71 = 0;
                 }
             }
+        }
+    }
+
+    /// LABEL_35 of `sub_2B260` (EF:21132-21170 + LABEL_58 at
+    /// EF:21226-35) — the wind-up/swing body. Arm 3 falls into it
+    /// the same tick (file 0x4FCBC), which is why it is a method.
+    fn m28_windup(&mut self, i: usize, slot: u16, ctx: &MobCtx) {
+        if self.ent[i].f26 <= 0 {
+            self.m28_sub(i, 6);
+            return;
+        }
+        self.ent[i].f30 = self.ent[i].f50 as u16;
+        self.ent[i].f34 = self.ent[i].f30;
+        if self.ent[i].f71 == 4 {
+            if let Some((tx, ty, _)) = self.mc2_target(slot, ctx) {
+                if self.ent[i].f63 & 7 == 0 {
+                    let e = &self.ent[i];
+                    if Self::dist2_sq(e.x, e.y, tx, ty) > 802_816 {
+                        let e = &self.ent[i];
+                        self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+                    }
+                }
+                // `word_0x2C_44 - 3 > dword_0x10_16 &&
+                //  dword_0x10_16 > 3` (EF:21157, file 0x4FD45)
+                // — the port's `4..=12` was the 16-frame
+                // hard-code's window.
+                let f26 = self.ent[i].f26;
+                let hot = if no_m28_strike_frames() {
+                    (4..=12).contains(&f26)
+                } else {
+                    M28_STRIKE_FRAMES - 3 > f26 && f26 > 3
+                };
+                if hot && self.mc2_atk_melee_768(i, slot, ctx) {
+                    self.ent[i].f71 = 5;
+                }
+            }
+        }
+        self.ent[i].f26 -= 1;
+        if self.ent[i].f63 & 3 == 0 {
+            self.mc2_avoid_packmate(i);
+        }
+        self.mc2_move_core(i);
+        self.ent[i].f50 = self.ent[i].f30 as i16;
+        let swing = if self.ent[i].f26 & 4 != 0 { 56 } else { -56 };
+        self.ent[i].f30 = (self.ent[i].f30 as i32 + swing) as u16 & 0x7FF;
+    }
+
+    /// LABEL_76 of `sub_2B260` (EF:21188-21203) — the random-heading
+    /// walk. Arm 7 falls into it the same tick (file 0x4FF05).
+    fn m28_walk(&mut self, i: usize) {
+        self.mc2_move_core(i);
+        self.ent[i].f26 -= 1;
+        if self.ent[i].f26 <= 0 {
+            self.m28_sub(i, 9);
         }
     }
 
@@ -5592,8 +5886,18 @@ impl Gen {
                 if mv == 3 {
                     self.m28_sub(i, 7);
                 } else if self.ent[i].f63 & 3 == 0 && self.ent[i].f26 < 14 {
+                    // ⭐ THE RANGE TEST MEASURES TO `v23x`, THE POINT
+                    // THE CHASE IS STEERING AT — the target's position
+                    // stepped 768 along the target's own yaw, NOT
+                    // `v25x->position_0x4C_76` (file 0x4FC0E pushes
+                    // `[ebp-0x1c]`; see [`no_m28_strike_range_pred`]).
+                    let (rx, ry) = if no_m28_strike_range_pred() {
+                        (tx, ty)
+                    } else {
+                        (pred.0, pred.1)
+                    };
                     let e = &self.ent[i];
-                    let d2 = Self::dist2_sq(e.x, e.y, tx, ty);
+                    let d2 = Self::dist2_sq(e.x, e.y, rx, ry);
                     if d2 < 2_768_896 && !self.m28_strike_taken(i) {
                         self.m28_sub(i, 3);
                     }
@@ -5604,39 +5908,13 @@ impl Gen {
                 self.m28_pose(i, 2);
                 self.ent[i].f50 = self.ent[i].f30 as i16;
                 self.snd(38, i);
+                // `goto LABEL_35` — arm 3 has no epilogue (file
+                // 0x4FCBC follows the sound call directly).
+                if !no_m28_strike_fallthrough() {
+                    self.m28_windup(i, slot, ctx);
+                }
             }
-            4 | 5 => {
-                if self.ent[i].f26 <= 0 {
-                    self.m28_sub(i, 6);
-                    return;
-                }
-                self.ent[i].f30 = self.ent[i].f50 as u16;
-                self.ent[i].f34 = self.ent[i].f30;
-                if self.ent[i].f71 == 4 {
-                    if let Some((tx, ty, _)) = self.mc2_target(slot, ctx) {
-                        if self.ent[i].f63 & 7 == 0 {
-                            let e = &self.ent[i];
-                            if Self::dist2_sq(e.x, e.y, tx, ty) > 802_816 {
-                                let e = &self.ent[i];
-                                self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
-                            }
-                        }
-                        if (4..=12).contains(&self.ent[i].f26)
-                            && self.mc2_atk_melee_768(i, slot, ctx)
-                        {
-                            self.ent[i].f71 = 5;
-                        }
-                    }
-                }
-                self.ent[i].f26 -= 1;
-                if self.ent[i].f63 & 3 == 0 {
-                    self.mc2_avoid_packmate(i);
-                }
-                self.mc2_move_core(i);
-                self.ent[i].f50 = self.ent[i].f30 as i16;
-                let swing = if self.ent[i].f26 & 4 != 0 { 56 } else { -56 };
-                self.ent[i].f30 = (self.ent[i].f30 as i32 + swing) as u16 & 0x7FF;
-            }
+            4 | 5 => self.m28_windup(i, slot, ctx),
             6 => {
                 self.m28_pose(i, 3);
                 {
@@ -5661,14 +5939,13 @@ impl Gen {
                 let d = self.mc2_rand(i);
                 self.ent[i].f34 = (d & 0x7FF) as u16;
                 self.m28_sub(i, 8);
-            }
-            8 => {
-                self.mc2_move_core(i);
-                self.ent[i].f26 -= 1;
-                if self.ent[i].f26 <= 0 {
-                    self.m28_sub(i, 9);
+                // `goto LABEL_76` — arm 7 has no epilogue either
+                // (file 0x4FF05 follows `sub_2BA50(a1x, 8u)`).
+                if !no_m28_strike_fallthrough() {
+                    self.m28_walk(i);
                 }
             }
+            8 => self.m28_walk(i),
             _ => {
                 self.m28_pose(i, 1);
                 self.ent[i].tick70 = M28_BASE + 1;

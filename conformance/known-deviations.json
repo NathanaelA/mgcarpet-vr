@@ -242,6 +242,7 @@
    "class": 2,
    "field": "z"
   },
+  {"id": "mc2l24-hydra-v34-parity", "status": "deviation", "note": "\u2b50\u2b50\u2b50 ROUND 128 (2026-09-10) \u2014 PAIR 41657 RETIRED AS A LAW, THE NINE THAT REMAIN ARE A FLOOR WITH A NAMED CAUSE. (a) 41657 was body 95 on the 0xDA path reading W-64 one tick after its `f63 & 0x1F == 0` aim pass: `sub_29710`'s range test `sub_583F0_distance_3d` (0x4E02F) keeps the 32-bit `t.y \u2212 b.y` in EBX (0x7CC0B/0x7CC0D) and the isqrt at 0x96F7A pushes it on W-64 (`push ebp` W-60, `push ebx` W-64); the mover committed the step first, so b.y is the post-move y (22852 vs the human's 20940 \u2192 \u22121912: even, negative, no stamp, draw taken; the port's clobbered seed stamped 4 \u2014 `b46` ungraded \u2014 and the state showed at 41658). `MGC_NO_M27_V34_AIM_RESIDUE`, `Gen::m27_v34_aim_word`; 14 \u2192 13 segments. (b) THE NINE (35668..38522) are body 5 (slot 5) on the 0xDA path, each a STATE-0 branch at the head of the chain (no state-1 branch before it draws #B, so the raw slot is read), with the human alive, `f63 & 3`/`& 0x1F` both off and the mover on code 2 \u2014 NOTHING between the frame boundary and slot 5 reaches W-64: the pre-walk passes top out at W-52 (`sub_68BF0`), W-28 (`sub_159E0`, which has NO calls \u2014 the round-127 '6-arg call at 0x3A4E8' is in the next function), W-20 (`sub_60F00`), W-12 (`sub_12780`); `sub_12500` runs for no record (no StageVar-flagged entity); slots 1-4 are (14,1) risers at life 4 that return from their prologue (0x7E783 `jmp 0x7f85b`). So the value is the PREVIOUS FRAME's: the game loop (0x6BD60) calls UpdateEntities and its siblings at one esp, W-64 is 212 bytes below it, and DrawGameFrame's subtree alone writes that depth 78 times (data-dependent byte stores in the sprite pass). Retail read odd > 4 at the nine and even > 4 at 34652/35412 (the other two body-5 residue reads). Not modellable without the renderer: PERMANENT FLOOR. (c) mc2l22's twin rule is RETIRED (0 ticks): its 19 were the (10,45) building tick's ESI (29) on W-64 and the 5 the fix exposed were the 0xD8 tail's position pointer \u2014 see DEVIATIONS.md. \u2b50\u2b50\u2b50 ROUND 127 (2026-09-10) \u2014 THREE MORE WRITERS LANDED, FOUR PAIRS RETIRED (33371, 35493, 41401, 41667; 14 \u2192 10 ticks). (a) THE `> 4` TEST IS SIGNED: 0x4E43F `83 fa 04 cmp edx,4` is followed by 0x4E442 `7e 04 jle`, so a residue with bit 31 set is `!= 0`, NOT `> 4`, and only its parity matters; the port compared as u32. (b) THE (10,34) TELEPORTER PAD LEAVES ITS OWN `y`: `sub_35390` (file 0x59B90, 4 pushes + `sub esp,0x10`) ends every alive tick with `push esi / call getTerrainAlt_10C40` (0x59D13; arg W-40, return W-44), and `getTerrainAlt` (0x35440, `push ebp` W-48) pushes `movsx eax,WORD [edx+2]` \u2014 the pad's sign-extended `y` \u2014 at W-52, the 0xD9-path `[ebp-0x10]`. The 0xE9/0xEA chain members are never CALLED by the walk (`str_D4C48ar[5]` rows 233/234 carry a NULL handler), idle (14,1) risers return before touching their `[ebp-0x20]` (= W-52), and idle (11,2) switches with a mis-aligned phase make no deep call, so on mc2l24 a hydra body walked AFTER the slot-66 pad (y 43392 \u2192 \u221222144: nonzero, even, not > 4) reads it. t=33370 births bodies 5 and 95 around the pad; on their first tick the branches with `f63 & 7 == 0` (7/23 of body 5, 135/159 of body 95) enter the state-1 arm on the residue: retail stamps `f71 = 4` on 7/23 (pre-walk residue) and keeps 135/159 in state 1 with the wander draw taken; the port stamped all four (33372: speed 16 vs 48). `MGC_NO_M27_V34_PAD_RESIDUE`. (c) THE (11,0..3) SWITCH PROBE LEAVES ITS OWN `y` (quiet) OR A POINTER (trip), AND ITS REARM ARM AN ODD RETURN ADDRESS: all four handlers (0x93830/0x93870/0x938B0/0x93900) are `push ebx/push ebp/mov ebp,esp` + two args into `InitSwitchChainZaxisAndSound_6F850` (0x94050, ebp = W-36); past the `f63 & 7` gate the roster walk's `CompareAxisWithShift_10750` (0x34F50 `push ebx`) drops the member pointer on W-52 and the no-match exit's `getTerrainAlt(&position)` (EF:44870) pushes `sext16(switch.y)` there LAST; the rearm arm's `sub_6F8E0` player loop (0x94108 `call 0x34f50`) leaves return address 0x25090D (odd) every countdown tick. Walk 41397\u21924398: switch 75 (phase 40, y 24448) between the pad and body 95 \u2014 branch 124 read 24448 and retail stamped 4; switches 79 at 41681/41713 likewise. `MGC_NO_M27_V34_SWITCH_RESIDUE`. (d) NOT A RESIDUE AT ALL: pair 35493 was the `v34 == 0` wizard-scan arm reached through draw #B (`& 7`) \u2014 `sub_2A6F0` walks the tick-top class-3 roster `dword_38519` (built with `life >= 0`, EF:39975), and the human was a corpse (action 3, life \u2212347); the port considered the out-of-pool human unconditionally and locked it (`f71` 2, target 116). Now gated on `pdead_top`. `MGC_NO_M27_SCAN_ROSTER_LIFE`. Measured: mc2l24 plain 33371 \u2192 35668, --segmented 18 \u2192 14 segments (roster 17 \u2192 13, excess 0); mc2l22 byte-identical (no pads; its residues are all positive). Each law's OFF arm restores its boundaries (33372 / 41399+41683+41715 / 35494). WHAT REMAINS (10 ticks): body 5's nine (35668..38522) read the PRE-WALK residue \u2014 slots 1-4 are idle risers, so W-52 is what the tick-top passes left: `sub_68BF0/sub_68C70` (the awake pass, per-creature `sub_584D0` pushes / `getTerrainAlt` / `CopyEntityPosition` at W-52 with the caller at esp = W+4) and then `sub_159E0` (one conditional 6-arg call whose first argument lands on W-52); `sub_60F00` reaches only W-28. Pair 41657 is body 95 on the 0xDA path (W-64) with two dying (10,0) records at slots 88/89 between the pad and the body. Both are the same class (an unmodelled handler's leaving), now with the writer NAMED rather than 'the whole walk'. The pad/switch/scan laws are pair-invisible (`b46` is ungraded and the importer restores it), so their witness is the free run plus three unit tests. \u26a0 NOTE PRECEDENCE: the ROUND-126 text below still says 'SUPERSEDED: the MAGNITUDE FACE clause' and calls the five pairs 'a SEPARATE rand speed x y z family' \u2014 that family WAS the residue magnitude (negative vs positive) plus the scan bug. \u2b50\u2b50\u2b50 PROVENANCE SETTLED (wave 126, dig 126O, 2026-09-10) \u2014 AND ONE WRITER LANDED. The frame arithmetic is exact and byte-verified: sub_29A90's [ebp-0x10] and sub_2AF10's [ebp-0xc] are the SAME absolute stack address on EVERY m27 dispatch path. sub_29670 (0xD9, file 0x4DE70 `53 55 89 e5`, no locals) pushes 2 args at 0x4DEA3 `6a 01 53` and 1 arg at 0x4DEFF, and sub_29710 (0xDA, 0x4DF10 `53 56 57 55 89 e5 83 ec 04`) pushes 2 at 0x4DF55 `50 53` and 1 at 0x4E071 \u2014 both geometries put sub_2AF10's [ebp-0xc] and sub_29A90's [ebp-0x10] on the same dword (E-48 for 0xD9, E-60 for 0xDA, where E is the handler's entry esp; the 0xDB wrapper sub_29890 at 0x4E090 delegates one frame deeper and lands on E-60 too). \u2b50\u2b50\u2b50 BOTH mover writes are BYTE writes into a slot sub_29A90 reads as a DWORD: `88 75 f4` (0x4F85E, MOV r/m8,r8 = 0 entering the \u00b191 scan) and `c6 45 f4 01` (0x4F8F3, MOV r/m8,imm8 = heading found), against `8b 55 f0` (0x4E401) + signed `83 fa 04` (0x4E43F) for the != 0 / > 4 arms and `f6 45 f0 01` (0x4E452, TEST r/m8) for the parity. So a turn-search that RUNS decides the PARITY BIT ONLY; the magnitude stays residue. LANDED as `MGC_NO_M27_V34_RESIDUE` (multipart.rs m27_move -> Gen::m27_v34_slot -> m27_drive; the 0xDA aim/pose calls at 0x4DFB1/0x4DFD9/0x4DFEE/0x4E015/0x4E02F/0x4E05C and the 0xDF pose set at 0x4E163 re-occupy the slot and clear it): mc2l24 --segmented 20 -> 18 segments (roster 19 -> 17, devs 0, horizon END), PLAIN HORIZON 19591 -> 33371; mc2l22 byte-identical; the other 8 MC2 takes byte-identical. That closes pairs 19591 and 19627 \u2014 REMOVED from the tick list below. \u26a0 Writing a bare 0/1 instead of the low byte measured mc2l22 END -> 46488 and mc2l24 devs 0 -> 2. \u26a0\u26a0\u26a0 THE REST OF THE FLOOR STANDS AND IS NOW EXPLAINED. sub_2A6B0 is a LEAF (0x4EEB0..0x4EEEB) and sub_2AF10's own callees sit below its esp, so on every arm where the turn-search does NOT run, NOTHING INSIDE the m27 body handler writes the slot \u2014 the value read is whatever the PREVIOUS ENTITY's handler subtree left at that absolute address. Dig 126O enumerated the complete parity census by A/B-ing MGC_M27_V34_SEED in the PAIR lane (even seed -> the ODD sites, odd seed -> the EVEN sites): mc2l24 36 boundaries (11 odd / 25 even), mc2l22 27 (19 odd / 8 even). The mover's scan runs at only 2 of those 63. DECISIVE COUNTER-EXAMPLE: mc2l24 body 5, entry action 0xDA, mover code 2, no scan, no clobber, branch f71 0 \u2014 ODD at pair 35668 and EVEN at pair 34652, an identical port-visible signature with opposite parity. A 'handler identity' model (0xDA -> odd, 0xD9/0xD8 -> even) scores 27/27 on mc2l22 and 19/36 on mc2l24 (worse than the constant's 25/36). To model the remainder the port would need a byte-accurate stack emulation of the WHOLE entity walk. FLOOR RE-CONFIRMED with a real trace. \u26a0 SUPERSEDED: the wave-125 'MAGNITUDE FACE' clause (pairs 33371, 35493, 41401, 41657, 41667 with v34 even AND <= 4) \u2014 all five pairs are CLEAN in the pair lane at HEAD on both parity arms after the wave-126 laws; 33372 is now the take's plain-horizon head and belongs to the SEPARATE `rand speed x y z` family (retail 2-3 LCG steps vs port 1; an f71 sub-state / sub_2A340 dispatch divergence). \u26a0 The wave-125 note's inference that byte_0x46_70 = 4 at every site PROVES v34 > 4 is UNSOUND \u2014 f71 is persistent state, not a per-tick write. \u26a0\u26a0\u26a0 DO NOT RE-SWEEP MGC_M27_V34_SEED. Ledger ROUND 99 digs 99-11/99-17, ROUND 103, wave 125 digs S/W, wave 126 dig O.", "takes": ["mc2l24"], "kind": "field", "class": 5, "model": 27, "fields": ["heading", "rand", "speed", "x", "y", "z"], "ticks": [35668, 35752, 35820, 36034, 37954, 38212, 38378, 38448, 38522]},
   {
    "id": "mc2l24-hydra-residual",
    "status": "capture",
@@ -251,50 +252,6 @@
    ],
    "class": 5,
    "model": 27
-  },
-  {
-   "id": "mc2l24-player-mana-regen",
-   "status": "capture",
-   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): player.mana drift = regen-cadence capture - the stored +132/lifeRegen deltas live in the un-recorded wizext, so the port derives them; suppression beats slot order (conformance.rs:304-325 mechanism). Death machine itself RULED FAITHFUL (14/14 respawns agree at t+1).",
-   "takes": [
-    "mc2l24"
-   ],
-   "kind": "field",
-   "field": "player.mana"
-  },
-  {
-   "id": "mc2l24-player-life-regen",
-   "status": "capture",
-   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): player.life = same wizext regen-derivation class - retail holds post-damage life ~16 ticks then +5/tick (lifeRegen_0x163_355, EF:5427-49); port regens one quantum early, transient 9900-vs-9905 heals at cap. ⚠⚠ RE-AUDIT OWED 2026-09-04: this rule was HIDING A LAW. Session 96 found MC2's area writers have NO player arm at all (`sub_116A0` = NETHERW.EXE 0x35EA0..0x360F7 reaches every victim through the tile grid `mapEntityIndex_15B4E0`; the port's `Gen::area_write` carried an invented `mc2 ||` that skipped the window gate). At mc2l24 t=134 that billed the wizard 1,200 phantom damage from a (10,9) dome whose window ends one tile short of the wizard's link tile — and THIS RULE, whose note claims a 'transient 9900-vs-9905 heals at cap' regen quantum, was absorbing it. A whole-field capture swallowed a 1,200-point hit labelled 'regen'. The law landed (mc2l24 horizon 133 -> 1,024) and the count fell 35 -> 30; THE SURVIVING 30 ROWS HAVE NOT BEEN RE-TRIAGED and must not be assumed to be the regen story.",
-   "takes": [
-    "mc2l24"
-   ],
-   "kind": "field",
-   "field": "player.life"
-  },
-  {
-   "id": "mc2l24-wizard-mana-regen",
-   "status": "capture",
-   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): the (3,0) wizard entity's mana lane is the recorded twin of player.mana - same wizext regen-derivation capture (identical 24,465-pair count).",
-   "takes": [
-    "mc2l24"
-   ],
-   "kind": "field",
-   "class": 3,
-   "model": 0,
-   "field": "mana"
-  },
-  {
-   "id": "mc2l24-wizard-life-regen",
-   "status": "capture",
-   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): the (3,0) wizard entity's life lane, twin of player.life - retail holds post-damage ~16 ticks then +5/tick from the un-recorded wizext lifeRegen; port regens one quantum early, heals at cap. ⚠⚠ RE-AUDIT OWED 2026-09-04: this rule was HIDING A LAW. Session 96 found MC2's area writers have NO player arm at all (`sub_116A0` = NETHERW.EXE 0x35EA0..0x360F7 reaches every victim through the tile grid `mapEntityIndex_15B4E0`; the port's `Gen::area_write` carried an invented `mc2 ||` that skipped the window gate). At mc2l24 t=134 that billed the wizard 1,200 phantom damage from a (10,9) dome whose window ends one tile short of the wizard's link tile — and THIS RULE, whose note claims a 'transient 9900-vs-9905 heals at cap' regen quantum, was absorbing it. A whole-field capture swallowed a 1,200-point hit labelled 'regen'. The law landed (mc2l24 horizon 133 -> 1,024) and the count fell 35 -> 30; THE SURVIVING 30 ROWS HAVE NOT BEEN RE-TRIAGED and must not be assumed to be the regen story.",
-   "takes": [
-    "mc2l24"
-   ],
-   "kind": "field",
-   "class": 3,
-   "model": 0,
-   "field": "life"
   },
   {
    "id": "mc2l24-castle-piece-terrain-z",
@@ -338,7 +295,7 @@
   {
    "id": "mc2-guard-terrain",
    "status": "capture",
-   "note": "§l4-guard-terrain: (5,15) castle guards walk runtime-terraformed ground the pristine replay lacks — z tracks the missing ramp, the tile type trips the die-gate (action), the early return freezes rand; port laws verified line-by-line (ledger mc2l4+mc2l30 triage). NARROWED to mc2l24 (2026-08-04 housekeeping): the BUILD00 pad replay ENDED the castle-mound family everywhere (1.81M corpus rows → 1,199, all l24); the residue clusters on DOOMSDAY/volcano ground (the static-terrain-z family, not the mound) — re-triage owed post prop-inversion. Hit-count jump = pad-replay regression signal.",
+   "note": "§l4-guard-terrain: (5,15) castle guards walk runtime-terraformed ground the pristine replay lacks — z tracks the missing ramp, the tile type trips the die-gate (action), the early return freezes rand; port laws verified line-by-line (ledger mc2l4+mc2l30 triage). NARROWED to mc2l24 (2026-08-04 housekeeping): the BUILD00 pad replay ENDED the castle-mound family everywhere (1.81M corpus rows → 1,199, all l24); the residue clusters on DOOMSDAY/volcano ground (the static-terrain-z family, not the mound) — re-triage owed post prop-inversion. ✅ RE-TRIAGE DONE 2026-09-09 (wave 124 dig E): THE RESIDUE IS GONE — 0 rows on mc2l24, this rule's only take, measured both at the wave's OPEN (pre-124 HEAD) and on the post-wave tree in both arms of the m21 wrapper-tail A/B. It was ALREADY 0 before 124 opened, so no law in this wave closed it and WHICH EARLIER LANDING DID WAS NOT DETERMINED. The rule now grades NOTHING and survives ONLY as the pad-replay regression sensor. Hit-count jump = pad-replay regression signal.",
    "takes": [
     "mc2l24"
    ],
@@ -434,7 +391,7 @@
   {
    "id": "mc2-fire-smoke-churn",
    "status": "capture",
-   "note": "§effects RULED capture (KINEMATICS ROUND): fire/smoke laws verified byte-exact; residue = newborn stale-slot seeds, RNG-stream flicker (rand%0x41-32), slot substitution, late-run drift. Models 0/6/13/14 all lanes. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
+   "note": "§effects RULED capture (KINEMATICS ROUND): fire/smoke laws verified byte-exact; residue = newborn stale-slot seeds, RNG-stream flicker (rand%0x41-32), slot substitution, late-run drift. Models 0/6/13/14 all lanes. mc2l24: ⚠⚠ THE 'OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands' CLAUSE THAT USED TO SIT HERE WAS WRONG AND IS RETIRED (wave 124, dig C). There is NO unfired wave trigger: level-024 authors NO StageVars at all, and the (40.5,213.5) stream it blamed is the APOCALYPSE MANA RAIN (sub_32CF0, the (10,91) summit child of the doomsday dome, NETHERW.EXE 0x574F0..0x576DD), whose three (10,39) spheres per tick the port simply mis-armed - landed as MGC_NO_MC2_RAIN_ARM. Post-wave hit counts on mc2l24 were re-measured rather than assumed.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -447,7 +404,7 @@
   {
    "id": "mc2-fire-churn-m13",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn — the (10,13) emitter face. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
+   "note": "See mc2-fire-smoke-churn — the (10,13) emitter face. mc2l24: ⚠⚠ THE 'OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands' CLAUSE THAT USED TO SIT HERE WAS WRONG AND IS RETIRED (wave 124, dig C). There is NO unfired wave trigger: level-024 authors NO StageVars at all, and the (40.5,213.5) stream it blamed is the APOCALYPSE MANA RAIN (sub_32CF0, the (10,91) summit child of the doomsday dome, NETHERW.EXE 0x574F0..0x576DD), whose three (10,39) spheres per tick the port simply mis-armed - landed as MGC_NO_MC2_RAIN_ARM. Post-wave hit counts on mc2l24 were re-measured rather than assumed. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -461,7 +418,7 @@
   {
    "id": "mc2-fire-churn-m0",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn — the (10,0) fire face (flicker band + substitution). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
+   "note": "See mc2-fire-smoke-churn — the (10,0) fire face (flicker band + substitution). mc2l24: ⚠⚠ THE 'OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands' CLAUSE THAT USED TO SIT HERE WAS WRONG AND IS RETIRED (wave 124, dig C). There is NO unfired wave trigger: level-024 authors NO StageVars at all, and the (40.5,213.5) stream it blamed is the APOCALYPSE MANA RAIN (sub_32CF0, the (10,91) summit child of the doomsday dome, NETHERW.EXE 0x574F0..0x576DD), whose three (10,39) spheres per tick the port simply mis-armed - landed as MGC_NO_MC2_RAIN_ARM. Post-wave hit counts on mc2l24 were re-measured rather than assumed. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -475,7 +432,7 @@
   {
    "id": "mc2-fire-churn-m6",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn — the (10,6) standing-fire face (z = f44 + terrain, recomputed; divergence is upstream terrain/init). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
+   "note": "See mc2-fire-smoke-churn — the (10,6) standing-fire face (z = f44 + terrain, recomputed; divergence is upstream terrain/init). mc2l24: ⚠⚠ THE 'OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands' CLAUSE THAT USED TO SIT HERE WAS WRONG AND IS RETIRED (wave 124, dig C). There is NO unfired wave trigger: level-024 authors NO StageVars at all, and the (40.5,213.5) stream it blamed is the APOCALYPSE MANA RAIN (sub_32CF0, the (10,91) summit child of the doomsday dome, NETHERW.EXE 0x574F0..0x576DD), whose three (10,39) spheres per tick the port simply mis-armed - landed as MGC_NO_MC2_RAIN_ARM. Post-wave hit counts on mc2l24 were re-measured rather than assumed. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -511,32 +468,6 @@
    ],
    "kind": "missing",
    "class": 9
-  },
-  {
-   "id": "mc2-cast-timing-extra",
-   "status": "capture",
-   "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse. mc2l24: also carries the possession fresh-arm input-reconstruction extras (session-4 ruling; the hydra (9,9) under-fire since FIXED, session-7 f136<-d88 — residual is beam geometry/terrain). ⚠ RE-NOTED 2026-08-04: check SYMMETRY before trusting this rule — the (9,17) possession re-fire bug (452 extra vs 0 missing) AND the one-tick launch-phase bug (24 extra vs 0 missing, fixed 2026-08-05 manifestation-slot order) both hid under it; balanced ± = latency skew, ONE-SIDED counts = a real port bug hiding here.",
-   "takes": [
-    "mc2l0",
-    "mc2l4",
-    "mc2l30",
-    "mc2l24"
-   ],
-   "kind": "extra",
-   "class": 9
-  },
-  {
-   "id": "mc2-lightning-blast-churn",
-   "status": "capture",
-   "note": "(10,23) lightning blasts ride the cast-timing skew (ledger §lightning residual).",
-   "takes": [
-    "mc2l0",
-    "mc2l4",
-    "mc2l30",
-    "mc2l24"
-   ],
-   "class": 10,
-   "model": 23
   },
   {
    "id": "mc1l0-cast-impacts",
@@ -686,7 +617,7 @@
   {
    "id": "mc2-walker-ground-z",
    "status": "capture",
-   "note": "Class-5 walker z ground-snap on terraformed sites (the guard/mound/regrade roots) — placed after the specific class-5 rules; x/y/heading knock-on stays unexplained.",
+   "note": "Class-5 walker z ground-snap on terraformed sites (the guard/mound/regrade roots) — placed after the specific class-5 rules; x/y/heading knock-on stays unexplained. ⚠⚠ THIS RULE WAS HIDING TWO LAWS, NOT A GROUND-SNAP (wave 124, digs E+G). At the wave's open it carried 8,693 mc2l24 rows; 8,560 of them were the doomsday pyramid's phase-7 wrapper physics never running on the CONTROLLED seam — the (5,0) worm summons missing sub_1F300's vertical bob (landed as Gen::m0_phase7_physics, MGC_NO_MC2_M0_PHASE7_CONTROLLED) and the (5,21) devil summons missing sub_26470's jump cycle (MGC_NO_MC2_M21_CONTROLLED_TAIL). Post-wave count: 133 with the m21 law off, 34 with it on. THE SURVIVING 34 HAVE NOT BEEN RE-TRIAGED and must not be assumed to be the ground-snap story: 32 are (5,0) at t~50k, one (5,17) at t=7999 and one (5,25) at t=8057. A hit-count jump is now a wrapper-tail regression signal as well as a terrain one.",
    "takes": [
     "mc2l4",
     "mc2l30",
@@ -737,7 +668,7 @@
   {
    "id": "mc2-splash-churn",
    "status": "capture",
-   "note": "(10,5) splash lifecycle churn downstream of cast-timing skew. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
+   "note": "(10,5) splash lifecycle churn downstream of cast-timing skew. \u26a0 mc2l24 (wave 125, dig E, 2026-09-10): EVERY mc2l24 row this rule excused (45 rows / 15 pairs from t=27274) was the m21 walker's water splash spawned at retail's GLOBAL scratch axis predictedAxis_EB398ar (sub_265A0 EF:17131, NETHERW.EXE 0x4AFB9 push 0x1b398) - landed as MGC_NO_MC2_SPLASH_PRED_AXIS, 0 hits on mc2l24 after it; whether mc2l0/mc2l4/mc2l30 still need the rule is unmeasured. mc2l24: ⚠⚠ THE 'OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands' CLAUSE THAT USED TO SIT HERE WAS WRONG AND IS RETIRED (wave 124, dig C). There is NO unfired wave trigger: level-024 authors NO StageVars at all, and the (40.5,213.5) stream it blamed is the APOCALYPSE MANA RAIN (sub_32CF0, the (10,91) summit child of the doomsday dome, NETHERW.EXE 0x574F0..0x576DD), whose three (10,39) spheres per tick the port simply mis-armed - landed as MGC_NO_MC2_RAIN_ARM. Post-wave hit counts on mc2l24 were re-measured rather than assumed.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -750,7 +681,7 @@
   {
    "id": "mc2-hit-flash-churn",
    "status": "capture",
-   "note": "(10,12) hit-flash slot churn downstream of cast-timing skew (the MC1 entry-4 twin). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
+   "note": "(10,12) hit-flash slot churn downstream of cast-timing skew (the MC1 entry-4 twin). mc2l24: ⚠⚠ THE 'OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands' CLAUSE THAT USED TO SIT HERE WAS WRONG AND IS RETIRED (wave 124, dig C). There is NO unfired wave trigger: level-024 authors NO StageVars at all, and the (40.5,213.5) stream it blamed is the APOCALYPSE MANA RAIN (sub_32CF0, the (10,91) summit child of the doomsday dome, NETHERW.EXE 0x574F0..0x576DD), whose three (10,39) spheres per tick the port simply mis-armed - landed as MGC_NO_MC2_RAIN_ARM. Post-wave hit counts on mc2l24 were re-measured rather than assumed.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -984,42 +915,6 @@
    ],
    "ticks": [
     9784
-   ]
-  },
-  {
-   "id": "mc2l22-hydra-v34-parity",
-   "status": "deviation",
-   "note": "PLAYER-RULED, DEVIATIONS.md 'multipart.rs::m27_drive / V34_ENTRY (the hydra's uninitialised branch scratch)' - the mc2l22 face of the registered floor that entry already sizes at '~18 mc2l22 segments'. sub_29A90 (NETHERW.EXE 0x4E290) reserves 16 bytes of locals and the only store before its branch-chain loop is v37 = 0 (0x4E2CA), so v34 at [ebp-0x10] - one writer (0x4E351), read at 0x4E401 and 0x4E452 - is ENTRY RESIDUE on every tick where no branch is in sub-state 1. Its magnitude bits are stable (byte_0x46_70 = 4 at all 27 witnessed sites) but its LOW BIT is not, and that bit decides whether the branch spends a wander-yaw draw: on mc2l22 retail SKIPS it (odd) at the 19 boundaries listed here and TAKES it (even) at 8 more, flipping within four ticks (54,942 even -> 54,946 odd), each verified as an exact +-1 step of the 9377/9439 LCG on the branch's own rand. NO CONSTANT CAN BE RIGHT; the port carries the least-bad even V34_ENTRY. Registered as a FLOOR and listed tick by tick rather than as a window or a bare (5,27) class scope, because a (5,27) heading/rand rule with no tick list would also cover the take's REAL hydra leads (the 21617-22225 mover window). Boundaries: 53912 53922 53944 53954 53976 54038 54910 54912 54914 54946 54974 54978 55006 55010 55038 55042 55070 55074 55089 (listed below as pair ticks, one less). NOTE 53976 also carries a missing-in-port (9,9) row, so replay's all-or-nothing gate leaves that boundary a defect - correctly. ⚠⚠⚠ DO NOT RE-SWEEP MGC_M27_V34_SEED (an earlier sweep read a 476-vs-488 census difference as signal when it was noise). Ledger ROUND 99 digs 99-11/99-17, ROUND 103.",
-   "takes": [
-    "mc2l22"
-   ],
-   "kind": "field",
-   "class": 5,
-   "model": 27,
-   "fields": [
-    "heading",
-    "rand"
-   ],
-   "ticks": [
-    53911,
-    53921,
-    53943,
-    53953,
-    53975,
-    54037,
-    54909,
-    54911,
-    54913,
-    54945,
-    54973,
-    54977,
-    55005,
-    55009,
-    55037,
-    55041,
-    55069,
-    55073,
-    55088
    ]
   },
   {

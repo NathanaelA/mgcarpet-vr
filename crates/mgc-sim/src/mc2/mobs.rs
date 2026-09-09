@@ -126,6 +126,17 @@ fn no_mc2_controlled_wrapper_tail() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CONTROLLED_WRAPPER_TAIL").is_some())
 }
 
+/// A/B toggle for the m21 phase-7 wrapper's JUMP CYCLE on the
+/// CONTROLLED seam (dig 124-E): set `MGC_NO_MC2_M21_CONTROLLED_TAIL`
+/// to restore the pre-dig behaviour, where a `sub_1D5D0` StageVar2
+/// case body returned without running `sub_26470`'s own switch and
+/// its unconditional mode re-apply. The m0 twin of this law is
+/// [`Gen::m0_phase7_physics`] (dig 124-G), landed separately.
+fn no_mc2_m21_controlled_tail() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M21_CONTROLLED_TAIL").is_some())
+}
+
 /// A/B toggle for the ALLIANCE EXECUTOR RECORD: set
 /// `MGC_NO_MC2_ALLIANCE_RECORD` to restore the pre-dig behaviour,
 /// where the (10,74) impact arm converted the victims INLINE instead
@@ -223,6 +234,17 @@ pub(crate) fn arrow_volley_trace_on() -> bool {
 pub(crate) fn no_mc2_frames89() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FRAMES89").is_some())
+}
+
+/// A/B kill-switch for THE PYRAMID'S INDEX-ONLY RE-SPRITE: set
+/// `MGC_NO_MC2_PYRAMID_SPRITE_KEEPS_ROT` to restore the pre-dig
+/// behaviour, where `sub_221F0` reached for
+/// [`Gen::mc2_set_sprite`] (`SetEntityIndexAndRot_49CD0`) and
+/// re-derived the boss's half-extent quad on every state change.
+/// See the call site in [`Gen::mc2_pyramid_sprite`].
+pub(crate) fn no_mc2_pyramid_sprite_keeps_rot() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_SPRITE_KEEPS_ROT").is_some())
 }
 
 /// A/B toggle for the ARCHER ACQUIRE **Scan B** (`sub_1FAA0` :11811):
@@ -1256,27 +1278,45 @@ impl Gen {
                                     let e = &self.ent[i];
                                     (e.x, e.y, e.model65, e.id24)
                                 };
-                                for c in self.ent.iter().skip(1) {
-                                    if c.class64 == 5
-                                        && c.model65 == model
-                                        && c.id24 != id
-                                        && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
-                                        && c.flags & 0x400 == 0
-                                        // ⚠ NOT a wrapping delta. Retail
-                                        // sign-casts EACH position on its
-                                        // own and subtracts in 32 bits
-                                        // (:9473-74, no outer cast — its
-                                        // `ent_overlap` siblings at :3714
-                                        // and :3728 DO carry one and DO
-                                        // wrap). Two creatures straddling
-                                        // the 32768 (tile 128) line
-                                        // therefore read ~65k apart and
-                                        // the sidestep never fires there.
-                                        && ((ex as i16 as i32) - (c.x as i16 as i32)).abs() < 256
-                                        && ((ey as i16 as i32) - (c.y as i16 as i32)).abs() < 256
-                                    {
-                                        self.ent[i].f34 = Self::angle_between(c.x, c.y, ex, ey);
-                                        break;
+                                // ⭐⭐ `v14x = bytearray_38403x[a1x->model]`
+                                // (EF:9456), chased through `next_0` at
+                                // :9469-79 — the tick-top roster, not the
+                                // pool ([`Gen::mc2_roster`]).
+                                //
+                                // ⚠ NOT a wrapping delta. Retail
+                                // sign-casts EACH position on its own and
+                                // subtracts in 32 bits (:9473-74, no outer
+                                // cast — its `ent_overlap` siblings at
+                                // :3714 and :3728 DO carry one and DO
+                                // wrap). Two creatures straddling the
+                                // 32768 (tile 128) line therefore read
+                                // ~65k apart and the sidestep never fires
+                                // there.
+                                let box256 = |a: u16, b: u16| {
+                                    ((a as i16 as i32) - (b as i16 as i32)).abs() < 256
+                                };
+                                if crate::engine::features::no_mc2_mob_chain_predicate() {
+                                    for c in self.ent.iter().skip(1) {
+                                        if c.class64 == 5
+                                            && c.model65 == model
+                                            && c.id24 != id
+                                            && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+                                            && c.flags & 0x400 == 0
+                                            && box256(ex, c.x)
+                                            && box256(ey, c.y)
+                                        {
+                                            self.ent[i].f34 = Self::angle_between(c.x, c.y, ex, ey);
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    for k in 0..self.mc2_roster(model).len() {
+                                        let c = &self.ent[self.mc2_roster(model)[k] as usize];
+                                        if c.id24 != id && box256(ex, c.x) && box256(ey, c.y) {
+                                            let away = Self::angle_between(c.x, c.y, ex, ey);
+                                            self.ent[i].f34 = away;
+                                            break;
+                                        }
                                     }
                                 }
                                 // Catch-up: leader max + act (:9482) —
@@ -3441,16 +3481,26 @@ impl Gen {
         } else {
             0
         };
+        // The v34 residue seam (`Gen::m27_v34_publish_building`): does
+        // this tick load a record pointer into ESI before the tail's
+        // `getTerrainAlt` pushes it?
+        let mut esi_pointer = false;
         if status == 2 {
             // Lethal: the RemoveCastleStage_385C0 teardown (state 53).
             self.ent[i].tick70 = 53;
             let (x, y) = (self.ent[i].x, self.ent[i].y);
             self.ent[i].z = self.ground_z(x, y) as i16;
+            // 0x5CB60 `mov BYTE PTR [ebx+0x45],0x35 / jmp 0x5cd9c`: the
+            // tail still runs, ESI untouched.
+            self.m27_v34_publish_building(false);
             return;
         }
         if status == 1 && self.ent[i].f26 > 2 {
             // Militia pop (:27994-28015): one occupant out to defend
             // (enterable kind only), and the attacker goes wanted.
+            // 0x5CBDD `mov esi,DWORD PTR ds:0x1a3e4` (`Entities_EA3E4[0]`)
+            // runs on this arm whether or not the kind is enterable.
+            esi_pointer = true;
             self.ent[i].f26 -= 1;
             let bldg = self.ent[i].f71 as usize;
             let enterable = self
@@ -3562,6 +3612,8 @@ impl Gen {
                             let e = &self.ent[i];
                             (e.x, e.y, e.z, e.f80)
                         };
+                        // 0x5CD5D `lea esi,[ebx+0x4c]` (the scratch copy).
+                        esi_pointer = true;
                         self.mc2_rand_occupant(i, x.wrapping_add(off), y, z);
                     }
                 }
@@ -3569,6 +3621,9 @@ impl Gen {
         }
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         self.ent[i].z = self.ground_z(x, y) as i16;
+        // The tail's `getTerrainAlt(&position)`: EBX (this record) on
+        // W-52, ESI (29, or a pointer) on W-64.
+        self.m27_v34_publish_building(esi_pointer);
     }
 
     // ---- dispatch + awake --------------------------------------------------
@@ -3775,6 +3830,44 @@ impl Gen {
                 // seam (mc2l1's 22 witnesses are all stage-held); the
                 // same `MGC_NO_MC2_M2_LUNGE_REARM` switch covers it.
                 self.m2_wrapper_lunge_rearm(i);
+            }
+            // ⭐⭐⭐ …AND m0's WRAPPER TAIL IS THE `sub_1F300`
+            // StageVar2 JUMP TABLE ITSELF (dodge + vertical bob).
+            // The port had it on the stage-HELD seam only; the table
+            // covers 0xD/0xE/0x10 (dodge+bob) and 0x11 (bob only),
+            // which are exactly the CONTROLLED kinds that arrive here.
+            // See [`Gen::m0_phase7_physics`] for the EXE bytes and the
+            // mc2l24 worm witness. `MGC_NO_MC2_M0_PHASE7_CONTROLLED`
+            // reverts.
+            self.m0_phase7_physics(i);
+            // ⭐⭐ …AND m21's WRAPPER IS THE SAME SHAPE AS m0's.
+            // `sub_26470` (EF:16938-65, NETHERW.EXE file 0x4AC70; its
+            // `sub_1D5D0(a1x, 168)` leg call is the `e8` at file
+            // 0x4AC7D) is `sub_1D5D0(a1x, 168); switch (StageVar2) {
+            // case 1..0xA: sub_265A0; case 0xD/0xE/0x10:
+            // byte_0x43_67 = 0; sub_265A0; default: break; }` and then
+            // the UNCONDITIONAL `if (actionIndex != 175)
+            // sub_268F0(actionIndex + 88)` mode re-apply. Note the two
+            // differences from m0's table: the 0xD/0xE/0x10 arm zeroes
+            // the rest base BEFORE the jump, and StageVar2 0x11 (the
+            // pyramid SPIN-UP) is NOT in the list at all.
+            // The port ran this on the stage-HELD seam only, so a
+            // pyramid-summoned DEVIL parked in the StageVar2-16 home
+            // slot never jumped: mc2l24 t=45549 slot 805 (sv2 16,
+            // action 175, b43 already 0) — retail settles z 726 -> 684
+            // (`m21_jump`'s -42) where the port held 726, a clean
+            // `port[t] == retail[t-1]` lag.
+            // `MGC_NO_MC2_M21_CONTROLLED_TAIL` reverts.
+            if self.ent[i].model65 == 21 && !no_mc2_m21_controlled_tail() {
+                match self.ent[i].site_z {
+                    1..=10 => self.m21_jump(i),
+                    13 | 14 | 16 => {
+                        self.ent[i].f68 = 0;
+                        self.m21_jump(i);
+                    }
+                    _ => {}
+                }
+                self.m21_wrapper_tail(i);
             }
             return;
         }
@@ -4042,7 +4135,14 @@ impl Gen {
                     && (atk as usize) < self.ent.len()
                     && self.ent[atk as usize].class64 == cls
                     && self.ent[atk as usize].model65 == mdl;
-                if atk != 0 && !same_species && atk != own {
+                // ⭐ NO NULL TEST ON `word_0x26_38` (0x42FBE/0x42FC2)
+                // — see `Self::mc2_doom_hit_retarget`. Retail has ONE
+                // `sub_1E700`; this is its third call path
+                // (`sub_1E9C0` 0x43333), so the law lands here too.
+                if (atk != 0 || Self::summon_null_attacker_law())
+                    && !same_species
+                    && atk != own
+                {
                     self.ent[i].f146 = atk;
                     let flee =
                         BEHAVIOR[self.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0;
@@ -4223,12 +4323,144 @@ impl Gen {
         }
     }
 
-    /// A pyramid-summon target's position: PLAYER_TARGET is the
-    /// out-of-pool human (never invalid — its death restarts the
-    /// level), pool slots validate like retail's `Entities[t] >
-    /// Entities[0] && life >= 0 && !(byte[1] & 4)` probe.
+    /// A/B toggle for the DOOM-SUMMON DEAD-TARGET law (dig 125-B).
+    /// `MGC_NO_DOOM_DEAD_TARGET=1` restores the pre-2026-09-10
+    /// behaviour, where the out-of-pool human was declared "never
+    /// invalid" and the two retail probes shared one `life < 0` test.
+    pub(crate) fn doom_dead_target_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_DOOM_DEAD_TARGET").is_none())
+    }
+
+    /// A/B toggle for the DOOM-SUMMON PARENTWARD AIM ORDER (dig 125-B).
+    /// `MGC_NO_DOOM_PARENT_AIM_ORDER=1` restores the pre-2026-09-10
+    /// aim-then-move, unthrottled.
+    pub(crate) fn doom_parent_aim_order_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_DOOM_PARENT_AIM_ORDER").is_none())
+    }
+
+    /// A/B toggle for the DOOM-SUMMON CROWD-STEER ROSTER law (dig
+    /// 125-L). `MGC_NO_MC2_DOOM_CROWD_ROSTER=1` restores the
+    /// pre-2026-09-10 hand-rolled live-pool sweep in
+    /// `mc2_doom_summon_home_tick`, which steered a worm head away
+    /// from its own `actionIndex` 0xE8 chain children.
+    pub(crate) fn doom_crowd_roster_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DOOM_CROWD_ROSTER").is_none())
+    }
+
+    /// A/B toggle for the SUMMON CORE's NULL-ATTACKER retarget (dig
+    /// 125-U). `MGC_NO_MC2_SUMMON_NULL_ATTACKER=1` restores the
+    /// invented `word_0x26_38 != 0` guard.
+    pub(crate) fn summon_null_attacker_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SUMMON_NULL_ATTACKER").is_none())
+    }
+
+    /// A/B toggle for the DOOM SUMMON's PARENT-DRIFT HIT ARM (dig
+    /// 125-U). `MGC_NO_MC2_DOOM_DRIFT_HIT_ARM=1` restores the
+    /// pre-2026-09-10 drift arm, which ran the quiet leg for every
+    /// non-fatal `sub_1E700` outcome and never retargeted.
+    pub(crate) fn doom_drift_hit_arm_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DOOM_DRIFT_HIT_ARM").is_none())
+    }
+
+    /// `sub_1E700`'s `v2 == 1` arm past the move core (EF:10841-62,
+    /// `NETHERW.EXE` 0x42FB6-0x4302C): index `Entities[word_0x26_38]`
+    /// with **no null test** (0x42FBE `mov 0x26(%ebx),%ax` / 0x42FC2
+    /// `mov 0x1a3e4(,%eax,4),%edx`), clear the flag on a same
+    /// class+model peer (0x42FCB-0x42FE0) or on `parentId ==
+    /// word_0x26_38` (0x42FE2-0x42FEC), and otherwise store the lock
+    /// (0x42FF6) and hand to `a2 + 6` on a FLEE row / `a2 + 2`
+    /// otherwise (0x43007 `testb $0x8,0x20(%eax)` .. 0x43019).
+    ///
+    /// ⭐ **A ZERO ATTACKER STILL ENGAGES.** `word_0x26_38` is 0
+    /// whenever the intake came from the CHAIN leg with a child whose
+    /// own `word_0x26_38` is 0 (a worm head adopting a body segment's
+    /// life), and retail then reads the slot-0 scratch record: its
+    /// class/model do not match a class-5 summon, `parentId` is not 0,
+    /// so `v8` survives and the summon takes `8m+2` with the lock left
+    /// at 0. The port's invented `atk != 0` refused — mc2l24 t=49249
+    /// slot 985 (a (5,0) worm head, `f34`/@0x34 = chain child 641):
+    /// retail `action` 2 / `target96` 0, port `action` 7 /
+    /// `target96` 116.
+    fn mc2_doom_hit_retarget(&mut self, i: usize, parent: Option<usize>) -> u16 {
+        let atk = self.ent[i].f40;
+        if !Self::summon_null_attacker_law() && atk == 0 {
+            return 0;
+        }
+        let same_species = atk != PLAYER_TARGET
+            && (atk as usize) < self.ent.len()
+            && self.ent[atk as usize].class64 == self.ent[i].class64
+            && self.ent[atk as usize].model65 == self.ent[i].model65;
+        let is_parent = atk != PLAYER_TARGET && parent.is_some_and(|p| p == atk as usize);
+        if same_species || is_parent {
+            return 0;
+        }
+        self.ent[i].f146 = atk;
+        let flee = BEHAVIOR[self.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0;
+        self.ent[i].tick70 = self.ent[i]
+            .model65
+            .wrapping_mul(8)
+            .wrapping_add(if flee { 6 } else { 2 });
+        atk
+    }
+
+    /// A pyramid-summon target's position.
+    ///
+    /// ⭐ **THE HUMAN IS JUST ANOTHER POOL RECORD, AND RETAIL READS
+    /// ITS LIFE HERE.** The port's doc comment used to assert
+    /// PLAYER_TARGET was "never invalid — its death restarts the
+    /// level"; mc2l24 t=45559 REFUTES it. The human dies at that tick
+    /// (slot 116 `life_0x8` = −1190) and the level does not restart:
+    /// retail's `Entities[word_0x96_150]` probe reads slot 116's own
+    /// life, drops the lock (`word_0x96_150 = 0`) and hands every doom
+    /// summon to the parentward-drift arm. The port kept aiming at the
+    /// corpse, ran `sub_1E700`'s core instead, and its engage check
+    /// promoted five (5,0)s and three (5,21)s out of `8m+7` into
+    /// `8m+2` on the very next tick. Our human lives outside the pool,
+    /// so the life reaches Gen through `ctx.pdead`
+    /// (`World::player.life < 0`, world.rs:6192) — an APPROX only for
+    /// a human sitting at EXACTLY 0 life, which retail's home probe
+    /// (below) would already count as dead.
+    ///
+    /// ⚠ **THE TWO RETAIL PROBES ARE NOT THE SAME PREDICATE** — the
+    /// port had them sharing one helper:
+    /// * `sub_1E320` (SPIN-UP, StageVar2 17), `NETHERW.EXE`
+    ///   `0x42B59`: `83 78 08 00` `cmp dword [eax+8],0` /
+    ///   `0F 8C ..` **`jl`** — strictly `life < 0`.
+    /// * `sub_1E580` (HOME, StageVar2 16), `NETHERW.EXE` `0x42DEB`:
+    ///   `83 7E 08 00` `cmp dword [esi+8],0` / `7E 06` **`jng`** —
+    ///   `life <= 0`, i.e. a target on exactly 0 life is ALREADY
+    ///   dropped. (The parent probe eight instructions earlier,
+    ///   `0x42DA8`: `83 78 08 00` / `7C 12` **`jl`**, keeps `< 0` —
+    ///   retail chose the two independently.) EF:10713 vs EF:10578.
+    ///
+    /// This is the SPIN-UP probe (`< 0`); [`Gen::mc2_doom_target_pos_home`]
+    /// is the home probe (`<= 0`).
     fn mc2_doom_target_pos(&self, t: u16, ctx: &MobCtx) -> Option<(u16, u16, i16)> {
+        self.mc2_doom_target_probe(t, ctx, false)
+    }
+
+    /// `sub_1E580`'s own target probe (`NETHERW.EXE` 0x42DEB, `jng`):
+    /// `life <= 0` counts as dead. See [`Gen::mc2_doom_target_pos`].
+    fn mc2_doom_target_pos_home(&self, t: u16, ctx: &MobCtx) -> Option<(u16, u16, i16)> {
+        self.mc2_doom_target_probe(t, ctx, true)
+    }
+
+    fn mc2_doom_target_probe(
+        &self,
+        t: u16,
+        ctx: &MobCtx,
+        home: bool,
+    ) -> Option<(u16, u16, i16)> {
+        let law = Self::doom_dead_target_law();
         if t == PLAYER_TARGET {
+            if law && ctx.pdead {
+                return None;
+            }
             return Some((ctx.px, ctx.py, ctx.pz));
         }
         let j = t as usize;
@@ -4236,7 +4468,12 @@ impl Gen {
             return None;
         }
         let e = &self.ent[j];
-        if e.flags & 0x400 != 0 || e.act_life < 0 {
+        let dead = if law && home {
+            e.act_life <= 0
+        } else {
+            e.act_life < 0
+        };
+        if e.flags & 0x400 != 0 || dead {
             return None;
         }
         Some((e.x, e.y, e.z))
@@ -4343,18 +4580,43 @@ impl Gen {
         // pyramid's standing enemy (`sub_16FC0(parent)`) — the
         // out-of-pool player.
         let mut target = self.ent[i].f146;
-        if target != 0 && self.mc2_doom_target_pos(target, ctx).is_none() {
+        if target != 0 && self.mc2_doom_target_pos_home(target, ctx).is_none() {
             self.ent[i].f146 = 0;
             target = 0;
         }
+        // The re-acquire is `sub_16FC0(parent, parent)` (EF:8500-31):
+        // a walk of the CLASS-3 WIZARD ROSTER CHAIN `dword_38519` for
+        // the nearest wizard of a different `id_0x1A_26`. It runs NO
+        // life test of its own — a dead wizard is excluded by CHAIN
+        // MEMBERSHIP, and that chain is the TICK-TOP sample. So the
+        // human's death must be read here through `pdead_top`, not the
+        // live `pdead`.
         if target == 0 && self.ent[i].f63 & 7 == 0 {
-            target = PLAYER_TARGET;
-            self.ent[i].f146 = target;
+            if !(Self::doom_dead_target_law() && ctx.pdead_top) {
+                target = PLAYER_TARGET;
+                self.ent[i].f146 = target;
+            }
         }
         if target == 0 {
             // Parentward drift + fast decay while unlocked
             // (EF:10725-31: aim the move at the parent, @0x2E -= 4).
-            if let Some(p) = parent {
+            //
+            // ⭐ **RETAIL MOVES BEFORE IT AIMS, AND THE AIM IS ON THE
+            // 8-TICK THROTTLE.** `sub_1E700`'s quiet arm is
+            // `sub_1B8C0(a1x)` (the move core) and only THEN
+            // `if (!(byte_0x3E_62 & 7)) roll_0x20_32 =
+            // tan2(self -> word_0x96_150)` (EF:10809-14 /
+            // `NETHERW.EXE` 0x42F5D `test byte [ebx+0x3e],0x7` ·
+            // `jnz`). The port aimed from the PRE-move position and
+            // aimed EVERY tick, so the heading servo chased a stale
+            // bearing: mc2l24 t=45559 slot 945 settles `roll` 1813 in
+            // retail against the port's 1811 (the two-unit gap IS the
+            // one move step) and, worse, the pre-aim turned `yaw` the
+            // wrong way (retail 969 -> 935, port 969 -> 1003).
+            // `MGC_NO_DOOM_PARENT_AIM_ORDER=1` restores the old
+            // aim-then-move.
+            let order = Self::doom_parent_aim_order_law();
+            if !order && let Some(p) = parent {
                 let (mx, my) = (self.ent[i].x, self.ent[i].y);
                 let (px, py) = (self.ent[p].x, self.ent[p].y);
                 self.ent[i].f34 = Self::angle_between(mx, my, px, py);
@@ -4364,15 +4626,42 @@ impl Gen {
             // and subtracts 4 (EF:10727-30) — so a summon that died
             // on this very tick reads the core's `= 1` and lands on
             // −3, expiring next tick, instead of draining its live
-            // latch by 4s for ~62 ticks. APPROX: the port keeps the
-            // manual parent-aim above and skips the core's wander
-            // jink / crowd steer / `v2==1` retarget (whose
+            // latch by 4s for ~62 ticks. APPROX: the port skips the
+            // core's crowd steer / `v2==1` retarget (whose
             // `word_0x96_150` lock retail clobbers back to 0 two
             // lines later anyway, EF:10729).
-            if self.mc2_state_head(i) == 2 {
+            let v2 = self.mc2_state_head(i);
+            if v2 == 2 {
                 self.ent[i].set_lease(1);
+            } else if v2 == 1 && Self::doom_drift_hit_arm_law() {
+                // ⭐ **THE DRIFT ARM IS THE SAME `sub_1E700`.** The
+                // caller points `word_0x96_150` at the parent
+                // (0x42E88), calls the core (0x42E9B `call 0x42f00`)
+                // and only THEN clobbers the lock back to 0 (0x42EA4
+                // `movw $0x0,0x96(%ebx)`) — so a summon that takes a
+                // hit while it has no lock still runs the `v2 == 1`
+                // retarget and leaves in `8m+2` (or `8m+6` on a FLEE
+                // row), with the lock reading 0 at the end of the
+                // tick. mc2l24 t=45561 slot 298 dates it: a (5,25)
+                // whose `word_0x26_38` is 116 (the human) has retail
+                // `action` 202 / `target96` 0 against the port's 207.
+                self.mc2_move_core(i);
+                self.mc2_doom_hit_retarget(i, parent);
+                self.ent[i].f146 = 0;
             } else {
                 self.mc2_move_core(i);
+                if order
+                    && self.ent[i].f63 & 7 == 0
+                    && let Some(p) = parent
+                    && self.ent[i].flags & crate::mc2::stagevars::summon_blocked_mask() == 0
+                {
+                    let (mx, my) = (self.ent[i].x, self.ent[i].y);
+                    let (px, py) = (self.ent[p].x, self.ent[p].y);
+                    self.ent[i].f34 = Self::angle_between(mx, my, px, py);
+                    if self.ent[i].f63 & 0x3F == 0 {
+                        self.mc2_wander_turn(i);
+                    }
+                }
             }
             self.ent[i].add_lease(-4);
             return;
@@ -4393,28 +4682,15 @@ impl Gen {
             }
             1 => {
                 self.mc2_move_core(i);
-                let atk = self.ent[i].f40;
-                let same_species = atk != 0
-                    && atk != PLAYER_TARGET
-                    && (atk as usize) < self.ent.len()
-                    && self.ent[atk as usize].class64 == self.ent[i].class64
-                    && self.ent[atk as usize].model65 == self.ent[i].model65;
-                let is_parent = atk != PLAYER_TARGET && parent.is_some_and(|p| p == atk as usize);
-                if atk != 0 && !same_species && !is_parent {
-                    self.ent[i].f146 = atk;
+                let atk = self.mc2_doom_hit_retarget(i, parent);
+                if atk != 0 {
                     target = atk;
-                    let flee =
-                        BEHAVIOR[self.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0;
-                    self.ent[i].tick70 = self.ent[i]
-                        .model65
-                        .wrapping_mul(8)
-                        .wrapping_add(if flee { 6 } else { 2 });
                 }
             }
             _ => {
                 self.mc2_move_core(i);
                 if self.ent[i].f63 & 7 == 0 {
-                    if let Some((tx, ty, _)) = self.mc2_doom_target_pos(target, ctx) {
+                    if let Some((tx, ty, _)) = self.mc2_doom_target_pos_home(target, ctx) {
                         let (mx, my) = (self.ent[i].x, self.ent[i].y);
                         // Same gate as `mc2_summon_core` — `sub_1D5D0`
                         // (EF:10013-16) sends StageVar2 13 and 16 to
@@ -4426,28 +4702,70 @@ impl Gen {
                                 self.mc2_wander_turn(i);
                             }
                         }
-                        // Same-model crowd steer-away (EF:10829-38):
-                        // the first DIFFERENT-owner same-species
-                        // neighbour inside the f80 footprint box
-                        // turns the heading straight away from it.
-                        let pitch = self.ent[i].f80 as i32;
-                        for j in 1..self.ent.len() {
-                            if j == i {
-                                continue;
-                            }
-                            let e = &self.ent[j];
-                            if e.class64 != 5
-                                || e.model65 != self.ent[i].model65
-                                || e.flags & 0x400 != 0
-                                || e.id24 == self.ent[i].id24
-                            {
-                                continue;
-                            }
-                            if (mx as i32 - e.x as i32).abs() < pitch
-                                && (my as i32 - e.y as i32).abs() < pitch
-                            {
-                                self.ent[i].f34 = Self::angle_between(e.x, e.y, mx, my);
-                                break;
+                        // Same-model crowd steer-away (EF:10829-38,
+                        // `NETHERW.EXE` 0x430f0-0x4316b): the first
+                        // neighbour of a DIFFERENT `id_0x1A_26` inside
+                        // the subject's own `array_0x52_82.pitch` box
+                        // (`0x54(%ebx)`) turns the heading straight
+                        // away from it.
+                        //
+                        // ⭐⭐⭐ **THE SCAN IS THE TICK-TOP PER-MODEL
+                        // ROSTER, NOT THE LIVE POOL.** 0x430f5
+                        // `movsbl 0x40(%ebx),%eax` · 0x43100
+                        // `mov 0x41a4,%eax` · 0x43105
+                        // `mov 0x9603(%edx,%eax,1),%ecx` loads
+                        // `bytearray_38403x[model]`, and 0x43163
+                        // `mov (%ecx),%ecx` / 0x43165
+                        // `cmp 0x1a3e4,%ecx` / `ja` walks `next_0` —
+                        // the SAME chain [`Gen::mc2_avoid_packmate_at`]
+                        // already walks for its four other call paths
+                        // (its own doc names this one, `sub_1E700`
+                        // "summon crowd-steer"), and which
+                        // `mc2_summon_core` — the StageVar2-13 arm of
+                        // the SAME retail function — already calls.
+                        // Only this StageVar2-16 arm hand-rolled a
+                        // pool sweep, and the sweep admits exactly
+                        // what the tick-top roster build rejects:
+                        // `actionIndex` 0xB4 / **0xE8** / 0xEA,
+                        // `life < 0`, and mid-tick births — while
+                        // rejecting what retail admits (a
+                        // reap-flagged 0x400 record, a packmate that
+                        // died after the roster was built).
+                        //
+                        // mc2l24 t=49985 dates it: worm head 989 aims
+                        // at the human and gets retail's own `roll`
+                        // 1072, and the pool sweep then re-aims it
+                        // away from slot 933 — its OWN CHAIN CHILD,
+                        // `actionIndex` 0xE8, four units away on x —
+                        // to 1034, which the heading servo publishes
+                        // as `heading` 1034 against retail's 1072 one
+                        // tick later. `roll` is UNGRADED, so the
+                        // census named the wrong tick and the wrong
+                        // field: 360 of the take's 665 segmented
+                        // heads were this.
+                        if Self::doom_crowd_roster_law() {
+                            self.mc2_avoid_packmate(i);
+                        } else {
+                            let pitch = self.ent[i].f80 as i32;
+                            for j in 1..self.ent.len() {
+                                if j == i {
+                                    continue;
+                                }
+                                let e = &self.ent[j];
+                                if e.class64 != 5
+                                    || e.model65 != self.ent[i].model65
+                                    || e.flags & 0x400 != 0
+                                    || e.id24 == self.ent[i].id24
+                                {
+                                    continue;
+                                }
+                                if (mx as i32 - e.x as i32).abs() < pitch
+                                    && (my as i32 - e.y as i32).abs() < pitch
+                                {
+                                    let (ex, ey) = (e.x, e.y);
+                                    self.ent[i].f34 = Self::angle_between(ex, ey, mx, my);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -4457,7 +4775,7 @@ impl Gen {
         // The engage handoff (EF:10735-40): 8-tick throttle, 3-D
         // reach inside the row's `v_28` → the model's +2 attack.
         if self.ent[i].f63 & 7 == 0
-            && let Some(tp) = self.mc2_doom_target_pos(target, ctx)
+            && let Some(tp) = self.mc2_doom_target_pos_home(target, ctx)
         {
             let me = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
             let reach = BEHAVIOR[self.ent[i].row156 as usize].v_28.max(0) as u32;
@@ -5430,6 +5748,10 @@ mod tests {
         g.ent[prey].act_life = 100;
         let hz = g.ent[hive].z;
         g.link(prey, 40 * 256 + 400, 40 * 256, hz);
+        // The food scan walks the TICK-TOP model chain
+        // ([`Gen::mc2_roster`]) — a bare-`Gen` rig must build it, or
+        // the scan is vacuously empty and the split never fires.
+        g.rebuild_mob_chains_mc2();
         (hive, prey)
     }
 

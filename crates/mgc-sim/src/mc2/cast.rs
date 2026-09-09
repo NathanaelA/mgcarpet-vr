@@ -517,9 +517,14 @@ pub(crate) fn no_mc2_shield_armed() -> bool {
 /// and the pair importer (`mc2_applied_mana_delta`) reconstructs the
 /// delta from retail's OWN post-tick `f2e`/`f30` — where the arm tick
 /// already reads `300 != 301` (mid-burst pin) and the last tick reads
-/// `0` (skipped). The import seat is therefore ALREADY right; only the
-/// live token pass was wrong, so no pair can assert this and the lane
-/// is a unit test (`tests/mc2_shield_billing.rs`).
+/// `0` (skipped). ⚠⚠ **THAT CLAIM WAS WRONG AND A COMMENT SAYING A
+/// LANE IS SWEPT IS A DIG LEAD** (round 126 dig I): the import seat is
+/// `mc2_applied_mana_delta`, NOT the `@0x88` seat, and it re-derived
+/// the pin from the RECORDED `@0x2E` without the pre-decrement — so
+/// three mc2l24 pairs DO assert it (t=36824 / 40238 / 40567, token
+/// slot 40 at `@0x2E == 1`). Both call paths now carry it; the unit
+/// tests are `tests/mc2_shield_billing.rs` and
+/// `a_refused_token_tick_and_shield_iii_leave_the_wizard_regen_alone`.
 ///
 /// `MGC_NO_MC2_SHIELD3_PREDECREMENT=1` restores the shared skeleton
 /// (bill on the arm tick, pin on every later tick).

@@ -667,6 +667,7 @@ impl Ent {
 /// pending — hash-transparent when idle (the Planes ceiling / Rec par3
 /// discipline).
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Mc2PlayerDebuffs {
     pub(crate) slow: u8,
     pub(crate) stun: u8,
@@ -768,6 +769,7 @@ pub(crate) const SCRATCH: usize = 0;
 /// (`mgc_sim::world`, one pass per turn) — in the original these are
 /// the same pool and the same handlers.
 #[derive(Hash)]
+#[derive(Clone)]
 pub(crate) struct Gen {
     pub(crate) t: Planes,
     pub(crate) assets: FeatureAssets,
@@ -816,6 +818,14 @@ pub(crate) struct Gen {
     /// `free` is dry (see [`Mc2Recycle`]). Empty on MC1, whose
     /// allocator has the opposite priority.
     pub(crate) mc2_recycle: Mc2Recycle,
+    /// `sub_2AF10`'s `[ebp-0xc]` — the ONE writer of `sub_29A90`'s
+    /// `v34` stack slot that is not residue from an earlier entity's
+    /// handler (dig 126O; see [`Gen::m27_v34_residue_law`] for the
+    /// frame arithmetic that makes the two locals the same address).
+    /// `Some` only between the m27 mover's turn-search and the branch
+    /// machine that reads it, so it is a WITHIN-TICK scratch, never a
+    /// save-boundary datum.
+    pub(crate) m27_v34_slot: M27V34Slot,
     /// The conformance import's human-carpet slot — the `pinned`
     /// argument every [`Gen::mc2_rebuild_free`] call site already
     /// carries down from `World::mc2_carpet_slot`, mirrored here for
@@ -922,6 +932,21 @@ pub(crate) struct Gen {
     /// transport shape as the spin (world writes, the carpet's own
     /// walk slot drains it once, no decay).
     pub(crate) player_whirl: PlayerWhirl,
+    /// The doomsday pyramid's HURL-AWAY BEAM on the human — the
+    /// second `sub_21AB0` arm that is NOT a knock. Case 7 (EF:13427-56)
+    /// ramps the GLOBAL `D41A0_0.word_0x36546` 1024 → −80/tick → floor
+    /// 10 and spends it as `MoveEntity_57FA0(&pred, tan2(pyramid,
+    /// player), 0, ramp)` + `moveTest_5D0A0` + a ground+clearance
+    /// clamp + `CopyEntityPosition_57CF0` — a POSITION WRITE, at the
+    /// PYRAMID's own pool slot. **Nothing in case 7 touches
+    /// `moveBoost_0x1E_30`** (shipped `NETHERW.EXE` 0x465cd-0x466e1),
+    /// so carrying it on [`Gen::player_knock`] was an invented write
+    /// on a lane retail holds at 0 — and one the knock channel cannot
+    /// serve anyway: `World::take_knock_step` CLAMPS TO ±128 and
+    /// decays −4/tick, so retail's 944-unit opening shove landed as
+    /// 128 and then kept shoving for twenty ticks after the burst.
+    /// Same transport shape as [`Gen::player_whirl`].
+    pub(crate) player_hurl: PlayerHurl,
     /// The mana quarters the human's REBOUND deflections owe this
     /// tick — see [`DeflectDebit`]. Written by the projectile
     /// walkers' deflect arms, drained by the MC1 wizard pass
@@ -1117,6 +1142,28 @@ pub(crate) struct Gen {
     /// down. Live only inside one `mc2_lightning_beam_tick`; hash- and
     /// save-silent like [`Gen::bolt_fx`].
     pub(crate) mc2_beam_defer: BeamDefer,
+    /// ⭐⭐⭐ RETAIL'S ONE GLOBAL SCRATCH AXIS, `predictedAxis_EB398ar`
+    /// (shipped `NETHERW.EXE` data address **0x1b398**, 866 references
+    /// across the engine). Every move core writes the candidate here
+    /// and then commits it with `CopyEntityPosition_57CF0(a1x,
+    /// &predictedAxis)` — 65 of the 92 calls to that routine pass this
+    /// very global — so after any such commit the global HOLDS THE
+    /// POSITION THE LAST ENTITY MOVED TO. That matters because one
+    /// site READS it without writing it first: the m21 walker's water
+    /// contact spawns its (10,5) splash at `&predictedAxis` (file
+    /// 0x4AFB9 `68 98 b3 01 00`), i.e. at whatever entity moved most
+    /// recently THIS TICK — not at the walker. See
+    /// [`Gen::m21_jump`] and `mc2_splash_pred_axis_law`.
+    ///
+    /// ⚠ APPROXIMATION, and a deliberate one: the port tracks the
+    /// global at the COMMIT (`move_relink`, the `CopyEntityPosition`
+    /// twin) rather than at each of retail's 101 assignments, so the
+    /// ~27 commits that pass a non-global axis, and the writes that
+    /// are never committed (a rejected candidate), are not
+    /// distinguished. Only the m21 splash reads it, so the blast
+    /// radius of any mis-tracking is exactly one effect's spawn
+    /// position.
+    pub(crate) mc2_pred_axis: Mc2PredAxis,
     /// The mana-magnet aura CLAIM handshake (`word_0x7A_122` on the
     /// ball, EF:28364/28383): ball slot → claiming aura slot. An aura
     /// claims an unclaimed ball for one pull; the ball's own tick
@@ -1174,6 +1221,26 @@ pub(crate) struct Gen {
     /// like `castle_reg` — the driver re-pushes it every tick and
     /// conformance imports reseed it per pair.
     pub(crate) mc2_mobilize: Mc2Quiet<9>,
+    /// THE HUMAN'S WEB-SLOW LEVEL `moveSpeed_0x14C_332` (0..3) — the
+    /// twin of [`Gen::mc2_mobilize`] one field along, and imported,
+    /// re-pushed and hash-opted-out the same way for the same reason.
+    /// `sub_38E70` (the (10,65) STAGGER stamp, EF:28411-13 / shipped
+    /// EXE 0x5d6ae-0x5d6bf) reads it off the victim wizard's
+    /// `dword_0xA4_164x` BEFORE it decides anything: the −80 kick, the
+    /// `9377x+9439` grunt draw and the sound all sit inside
+    /// `if (!moveSpeed)`, and the `++moveSpeed`/palette pair inside
+    /// `if (moveSpeed < 3)`. The carpet is out of pool, so the stamp's
+    /// pool-slot handler has no entity to read the level off — and the
+    /// port's [`Gen::mc2_debuffs`] queue is a per-tick DELTA drained at
+    /// the next carpet dispatch, not the live level. This mirror is.
+    ///
+    /// ⚠ HASH-SILENT OUTRIGHT (not [`Mc2Quiet`]): this is a pure ECHO
+    /// of a field the flight ext already carries and already hashes,
+    /// recomputed from it at every carpet dispatch and at every
+    /// conformance import, so feeding it into `Gen`'s stream would add
+    /// no information and would move every MC2 golden recorded while
+    /// the human was webbed.
+    pub(crate) mc2_slow: Mc2Echo,
 }
 
 /// See [`Gen::mc2_castle_research`] — hashes to NOTHING while empty
@@ -1182,6 +1249,7 @@ pub(crate) struct Gen {
 /// part_type[stage-1])` for stages 1..=7 (retail slots 1..7 / 10..16
 /// of the 19-byte array — slots 0/8/9/17/18 are never addressed).
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Mc2CastleResearch(pub Vec<(u16, [u8; 7], [u8; 7])>);
 
 impl std::hash::Hash for Mc2CastleResearch {
@@ -1203,6 +1271,7 @@ impl std::hash::Hash for Mc2CastleResearch {
 /// `sub_6D8B0(id, spell, hits)` call per pass — one award, one
 /// level-up notification), so the mail carries the amount.
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Mc2XpMail(pub Vec<(u16, u16, i32)>);
 
 impl std::hash::Hash for Mc2XpMail {
@@ -1227,6 +1296,7 @@ impl std::hash::Hash for Mc2XpMail {
 /// (`sub_605E0`): the castle-death token purge drains those alone
 /// (round 112, `castle::no_mc2_purge_on_downgrade_only`).
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Mc2LadderMail(pub Vec<u16>);
 
 impl std::hash::Hash for Mc2LadderMail {
@@ -1251,9 +1321,20 @@ pub struct BoltStrike {
 /// field: dropping it changes nothing observable to the sim), unlike
 /// the drained-mail wrappers which hash when non-empty.
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct BoltFx(pub Vec<BoltStrike>);
 
 impl std::hash::Hash for BoltFx {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
+/// See [`Gen::mc2_pred_axis`]. Hash-SILENT: retail keeps this in a
+/// data-segment global, not in any pool record, so it is not part of
+/// the hashed retail state and adding it must not move a golden.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Mc2PredAxis(pub (u16, u16, i16));
+
+impl std::hash::Hash for Mc2PredAxis {
     fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
 }
 
@@ -1261,6 +1342,7 @@ impl std::hash::Hash for BoltFx {
 /// drained inside a single `mc2_lightning_beam_tick`, so it is empty at
 /// every hash and snapshot boundary by construction.
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct BeamDefer {
     /// True while the beam is marching: `mc2_proj_impact` parks instead
     /// of firing.
@@ -1278,6 +1360,7 @@ impl std::hash::Hash for BeamDefer {
 /// tick the same turn (the book lives world-side). Empty at hash
 /// time like a read mailbox; tagged against adjacent-mail aliasing.
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Mc2StealMail(pub Vec<(u16, u8)>);
 
 impl std::hash::Hash for Mc2StealMail {
@@ -1292,6 +1375,7 @@ impl std::hash::Hash for Mc2StealMail {
 /// See [`Gen::mc2_spawn_ord`] — hashes to NOTHING while all-zero
 /// (hash-transparent).
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Mc2Ord(pub [u8; 32]);
 
 impl std::hash::Hash for Mc2Ord {
@@ -1306,6 +1390,7 @@ impl std::hash::Hash for Mc2Ord {
 /// castle-HP factor, EF:43768/61695). Default 256 = 1.0x for every
 /// color; hashes to NOTHING while all-default (the [`Mc2Ord`]
 /// pattern).
+#[derive(Clone)]
 pub(crate) struct Mc2LifeScale(pub [u16; 8]);
 
 impl Default for Mc2LifeScale {
@@ -1344,6 +1429,7 @@ impl std::hash::Hash for Mc2LifeScale {
 /// Hash-quiet while empty (the [`Mc2Ord`] pattern): MC1 and every
 /// never-full MC2 run hash exactly as they did before the field.
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Mc2Recycle {
     pub(crate) stack: Vec<u16>,
     pub(crate) refill: bool,
@@ -1367,6 +1453,7 @@ impl std::hash::Hash for Mc2Recycle {
 /// identical byte streams (the conditional-hash aliasing class).
 /// Written INSIDE the condition, so zero fields contribute nothing.
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Mc2Quiet<const TAG: u8>(pub i32);
 
 impl<const TAG: u8> std::hash::Hash for Mc2Quiet<TAG> {
@@ -1378,6 +1465,45 @@ impl<const TAG: u8> std::hash::Hash for Mc2Quiet<TAG> {
     }
 }
 
+/// A per-tick ECHO of a DRIVER-owned flight-ext field held on [`Gen`]
+/// so that POOL-side handlers can read it (the carpet is out of pool,
+/// so a creature/effect handler has no entity to read the ext off).
+/// Unlike [`Mc2Quiet`] it hashes to NOTHING at every value: the ext is
+/// the storage of record and hashes itself, and this copy is rebuilt
+/// from it by every carpet dispatch and every conformance import — so
+/// it carries no state a golden could legitimately pin.
+#[derive(Default, Clone)]
+pub(crate) struct Mc2Echo(pub i32);
+
+impl std::hash::Hash for Mc2Echo {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
+/// `sub_2AF10`'s `[ebp-0xc]` — hash-SILENT, like [`Mc2Echo`]. The slot
+/// is `None` at every tick boundary (the m27 mover writes it and the
+/// branch machine three statements later `take`s it), so it carries no
+/// state a golden could legitimately pin, and hashing it would move
+/// every MC2 golden for a within-tick scratch. See
+/// [`Gen::m27_v34_residue_law`].
+///
+/// `.1` marks a value published by the (10,34) teleporter pad's walk
+/// slot (`Gen::m27_v34_publish_pad`): it is the 0xD9-path dword
+/// (`sext16(pad.y)`); the 0xD8/0xDA/0xDB slot one frame deeper holds
+/// a positive stack address of the seed's class, so `m27_tick` drops
+/// a pad value for those bodies. Reset at the top of every MC2 walk.
+/// `.2` is the ONE-FRAME-DEEPER dword (W-64, the 0xD8/0xDA/0xDB
+/// paths' `[ebp-0x10]`) a same-walk writer published — `None` = a
+/// pointer/stack address of the seed's class. `Gen::m27_v34_enter`
+/// moves it into `.0` for a body on those paths (round 128: the
+/// (10,45) building tick's `getTerrainAlt` leaves the walk's ESI
+/// there, `Gen::m27_v34_publish_building`).
+#[derive(Default, Clone)]
+pub(crate) struct M27V34Slot(pub(crate) Option<u32>, pub(crate) bool, pub(crate) Option<u32>);
+
+impl std::hash::Hash for M27V34Slot {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
 /// A slot-keyed side-channel that hashes to NOTHING while empty
 /// (hash-transparent) and contributes deterministically (BTreeMap
 /// order) once entries exist. Carries per-entity words that have no
@@ -1387,6 +1513,7 @@ impl<const TAG: u8> std::hash::Hash for Mc2Quiet<TAG> {
 /// its mirror); written only when non-empty, so empty maps stay
 /// transparent.
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Mc2SlotMap<const TAG: u8>(pub std::collections::BTreeMap<u16, u16>);
 
 /// The per-owner castle-guard register (see [`Gen::mc1_guard_reg`]).
@@ -1457,6 +1584,15 @@ fn preclear_eq() -> i32 {
 pub(crate) fn no_mc2_weave_model_gate() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WEAVE_MODEL_GATE").is_some())
+}
+
+/// `MGC_NO_MC2_MOB_CHAIN_PREDICATE=1` restores the pre-dig LIVE-POOL
+/// scans on every MC2 consumer that retail reaches through
+/// `bytearray_38403x[model]` — see [`Gen::mc2_roster`] for the law and
+/// the NETHERW.EXE citation.
+pub(crate) fn no_mc2_mob_chain_predicate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MOB_CHAIN_PREDICATE").is_some())
 }
 
 /// `MGC_NO_MC2_CASTLE_BALL_SPEED_STEP=1` restores the pre-dig CLAMPED
@@ -2129,6 +2265,34 @@ impl std::hash::Hash for PlayerSpin {
     }
 }
 
+/// See [`Gen::player_hurl`] — the doomsday pyramid's HURL-AWAY BEAM
+/// on the human, hash-TRANSPARENT while disarmed so no pre-boss
+/// golden moves for carrying it. Drained at the carpet's own walk
+/// slot, exactly like [`PlayerWhirl`], and deliberately NOT
+/// snapshotted: a save taken mid-beam reloads owing at most one tick
+/// of shove.
+#[derive(Default, Clone, Copy, Debug)]
+pub(crate) struct PlayerHurl {
+    /// `sub_21AB0` case 7 armed the beam this tick.
+    pub armed: bool,
+    /// `v18 = tan2(&a1x->position, &v31x->position)` (EF:13443) —
+    /// pyramid → player, the OUTWARD bearing.
+    pub bearing: u16,
+    /// `D41A0_0.word_0x36546` after its `-= 80` / floor 10 / ceiling
+    /// 1024 step — `MoveEntity_57FA0`'s distance (EF:13444).
+    pub dist: i16,
+}
+
+impl std::hash::Hash for PlayerHurl {
+    /// Hash-silent OUTRIGHT, the [`Lease2e`] / [`Raw48`] opt-out
+    /// rather than [`PlayerSpin`]'s transparent-at-rest one. The two
+    /// drain sites both sit behind `drive`, so a PINNED pair tick
+    /// (`verify-deltas`, the fixture runner) arms the one-shot and
+    /// never spends it — hashing it there would move a fixture
+    /// signature on a beam tick for a channel that tick cannot use.
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
 /// See [`Gen::player_whirl`] — the whirlwind's pose seizure on the
 /// human, hash-TRANSPARENT while disarmed so no pre-tornado golden
 /// moves for carrying it. Drained at the carpet's own walk slot.
@@ -2219,6 +2383,7 @@ impl std::hash::Hash for DeflectDebit {
 /// See [`Gen::mc2_night_shade`] — a bool that hashes to NOTHING when
 /// false (hash-transparent).
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct NightShade(pub bool);
 
 impl std::hash::Hash for NightShade {
@@ -2237,6 +2402,7 @@ impl std::hash::Hash for NightShade {
 /// no-op UNCONDITIONALLY — unlike the quiet counters above it stays
 /// silent even when populated.
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct SlotGens(pub Vec<u32>);
 
 impl std::hash::Hash for SlotGens {
@@ -2255,6 +2421,7 @@ impl std::hash::Hash for SlotGens {
 /// AFTER the teardown, mc1l0 t=1831→1832). Derived per tick —
 /// hash-silent like [`SlotGens`].
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct TickChain {
     pub list: Vec<u16>,
     /// THE SEVERED CHAIN (ledger §THE SEVERED BALL CHAIN): retail's
@@ -2293,6 +2460,7 @@ impl std::hash::Hash for TickChain {
 /// members; only MEMBERSHIP (and order) is the snapshot. Derived per
 /// tick — hash-silent like [`TickChain`], never saved.
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct MobChains {
     pub list: Vec<Vec<u16>>,
     /// Per-model severed-chain cut, the [`TickChain::cut`] law: a
@@ -2332,13 +2500,74 @@ impl Gen {
     /// top sweep — world.rs:2680, its only non-test twin).
     #[cfg(test)]
     pub(crate) fn rebuild_mob_chains(&mut self) {
-        self.mob_chains.reset(20);
+        self.rebuild_mob_chains_for(false);
+    }
+
+    /// The MC2 shape of the same helper — 29 chains and the
+    /// `actionIndex ∉ {0xB4, 0xE8, 0xEA}` exclusions, i.e. the arm
+    /// `World::tick_inner`'s live sweep takes for
+    /// [`crate::ids::GameId::Mc2`]. The MC1-sized (20) helper drops
+    /// every model above 19, so an MC2 test that used it saw an EMPTY
+    /// chain for the (5,25) Cymmerian and the (5,28) brute and passed
+    /// vacuously.
+    #[cfg(test)]
+    pub(crate) fn rebuild_mob_chains_mc2(&mut self) {
+        self.rebuild_mob_chains_for(true);
+    }
+
+    #[cfg(test)]
+    fn rebuild_mob_chains_for(&mut self, mc2: bool) {
+        let models = if mc2 { 29 } else { 20 };
+        self.mob_chains.reset(models);
         for s in 1..self.ent.len() {
             let e = &self.ent[s];
-            if e.class64 == 5 && e.act_life >= 0 && e.tick70 != 120 && (e.model65 as usize) < 20 {
+            let chained = if mc2 {
+                !matches!(e.tick70, 0xB4 | 0xE8 | 0xEA)
+            } else {
+                e.tick70 != 120
+            };
+            if e.class64 == 5 && e.act_life >= 0 && chained && (e.model65 as usize) < models {
                 self.mob_chains.list[e.model65 as usize].push(s as u16);
             }
         }
+    }
+
+    /// ⭐⭐⭐ THE MC2 PER-MODEL ROSTER, AS RETAIL'S CONSUMERS SEE IT.
+    /// `bytearray_38403x[model]` chased through `next_0` — the
+    /// tick-top snapshot the case-5 arm of `UpdateEntities_57730`
+    /// rebuilds (EF:40259-89). NETHERW.EXE, verbatim:
+    ///
+    ///   7bf5c  f6 43 0d 04   testb $0x4,0xd(%ebx)   <- THE REAP, and it
+    ///   7bf63  e8 b8 07 00 00  call 0x7c720          runs BEFORE the rebuild
+    ///   7bf89  6a 74         push $0x74             <- 29 * 4 bytes
+    ///   7bf92  05 03 96 00 00  add $0x9603,%eax      <- bytearray_38403x
+    ///   7bf98  e8 b3 4a 03 00  call 0xb0a50          <- memset(head, 0, 116)
+    ///   7bffe  83 78 08 00   cmpl $0x0,0x8(%eax)    <- life_0x8 < 0
+    ///   7c002  0f 8c ..      jl   0x7c189               -> not a member
+    ///   7c00b  80 fb e8      cmp  $0xe8,%bl         <- actionIndex
+    ///   7c010  0f 86 ..      jbe  0x7c189               == 0xE8 -> out
+    ///   7c016  80 fb ea      cmp  $0xea,%bl
+    ///   7c01b  80 fb b4      cmp  $0xb4,%bl
+    ///   7c01e  0f 84 ..      je   0x7c189               0xB4/0xEA -> out
+    ///   7c024  0f be 58 40   movsbl 0x40(%eax),%ebx <- model, SIGN-extended
+    ///   7c037/7c043                                 <- append (tail or head)
+    ///   7c04f  89 18         mov  %ebx,(%eax)       <- next_0 = Entities[0]
+    ///
+    /// and THAT IS THE WHOLE PREDICATE. Class, model, life, action AND
+    /// the reap flag were all settled at that moment, so a walker that
+    /// re-asks them is wrong in BOTH directions — and a `flags & 0x400`
+    /// (reap-pending) test is an invented guard retail has no trace of:
+    /// the reap at 0x7bf5c already ran, so a record flagged MID-tick
+    /// stays a member for the rest of the frame. There is no bound
+    /// check on the model either (`lea (,%ebx,4)` straight into a
+    /// 29-entry array); the port's `< 29` cap is a safety guard on a
+    /// case the assets never produce.
+    ///
+    /// Every MC2 site whose retail twin loads a chain head must read
+    /// THIS, never the pool. `MGC_NO_MC2_MOB_CHAIN_PREDICATE` restores
+    /// the pool scans at each call site.
+    pub(crate) fn mc2_roster(&self, model: u8) -> &[u16] {
+        self.mob_chains.visible(model as usize)
     }
 
     /// The mana-ball arm of the same tick-top sweep (:52290-97) —
@@ -2643,6 +2872,7 @@ impl Gen {
             paint_chain: TickChain::default(),
             mob_chains: MobChains::default(),
             mc2_recycle: Mc2Recycle::default(),
+            m27_v34_slot: M27V34Slot(None, false, None),
             mc2_pinned: Mc2Pinned(0),
             mc1_guard_reg: Mc1GuardReg::default(),
             mc1_balloon_reg: Mc1BalloonReg::default(),
@@ -2657,6 +2887,7 @@ impl Gen {
             player_knock: (0, 0),
             player_spin: PlayerSpin::default(),
             player_whirl: PlayerWhirl::default(),
+            player_hurl: PlayerHurl::default(),
             player_deflect_debit: DeflectDebit::default(),
             mc2_debuffs: Mc2PlayerDebuffs::default(),
             rival_ents: [0; 8],
@@ -2693,6 +2924,7 @@ impl Gen {
             mc2_ladder_sync: Mc2LadderMail::default(),
             bolt_fx: BoltFx::default(),
             mc2_beam_defer: BeamDefer::default(),
+            mc2_pred_axis: Mc2PredAxis::default(),
             mc2_steal_mail: Mc2StealMail::default(),
             mc2_aura_claim: Mc2SlotMap::default(),
             mc2_wanted: Mc2SlotMap::default(),
@@ -2700,6 +2932,7 @@ impl Gen {
             mc2_rebound_precise: Mc2Quiet::default(),
             mc2_castle_research: Mc2CastleResearch::default(),
             mc2_mobilize: Mc2Quiet::default(),
+            mc2_slow: Mc2Echo::default(),
         }
     }
 
@@ -3420,6 +3653,10 @@ impl Gen {
     /// is exactly the kind of invented state that turns a later dig's
     /// probe result into a false positive.
     pub(crate) fn move_relink(&mut self, i: usize, x: u16, y: u16, z: i16) {
+        // `CopyEntityPosition_57CF0`'s twin: retail reaches it with the
+        // global scratch axis on 65 of its 92 call sites, so the commit
+        // is where the port models the global. See `Gen::mc2_pred_axis`.
+        self.mc2_pred_axis = Mc2PredAxis((x, y, z));
         if self.mc2_beam_defer.armed && !no_beam_unlink() {
             self.unlink(i);
             let e = &mut self.ent[i];
@@ -8652,6 +8889,9 @@ impl Gen {
             // A per-tick transient the carpet's walk slot drains — see
             // PlayerWhirl.
             player_whirl: _,
+            // A per-tick transient the carpet's walk slot drains — see
+            // PlayerHurl.
+            player_hurl: _,
             // A per-tick transient the wizard pass drains — see
             // DeflectDebit.
             player_deflect_debit: _,
@@ -8708,6 +8948,10 @@ impl Gen {
             bolt_fx: _,
             // Transient within one beam tick — never live at a boundary.
             mc2_beam_defer: _,
+            // Retail's `predictedAxis_EB398ar` is a data-segment
+            // scratch, rewritten by the first move of the next tick and
+            // read by nothing before then — a save need not carry it.
+            mc2_pred_axis: _,
             mc2_steal_mail,
             mc2_aura_claim,
             mc2_wanted,
@@ -8718,6 +8962,8 @@ impl Gen {
             // by every MC2 carpet dispatch and reseeded by the import:
             // hash-excluded and save-silent like `castle_reg`.
             mc2_mobilize: _,
+            // The web-slow level's echo — same opt-out as `mc2_mobilize`.
+            mc2_slow: _,
             // NEVER saved, and that IS the retail law: every load path
             // rebuilds the pool lists and then empties this one
             // outright (`sub_49F90(); D41A0_0.dword_0x11e6 = -1;` —
@@ -8725,6 +8971,9 @@ impl Gen {
             // A restored world simply has no ranked victims until the
             // list next refreshes.
             mc2_recycle: _,
+            // A within-tick stack-slot mirror (dig 126O) — it is `None`
+            // at every tick boundary, so nothing to save.
+            m27_v34_slot: _,
             // Re-seeded by `World::new` / the strict import beside
             // `mc2_carpet_slot`; never a save-boundary datum.
             mc2_pinned: _,
@@ -12545,6 +12794,90 @@ mod tests {
         assert_eq!(
             g.mc2_debuffs.stun, 1,
             "and the drain still arms the flight ext's own counter"
+        );
+    }
+
+    /// ⭐⭐⭐ **THE STAGGER STAMP ONLY BITES A WIZARD WHO IS NOT
+    /// ALREADY SLOWED.** `sub_38E70` (action 0x46, the (10,65)) is the
+    /// paralyze stamp with `moveSpeed_0x14C_332` in place of
+    /// `mobilizeCounter_0x14E_334`, and it splits the arm in two
+    /// (EF:28404-21; shipped NETHERW.EXE `0x5d6ae 8a b0 4c 01 00 00`
+    /// read, `0x5d6b4 80 fe 03` / `0x5d6b7 0f 83` the `< 3` gate,
+    /// `0x5d6bd 84 f6` / `0x5d6bf 75 35` the `== 0` gate, `0x5d6c1`
+    /// the −80, `0x5d6c7`/`0x5d6cd` the `9377x+9439` step, `0x5d6fc`
+    /// the `++`, `0x5d74d` the unconditional counter refresh): the
+    /// kick, the LCG draw and the 54..57 grunt fire ONLY on the
+    /// level-0 → 1 transition.
+    ///
+    /// The port drew and kicked on every landing. mc2l24 caught it
+    /// five times — t=10775 slot 580, 10898 slot 500, 11526 and 11531
+    /// slot 336, 13759 slot 491 — each one a `rand` row where the port
+    /// stood exactly one draw ahead (`f(25861) = 24836`,
+    /// `f(45595) = 62426`, `f(8003) = 14850`, `f(9406) = 63581`,
+    /// `f(11470) = 19053`), and each one a tick the capture shows the
+    /// human already webbed (`move_speed 1 -> 2`, and 2 -> 3 at
+    /// 11531) with `knock_mag` still decaying +4/tick, never re-armed.
+    ///
+    /// Non-vacuous: `MGC_NO_MC2_STAGGER_LEVEL_GATE` (or dropping the
+    /// gate) makes the second stamp step the stream again and the
+    /// first assert fails.
+    #[test]
+    fn the_stagger_stamp_bites_only_at_slow_level_zero() {
+        let mut g = mc2_gen();
+        let mk = |g: &mut Gen| {
+            let stamp = g.new_event().unwrap();
+            let e = &mut g.ent[stamp];
+            e.class64 = 10;
+            e.model65 = 65;
+            e.tick70 = 70; // the STAGGER variant (action 0x46)
+            e.f146 = crate::mc1::mobs::PLAYER_TARGET;
+            e.rand = 45595;
+            e.x = 0x4000;
+            e.y = 0x4000;
+            e.act_life = 1;
+            stamp
+        };
+        let ctx = ctx_at(0x4000, 0x4000, 0);
+
+        // Level 0: the whole arm runs — one draw, and the mirror steps.
+        let a = mk(&mut g);
+        assert_eq!(g.mc2_slow.0, 0, "an unwebbed wizard");
+        g.mc2_debuff_stamp_tick(a, &ctx);
+        // ⚠ `mc2_gen()` builds on `ChassisParams::MC1`, whose
+        // `ent_rand_width` is `U32` — so the harness steps the
+        // UNMASKED `9377x+9439` here and the exact 16-bit landing
+        // (`f(45595) = 62426`) is the mc2l24 fixture's job. What this
+        // test owns is WHETHER the stream steps at all.
+        assert_ne!(
+            g.ent[a].rand, 45595,
+            "the level-0 landing takes its 9377x+9439 grunt draw"
+        );
+        assert_eq!(g.mc2_slow.0, 1, "…and steps the level the next stamp reads");
+        assert_eq!(g.mc2_debuffs.slow, 1, "the ext's own hit is still queued");
+
+        // Level 1: retail's `test dh,dh / jne` skips the kick, the draw
+        // and the sound — only the level and the 8-tick counter move.
+        let b = mk(&mut g);
+        g.mc2_debuff_stamp_tick(b, &ctx);
+        assert_eq!(
+            g.ent[b].rand, 45595,
+            "a stamp on an ALREADY-slowed wizard steps NOTHING"
+        );
+        assert_eq!(g.mc2_slow.0, 2, "but the level still climbs");
+
+        // …and saturates at 3 (`if (moveSpeed < 3u)`, 0x5d6b4), so a
+        // fourth landing leaves the mirror alone and still draws nothing.
+        let c = mk(&mut g);
+        g.mc2_debuff_stamp_tick(c, &ctx);
+        assert_eq!(g.mc2_slow.0, 3, "level 3 is the ceiling");
+        let d = mk(&mut g);
+        g.mc2_debuff_stamp_tick(d, &ctx);
+        assert_eq!(g.mc2_slow.0, 3, "…and it holds there");
+        assert_eq!(g.ent[d].rand, 45595, "no draw at the ceiling either");
+        assert_eq!(
+            g.mc2_debuffs.slow, 4,
+            "the counter refresh (`moveSpeedCounter = 8`, 0x5d74d) is \
+             OUTSIDE the `< 3` gate, so every landing still queues a hit"
         );
     }
 
