@@ -434,6 +434,7 @@ impl PoseLane {
             // The pair shadow never steps a death fall (the domain
             // is gated) — the command handler always runs here.
             no_command: false,
+            mc2_stop: false,
             mc2_park: false,
         };
         let mut s = Mc1State {
@@ -636,6 +637,7 @@ impl PoseLane {
             // The pair shadow never steps a death fall (the domain
             // is gated) — the command handler always runs here.
             no_command: false,
+            mc2_stop: false,
             // The modal park (big map / spell book): command 0 and
             // the carpet pinned across the pair — plus the FULL-STOP
             // key (BACKSPACE, PlayerAction 0x27), which bypasses the

@@ -262,6 +262,10 @@ fn mc1_input(input: &FlightInput) -> flight::Mc1Input {
         // Set world-side, at the carpet's dispatch — only the death
         // fall clears it (`World::step_player_flight`).
         no_command: false,
+        // Likewise world-side: the whirlwind's grab arms arm
+        // `byte[1] & 8` on the carpet record and
+        // `World::step_player_flight_mc2` reads it (dig Q7).
+        mc2_stop: false,
         mc2_park: input.mc2_park,
     }
 }

@@ -56,6 +56,16 @@ use mgc_formats::Thing;
 use crate::chassis::{ChassisParams, RandWidth};
 use crate::verbs::{VerbKind, VerbSet};
 
+/// A/B toggle for the MC1 CLAIMED-DWELLING FLAG EXTENTS: set
+/// `MGC_NO_MC1_HOUSE_FLAG_EXTENTS` to restore the pre-dig fold, where
+/// the claim stamped `set_sprite(177 + team)` and so took the
+/// building's collision quad off the TEAM's sprite row instead of row
+/// 177's. Citation at the write site in [`Gen::tick_building_live`].
+pub(crate) fn no_mc1_house_flag_extents() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HOUSE_FLAG_EXTENTS").is_some())
+}
+
 /// Cells in the 256x256 terrain grid.
 const GRID: usize = 0x10000;
 
@@ -1425,6 +1435,52 @@ fn preclear_eq() -> i32 {
 /// MC2's `NewEvent_4A050` recycle arm left the tick-top roster heads
 /// standing. See the citation at the blank itself (NETHERW.EXE
 /// 0x6E881). MC1's blank is unconditional either way.
+/// `MGC_NO_MC2_WEAVE_MODEL_GATE=1` restores the pre-dig IDENTITY gate on
+/// the MC2 rival's combat whiff weave — "weave only when the target is
+/// the human or another rival wizard". Retail's `sub_13890` gates on the
+/// TARGET RECORD'S **MODEL BYTE** alone, with no class or roster test:
+///
+/// ```text
+///     mov dh,[esi+0x40]   ; esi = Entities[a1x->word_0x96_150]
+///     test dh,dh
+///     jz   weave          ; model == 0
+///     cmp  dh,0x1
+///     jnz  skip           ; model != 1
+/// ```
+///
+/// NETHERW.EXE 0x1396A (`sub_13890`, the whiff arm; the same five bytes
+/// sit at 0x1392F on the landed-cast arm). Wizards are (3,0) and (3,1),
+/// so an identity gate reads right until the rival hunts something else
+/// whose model happens to be 0 or 1 — mc2l1 t=449, rival 138 in state
+/// 0xD (HuntMana) onto slot 60, a **(5,1)** mana creature, where retail
+/// weaves and the port did not. See [`World::mc2_rival_weave`].
+pub(crate) fn no_mc2_weave_model_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WEAVE_MODEL_GATE").is_some())
+}
+
+/// `MGC_NO_MC2_CASTLE_BALL_SPEED_STEP=1` restores the pre-dig CLAMPED
+/// castle-ball speed servo, `actSpeed += (minSpeed - actSpeed).clamp(-2, 2)`.
+/// Retail's step is a SIGN times two and never clamps: both castle-ball
+/// arms run
+///
+/// ```text
+///     v = minSpeed - actSpeed;
+///     if (minSpeed != actSpeed) v = (v <= 0) ? -1 : 1;
+///     actSpeed += 2 * v;
+/// ```
+///
+/// NETHERW.EXE 0x66B73-0x66BAA (`CastCastleProjectile_66B30`, the
+/// upgrade flight) and 0x66DEB-0x66E17 (`sub_66D00`, the create
+/// flight) are the same eight instructions: `sub`/`jz`/`test`/`jng`
+/// then `lea esi,[eax*2]` and `add`. The two forms differ only when
+/// |minSpeed - actSpeed| == 1, where retail OVERSHOOTS by one and then
+/// oscillates about minSpeed forever. See [`Gen::mc2_castle_ball_tick`].
+pub(crate) fn no_mc2_castle_ball_speed_step() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_BALL_SPEED_STEP").is_some())
+}
+
 /// `MGC_NO_CASTLE_EJECT_GC=1` restores the pre-dig castle ejector:
 /// a dry free stack aborts the mana burst outright, with no
 /// `sub_49F90` GC pass, no `v3 = 8` burst ceiling and no victim-stack
@@ -1546,6 +1602,25 @@ fn mc1_no_row0_shim_119() -> bool {
 fn mc1_no_row0_shim_47_55_76_85() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_47_55_76_85").is_some())
+}
+
+/// `MGC_NO_MC1_ROW0_SHIM_227=1` drops shim byte {227} back to PLAIN,
+/// restoring the pre-dig smoother on the row-0 cells x=226 and x=227.
+/// See [`Gen::OOB_TYPE_SHIM`].
+fn mc1_no_row0_shim_227() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_227").is_some())
+}
+
+/// `MGC_NO_MC1_ROW0_SHIM_32_39_40_48_89=1` drops shim bytes
+/// {32, 39, 40, 48, 89} back to PLAIN, restoring the pre-dig smoother
+/// on the row-0 cells x=31/32, 38/39, 39/40, 47/48 and 88/89.
+/// See [`Gen::OOB_TYPE_SHIM`].
+fn mc1_no_row0_shim_32_39_40_48_89() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var_os("MGC_NO_MC1_ROW0_SHIM_32_39_40_48_89").is_some()
+    })
 }
 
 /// `MGC_NO_BEAM_UNLINK=1` restores the pre-dig lightning beam, which
@@ -1871,6 +1946,81 @@ pub(crate) fn no_mc1_scatter_jar_owner_clear() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SCATTER_JAR_OWNER_CLEAR").is_some())
 }
 
+/// `MGC_NO_MC1_BUILD_SITE_CHAIN=1` restores the pre-dig POOL SCAN in
+/// MC1's `m12_build` site-overlap veto. Retail walks the two TICK-TOP
+/// ROSTER CHAINS, not the live pool: `HIDDEN.EXE 0x1ED41`
+/// `mov ebx,[ebx+0x8e76]` is the +36470 HOUSE head ([`Gen::bldg_chain`])
+/// and `0x1EDB3` `mov ebx,[ebx+0x8e6e]` the +36462 CLASS-3 head
+/// ([`Gen::wiz_chain`], filtered `cmp byte [ebx+0x41],0x2` = the
+/// castle), each stepped through the `->next` word at `+0` to the pool
+/// sentinel. `CARPET.EXE` carries the identical bytes at the identical
+/// VAs. Neither walk has a flags test — membership IS the gate.
+///
+/// The consequence the port could not express: a dwelling minted
+/// EARLIER IN THE SAME TICK is not on the tick-top chain, so retail
+/// cannot see it and the second settler's site is accepted.
+/// mc1hwl1 t=17542 is exactly that — settlers 22 and 909 both close
+/// their site attempt on the same tick; the port let 22's newborn
+/// house 788 (12544,46592) veto 909's site at (16384,43520) on a
+/// 3840 <= 4736 / 3072 <= 4224 box and lost slot 968 outright.
+///
+/// ⭐ MC2's twin (`mc2_m12_build`) has walked `bldg_chain` since it
+/// was written; MC1's never did — the tenth "a law on one call path
+/// is not landed".
+pub(crate) fn no_mc1_build_site_chain() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_BUILD_SITE_CHAIN").is_some())
+}
+
+/// `MGC_NO_MC1_GRAVE_REPOINT_CHAIN=1` restores the pre-dig LIVE POOL
+/// SCAN in the fall handler's grave re-point.
+///
+/// `sub_45C10_45F50`'s landing block re-points the dead wizard's mana
+/// balls at the fresh `(10,40)` grave, and it does so by walking the
+/// TICK-TOP BALL ROSTER — `var_u32_36462[1]`, the bucket[1] head —
+/// not the pool. HIDDEN.EXE, VA `0x46677`..`0x466c7` (file
+/// `0x5f06f`..`0x5f0bf`, VA + 0x189f8), read off the shipped bytes:
+///
+/// ```text
+///   46677: 8b 2d f8 e3 01 00   mov 0x1e3f8,%ebp        ; wizext base
+///   46681: 8b ad 72 8e 00 00   mov 0x8e72(%ebp),%ebp   ; +36466 = bucket[1] head
+///   46687: bf a4 00 00 00      mov $0xa4,%edi          ; 164
+///   4668e: 80 7d 41 27         cmpb $0x27,0x41(%ebp)   ; model65 == 39
+///   46692: 75 2a               jne  <next>
+///   ...    (ebx - pool)/164 -> eax                     ; corpse slot
+///   466a1: 66 8b 95 90 00 00 00 mov 0x90(%ebp),%dx     ; +144
+///   466a8: 39 c2 / 75 12       cmp %eax,%edx / jne <next>
+///   466b7: 66 89 85 90 …       mov %ax,0x90(%ebp)      ; +144 = grave slot
+///   466be: 8b 6d 00            mov 0x0(%ebp),%ebp      ; ->next
+///   466c1: mov 0x1e3f0,%ecx / add $0x7463,%ecx / cmp %ecx,%ebp / ja
+/// ```
+///
+/// — the `->next` walk with the pool base (0x7463 = 29795) as the
+/// terminator, and the ONLY member tests are `model65 == 39` and
+/// `+144 == corpse slot`. No class test (roster membership is the
+/// class gate), no `0x400` reap test.
+///
+/// It matters because the roster is a TICK-TOP SNAPSHOT and the MC1
+/// seizure BLANKS every roster head for the rest of the tick
+/// ([`Gen::new_event`]) — so on a pool-exhausted tick the walk sees
+/// NOTHING and the balls keep the dead wizard's `+144`.
+///
+/// WITNESS mc1hwl2 t=15762: rival 3's corpse (slot 449) lands, the
+/// 24-jar death scatter exhausts the free stack and SEIZES, and
+/// retail's re-point therefore leaves slots 875/938/953 — three
+/// `(10,39)` balls holding 5000 + 134 + 3000 — at `+144 = 449`. The
+/// port's pool scan re-pointed all three at the grave, and the NEXT
+/// tick's mana census (`recompute_mana`) consequently read rival 449
+/// back at the intrinsic base 1000 and dumped the 8134 onto the
+/// grave's own `+136` through the owner-credit fallback: t=15763
+/// slot 132 `mana_max` retail 0 / port 8134, slot 449 retail 9134 /
+/// port 1000. That pair was the take's ONLY divergence in 28,580
+/// ticks.
+pub(crate) fn no_mc1_grave_repoint_chain() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_GRAVE_REPOINT_CHAIN").is_some())
+}
+
 /// `MGC_NO_MC1_PAYLOAD_CHILD_REAP_GATE=1` restores the pre-dig
 /// UNCONDITIONAL soft kill on a spell-payload detonation. Retail's
 /// `sub_52770` explode tail (:62757-72) is one guarded block:
@@ -1992,6 +2142,40 @@ pub(crate) struct PlayerWhirl {
     /// `v30` — `MoveEntity_57FA0`'s distance, stepped along
     /// `word_0x30_48` (96 on the mid ring).
     pub step: i16,
+    /// ⭐ THE GRAB FAMILY'S PAYLOAD (`sub_33340`'s inner, near-grab and
+    /// far-grab arms — `NETHERW.EXE` 0x57ca3 / 0x57d65 / 0x57da9).
+    /// Those three arms TELEPORT the victim (`predictedAxis` is the
+    /// funnel's own `axis_0x9A_154x` on the inner arm) and can run
+    /// MORE THAN ONCE per tick, so the channel cannot carry a
+    /// heading+distance pair the way the mid ring's does: the funnel's
+    /// own slot resolves the whole walk and publishes the ABSOLUTE
+    /// `(x, y, z, yaw_0x1C_28)` `CopyEntityPosition_57CF0` would have
+    /// written. `None` = only the mid ring fired, the pre-existing
+    /// `heading`/`step` path (dig W4).
+    pub grab: Option<(u16, u16, i16, u16)>,
+    /// EF:24345-49 / 0x57c8d `mov word [ebx+0x82],0x50` — `actSpeed
+    /// = 80`, written for the HUMAN (`v40`) on the NOT-YET-GRABBED
+    /// arms only. The grabbed arms jump over that block (0x57c61
+    /// `jnz 0x57d65`), and `sub_5D530`'s stop veto then freezes the
+    /// speed servo, which is why retail holds 80 across a grab.
+    pub act80: bool,
+    /// ⭐⭐⭐ THE CAMERA-ROLL CRANK, AND IT RIDES EXACTLY WHERE `act80`
+    /// DOES. EF:24344-46 `v8 = ix->dword_0xA4_164x->roll_0x155_341;
+    /// if (v8 < 256) … = v8 + 28` is the FIRST half of the same `v40`
+    /// block (`NETHERW.EXE` 0x57c67 `cmp byte [ebp-0x4],0x0` → 0x57c73
+    /// `mov cx,[eax+0x155]` / 0x57c7a `cmp cx,0x100` / 0x57c83
+    /// `add esi,0x1c` / 0x57c86 `mov [eax+0x155],si`, with `[ebx+0x82]
+    /// = 0x50` at 0x57c8d), so the grabbed arms skip BOTH.
+    ///
+    /// It writes THE MOVER'S OWN BANK ACCUMULATOR: `sub_5D530` reads
+    /// the SAME `a1x->dword_0xA4_164x->roll_0x155_341` for `roll +=
+    /// rollDelta` (0x81d69 `mov ax,[ecx+0x4]` / 0x81d6d
+    /// `add [ecx+0x155],ax`) and for the yaw rate `yaw += (roll -
+    /// sign*7) >> 3` (0x81df9). One word, not two homes — that field
+    /// IS the recorded `roll_acc` lane / [`crate::flight::Mc1State`]'s
+    /// `roll_f`. A COUNT, not a flag: the ring walk can reach the
+    /// not-yet-grabbed block more than once in a tick.
+    pub bumps: u8,
 }
 
 impl std::hash::Hash for PlayerWhirl {
@@ -2000,6 +2184,15 @@ impl std::hash::Hash for PlayerWhirl {
             state.write_u8(0x5C);
             state.write_u16(self.heading);
             state.write_i16(self.step);
+            if let Some((x, y, z, yaw)) = self.grab {
+                state.write_u8(0x5D);
+                state.write_u16(x);
+                state.write_u16(y);
+                state.write_i16(z);
+                state.write_u16(yaw);
+            }
+            state.write_u8(self.act80 as u8);
+            state.write_u8(self.bumps);
         }
     }
 }
@@ -5863,10 +6056,32 @@ impl Gen {
         // to the direct-hit cell scans.
         self.link(i, x, y, z);
         self.refill_life(i);
-        // Balloon sprite = 169 + team (the castle dispatcher's
-        // `+86 += var_48`, :56347).
+        // ⭐ THE PER-TEAM ART IDIOM IS TWO STATEMENTS, NEVER A FOLD.
+        // Retail's balloon ctor stamps the BASE row and only then
+        // shifts the index: `sub_36FA0_37360(v2, 169)` (:44286) and,
+        // in the castle dispatcher that runs it, `+86 += var_48`
+        // (:56347) — the same shape the possession claim uses at
+        // `CARPET.EXE` 0x28EDE/0x28EEA then 0x28F1A-0x28F25.
+        //
+        // It matters because `set_sprite` also stamps the row's
+        // EXTENTS, and `SPRITE_STATS` widths are DERIVED AT BOOT from
+        // the TMAPS sprite aspect (`width = height * sprW / sprH`;
+        // all 286 rows ship `width = 0`), so adjacent rows share a
+        // box only when their sprites share a size. Folding the team
+        // into the row is exactly the defect
+        // `MGC_NO_MC1_HOUSE_FLAG_EXTENTS` fixed one band up: rows
+        // 177..184 derive 369/411/423/436/400/400/411/400.
+        //
+        // ⚠ THE BALLOON BAND IS LATENT, NOT LIVE — deliberately fixed
+        // in FORM only. Rows 169..176 (sprites 157..164, all 60x85)
+        // derive one single box — width 564, height 800, draw_type 0,
+        // frames89 1 — in BOTH the temperate and arctic banks, so the
+        // fold is byte-identical on all shipped data and no fixture
+        // or unit test can distinguish the two forms. Nothing
+        // enforces that the eight balloon sprites stay the same size.
         let team = self.owner_team(own).unwrap_or(0) as u16;
-        self.set_sprite(i, 169 + team);
+        self.set_sprite(i, 169);
+        self.ent[i].type86 = self.ent[i].type86.wrapping_add(team);
         Some(i)
     }
 
@@ -7204,10 +7419,39 @@ impl Gen {
                     let e = &self.ent[i];
                     (e.f78, e.f80, e.f82, e.f84)
                 };
-                // Owner recolor (:30808-09): flag row 177 + team color
-                // (rows 177-184 are the eight team flags).
-                let flag = 177 + self.owner_team(src).unwrap_or(0) as u16;
-                self.set_sprite(i, flag);
+                // ⭐ THE COLOUR RIDES `+86` ALONE — THE EXTENTS ARE
+                // ALWAYS ROW 177's. Retail is TWO statements, not one
+                // (:30808-09), and the shipped CARPET.EXE settles the
+                // order: `sub_28DC0` @0x28EDE `push 0xb1` / 0x28EEA
+                // `call 0x36fa0` stamps the sprite from row 177 FLAT,
+                // and only then 0x28F1A-0x28F25
+                // (`mov cx,[ebx+0x56]; add cx,[eax+0x30]; mov
+                // [ebx+0x56],cx`) adds the claimant wizext's `+48`
+                // team colour onto `+86`/type86. Folding the two into
+                // `set_sprite(177 + team)` takes the extent quad off
+                // the TEAM's row — and rows 177..184 do NOT share a
+                // sprite: TMAPS ids 165..172 measure 36x39, 36x35,
+                // 36x34, 36x33, 36x36, 36x36, 36x35, 36x36, and the
+                // boot pass (`sub_58F90`, CARPET.EXE 0x58F90; the
+                // static table ships width = 0 for EVERY row) derives
+                // `width = height * sprW / sprH` = 369, 411, 423, 436,
+                // 400, 400, 411, 400. Row 177's 369 halves to the 184
+                // every retail house wears; a team-2 claim under the
+                // fold wore 211 and its AABB reached 27 units further
+                // on each side. mc1l37 t=7177 is the witness: the
+                // wyvern's (10,0) fire cell at x=38075 sits 325 from
+                // house 676 at 38400, which clears retail's 184 + 128
+                // = 312 and FAILS the port's 211 + 128 = 339, so the
+                // port billed one extra 400 (life 1200 -> 800) a tick
+                // before retail's own trail reached the wall.
+                // (`MGC_NO_MC1_HOUSE_FLAG_EXTENTS=1` restores the fold.)
+                let team = self.owner_team(src).unwrap_or(0) as u16;
+                if no_mc1_house_flag_extents() {
+                    self.set_sprite(i, 177 + team);
+                } else {
+                    self.set_sprite(i, 177);
+                    self.ent[i].type86 = self.ent[i].type86.wrapping_add(team);
+                }
                 if patches.possessed_footprint {
                     let e = &mut self.ent[i];
                     e.f78 = f78;
@@ -7827,10 +8071,67 @@ impl Gen {
     /// on terrain with no shared history — four bytes, two takes, no
     /// contradiction.
     ///
-    /// ⏭ OPEN: mc1l37 t=12604 also skips (48,0) after smoothing (50,0)
-    /// exactly, which forces a building byte in {48, 49} that no
-    /// witness yet separates. It cannot affect mc1l49 (whose smoother
-    /// never visits (48,0)/(49,0)) and is left unfit.
+    /// {32, 39, 40, 48, 89} came from mc1hwl1 (round 122, dig Q5),
+    /// the rest of the row-0 family dig W3 opened with {227}. Every
+    /// one is FORCED to a single index — never a pair — because the
+    /// neighbouring cell that shares the byte SMOOTHS bit-exactly with
+    /// retail in the same tick. For {40}, {39}, {32} and {89} the
+    /// whole height plane is byte-identical entering the tick
+    /// (`MGC_PLANE_DIFF` hdiff 0); for {48} five cells are already
+    /// adrift at t=9671, but all of them (x=39 and x=87..89) lie
+    /// outside the x=47..50 windows in play, and the sum identity
+    /// below proves the local neighbourhood was clean:
+    ///   {40} — t=6644, the take's FIRST height drift (hdiff 1). The
+    ///     port smooths (40,0) 62 -> 61 (556/9) where retail holds 62,
+    ///     and in the same walk (41,0) 62 -> 61 matches retail exactly
+    ///     (retail's own sum is 371/6 = 61 against the port's 370/6,
+    ///     the one-unit difference being (40,0) itself). (41,0)
+    ///     smoothing pins {41, 42} plain, so {40} is forced.
+    ///   {39} — t=6730 and again t=7122. (37,0) smooths 68 -> 67
+    ///     (610/9) bit-exactly with retail, pinning {37, 38} plain;
+    ///     (38,0) then skips (retail holds 72 where the port writes
+    ///     608/9 = 67), so {39} is forced. (39,0)'s own skip reads the
+    ///     same byte and is explained by it.
+    ///   {32} — t=6730, the same un-stamp epilogue. (33,0) smooths
+    ///     65 -> 68 in both columns, pinning {33, 34} plain; (32,0)
+    ///     skips (retail 65, port 604/9 = 67), so {32} is forced.
+    ///   {89} — t=8849, a shoreline collapse at x=86..91. (87,0)
+    ///     smooths 12 -> 18 in both columns, pinning {87, 88} plain;
+    ///     (88,0) skips (retail 11) and (89,0) skips (retail 9), so
+    ///     {89} — the byte they share — is forced. Blast radius is
+    ///     those two cells plus the (87,255) row-wrap cascade.
+    ///   {48} — t=9671. (49,0) SMOOTHS in retail to 61, which is
+    ///     neither its pre-value 67 nor the port's 60: retail's sum is
+    ///     552/9 = 61 exactly, the port's 545/9 = 60 differing only by
+    ///     (48,0) (retail 69, port 62). That pins {49, 50} plain, and
+    ///     (48,0)'s skip forces {48}. This SETTLES the open question
+    ///     below.
+    ///
+    /// Per-byte attribution (each entry alone, `--segmented --brief`):
+    /// on mc1hwl1 {32} -2, {40} -3, {39} -1, {89} -1 segments and all
+    /// five together -18 — strongly superadditive, because any seed
+    /// left unfixed re-contaminates the region the others cleaned. On
+    /// the MC1 takes only {48} moves anything: mc1l37 5 segments -> 3
+    /// and mc1l49 11 -> 10, with {32, 39, 40, 89} inert on every MC1
+    /// take in the corpus.
+    ///
+    /// ⚠ mc1l37/mc1l49 are MC1 and mc1hwl1 is HIDDEN WORLDS, whose
+    /// windows are 16 bytes apart (CC0DF+i vs CC0CF+i), so shim index
+    /// i is not the same PHYSICAL byte in the two executables. The
+    /// single shared table is a modelling economy that has not yet
+    /// been contradicted — every MC1 take is byte-identical under
+    /// these five entries. The day a contradiction appears the answer
+    /// is to split the table on `GameId::Mc1Hw`, not to overwrite a
+    /// byte.
+    ///
+    /// ⏭ WAS OPEN, NOW SETTLED BY {48}: mc1l37 t=12604 also skips
+    /// (48,0) after smoothing (50,0) exactly, which forces a building
+    /// byte in {48, 49} that no MC1 witness separates. mc1hwl1 t=9671
+    /// separates it in favour of {48} — and mc1l37 and mc1l49 then
+    /// BOTH improve under it, so the choice is corroborated by the
+    /// very takes that could not make it. ⚠ The old note's "it cannot
+    /// affect mc1l49 (whose smoother never visits (48,0)/(49,0))" is
+    /// FALSE: mc1l49 goes 11 segments -> 10 under {48} alone.
     ///
     /// The 257 bytes retail's sub_360C0 quad gate reads BELOW the
     /// type plane for row-0 cells (addresses CC0DF..CC1DF — sound-
@@ -7852,6 +8153,12 @@ impl Gen {
         s[55] = 22;
         s[76] = 22;
         s[85] = 22;
+        s[227] = 22;
+        s[32] = 22;
+        s[39] = 22;
+        s[40] = 22;
+        s[48] = 22;
+        s[89] = 22;
         s
     };
 
@@ -7874,6 +8181,19 @@ impl Gen {
                 {
                     return 0;
                 }
+                // `MGC_NO_MC1_ROW0_SHIM_227=1` — see
+                // [`mc1_no_row0_shim_227`].
+                if idx == -30 && mc1_no_row0_shim_227() {
+                    return 0;
+                }
+                // `MGC_NO_MC1_ROW0_SHIM_32_39_40_48_89=1` — see
+                // [`mc1_no_row0_shim_32_39_40_48_89`].
+                if matches!(idx + 257, 32 | 39 | 40 | 48 | 89)
+                    && mc1_no_row0_shim_32_39_40_48_89()
+                {
+                    return 0;
+                }
+
                 Self::OOB_TYPE_SHIM[(idx + 257) as usize]
             } else {
                 self.t.tile_type[idx as usize]
@@ -9267,6 +9587,172 @@ mod tests {
         );
     }
 
+    /// ⚖ **mc1l6's FOUR HEADS ARE ONE RETAIL-SIDE WOUND IN BUILD ROW
+    /// 5 — THIS PINS THE PORT'S HALF OF THAT RULING.** Retail's
+    /// in-memory BUILD0-0.DAT row 5 (the 35x35 level-5 castle course)
+    /// is damaged during play at five cells — dat 2736/2737/2738/2739
+    /// /2750, i.e. row-5 RLE row 10, cells 18/19/20/21/32 — so its
+    /// `(10,42)` painter raises, and its demolish walker later razes,
+    /// five cells the shipped table does not name. Both mc1l6 castle
+    /// sites show it ((12,24) t=11733 and t=27748, (3,227) t=28252),
+    /// levels 1..4 are bit-exact at both, and the collapse's draw
+    /// count — graded against retail's own LCG on pool slot 0's `+4`
+    /// — is exact for courses 4/3/2/1 and short by 4 and 5 for course
+    /// 5. `conformance/known-deviations.json`
+    /// `mc1l6-build-row5-dat-damage-ground-reads` carries the full
+    /// evidence; this test is the ASSET + CODE half that the ruling
+    /// rests on, and it must FAIL if a re-bake or a painter change
+    /// ever makes the shipped table produce retail's heights.
+    ///
+    /// ⭐ It also pins why `fill_castle_goal_row` is faithful WITHOUT
+    /// the `+4`/`+5` axis transposition that sub_285C0's inner-row
+    /// walk really has (:30594-97 takes the row's X extent from `+5`
+    /// and its Y extent AND row count from `+4`, the opposite of the
+    /// level rect's): **every castle course is SQUARE**, so the
+    /// transposition is vacuous here. It is NOT vacuous for the
+    /// non-square dwelling rows (17+), which is a live lead — if that
+    /// lead ever lands, the castle courses must not move, and this
+    /// assertion says so.
+    #[test]
+    fn the_level5_castle_course_paints_only_the_shipped_bytes() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../baked/assets/mc1-temperate");
+        let (Ok(tab), Ok(dat)) = (
+            std::fs::read(root.join("build.tab.bin")),
+            std::fs::read(root.join("build.dat.bin")),
+        ) else {
+            return; // baked game data is optional
+        };
+        let mut grid = vec![31u8; 1024];
+        grid[15 * 32 + 15] = 0;
+        let assets = FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+
+        // The RLE cell grid of one build row, `None` where a negative
+        // run skips the cell (the same walk the painter runs).
+        let cells = |bt: usize| -> Vec<Option<u8>> {
+            let def = assets.build_tab[bt];
+            let (w, h) = (def.w as usize, def.h as usize);
+            let mut out = vec![None; w * h];
+            let (mut rows, mut rx, mut ry, mut c) = (h, 0i32, 0usize, def.offset as usize);
+            while rows != 0 {
+                let ctl = assets.build_dat[c] as i8;
+                c += 1;
+                if ctl == 0 {
+                    ry += 1;
+                    rows -= 1;
+                    rx = 0;
+                    continue;
+                }
+                if ctl < 0 {
+                    rx -= ctl as i32;
+                    continue;
+                }
+                for _ in 0..ctl {
+                    if rx >= 0 && (rx as usize) < w && ry < h {
+                        out[ry * w + rx as usize] = Some(assets.build_dat[c]);
+                    }
+                    c += 1;
+                    rx += 1;
+                }
+            }
+            out
+        };
+
+        // 1. EVERY CASTLE COURSE IS SQUARE — what makes sub_285C0's
+        //    `+4`/`+5` inner-row transposition vacuous for the castle.
+        for bt in 1..=8usize {
+            let d = assets.build_tab[bt];
+            assert_eq!(
+                (bt, d.w),
+                (bt, d.h),
+                "castle course {bt} must be square, else sub_285C0's \
+                 inner-row `+5`-is-X / `+4`-is-Y walk is NOT vacuous"
+            );
+        }
+        assert_eq!(
+            (assets.build_tab[5].w, assets.build_tab[5].offset),
+            (35, 2347),
+            "course 5 is the 35x35 rect at dat 2347"
+        );
+
+        // 2. THE FIVE DISPUTED BYTES, AS SHIPPED.
+        let c5 = cells(5);
+        for (rx, want) in [(18, 0x55u8), (19, 0), (20, 0), (21, 0), (32, 0)] {
+            assert_eq!(
+                c5[10 * 35 + rx],
+                Some(want),
+                "shipped course-5 cell (row 10, col {rx}) — retail \
+                 behaves as if this byte were 0x5B/0x5F/0x5F/0x5F/0x54"
+            );
+        }
+
+        // 3. AND THE ASSET CANNOT REACH RETAIL'S GOAL AT ALL: a goal
+        //    of `target + 56` needs a cell byte with low nibble 15
+        //    (`4 * (lo - 1) + target`, CARPET.EXE 0x288E7-0x2891F),
+        //    and courses 1..5 hold NO such byte anywhere. Retail
+        //    applied exactly `target + 56` at three cells, in three
+        //    separate builds, at two sites.
+        for bt in 1..=5usize {
+            assert!(
+                !cells(bt)
+                    .iter()
+                    .any(|b| b.is_some_and(|b| b >= 0x0F && b % 16 == 15)),
+                "course {bt} must hold no low-nibble-15 cell byte"
+            );
+        }
+
+        // 4. THE PAINTER ITSELF, over mc1l6's own site and course:
+        //    18 work ticks converge every cell on the SHIPPED goal.
+        let mut g = Gen::new(
+            flat_land(60),
+            assets,
+            1,
+            ChassisParams::MC1,
+            VerbSet::MC1,
+        );
+        let i = g.new_event().unwrap();
+        {
+            let e = &mut g.ent[i];
+            e.class64 = 10;
+            e.model65 = 42;
+            e.f71 = 5; // level 5 => courses 1..=5
+            e.x = 12 * 256; // mc1l6's castle site (12,24)
+            e.y = 24 * 256;
+            e.z = 55 * 32; // target = z >> 5 = 55
+        }
+        for _ in 0..18 {
+            g.tick_castle_painter(i);
+        }
+        // Course-5 rect origin = (12,24) - (35>>1) = (251,7), so RLE
+        // row 10 is map row 17 and cols 18/19/20/21/32 are map x
+        // 13/14/15/16/27 — mc1l6's five drifting cells verbatim.
+        let got: Vec<u8> = [13u8, 14, 15, 16, 27]
+            .iter()
+            .map(|&x| g.t.height[tile(x, 17)])
+            .collect();
+        assert_eq!(
+            got,
+            vec![71u8, 79, 79, 87, 55],
+            "the SHIPPED goals: 0x55 -> target+16 at x=13, course 3's \
+             0x57/0x57/0x59 -> target+24/+24/+32 at x=14/15/16, and \
+             course 4's 0x07 -> target at x=27"
+        );
+        assert_ne!(
+            got,
+            vec![95u8, 111, 111, 111, 67],
+            "retail's mc1l6 heights are NOT reachable from the shipped \
+             table — if this ever passes, the deviation ruling is stale"
+        );
+        // …and the cells either side of the lesion agree with retail
+        // on the same tick, which is why the wound reads as five cells
+        // and not as a misplaced rect.
+        assert_eq!(
+            (g.t.height[tile(9, 17)], g.t.height[tile(17, 17)]),
+            (79, 87),
+            "course-5 row 10 cols 14 and 22 — the lesion's neighbours"
+        );
+    }
+
     /// ⭐ **A DWELLING WEARS THE CASTLE'S Z-CENTER MARKER, SPRITE ROW
     /// 177, AND AN OCCUPANCY CAP OF AREA/4.** `sub_3B690` (:47501)
     /// ends on `sub_36FA0_37360(event, 177)` and `sub_36DF0_371B0`
@@ -10026,6 +10512,80 @@ mod tests {
                 102,
                 "({x},0) pins its shim pair plain and must smooth"
             );
+        }
+    }
+
+    /// Round 122 (dig Q5): the rest of the mc1hwl1 row-0 family that
+    /// dig W3 opened with {227} — building-classed shim bytes
+    /// {32, 39, 40, 48, 89}. Each is forced to a SINGLE index, never a
+    /// pair, because in the very same smoother walk the neighbouring
+    /// cell that shares the byte reproduces retail's 3x3 average
+    /// bit-exactly: (41,0) at t=6644 forces {40}, (37,0) at t=6730 and
+    /// t=7122 forces {39}, (33,0) at t=6730 forces {32}, (87,0) at
+    /// t=8849 forces {89}, and (49,0) at t=9671 forces {48} — the last
+    /// settling the {48, 49} ambiguity mc1l37 could not separate.
+    /// See [`Gen::OOB_TYPE_SHIM`].
+    ///
+    /// NO RECORDING PIN IS POSSIBLE: pair mode installs the truth
+    /// channel's terrain per pair, so a drifting height plane never
+    /// reaches the compare, and the take's head (t=5540
+    /// `(5,4)slot665:x`) is not a terrain row. The free-run witness is
+    /// `MGC_PLANE_DIFF`: over mc1hwl1's whole 53,495-tick run the
+    /// height plane drifts from retail on 11,985 ticks without these
+    /// five bytes and on 1 with them, and the segmented census goes
+    /// 27 segments / 26 devs -> 9 / 8.
+    ///
+    /// NON-VACUITY: `MGC_NO_MC1_ROW0_SHIM_32_39_40_48_89=1` fails this
+    /// test — every blocked cell smooths to 102.
+    #[test]
+    fn the_row0_shim_gates_bytes_32_39_40_48_and_89() {
+        // ONE WORLD PER CELL — the 3x3 windows of adjacent probes
+        // overlap, so a shared world would let one probe's write feed
+        // the next one's average.
+        let probe = |x: u8| {
+            let mut g = Gen::new(
+                flat_land(100),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                crate::verbs::VerbSet::MC1,
+            );
+            // Eight cells at 100 and (x,1) at 118, so a smooth writes
+            // (8*100 + 118)/9 = 102 and a skip leaves 100.
+            g.t.height[tile(x, 1)] = 118;
+            g.smooth_cell(tile(x, 0));
+            g.t.height[tile(x, 0)]
+        };
+        // A byte b blocks exactly the two cells that read it, (b-1,0)
+        // and (b,0). (39,0) is blocked twice over, by {39} and {40}.
+        for (x, byte) in [
+            (31u8, 32),
+            (32, 32),
+            (38, 39),
+            (39, 39),
+            (40, 40),
+            (47, 48),
+            (48, 48),
+            (88, 89),
+            (89, 89),
+        ] {
+            assert_eq!(probe(x), 100, "shim byte {byte} must gate ({x},0) off");
+        }
+        // The smooths that FORCED those five bytes, each pinning its
+        // own pair {x, x+1} plain, must still take the 3x3 average —
+        // this is the half that makes the fit a separation rather than
+        // a guess.
+        for x in [33u8, 37, 41, 49, 87] {
+            assert_eq!(
+                probe(x),
+                102,
+                "({x},0) pins its shim pair plain and must smooth"
+            );
+        }
+        // ...and so must their partners, the upper halves of the
+        // pinned pairs: {34}, {38}, {42}, {50}, {88} are all plain.
+        for x in [34u8, 42, 50, 90] {
+            assert_eq!(probe(x), 102, "({x},0) reads two plain shim bytes");
         }
     }
 
@@ -12336,5 +12896,80 @@ mod tests {
         g.ent[k].f63 = 1;
         g.creature_tick(k, &ctx);
         assert_eq!(g.ent[k].f71, 3, "an off-cadence tick still spends a charge");
+    }
+
+    /// ⭐⭐⭐ **THE ROW-0 SMOOTHER GATE READS BELOW THE TYPE PLANE, AND
+    /// SHIM BYTE {227} IS BUILDING-CLASSED.** `sub_360C0` (:42912-19)
+    /// forms its four-way quad index in SIGNED 32-bit arithmetic —
+    /// `(u16)a1 - 257` / `- 256` / `- 1`, no wrap — so for a ROW-0
+    /// cell two of the three reads land 257 and 256 bytes BELOW
+    /// `mapTerrainType`, in the sound-driver globals. The shipped
+    /// binaries carry the three displacements verbatim:
+    /// `HIDDEN.EXE` file 0x4eea9 `8a 93 cf c0 03 00`, 0x4eec2
+    /// `8a 93 d0 c0 03 00`, 0x4eedb `8a 93 cf c1 03 00` (bases −257 /
+    /// −256 / −1 off the plane base), and `CARPET.EXE` the same
+    /// stream at 0x4e8e9 / 0x4e902 / 0x4e91b with its base 16 bytes
+    /// higher. Only the GATE escapes: the 3x3 SUM loop casts per
+    /// access (:42928) and wraps into row 255 correctly.
+    ///
+    /// The rig is the recorded row-0 neighbourhood at x=225..229
+    /// (rows 255/0/1) that pinned [`Gen::OOB_TYPE_SHIM`]`[227]`.
+    /// A cell (x,0) reads shim `x` and `x + 1`, so (226,0) and
+    /// (227,0) BOTH read {227} and retail skips them, while (228,0)
+    /// and (229,0) see only plain shim bytes and smooth to their
+    /// exact 3x3 averages (304/9 and 295/9).
+    ///
+    /// WHAT WOULD BREAK IT: dropping {227} back to plain (the pre-dig
+    /// table, restored process-wide by `MGC_NO_MC1_ROW0_SHIM_227=1`)
+    /// smooths the first two cells to 31 and 33 and leaves the last
+    /// two at 33 and 32 — so the four values are asserted TOGETHER,
+    /// because the `OnceLock` switch cannot be flipped inside one
+    /// test. No plain-{227} implementation can produce (30, 37), and
+    /// no "row 0 never smooths" implementation can produce (33, 32).
+    #[test]
+    fn the_row_0_smoother_gate_reads_shim_byte_227_as_building() {
+        // Uniform plain land at height 30 — the untouched ground the
+        // recorded neighbourhood sits in (x=230's column feeds
+        // (229,0)'s average).
+        let mut planes = Planes {
+            height: vec![30; GRID],
+            tile_type: vec![1; GRID],
+            shading: vec![32; GRID],
+            angle: vec![1; GRID],
+            ceiling: Vec::new(),
+        };
+        // Rows 255 / 0 / 1 at x=225..229, as recorded.
+        let rows: [(u8, [u8; 5]); 3] = [
+            (255, [30, 33, 34, 33, 31]),
+            (0, [30, 30, 37, 31, 33]),
+            (1, [30, 30, 30, 45, 30]),
+        ];
+        let types: [u8; 5] = [77, 1, 1, 1, 1];
+        for (y, hs) in rows {
+            for (k, x) in (225u8..=229).enumerate() {
+                planes.height[tile(x, y)] = hs[k];
+                planes.tile_type[tile(x, y)] = types[k];
+                planes.angle[tile(x, y)] = 1;
+            }
+        }
+        let mut g = Gen::new(
+            planes,
+            synthetic_assets(),
+            0,
+            ChassisParams::MC1,
+            VerbSet::MC1,
+        );
+        // The perimeter walk's row-0 order.
+        for x in 226u8..=229 {
+            g.smooth_cell(tile(x, 0));
+        }
+        let h = |x: u8| g.t.height[tile(x, 0)];
+        assert_eq!(
+            (h(226), h(227), h(228), h(229)),
+            (30, 37, 33, 32),
+            "(226,0) and (227,0) read shim {{227}} = building and hold \
+             their pre-smoother heights; (228,0) and (229,0) read only \
+             plain shim bytes and take the 3x3 averages 304/9 and 295/9"
+        );
     }
 }

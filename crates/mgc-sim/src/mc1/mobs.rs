@@ -19,7 +19,7 @@
 //!   (:45086-:45087); `link` guards on the placed flag in both the
 //!   original and this port, so the second call is a no-op.
 
-use crate::engine::features::Gen;
+use crate::engine::features::{Gen, no_mc1_build_site_chain};
 use crate::mc1::behavior::{BEHAVIOR, BehaviorRow};
 use crate::mc1::combat::{Inbox, MailTarget};
 use crate::mc1::sprite_stats::SPRITE_STATS;
@@ -101,6 +101,61 @@ fn no_m15_chase_hit_fallthrough() -> bool {
 fn no_m15m16_scratch_target() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_M15M16_SCRATCH_TARGET").is_some())
+}
+
+/// `MGC_NO_M4M9_ARM_SCRATCH_TARGET=1` restores the pre-dig `+146 == 0`
+/// guards on the two ARM trailers that stamp the filter pair off the
+/// target record: the militiaman's `sub_1BC50` (:22759-61) and the
+/// mound's `sub_1DCD0` (:24240-48) — see [`Gen::militia_arm`] and
+/// [`Gen::m9_enter_chase`]. Both retail functions index the pool with
+/// `+146` UNCONDITIONALLY (`*(BYTE *)(pool + 164 * v3 + 64)`), and
+/// `sub_1DCD0` runs its `id24` equality test off the SAME raw pointer,
+/// so a `+146` of 0 reads the scratch record and stamps its (0, 0) —
+/// the FIFTH and SIXTH copies of the law `no_m4_scratch_target` names.
+/// Kept so one binary can be A/B'd; read once, a whole-process arm.
+fn no_m4m9_arm_scratch_target() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M4M9_ARM_SCRATCH_TARGET").is_some())
+}
+
+/// `MGC_NO_MC1_WANTED_DEATH_STATE=1` restores the pre-dig placement of
+/// the village-wanted (+528 = 200) arm on the death-TRANSITION tick,
+/// inside the damage prologue's `Inbox::Dead` arm. Retail does not arm
+/// there at all: the +528 write lives in the four per-model DEATH-STATE
+/// handlers, which run one and two ticks LATER and read `+38` as it
+/// stands then — griffon `sub_1CF60` (state 0x34 = 48+4,
+/// `reference/remc1/sub_main.cpp` :23574-80, HW twin :22131-39),
+/// settler `sub_1F5B0` (state 0x4D = 72+5, :25285-92, HW :23842-50),
+/// feeder `sub_1FA00` (state 0x52 = 78+4, :25447-62, HW :24004-20,
+/// the arm sitting in the NON-absorb else) and feeder `sub_1FEC0`
+/// (state 0x59 = 84+5, :25632-38, HW :24189-97). NONE of the four has
+/// a single `call` site in `CARPET.EXE` — every one is reached ONLY
+/// through the class-5 state table — and each tails into its own
+/// family BASE: `sub_1CF60` @VA 0x1CF60 ends `push 0x30; call 0x1a6c0`
+/// (48 = m8, the DEATH slot), `sub_1FA00` @0x1FA00 `push 0x4e; call
+/// 0x1a6c0` (78 = m13, DEATH), `sub_1F5B0` @0x1F5B0 `push 0x48; call
+/// 0x1a800` (72 = m12, CORPSE) and `sub_1FEC0` @0x1FEC0 `push 0x54;
+/// call 0x1a800` (84 = m14, CORPSE). The write itself is one
+/// instruction, `66 C7 80 10 02 00 00 C8 00` = `mov word
+/// [eax+0x210],200`, at file 0x357C2 / 0x37E12 / 0x3827A / 0x38722
+/// (`file = VA + 0x187f8`), reached past `mov dl,[eax+0x74a4]` (POOL
+/// + 65 = the killer's model) `test dl,dl / cmp dl,1` — the
+/// `model <= 1` gate — off `mov eax,[edx+eax*4+0x7503]` (POOL + 160,
+/// the wizext). Kept so one binary can be A/B'd; read once, a
+/// whole-process arm.
+fn no_mc1_wanted_death_state() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WANTED_DEATH_STATE").is_some())
+}
+
+/// `MGC_NO_M4_CHASE_WANTED_TRAILER=1` restores the pre-dig behaviour in
+/// which a militiaman's CHASE tick that is FROZEN by the damage inbox
+/// skipped `sub_1BB20`'s wanted-timer tail — see
+/// [`Gen::militia_chase_wanted_tail`]. Kept so one binary can be A/B'd;
+/// read once, a whole-process arm.
+fn no_m4_chase_wanted_trailer() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M4_CHASE_WANTED_TRAILER").is_some())
 }
 
 /// Per-tick context the creature handlers need: the player's position
@@ -2353,10 +2408,19 @@ impl Gen {
         let tgt = self.ent[i].f146;
         // The human is out of pool here, so his class/model pair is
         // named directly (the wizard-body class 3, model 0) exactly as
-        // the chase read it before.
+        // the chase read it before — retail keeps his POOL SLOT in
+        // `+146` and reads (3, 0) straight off it.
+        //
+        // :22759-61 has no index test of any kind: `+146` of 0 reads
+        // the SCRATCH RECORD at pool slot 0 and stamps its class/model,
+        // which is (0, 0) while the slot is unstaged. The `t != 0` arm
+        // was invented, and it is what mc1hwl1 t=3684 and mc1l37
+        // t=2742..2878 score as `sclass: retail 0 port 3`.
         let (tc, tm) = match tgt as usize {
             _ if tgt == PLAYER_TARGET => (3u8, 0u8),
-            t if t != 0 && t < self.ent.len() => (self.ent[t].class64, self.ent[t].model65),
+            t if t < self.ent.len() && !(t == 0 && no_m4m9_arm_scratch_target()) => {
+                (self.ent[t].class64, self.ent[t].model65)
+            }
             _ => (3u8, 0u8),
         };
         let d = self.ent_rand(i);
@@ -2386,10 +2450,13 @@ impl Gen {
     /// and ANY break runs the disarm trailer on the same tick.
     fn militia_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         self.militia_chase_body(i, base, ctx);
-        // sub_1BB20's trailer (:22699-702).
+        // sub_1BB20's trailer (:22699-702)...
         if self.ent[i].tick70 != base + 2 {
             self.chase_exit_trailer(i, 4);
         }
+        // ...and its wanted-timer tail (:22703-14), textually below the
+        // core exactly like the m0 bob and the m5 regen.
+        self.militia_chase_wanted_tail(i, base);
     }
 
     fn militia_chase_body(&mut self, i: usize, base: u8, ctx: &MobCtx) {
@@ -2467,15 +2534,54 @@ impl Gen {
             } else {
                 self.attack_thunk(i, 4, tgt, tx, ty, tz, 0, 0);
             }
-            // sub_1BB20's own tail (:22705-14): the SAME cadence
-            // refreshes the target's wanted timer, outside the range
-            // gate and only for a carpet-borne target (model ≤ 1;
-            // the out-of-pool player IS the carpet).
-            if self.ent[i].tick70 == base + 2
-                && (tgt == PLAYER_TARGET || self.ent[tgt as usize].model65 <= 1)
-            {
-                self.flag_village_wanted(tgt);
-            }
+        }
+    }
+
+    /// `sub_1BB20`'s own tail (:22703-14), the militia CHASE wrapper's
+    /// wanted-timer cadence: every `v_26` ticks a chasing militiaman
+    /// re-stamps his target's `+528` to 200, outside the range gate and
+    /// only for a carpet-borne target (`model <= 1`; the out-of-pool
+    /// player IS the carpet).
+    ///
+    /// ⭐ IT IS A WRAPPER TRAILER, SO THE DAMAGE FREEZE DOES NOT REACH
+    /// IT. `sub_1BB20` is `sub_1A120(a1x, 24, sub_1A990)` and *then*
+    /// this tail (:22696-714): every early exit the shared core takes
+    /// out of its damage prologue — the class-3 retarget
+    /// `+146 = +40; return 0` (:21641-44) and the plain `return v15`
+    /// a non-wizard hit falls to (:21649) — is a return INTO the
+    /// wrapper, which then runs this. Only a LETHAL hit escapes it,
+    /// because that arm moves `+70` to `a2 + 4` and the wrapper's own
+    /// `if (+70 != 26)` (:22699) diverts to `sub_1BCE0` first. This is
+    /// the same law the m0 bob, the m1 idle trailer and the m5 regen
+    /// already carry in [`Gen::creature_tick`]'s `Inbox::Hit` arm; the
+    /// m4 chase's `+528` cadence was the one wrapper tail left out of
+    /// it.
+    ///
+    /// mc1l37 t=9270 is the witness: militiaman 867 is in chase 26 on
+    /// the human with `+63 = 180` (row 16, `v_26 = 30`) when the human's
+    /// 240 lands (`+94 = 523`, `act_life 520 → 280`). Retail's core
+    /// aborts on the retarget, the wrapper still stamps
+    /// `wiz 0 +528 = 200` — read raw at struct offset 14954, `aggro`
+    /// 0 → 200 — and 16 ticks later the militiaman at slot 183 passes
+    /// rung 1 of the idle acquisition ladder and takes the human
+    /// (`+146 = 523`, `type86 = 206`, speed 0). The port, frozen out of
+    /// the tail, held `player_aggro` at 0 and slot 183 wandered on.
+    fn militia_chase_wanted_tail(&mut self, i: usize, base: u8) {
+        // The wrapper's `if (+70 != 26)` diverts to `sub_1BCE0` before
+        // the cadence is ever read (:22699-702).
+        if self.ent[i].tick70 != base + 2 {
+            return;
+        }
+        let e = &self.ent[i];
+        let tgt = e.f146;
+        if (e.f63 as i16) % BEHAVIOR[e.row156 as usize].v_26 != 0 {
+            return;
+        }
+        // Retail indexes its fixed pool array with the raw `+146`; the
+        // bound is memory safety only (the FROZEN path never reaches
+        // the body's own index guard).
+        if tgt == PLAYER_TARGET || self.ent.get(tgt as usize).is_some_and(|c| c.model65 <= 1) {
+            self.flag_village_wanted(tgt);
         }
     }
 
@@ -2828,17 +2934,51 @@ impl Gen {
             return;
         }
         // Overlap vs every house, then every castle (:24940-75).
-        for j in 1..self.ent.len() {
-            let c = &self.ent[j];
-            let house = c.class64 == 10 && c.model65 == 45;
-            let castle = c.class64 == 3 && c.model65 == 2;
-            if !(house || castle) || c.flags & 0x400 != 0 {
-                continue;
+        //
+        // ⭐⭐⭐ AND BOTH SCANS WALK A TICK-TOP ROSTER CHAIN, NOT THE
+        // LIVE POOL. `HIDDEN.EXE 0x1ED41: mov ebx,[ebx+0x8e76]` is the
+        // +36470 HOUSE head ([`Gen::bldg_chain`]) and `0x1EDB3: mov
+        // ebx,[ebx+0x8e6e]` the +36462 CLASS-3 head
+        // ([`Gen::wiz_chain`]) under `0x1EDC9: cmpb $0x2,0x41(%ebx)`
+        // = the castle; each is stepped by `mov ebx,[ebx]`, the
+        // `->next` word at +0, to the pool sentinel. `CARPET.EXE`
+        // carries the identical bytes at the identical VAs. Neither
+        // loop tests a flag — chain MEMBERSHIP is the whole gate, so
+        // the port's `flags & 0x400` skip went with the pool scan.
+        // See [`no_mc1_build_site_chain`] for what it cost.
+        if no_mc1_build_site_chain() {
+            for j in 1..self.ent.len() {
+                let c = &self.ent[j];
+                let house = c.class64 == 10 && c.model65 == 45;
+                let castle = c.class64 == 3 && c.model65 == 2;
+                if !(house || castle) || c.flags & 0x400 != 0 {
+                    continue;
+                }
+                let dx = (c.x.wrapping_sub(px) as i16 as i32).abs();
+                let dy = (c.y.wrapping_sub(py) as i16 as i32).abs();
+                if dx <= c.f80 as i32 + half_x && dy <= c.f82 as i32 + half_y {
+                    return;
+                }
             }
-            let dx = (c.x.wrapping_sub(px) as i16 as i32).abs();
-            let dy = (c.y.wrapping_sub(py) as i16 as i32).abs();
-            if dx <= c.f80 as i32 + half_x && dy <= c.f82 as i32 + half_y {
-                return;
+        } else {
+            for k in 0..self.bldg_chain.visible_len() {
+                let c = &self.ent[self.bldg_chain.list[k] as usize];
+                let dx = (c.x.wrapping_sub(px) as i16 as i32).abs();
+                let dy = (c.y.wrapping_sub(py) as i16 as i32).abs();
+                if dx <= c.f80 as i32 + half_x && dy <= c.f82 as i32 + half_y {
+                    return;
+                }
+            }
+            for k in 0..self.wiz_chain.visible_len() {
+                let c = &self.ent[self.wiz_chain.list[k] as usize];
+                if c.model65 != 2 {
+                    continue;
+                }
+                let dx = (c.x.wrapping_sub(px) as i16 as i32).abs();
+                let dy = (c.y.wrapping_sub(py) as i16 as i32).abs();
+                if dx <= c.f80 as i32 + half_x && dy <= c.f82 as i32 + half_y {
+                    return;
+                }
             }
         }
         // Site accepted: the house goes up, the settler settles.
@@ -3350,6 +3490,21 @@ impl Gen {
             self.ent[i].flags |= 0x400;
             return;
         }
+        // ⭐ THE VILLAGE-WANTED ARM IS A DEATH-STATE HANDLER, NOT A
+        // DEATH-TRANSITION TRAILER. The griffon's `sub_1CF60` (state
+        // 0x34 = 48 + 4, :23574-80) and the feeder's `sub_1FA00`
+        // (state 0x52 = 78 + 4, :25447-62) each stamp
+        // `pool[+38].+160->u16_528 = 200` and THEN call
+        // `sub_1A6C0` — so the write runs on the FIRST tick spent IN
+        // the death state, one tick after the prologue put the record
+        // there, and reads `+38` as it stands then. m13's copy sits in
+        // the NON-absorb `else`, so a feeder that walked into a house
+        // (+26 != 0) marks nobody — the early return above.
+        // Both arms precede the body, so they take the PRE-propagation
+        // `+38`, before the segment chain below can overwrite it.
+        if matches!(base / 6, 8 | 13) && !no_mc1_wanted_death_state() {
+            self.flag_village_wanted(self.ent[i].f38);
+        }
         let mut s = self.ent[i].f54 as usize;
         while s != 0 {
             self.ent[s].tick70 = base + 5;
@@ -3372,7 +3527,20 @@ impl Gen {
     /// CORPSE sub_1A800 (:21855), on every 8th phase tick: drop the
     /// mana ball (sub_27690) and the death-flame puff, then despawn.
     /// Every worm segment corpses independently — each drops its own.
-    fn mob_corpse(&mut self, i: usize) {
+    fn mob_corpse(&mut self, i: usize, base: u8) {
+        // The settler's `sub_1F5B0` (state 0x4D = 72 + 5, :25285-92)
+        // and the second feeder slot's `sub_1FEC0` (state 0x59 =
+        // 84 + 5, :25632-38) are CORPSE handlers that arm +528 and
+        // then call `sub_1A800` — so their write is TWO ticks after
+        // the kill, it is UNGATED by the every-8th-tick drop below,
+        // and it RE-FIRES on every corpse tick the record survives.
+        // (mc1hwl2: the settler at slot 136, killed by the human's
+        // castle footprint at t=372, holds retail's `aggro` at 199
+        // across BOTH t=375 and t=376 — a 200 re-stamp against the
+        // per-tick decay — then lets it fall to 198 at t=377.)
+        if matches!(base / 6, 12 | 14) && !no_mc1_wanted_death_state() {
+            self.flag_village_wanted(self.ent[i].f38);
+        }
         if self.ent[i].f63 & 7 == 0 {
             self.corpse_drop(i);
             self.corpse_puff(i);
@@ -3415,9 +3583,15 @@ impl Gen {
     /// as its bolt filter.
     fn m9_enter_chase(&mut self, i: usize) {
         let tgt = self.ent[i].f146;
+        // :24240-48 stages ONE pointer `v1 = pool + 164 * +146` and runs
+        // both the `id24` equality test and the filter stamp off it, with
+        // no index test — so a `+146` of 0 tests against the SCRATCH
+        // record's id and stamps its (0, 0). The `t != 0` arm was
+        // invented, and it short-circuited the id test as well as the
+        // stamp.
         let (tc, tm) = match tgt as usize {
             _ if tgt == PLAYER_TARGET => (3u8, 0u8),
-            t if t != 0 && t < self.ent.len() => {
+            t if t < self.ent.len() && !(t == 0 && no_m4m9_arm_scratch_target()) => {
                 if self.ent[i].id24 == self.ent[t].id24 {
                     self.ent[i].tick70 = 55; // 0x37, back to hidden
                     return;
@@ -4102,7 +4276,7 @@ impl Gen {
         let role = s % 6;
         match role {
             4 => return self.mob_death(i, base),
-            5 => return self.mob_corpse(i),
+            5 => return self.mob_corpse(i, base),
             _ => {}
         }
         // Per-model wrapper PRE-WORK that retail runs ABOVE its damage
@@ -4198,13 +4372,27 @@ impl Gen {
                 // list (m12 :25291, m13 :25459, m14 :25638) — and so
                 // does killing a griffon (sub_1CF60 :23578-80): the
                 // flock avenges it. NO m4 site exists — the +528=200
-                // census finds death-tick arms for 8/12/13/14 alone,
-                // and a MILITIA death arms nobody (mc1l32 t=45218:
-                // three militia burn with f38=14 and retail's wanted
-                // stays 0; the port's invented "m4 corpse analog"
-                // armed the human and the 45231/45249 pack scans
-                // acquired a carpet retail never marked).
-                if matches!(model, 8 | 12 | 13 | 14) {
+                // census finds death arms for 8/12/13/14 alone, and a
+                // MILITIA death arms nobody (mc1l32 t=45218: three
+                // militia burn with f38=14 and retail's wanted stays
+                // 0; the port's invented "m4 corpse analog" armed the
+                // human and the 45231/45249 pack scans acquired a
+                // carpet retail never marked).
+                //
+                // ⚠ NONE OF THE FOUR IS ON THIS TICK. All four writes
+                // are per-model DEATH/CORPSE STATE handlers (0x34,
+                // 0x4D, 0x52, 0x59) — see [`Gen::mob_death`] and
+                // [`Gen::mob_corpse`]. Arming here read `+38` one tick
+                // too early, at the one moment the prologue itself has
+                // just clobbered it: the `else { +40 = 0 }` above
+                // (:21341-44) then `+38 = +40` (:21363-66) wipes the
+                // killer stamp of every OUT-OF-BAND kill — the castle
+                // footprint sweep `sub_40E20` (:51751-58) writes
+                // `life = -1, +38 = +40 = owner` directly — so the
+                // arm fired with `+38 = 0` and marked nobody. Retail's
+                // handler runs a tick later, after the painter's next
+                // pass has RE-STAMPED the credit.
+                if no_mc1_wanted_death_state() && matches!(model, 8 | 12 | 13 | 14) {
                     self.flag_village_wanted(self.ent[i].f38);
                 }
                 self.ent[i].tick70 = base + 4;
@@ -4440,6 +4628,17 @@ impl Gen {
                 // l32 death-overshoot family is the receipt.
                 if model == 5 && matches!(role, 1 | 2) {
                     self.m5_regen(i);
+                }
+                // ...and so is the militia CHASE wrapper's wanted-timer
+                // cadence (sub_1BB20 :22703-14) — the tail sits below
+                // `sub_1A120` in the wrapper, so every non-lethal exit
+                // the core's damage prologue takes still reaches it.
+                // See [`Gen::militia_chase_wanted_tail`].
+                if (model, role) == (4, 2)
+                    && !no_hit_trailers()
+                    && !no_m4_chase_wanted_trailer()
+                {
+                    self.militia_chase_wanted_tail(i, base);
                 }
                 return;
             }
@@ -4747,5 +4946,193 @@ impl Gen {
         self.refill_life(head);
         self.set_sprite(head, head_type);
         Some(head)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MobCtx, PLAYER_TARGET};
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::patches::WorldPatches;
+    use crate::verbs::VerbSet;
+
+    /// A flat MC1 `Gen` — the mob state machine needs terrain under it
+    /// (`creature_move`) and nothing else. Same shape as
+    /// `mc2::stagevars::tests::flat_gen`.
+    fn flat_gen() -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC1, VerbSet::MC1)
+    }
+
+    fn ctx() -> MobCtx {
+        MobCtx {
+            px: 200 << 8,
+            py: 200 << 8,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// A mound in the PACK slot whose leader is already chasing, with
+    /// the leader's `+146` reading 0 — the pack-death handoff
+    /// (`sub_1A390` :21777-81 copies the leader's `+146` verbatim,
+    /// clears `+52` and promotes to `base + 2`), which is exactly how
+    /// the mc1hwl1 t=345 militiaman acquires his own `+146 = 0`. The
+    /// `(9, 3)` wrapper `sub_1DC80` (:24215-21 — `sub_1A390(a1x,
+    /// 0x36)` then `if (+70 == 56) sub_1DCD0(a1x)`) runs the
+    /// chase-entry trailer on the SAME tick.
+    fn packed_mound(g: &mut Gen, tgt_of_leader: u16) -> usize {
+        let leader = g.spawn_creature(9, 100 << 8, 100 << 8, 100).unwrap();
+        let mound = g.spawn_creature(9, 101 << 8, 100 << 8, 100).unwrap();
+        g.ent[leader].tick70 = 56; // m9 CHASE = 9*6 + 2
+        g.ent[leader].f146 = tgt_of_leader;
+        g.ent[mound].tick70 = 57; // m9 PACK = 9*6 + 3
+        g.ent[mound].f52 = leader as u16;
+        g.ent[mound].f63 = 0; // on the v_26 cadence
+        // The type-201 disguise pose the entry trailer overwrites.
+        g.ent[mound].f126 = 20;
+        g.ent[mound].f66 = 3;
+        g.ent[mound].f67 = 0xFF;
+        mound
+    }
+
+    /// ⭐⭐⭐ **THE MOUND'S CHASE-ENTRY TRAILER INDEXES THE POOL WITH
+    /// `+146` UNCONDITIONALLY, SO A TARGET OF 0 IS THE SCRATCH
+    /// RECORD** — law L1's SECOND call path (`sub_1DCD0`), the half
+    /// the recording corpus never captured.
+    ///
+    /// `reference/remc1/sub_main.cpp` :24240-48 stages ONE pointer
+    /// `v1 = pool_base + 164 * a1x->+146` and then runs BOTH the
+    /// `id24` equality test (`if (a1x->+24 == v1->+24) { +70 = 55;
+    /// return; }`, the sibling test below) and the filter stamp
+    /// (`+66 = v1->+64`, `+67 = v1->+65`) off it. There is no index
+    /// test, no class test and no player special case anywhere on the
+    /// path — the militia twin `sub_1BC50` (:22759-61,
+    /// `sClass = *(BYTE *)(pool() + 164 * v3 + 29859)`, 29859 = POOL
+    /// 29795 + 64) is the same idiom and is already corpus-pinned by
+    /// `conformance/fixtures/mc1hwl1/an-arm-trailer-stamps-the-scratch-record-s-filter.mgcr`
+    /// (mc1hwl1 t=3684, slot 305: retail stamps `f66 = 0`).
+    /// Pool slot 0 is the engine's SCRATCH RECORD: unstaged it reads
+    /// class64 = 0 / model65 = 0, so the mound stamps (0, 0) — not the
+    /// wizard-body (3, 0) the port's invented `t != 0` fallthrough
+    /// produced.
+    ///
+    /// THE SHIPPED BYTES SETTLE IT (`CARPET.EXE`, file = VA + 0x187f8;
+    /// `sub_1DCD0` begins at file 0x364c8 = VA 0x1DCD0). `+146` is
+    /// loaded ZERO-EXTENDED with no test at all —
+    /// `31 d2 / 66 8b 93 92 00 00 00` (`xor edx,edx` /
+    /// `mov dx,[ebx+0x92]`) at file 0x364d0 — scaled by 164 through
+    /// the `lea` chain and folded into ONE staged pointer by
+    /// `01 c6` (`add esi,eax`) at 0x364fc. Both consumers then read
+    /// off `%esi`: the id test `66 8b 53 18 / 66 3b 56 18`
+    /// (`mov dx,[ebx+0x18]` / `cmp dx,[esi+0x18]`) at 0x364fe, whose
+    /// taken branch is `6a 37 / 53 / e8 …` (`push 0x37` = state 55)
+    /// at 0x36508, and the stamp `8a 46 40 / 88 43 42`
+    /// (`+66 = [esi+0x40]`) at 0x36527 with `8a 46 41 / 88 43 43`
+    /// (`+67 = [esi+0x41]`) at 0x3652d. There is no `test` or `cmp`
+    /// against the index anywhere between the load and either use.
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_M4M9_ARM_SCRATCH_TARGET=1` puts the
+    /// invented guard back and the stamp reads (3, 0).
+    #[test]
+    fn a_mound_entering_chase_on_a_null_target_stamps_the_scratch_filter() {
+        let mut g = flat_gen();
+        assert_eq!(
+            (g.ent[0].class64, g.ent[0].model65),
+            (0, 0),
+            "the scratch record is unstaged — retail reads class64 = 0, model65 = 0 there"
+        );
+        let mound = packed_mound(&mut g, 0);
+        assert_ne!(
+            g.ent[mound].id24, g.ent[0].id24,
+            "this leg must not trip the sibling id test"
+        );
+        g.creature_tick(mound, &ctx());
+        assert_eq!(
+            g.ent[mound].f146, 0,
+            "the pack handoff copied the leader's null target"
+        );
+        assert_eq!(g.ent[mound].tick70, 56, "and promoted the mound to CHASE");
+        assert_eq!(
+            (g.ent[mound].f66, g.ent[mound].f67),
+            (0, 0),
+            "the bolt filter is the SCRATCH record's (0, 0), not a hardcoded (3, 0)"
+        );
+        assert_eq!(
+            g.ent[mound].f126, 0,
+            "…and the burrower fights rooted (+126 = 0)"
+        );
+
+        // CONTROLS — the arm is not simply always (0, 0).
+        let mut g = flat_gen();
+        let victim = g.spawn_creature(4, 102 << 8, 100 << 8, 100).unwrap();
+        let mound = packed_mound(&mut g, victim as u16);
+        g.creature_tick(mound, &ctx());
+        assert_eq!(
+            (g.ent[mound].f66, g.ent[mound].f67),
+            (5, 4),
+            "a live militia target stamps its own (5, 4)"
+        );
+        let mut g = flat_gen();
+        let mound = packed_mound(&mut g, PLAYER_TARGET);
+        g.creature_tick(mound, &ctx());
+        assert_eq!(
+            (g.ent[mound].f66, g.ent[mound].f67),
+            (3, 0),
+            "the out-of-pool human is still named directly"
+        );
+    }
+
+    /// The OTHER half of `sub_1DCD0`'s single staged pointer: the
+    /// `id24` equality test at :24242-46 runs off `v1` too, so a mound
+    /// whose `+146` is 0 tests itself against POOL SLOT 0's id and, on
+    /// a match, drops straight back to hidden (`+70 = 0x37` = 55)
+    /// without stamping anything. The port's invented `t != 0` guard
+    /// short-circuited the test as well as the stamp, so this path was
+    /// unreachable.
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_M4M9_ARM_SCRATCH_TARGET=1` — the
+    /// mound then stays in CHASE (`tick70` 56) with the hardcoded
+    /// (3, 0) stamped over its disguise filter.
+    #[test]
+    fn a_mound_s_id_test_runs_against_the_scratch_record_too() {
+        let mut g = flat_gen();
+        let mound = packed_mound(&mut g, 0);
+        // "a mound that acquired its own owner's body" — here the
+        // scratch record's id, which is what retail actually compares.
+        g.ent[mound].id24 = g.ent[0].id24;
+        g.creature_tick(mound, &ctx());
+        assert_eq!(
+            g.ent[mound].tick70, 55,
+            "matching the scratch record's id drops the mound straight back to HIDDEN"
+        );
+        assert_eq!(
+            (g.ent[mound].f66, g.ent[mound].f67),
+            (3, 0xFF),
+            "the early return leaves the disguise filter standing — no stamp at all"
+        );
+        assert_eq!(g.ent[mound].f126, 20, "and no rooting either");
     }
 }

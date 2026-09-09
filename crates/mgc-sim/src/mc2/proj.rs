@@ -143,6 +143,7 @@ fn no_a18_victim_gate() -> bool {
 // and the impact tail stamped the mine's bearing words.
 use super::effects::no_mc2_mine as no_mine_carrier;
 use super::mobs::no_mine_beacon;
+use crate::engine::features::no_mc2_castle_ball_speed_step;
 
 /// A/B toggle for the action-18 ceiling pre-clamp removal
 /// (`sub_674C0` EF:58993-96 has no cave arm before its commit, unlike
@@ -2476,7 +2477,26 @@ impl Gen {
             e.f36 = tgt_pitch;
             e.f30 = (e.f30 as i32 + Self::turn_step(e.f30, tgt_yaw, cy) as i32) as u16 & 0x7FF;
             e.f32 = (e.f32 as i32 + Self::turn_step(e.f32, tgt_pitch, cp) as i32) as u16 & 0x7FF;
-            e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+            // ⭐ RETAIL'S SPEED SERVO IS A **SIGN TIMES TWO**, NOT A
+            // CLAMPED DIFFERENCE. Both castle-ball arms run the same
+            // eight instructions — NETHERW.EXE 0x66B73 (upgrade,
+            // `CastCastleProjectile_66B30`) and 0x66DEB (create,
+            // `sub_66D00`): `sub eax,edx` / `jz` / `test` / `jng` /
+            // `mov eax,±1` / `lea esi,[eax*2]` / `add`. A `.clamp`
+            // is a step of ONE when the gap is one; retail steps TWO
+            // and OVERSHOOTS, then oscillates about minSpeed forever.
+            // mc2l4 t=7249 is the witness: the mint's caster boost
+            // (`e.f126 += wspeed`, wspeed = −1 off rival 292) leaves
+            // the fresh (9,10) at 383 against minSpeed 384, and
+            // retail's very first flight tick reads 385 where the
+            // clamped servo read 384.
+            if no_mc2_castle_ball_speed_step() {
+                e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+            } else if e.f126 < e.f128 {
+                e.f126 += 2;
+            } else if e.f126 > e.f128 {
+                e.f126 -= 2;
+            }
         }
         let (yaw, pitch, speed) = {
             let e = &self.ent[i];

@@ -394,6 +394,7 @@ fn step_mc2(world: &mut World, ch: &mut Chain, inp: Mc1Input, cmd: PlayerCommand
                 stick_x: if end_seized { 0 } else { inp.stick_x },
                 stick_y: if end_seized { 0 } else { inp.stick_y },
                 no_command: true,
+                mc2_stop: false,
                 ..Mc1Input::default()
             },
             PlayerCommand {
@@ -497,6 +498,7 @@ fn mc1_mover_input(mb: u32, stick: (i16, i16)) -> Mc1Input {
         // Cleared at the carpet's dispatch on the death fall
         // (`World::step_player_flight`).
         no_command: false,
+        mc2_stop: false,
         mc2_park: false,
     }
 }

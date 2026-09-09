@@ -78,6 +78,17 @@ fn no_sv_watch_cadence() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_SV_WATCH_CADENCE").is_some())
 }
 
+/// A/B toggle for the WATCH-HANDLE RESOLVE PHASE: set
+/// `MGC_NO_SV_WATCH_POST_MOVE_RESOLVE` to restore the pre-dig
+/// behaviour, where the kind-3/4/5 shadow leg resolved the watch
+/// handle BEFORE its own move core, so `sub_1E3E0`'s nearest scan
+/// measured from last tick's position. See the write-up at the call
+/// site in `mc2_held_move`.
+fn no_sv_watch_post_move_resolve() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_SV_WATCH_POST_MOVE_RESOLVE").is_some())
+}
+
 /// A/B toggle for the WATCH-HANDLE NEAREST SCAN: set
 /// `MGC_NO_SV_WATCH_CHAIN_SCAN` to restore the pre-dig pool walk, which
 /// scanned in slot order with three guards retail does not have and
@@ -776,6 +787,26 @@ impl World {
                 }
             },
         }
+        // ⭐⭐⭐ **AND m2's WRAPPER ENDS IN A TWO-DRAW WANDER JIGGLE.**
+        // `sub_1F8A0` (EF:11563-77, NETHERW.EXE 0x440A0) is
+        // `sub_1D5D0(a1x, 16);` then, on the SAME `byte_0x3E_62 & 7`
+        // cadence the legs use and for `StageVar2` 1..9, two entity
+        // LCG draws that nudge `roll_0x20_32` by ±(rand % 0x55).
+        // It is the FIRST statement after the legs, so it goes here.
+        // See [`Gen::m2_wrapper_jiggle`] for the EXE bytes and the
+        // mc2l1 slot-24 witness (3,645 of that take's 3,713 excess
+        // resets). `MGC_NO_MC2_M2_WRAPPER_JIGGLE=1` reverts.
+        if self.g.ent[i].model65 == 2 {
+            self.g.m2_wrapper_jiggle(i);
+            // …and the wrapper's LAST statement, the lunge-countdown
+            // re-arm (`if (actionIndex == 18) dword_0x10_16 = 1`,
+            // EF:11576 / NETHERW.EXE 0x4413A). It reads the action the
+            // legs above JUST WROTE, so it fires on the RELEASE tick —
+            // 22 of mc2l1's 34 excess resets. See
+            // [`Gen::m2_wrapper_lunge_rearm`];
+            // `MGC_NO_MC2_M2_LUNGE_REARM` reverts.
+            self.g.m2_wrapper_lunge_rearm(i);
+        }
         // Retail's per-model phase-7 wrappers run the model's AMBIENT
         // PHYSICS after the 1D5D0 legs — the held seam mirrors two:
         // - m21 (`sub_26470` EF:16938-61, kinds 1-10; 13/14/16 zero
@@ -1065,16 +1096,61 @@ impl World {
                 // Off-cadence `mc2_sv_walk` returns straight after
                 // `mc2_move_core`, so `target`/`watched` are dead
                 // there and passing 0 changes nothing but the resolve.
-                let w = if no_sv_watch_cadence() || self.g.ent[i].f63 & 7 == 0 {
-                    self.mc2_watch_handle(i, hpos, &v)
+                //
+                // ⭐⭐⭐ **AND THE RESOLVE READS THE POST-MOVE
+                // POSITION.** The same disassembly settles the PHASE
+                // as well as the cadence: `sub_1B8C0` at 0x421ce runs
+                // BEFORE the `& 7` gate at 0x421d9 and before
+                // `sub_1E3E0`'s call at 0x42205, so the position the
+                // nearest scan measures from (`lea eax,[a1x+0x4c]`,
+                // 0x42c83, the SECOND argument of
+                // `EuclideanDistXY_584D0` at 0x7CCD0) is THIS tick's
+                // post-move position. The port called
+                // `mc2_watch_handle` first and only then entered
+                // `mc2_sv_walk`, whose own first statement is
+                // `mc2_move_core` — one whole step of parallax on
+                // every election, and the elected handle is CACHED in
+                // word74 for the rest of the hold.
+                //
+                // WITNESS mc2l4 t=1, slot 218 (5,4), StageVar1 3,
+                // kind 3 — the FIRST write of the take's `sv_timer`
+                // lane. The archer steps (33160, 14448) -> (33161,
+                // 14478) inside tick 1, and the two nearest (5,9)
+                // skeletons straddle that step (squared XY, retail's
+                // own metric):
+                //     from (33160, 14448)   173: 247,517,504   <- wins
+                //                           174: 247,521,600
+                //     from (33161, 14478)   174: 248,159,509   <- wins
+                //                           173: 248,171,285
+                // The margin is 4,096 one way and 11,776 the other on
+                // values near 2.5e8 — 0.005%, i.e. the archer's own
+                // 30-unit step IS the tie-break. Retail records
+                // **174**, the vanguard skeleton the live-DOSBox
+                // memimage names (docs/traces/
+                // mc2-level004-stagevar-ground-truth.md); the port
+                // elected **173** and shadow-marched the wrong
+                // skeleton for the rest of the take.
+                let w = if no_sv_watch_post_move_resolve() {
+                    let w = if no_sv_watch_cadence() || self.g.ent[i].f63 & 7 == 0 {
+                        self.mc2_watch_handle(i, hpos, &v)
+                    } else {
+                        0
+                    };
+                    self.g.mc2_move_core(i);
+                    w
                 } else {
-                    0
+                    self.g.mc2_move_core(i);
+                    if no_sv_watch_cadence() || self.g.ent[i].f63 & 7 == 0 {
+                        self.mc2_watch_handle(i, hpos, &v)
+                    } else {
+                        0
+                    }
                 };
                 let target = (w != 0).then(|| {
                     let t = &self.g.ent[w];
                     (t.x, t.y)
                 });
-                self.mc2_sv_walk(i, target, (w != 0).then_some(w));
+                self.mc2_sv_walk_after_move(i, target, (w != 0).then_some(w));
             }
             6..=9 => self.mc2_sv_graze(i),
             _ => {}
@@ -1097,6 +1173,20 @@ impl World {
     /// separation override last (EF:10195-10218).
     fn mc2_sv_walk(&mut self, i: usize, target: Option<(u16, u16)>, watched: Option<usize>) {
         self.g.mc2_move_core(i);
+        self.mc2_sv_walk_after_move(i, target, watched);
+    }
+
+    /// `mc2_sv_walk` from the cadence gate down — everything
+    /// `sub_1D8C0` runs AFTER `sub_1B8C0` (NETHERW.EXE 0x421d3
+    /// onward). Split out so the kind-3/4/5 shadow leg can run its
+    /// move core, then resolve, then finish the walk, which is
+    /// retail's order.
+    fn mc2_sv_walk_after_move(
+        &mut self,
+        i: usize,
+        target: Option<(u16, u16)>,
+        watched: Option<usize>,
+    ) {
         if self.g.ent[i].f63 & 7 != 0 {
             return;
         }
@@ -1748,9 +1838,11 @@ impl Snap for Mc2Held {
 
 #[cfg(test)]
 mod tests {
-    use super::summon_blocked_mask;
+    use super::{Mc2Held, Mc2StageVar, summon_blocked_mask};
     use crate::chassis::ChassisParams;
     use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::engine::world::World;
+    use crate::ids::GameId;
     use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
     use crate::mc2::mobs::{F_BLOCKED, F_STOP};
     use crate::patches::WorldPatches;
@@ -1949,5 +2041,164 @@ mod tests {
     fn the_summon_aim_gate_reads_the_port_s_own_blocked_bit() {
         assert_eq!(summon_blocked_mask(), F_BLOCKED);
         assert_ne!(F_BLOCKED, 1 << 18, "the port's flag word is remapped");
+    }
+
+    /// A flat MC2 world — the `World` twin of [`flat_gen`], for the
+    /// legs that live on `World` rather than `Gen`.
+    fn flat_world() -> World {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        World::new_for_game(planes, &[], 1, assets, GameId::Mc2)
+    }
+
+    /// ⭐⭐⭐ **THE DEATH-WATCH RESOLVE RUNS AFTER THE MOVE, SO THE
+    /// NEAREST SCAN MEASURES FROM THIS TICK'S POSITION.**
+    /// `sub_1D8C0` (EF:10171-77, shipped `NETHERW.EXE` file 0x420C0)
+    /// calls the move core FIRST and only then reaches the resolve:
+    /// `421ce e8 ed de ff ff  call 0x400C0` (`sub_1B8C0`, the move),
+    /// then the cadence gate `421d9 f6 c5 07  test ch,0x7` /
+    /// `421dc 0f 85 03 02 00 00  jne 0x423e5`, then
+    /// `42205 e8 d6 09 00 00  call 0x42BE0` (`sub_1E3E0`, THE
+    /// RESOLVE) and `4220d 66 89 43 4a  mov [ebx+0x4a],ax`. The
+    /// position `sub_1E3E0`'s scan measures from is
+    /// `lea eax,[a1x+0x4c]` (0x42c83, the second argument of
+    /// `EuclideanDistXY_584D0`) — the entity's own live position,
+    /// which the move has already updated.
+    ///
+    /// The port resolved BEFORE entering `mc2_sv_walk`, whose own
+    /// first statement is the move core — one whole step of parallax
+    /// on an election that is then CACHED in `word_0x4A_74` for the
+    /// rest of the hold. On mc2l4 t=1 (slot 218, a kind-3 (5,4)
+    /// archer) the two nearest (5,9) skeletons straddle the archer's
+    /// own 30-unit step by 0.005%: from the pre-move seat 173 wins by
+    /// 4,096, from the post-move seat 174 wins by 11,776, on values
+    /// near 2.5e8. Retail records 174.
+    ///
+    /// The rig reproduces that shape rather than that arithmetic, and
+    /// asserts RELATIONALLY so it cannot be tuned to a mover
+    /// constant: the step must move the archer, the step must flip
+    /// the election, and the CACHED handle must be the post-step
+    /// winner.
+    ///
+    /// WHAT WOULD BREAK IT: restoring the pre-dig order
+    /// (`MGC_NO_SV_WATCH_POST_MOVE_RESOLVE=1`) caches the PRE-move
+    /// winner, and the third assertion reads the other skeleton.
+    #[test]
+    fn the_stagevar_death_watch_resolves_from_the_post_move_position() {
+        // `sub_1E3E0`'s metric verbatim: `EuclideanDistXY_584D0`'s
+        // sign-extended 16-bit differences squared, strict `<` (so
+        // the first of a tie holds), walked in CHAIN order.
+        fn nearest(w: &World, x: u16, y: u16) -> u16 {
+            let (mut best, mut bd) = (0u16, u64::MAX);
+            for k in 0..w.g.mob_chains.visible(9).len() {
+                let j = w.g.mob_chains.visible(9)[k];
+                let e = &w.g.ent[j as usize];
+                let dx = (x.wrapping_sub(e.x) as i16 as i64).unsigned_abs();
+                let dy = (y.wrapping_sub(e.y) as i16 as i64).unsigned_abs();
+                let d = dx * dx + dy * dy;
+                if d < bd {
+                    bd = d;
+                    best = j;
+                }
+            }
+            best
+        }
+
+        let mut w = flat_world();
+        // A kind-3 hold on a `&2` (watch-MODEL) row with `&1` CLEAR,
+        // so `mc2_watch_handle` cannot take the cached-sibling
+        // shortcut or the bound-entity arm and must run the scan.
+        w.mc2_stagevars = vec![Mc2StageVar::default(); 2];
+        w.mc2_stagevars[1] = Mc2StageVar {
+            kind: 3,
+            flags: 0x02,
+            watch_model: 9,
+            ..Default::default()
+        };
+
+        // The scanner: a (5,4) archer stepping 30 units due +x
+        // (yaw 512), already aimed there so the commit turn is 0, on
+        // a cadence tick (`f63 & 7 == 0`) with an EMPTY handle cache.
+        let i = w.g.new_event().expect("archer slot");
+        {
+            let e = &mut w.g.ent[i];
+            e.class64 = 5;
+            e.model65 = 4;
+            e.row156 = (crate::mc2::behavior::ROW_BASE + 4) as u8;
+            e.max_life = 300;
+            e.act_life = 300;
+            e.x = 0x2000;
+            e.y = 0x2000;
+            e.z = 100;
+            e.f30 = 512;
+            e.f34 = 512;
+            e.f126 = 30;
+            e.f63 = 0;
+            e.site_z = 3;
+        }
+        // Two live (5,9) skeletons the step straddles: 100 units
+        // BEHIND the archer and 150 AHEAD of it. Pre-step the trailer
+        // is nearer (100 < 150); post-step the leader is (≈120 <
+        // ≈130). Nothing here is a mover constant — any step in
+        // 26..=49 units flips the pair the same way.
+        let mut skeleton = |x: u16| {
+            let s = w.g.new_event().expect("skeleton slot");
+            let e = &mut w.g.ent[s];
+            e.class64 = 5;
+            e.model65 = 9;
+            e.row156 = (crate::mc2::behavior::ROW_BASE + 9) as u8;
+            e.max_life = 300;
+            e.act_life = 300;
+            e.x = x;
+            e.y = 0x2000;
+            e.z = 100;
+            s as u16
+        };
+        let trailer = skeleton(0x2000 - 100);
+        let leader = skeleton(0x2000 + 150);
+        // `sub_1E3E0` scans the per-model ROSTER CHAIN, a tick-top
+        // snapshot — not the pool.
+        w.g.rebuild_mob_chains();
+        w.mc2_sv_held = vec![Mc2Held {
+            ent: i as u16,
+            slot: 1,
+            timer: 0,
+        }];
+
+        let pre = (w.g.ent[i].x, w.g.ent[i].y);
+        let pre_nearest = nearest(&w, pre.0, pre.1);
+        w.mc2_held_move(i, 3, &ctx_at(0, 0));
+        let post = (w.g.ent[i].x, w.g.ent[i].y);
+        let post_nearest = nearest(&w, post.0, post.1);
+
+        assert_ne!(pre, post, "the rig actually moves: {pre:?} -> {post:?}");
+        assert_ne!(
+            pre_nearest, post_nearest,
+            "the rig is discriminating: one step must flip the election \
+             (pre {pre_nearest}, post {post_nearest})"
+        );
+        assert_eq!(
+            (pre_nearest, post_nearest),
+            (trailer, leader),
+            "and it flips the way the geometry says it does"
+        );
+        assert_eq!(
+            w.mc2_sv_held[0].timer as u16, post_nearest,
+            "`sub_1E3E0` at 0x42205 runs AFTER `sub_1B8C0` at 0x421ce, \
+             so the cached handle is the POST-move winner"
+        );
     }
 }

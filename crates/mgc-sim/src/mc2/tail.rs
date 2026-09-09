@@ -90,6 +90,20 @@ fn mc2_ww_reap_skip() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_MC2_WW_REAP_SKIP").is_some())
 }
 
+/// A/B toggle for the whirlwind's GRAB FAMILY on the human wizard
+/// (dig Q7): set `MGC_NO_MC2_WW_HUMAN_GRAB` to restore the pre-dig
+/// behaviour, where `sub_33340`'s inner LIFT arm, its near-grab and
+/// far-grab arms and the `byte[3] |= 0x10` latch simply did not
+/// exist for the out-of-pool human — the funnel could sway him on
+/// the mid ring (dig W4) and otherwise shoved him through the
+/// invented `Gen::player_knock` spiral registered at
+/// `docs/DEVIATIONS.md` ("the full grab/lift/camera-roll takeover is
+/// the deferred FlightVerb seam").
+pub(crate) fn no_mc2_ww_human_grab() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_HUMAN_GRAB").is_some())
+}
+
 impl Gen {
     // ---- ctors ---------------------------------------------------------------
 
@@ -1261,7 +1275,7 @@ impl Gen {
     pub(crate) fn mc2_whirlwind_tick(&mut self, i: usize, ctx: &MobCtx) {
         self.ent[i].act_life -= 1;
         if self.ent[i].act_life < 0 {
-            self.mc2_whirlwind_teardown(i);
+            self.mc2_whirlwind_teardown(i, ctx);
             return;
         }
         self.mc2_whirlwind_move(i);
@@ -1399,6 +1413,62 @@ impl Gen {
             (self.ent[i].y.wrapping_add(128) >> 8) as i16,
         );
         let mut hits = 0u32;
+        // ⭐⭐⭐ THE HUMAN IS A VICTIM OF THE SAME BODY (dig Q7).
+        // `sub_33810` (EF:24452-515) passes class 3 / non-castle /
+        // non-own-id, and the human wizard IS class 3 model 0 — which
+        // is precisely what `v40` (`0x57be8 cmp dl,3` + `0x57bed cmp
+        // byte [ebx+0x40],0x0`) selects for its 56/384 constants. He
+        // lives outside our pool, so he is not on a tile chain and the
+        // walk above cannot reach him; instead his LIVE pose is tested
+        // against each ring cell below, which reproduces retail's
+        // MULTI-VISIT (a victim carried into a cell the ring has not
+        // reached yet is lifted and moved a second time — the same
+        // traversal the billing law already depends on).
+        //
+        // ⚠ THE BANKING, STATED DELIBERATELY (`docs/DEVIATIONS.md`
+        // `flood.rs::flood_shove` is the precedent for getting this
+        // wrong by accident): the three pieces of retail state this
+        // arm keeps on the victim record all bank on the HUMAN'S OWN
+        // POOL RECORD (`Gen::mc2_pinned`, the class-0 pinned seat
+        // `mc2_spawn_human_record` pops at retail's own slot) — the
+        // `byte[3] & 0x10` grab latch on its `F_GRABBED`, the `byte[1]
+        // & 8` mover veto on its `F_STOP`, the latched `word_0x30_48`
+        // swirl heading on its `f50`, and the `rand_0x14_20` draw on
+        // its live `rand` lane. That is retail's OWN home for all four
+        // (mc2l30 slot 83 records `flags 525 -> 268438029` at t=2985 =
+        // `byte[1] |= 8` plus `byte[3] |= 0x10`, and `rand 19555 ->
+        // 6946` = one 9377/9439 step). ONLY the pose rides a channel —
+        // `Gen::player_whirl` — because the carpet's x/y/z/yaw live in
+        // `flight::Mc1State`, not in the pool record.
+        let cs = self.mc2_pinned.0 as usize;
+        // `sub_33810` case 1 (EF:24473): your OWN funnel never grabs
+        // you. `id24` on a whirlwind head is the caster's id.
+        // ⚠ `MGC_NO_MC2_WW_MIDRING` is dig W4's older A/B and it takes
+        // the WHOLE human column back to the pre-W4 knock spiral, so
+        // this arm stands down under it too — the two switches are a
+        // ladder, not independent axes.
+        let human_law = !no_mc2_ww_human_grab()
+            && !no_mc2_ww_midring()
+            && cs != 0
+            && cs < self.ent.len()
+            && id != PLAYER_TARGET;
+        let hrow = if self.is_cave() {
+            crate::flight::Mc2Row::CAVE
+        } else {
+            crate::flight::Mc2Row::OPEN
+        };
+        let mut hp = (ctx.px, ctx.py, ctx.pz);
+        let mut hyaw = ctx.pyaw & 0x7FF;
+        let mut hgrab = human_law && self.ent[cs].flags & F_GRABBED != 0;
+        let mut hstop = false;
+        // Any GRAB-FAMILY visit this tick (inner lift / near-grab /
+        // far-grab). The mid ring keeps dig W4's heading+step channel.
+        let mut hseized = false;
+        let mut hmid: Option<u16> = None;
+        let mut hact80 = false;
+        // Dig Q6 — one `roll_0x155_341 += 28` per visit that reaches
+        // the `v40` block, i.e. exactly where `hact80` is raised.
+        let mut hcrank: u8 = 0;
         for (dx, dy) in self.ring_cells(0, 12) {
             let tx = (cx.wrapping_add((dx as i8) as i16)) as u8;
             let ty = (cy.wrapping_add((dy as i8) as i16)) as u8;
@@ -1576,6 +1646,207 @@ impl Gen {
                     self.ent[j].next20 as usize
                 };
             }
+            // ── THE HUMAN'S VISIT TO THIS CELL ────────────────────────
+            // Run AFTER the tile chain: retail's wizard sits somewhere
+            // in that chain and we cannot know where, so the position
+            // in the cell's order is an approximation (it only matters
+            // against OTHER victims sharing the cell — the victims do
+            // not read each other).
+            if human_law && (hp.0 >> 8) as u8 == tx && (hp.1 >> 8) as u8 == ty {
+                let d2 = Self::dist2_sq(ex, ey, hp.0, hp.1) as i64;
+                // `v38`/`v34` — 56 and 384 for the human (`0x57c04 mov
+                // eax,0x38`, `0x57c19 mov eax,0x180`), against the
+                // creatures' 204/768 the pooled body above uses.
+                const V38: u16 = 56;
+                const V34: u32 = 384;
+                let mut swirl = self.ent[cs].f50 as u16;
+                let mut pred = hp;
+                let mut v30 = 0i16;
+                let mut float = 0i16;
+                let mut banded = false;
+                // `v39` — the BILL flag, PER VISIT (retail zeroes it
+                // at the top of the victim body, EF:24291 / `0x57bdf
+                // xor edi,edi`). ⚠ ONLY the two GRABBED arms raise it
+                // (`0x57d81 mov dh,1` near, `0x57dbd mov dl,1` far);
+                // the INNER LIFT arm does not, and mc2l30 agrees to
+                // the tick — slot 83 is still `life 10000, mail[0]
+                // (0,0)` on the grab tick t=2985 and only takes its
+                // first `(100, 133)` letter at t=2986.
+                let mut bill = false;
+                if d2 >= 3_211_264 {
+                    // FAR (`0x57c41 cmp eax,0x310000` / `jnl 0x57da9`).
+                    if hgrab {
+                        hstop = true;
+                        hseized = true;
+                        banded = true;
+                        bill = true; // `0x57dbd mov dl,1`
+                        float = hrow.buoyancy; // `v37` = row `word_0xe`
+                        v30 = 64; // `0x57dde mov esi,0x40`
+                        hyaw = hyaw.wrapping_add(V38) & 0x7FF;
+                        if d2 >= 5_308_416 {
+                            // `0x57ded cmp eax,0x510000` — the FLING.
+                            hgrab = false;
+                        }
+                    }
+                } else if hgrab {
+                    // NEAR-GRABBED (`0x57c5e test cl,0x10` →`0x57d65`).
+                    hstop = true;
+                    hseized = true;
+                    banded = true;
+                    bill = true; // `0x57d81 mov dh,1`
+                    v30 = 128; // `0x57d65 mov ecx,0x80`
+                    pred.2 = pred.2.wrapping_add(114); // `0x57d96 add esi,0x72`
+                    hyaw = hyaw.wrapping_add(V38) & 0x7FF;
+                } else {
+                    // NOT YET GRABBED — the `v40` block runs first
+                    // (`0x57c67`): camera roll +28 and `actSpeed = 80`.
+                    // ⭐⭐⭐ BOTH HALVES ARE PORTED NOW (dig Q6). The
+                    // `roll_0x155_341 += 28` half is NOT a separate
+                    // Type_164 word: `sub_5D530` integrates and turns
+                    // on the SAME `[ebx+0xa4] -> +0x155` (0x81d6d,
+                    // 0x81df9) this block writes at 0x57c86, so it IS
+                    // the carpet's recorded `roll_acc` bank filter.
+                    // W4's mc2l1 t=268→269 counter-example was an
+                    // artifact of the harness, not of retail: the
+                    // stick is RECOVERED by inverting that same
+                    // accumulator, so adding the crank without
+                    // teaching `recover_stick` about it double-counts.
+                    // With both halves in, t=269 closes on stick 48
+                    // instead of 105 and lands the recorded 138 either
+                    // way, while t=272 — where NO byte-range stick
+                    // explains retail's +35 at all — only closes with
+                    // the crank.
+                    hact80 = true;
+                    hcrank = hcrank.saturating_add(1);
+                    if d2 >= 0x40000 {
+                        // MID RING (`0x57c96` / `0x57d3d`) — dig W4's
+                        // landed arm, kept on its own channel so the
+                        // mc2l1 t=269 and mc2l30 t=2973 arithmetic is
+                        // byte-for-byte the one it landed.
+                        let v14 = Self::angle_between(ex, ey, hp.0, hp.1)
+                            .wrapping_add(591)
+                            & 0x7FF;
+                        swirl = v14;
+                        hyaw = v14;
+                        v30 = 96;
+                        hmid = Some(v14);
+                    } else {
+                        // INNER LIFT (`0x57ca3`) — the arm this dig
+                        // ports. `predictedAxis = a1x->axis_0x9A_154x`
+                        // (0x57cae `movsd`/`movsw` from `esi+0x9a`),
+                        // `v9 = ix->position.z - a1x->word_0x30_48 +
+                        // 57` (0x57cbf..0x57cce), z = v9 + terrainAlt
+                        // clamped up to terrainAlt, `yaw += v38`, then
+                        // the LCG and the LATCH:
+                        // `if (v9 >= v34 + rand % v34) { byte[3] |=
+                        // 0x10; word_0x30_48 = yaw_0x1C_28; }`
+                        // (0x57d06..0x57d34). `v30` stays 0 — the
+                        // closing `MoveEntity_57FA0` does not step.
+                        hstop = true;
+                        hseized = true;
+                        banded = true;
+                        pred.0 = ex;
+                        pred.1 = ey;
+                        let v9 = hp.2 as i32 - eye_z as i32 + 57;
+                        let galt = self.ground_z(ex, ey) as i16;
+                        pred.2 = ((v9 + galt as i32).max(galt as i32)) as i16;
+                        hyaw = hyaw.wrapping_add(V38) & 0x7FF;
+                        let d = self.ent_rand(cs);
+                        if v9 >= (V34 + d % V34) as i32 {
+                            hgrab = true;
+                            swirl = hyaw;
+                        }
+                    }
+                }
+                self.ent[cs].f50 = swirl as i16;
+                if v30 != 0 {
+                    Self::polar_step(&mut pred, swirl & 0x7FF, 0, v30);
+                }
+                if banded {
+                    // EF:24382-94 — the cave ceiling clamp and then
+                    // `sub_580E0(&pred, getTerrainAlt(&pred),
+                    // word_0xc, word_0xa, v37)`. ⚠ Applied on the GRAB
+                    // arms only: retail runs it on every visit, but the
+                    // mid ring's channel is dig W4's landed one and
+                    // touches no z at all — folding the band into it
+                    // would move a law that is already pinned.
+                    // `array_0x52_82.fov` on the carpet record is 100
+                    // (`AddPlayer_4A920` EF:33334, params row 44).
+                    if self.is_cave() {
+                        let c = (self.ceiling_z(pred.0, pred.1) as i16).wrapping_sub(100);
+                        if pred.2 > c {
+                            pred.2 = c;
+                        }
+                    }
+                    let galt = self.ground_z(pred.0, pred.1) as i16;
+                    Self::mc2_alt_core(&mut pred.2, galt, hrow.clearance, float);
+                }
+                hp = pred;
+                if bill {
+                    // `v39 = 1` ⇒ `v31++` and `sub_11900(a1x, ix, 0,
+                    // v26)` (0x57e98-0x57e9b) — the SINGLE/INVERSE
+                    // protocol, the same writer and the same
+                    // `subSpellIndex_0x2A_42` amount the pooled body
+                    // above bills, mailed to the human's own inbox.
+                    // mc2l30 records it to the unit: slot 83 `mail[0]`
+                    // is `(100, 133)` from t=2986 and `life` runs
+                    // 10000 → 8000 across the hold.
+                    hits += 1;
+                    if no_whirlwind_single_bill() {
+                        self.mail_write(MailTarget::Player, 0, amt, id);
+                    } else {
+                        self.mail_write_single(MailTarget::Player, 0, amt, id);
+                    }
+                }
+            }
+        }
+        // ── PUBLISH THE HUMAN'S SEIZURE ──────────────────────────────
+        if human_law && (hseized || hmid.is_some()) {
+            if hstop {
+                // `byte[1] |= 8` — consumed (and cleared) by the veto
+                // at the head of `sub_5D530` (`NETHERW.EXE` 0x81d39
+                // `mov ah,[ebx+0xd]` / `test ah,0x8` / `and dl,0xf7`),
+                // the human carpet mover. Same one-shot the rival
+                // carpet, the corpse mover, the creature core and the
+                // ball already read.
+                self.ent[cs].flags |= super::mobs::F_STOP;
+            }
+            if hgrab {
+                self.ent[cs].flags |= F_GRABBED;
+            } else {
+                self.ent[cs].flags &= !F_GRABBED;
+            }
+            self.player_whirl = crate::engine::features::PlayerWhirl {
+                armed: true,
+                heading: hmid.unwrap_or(0),
+                step: if hseized { 0 } else { 96 },
+                grab: if hseized {
+                    Some((hp.0, hp.1, hp.2, hyaw))
+                } else {
+                    None
+                },
+                act80: hact80,
+                // ⚠ ONE CRANK PER *PUBLISHED* SEIZURE, WHICH IS THE
+                // CHANNEL'S ARITY, NOT A CAP ON RETAIL. The grab
+                // family resolves every repeat visit into `hp`/`hyaw`
+                // and publishes an ABSOLUTE pose, so a double
+                // inner-lift tick carries both cranks. The MID RING
+                // still publishes one heading+step pair (dig W4's
+                // pinned arithmetic), so a double mid-ring visit is
+                // only half-representable: the second 96-step is
+                // dropped, and carrying its crank alone would be a
+                // two-visit bank on a one-visit position. mc2l1 t=272
+                // is exactly that tick — retail seized TWICE (two
+                // 96-steps: y lands on 49844, one step lands 49748;
+                // the recorded `word_0x30_48` 1052 is the SECOND
+                // bearing while the port's single visit yields ~1035)
+                // — and the port's ring walk does reach the block
+                // twice. See the dig note: the fix is to publish the
+                // resolved absolute pose whenever the mid ring is
+                // visited more than once, at which point this `min`
+                // comes straight back out.
+                bumps: if hseized { hcrank } else { hcrank.min(1) },
+            };
         }
         // The player arm — the tornado SWAY (retail `sub_33340`'s
         // wizard branch, EF:24296: the human [class 3, model 0] is
@@ -1601,7 +1872,8 @@ impl Gen {
         // about four ticks early and 1.9x too far out.
         let far_skip = (Self::dist2_sq(ex, ey, ctx.px, ctx.py) as i64) >= 3_211_264;
         let pd2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py) as i64;
-        if pd < 3328
+        if !human_law
+            && pd < 3328
             && !far_skip
             && pd2 >= 0x40000
             && !no_mc2_ww_midring()
@@ -1630,8 +1902,15 @@ impl Gen {
                 armed: true,
                 heading: Self::angle_between(ex, ey, ctx.px, ctx.py).wrapping_add(591) & 0x7FF,
                 step: 96,
+                grab: None,
+                act80: true,
+                // Dig Q6's crank is the OTHER half of the same `v40`
+                // block, so it rides this ladder rung too — under
+                // `MGC_NO_MC2_WW_HUMAN_GRAB=1` the mid ring still
+                // cranks.
+                bumps: 1,
             };
-        } else if pd < 3328 && !far_skip && id != crate::mc1::mobs::PLAYER_TARGET {
+        } else if !human_law && pd < 3328 && !far_skip && id != crate::mc1::mobs::PLAYER_TARGET {
             let toward = Self::angle_between(ctx.px, ctx.py, ex, ey);
             let dir = (toward as i32 + 256) as u16 & 0x7FF; // +45° spiral bias
             // Stronger closer (0..128 across the funnel), clamped to
@@ -1737,7 +2016,7 @@ impl Gen {
     /// victim's grab/stop latches over the radius-12 disc, end the
     /// wind loop (sound 49 stops with the emitter), despawn the head
     /// and all 11 nodes down the f54 chain.
-    fn mc2_whirlwind_teardown(&mut self, i: usize) {
+    fn mc2_whirlwind_teardown(&mut self, i: usize, ctx: &MobCtx) {
         // Cell center rounds: `(pos + 128) >> 8` (EF:29527-28 fissure,
         // :24273-74 lift, :24531-32 teardown; truncation would shift
         // the disc half a tile on the high side).
@@ -1745,6 +2024,27 @@ impl Gen {
             (self.ent[i].x.wrapping_add(128) >> 8) as i16,
             (self.ent[i].y.wrapping_add(128) >> 8) as i16,
         );
+        // ⭐ THE HUMAN IS ON THE SAME DISC (dig Q7). Retail's release
+        // sweep walks the tile chains, and retail's wizard is a chain
+        // member; ours is not, so the human's own pool record — where
+        // [`World::mc2_whirlwind_lift`] banks his `byte[3] & 0x10` and
+        // `byte[1] & 8` — has to be swept by his LIVE pose instead.
+        // Without it a funnel that expires while holding him leaves
+        // the latch armed forever and the next funnel resumes mid-grab.
+        {
+            let cs = self.mc2_pinned.0 as usize;
+            if !no_mc2_ww_human_grab() && cs != 0 && cs < self.ent.len() {
+                let hx = ((ctx.px >> 8) as u8) as i16;
+                let hy = ((ctx.py >> 8) as u8) as i16;
+                let inside = self.ring_cells(0, 12).into_iter().any(|(dx, dy)| {
+                    (cx.wrapping_add((dx as i8) as i16)) as u8 == hx as u8
+                        && (cy.wrapping_add((dy as i8) as i16)) as u8 == hy as u8
+                });
+                if inside {
+                    self.ent[cs].flags &= !(F_GRABBED | super::mobs::F_STOP);
+                }
+            }
+        }
         for (dx, dy) in self.ring_cells(0, 12) {
             let tx = (cx.wrapping_add((dx as i8) as i16)) as u8;
             let ty = (cy.wrapping_add((dy as i8) as i16)) as u8;

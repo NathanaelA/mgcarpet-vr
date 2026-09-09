@@ -107,6 +107,61 @@ pub(crate) fn ball_guard_excludes_own_id() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_BALL_GUARD_OWN_ID").is_none())
 }
 
+/// ⭐⭐⭐ **THE WAR CLEAR TESTS THE TARGET'S MODEL BYTE AND NOTHING
+/// ELSE — SHOOTING A CREATURE DISCHARGES THE RIVAL'S GRUDGE.**
+///
+/// `sub_13DD0`'s tail (`reference/remc1/sub_main.cpp:18337-39`) ends a
+/// successful cast with
+///
+/// ```c
+/// if ( *(_BYTE *)(v1 + 65) <= 1u )
+///   *(_WORD *)(*(_DWORD *)(a1 + 160) + 8 * *(__int16 *)(*(_DWORD *)(v1 + 160) + 48) + 462) = 0;
+/// ```
+///
+/// where `v1 = pool[a1->+146]` is the TARGET record. THE SHIPPED
+/// `CARPET.EXE` SETTLES IT — `sub_13DD0` = VA 0x13DD0 = file 0x2C5C8,
+/// and the tail at file 0x2C683 is:
+///
+/// ```text
+///   2c683  8a 66 41                    mov  0x41(%esi),%ah        ; TARGET +65 = MODEL
+///   2c686  84 e4                       test %ah,%ah
+///   2c688  74 05                       je   2c68f                 ; model 0 -> clear
+///   2c68a  80 fc 01                    cmp  $0x1,%ah
+///   2c68d  75 1a                       jne  2c6a9                 ; model > 1 -> skip
+///   2c68f  8b 86 a0 00 00 00           mov  0xa0(%esi),%eax       ; TARGET's wizext, UNGUARDED
+///   2c695  0f bf 48 30                 movswl 0x30(%eax),%ecx     ; wizext+48 = player slot
+///   2c699  8b 83 a0 00 00 00           mov  0xa0(%ebx),%eax       ; MY wizext
+///   2c69f  66 c7 84 c8 ce 01 00 00 00 00   movw $0,0x1ce(%eax,%ecx,8)  ; 0x1ce = 462 = war
+/// ```
+///
+/// There is NO class test: `[esi+0x40]` is never read anywhere in the
+/// function (all three encodings searched, 0 hits). The port had
+/// invented `class64 == 3 && model65 <= 1` and then routed the index
+/// through [`World::owner_slot`], which returns `None` for a creature
+/// — so a rival that spent its whole life shooting creatures NEVER
+/// discharged its war flag, [`World::rival_hate_decay`]'s `!war[p]`
+/// gate stayed shut and its hate ledger PINNED at 65,535 forever.
+///
+/// ⚠ A creature's `+160` is the mint's NULL, so retail's `movswl
+/// 0x30(%eax)` reads low memory and the index resolves to 0 — the
+/// HUMAN's row. This is the unguarded-pointer constant class the
+/// `rival_war_check` threshold ruling already names. mc1l6 t=9525 is
+/// the measurement: the rival's `+146` is slot 25, a `(5,1)` creature,
+/// its cast lands, and RETAIL's `hate[0]` breaks out of its war pin on
+/// that exact boundary (t=9525 65535 -> t=9526 65373, a clean -162 =
+/// -(256 - agg)) and decays for the next 300 ticks. The port held
+/// 65,535 and its ball election then read `hate[0] > 47,153` TRUE,
+/// taking the human-owned ball 301 (2.4 tiles off) through the at-war
+/// arm where retail took the wild ball 131 (107 tiles off) through the
+/// wild arm — mc1l6's whole 9,816 horizon.
+///
+/// Set `MGC_NO_MC1_WAR_CLEAR_MODEL_ONLY=1` to restore the pre-dig
+/// class-3-only clear.
+pub(crate) fn war_clear_is_model_only() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WAR_CLEAR_MODEL_ONLY").is_none())
+}
+
 /// ⭐⭐⭐ **THE OUT-OF-POOL HUMAN IS A CLASS-3 ROSTER MEMBER, AND A
 /// BLANKED OR SEVERED ROSTER HIDES HIM FROM THE WIZARD PICK.**
 ///
@@ -317,6 +372,17 @@ pub(crate) fn death_keeps_rebound() -> bool {
 pub(crate) fn castle_ball_debit_order() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_BALL_DEBIT_ORDER").is_none())
+}
+
+/// A/B toggle for **THE KNOCKBACK BEARING READS A FREED SOURCE**: set
+/// `MGC_NO_MC1_KNOCK_FROM_DEAD_SOURCE` to restore the pre-dig guard,
+/// which only armed the register when the letter's source was still a
+/// LIVE pool record. Retail's gate at :55712 is the pointer compare
+/// `v13x > v12x` — `src > 0` — alone. See the site in
+/// [`World::rival_mail_intake`].
+fn no_mc1_knock_from_dead_source() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_KNOCK_FROM_DEAD_SOURCE").is_some())
 }
 
 /// `sub_44D30`'s wizext CLEAR LIST is exact, and the port's copy was
@@ -1474,12 +1540,19 @@ impl World {
         // area writers already do) — without it every rival the PLAYER
         // kills would drop straight down and the law would be
         // corpus-only.
+        // ⭐⭐ AND THE SOURCE NEED NOT STILL BE ALIVE — :55712's gate is
+        // the POINTER COMPARE `if (v13x > v12x)`, i.e. `src > 0`, and
+        // `v14x = &v13x->var_u32_29867_72` is taken off the record
+        // whatever its class. MC2's twin arm says the same thing
+        // (EF:61037) and mc2l4 t=8541 proves it on the recording. The
+        // `class64 != 0` here was an invented guard.
         let attacker = if src == PLAYER_TARGET {
             Some((self.human_pose.0, self.human_pose.1))
         } else {
             let s = src as usize;
-            (s != 0 && s < self.g.ent.len() && self.g.ent[s].class64 != 0)
+            (s != 0 && s < self.g.ent.len())
                 .then(|| (self.g.ent[s].x, self.g.ent[s].y))
+                .filter(|_| !no_mc1_knock_from_dead_source() || self.g.ent[s].class64 != 0)
         };
         if let Some((ax, ay)) = attacker {
             let (vx, vy) = (self.g.ent[i].x, self.g.ent[i].y);
@@ -4131,18 +4204,30 @@ impl World {
                     };
                     if fired {
                         // Landing a cast clears MY war flag toward the
-                        // struck WIZARD — carpet targets only, human
-                        // or rival (:18337-39; the target's +65 <= 1
-                        // gate).
+                        // struck record's TEAM ROW (:18337-39). ⭐ The
+                        // gate is the target's `+65 <= 1` and NOTHING
+                        // ELSE — no class test exists in sub_13DD0
+                        // (CARPET.EXE 0x2c683, see
+                        // [`war_clear_is_model_only`]), so a model-0
+                        // or model-1 CREATURE discharges the grudge
+                        // too, and its NULL wizext makes the index the
+                        // low-memory constant 0 — the human's row.
                         let target = self.rivals[ri].target;
-                        let is_carpet = target == PLAYER_TARGET
-                            || self
-                                .g
-                                .ent
-                                .get(target as usize)
-                                .is_some_and(|e| e.class64 == 3 && e.model65 <= 1);
-                        if is_carpet {
-                            if let Some(o) = self.owner_slot(target) {
+                        let model_only = war_clear_is_model_only();
+                        let hit = target == PLAYER_TARGET
+                            || self.g.ent.get(target as usize).is_some_and(|e| {
+                                e.model65 <= 1 && (model_only || e.class64 == 3)
+                            });
+                        if hit {
+                            // A carpet answers with its own wizext's
+                            // `+48`; a record with no wizext reads
+                            // through NULL and lands on row 0.
+                            let row = match (self.owner_slot(target), model_only) {
+                                (Some(o), _) => Some(o),
+                                (None, true) => Some(0),
+                                (None, false) => None,
+                            };
+                            if let Some(o) = row {
                                 self.rivals[ri].war[o as usize] = false;
                             }
                         }
@@ -5238,15 +5323,34 @@ impl World {
         // `player.z`, `World::player_land`.)
         if let Some(gv) = self.g.spawn_grave(cx, cy, cz) {
             let me = self.rivals[ri].ent;
-            for j in 1..self.g.ent.len() {
-                let e = &self.g.ent[j];
-                if e.class64 == 10 && e.model65 == 39 && e.flags & 0x400 == 0 && e.f144 == me {
-                    // +144 only — retail's death sweep (sub_275C0
-                    // :29633-40) re-points and never re-derives; the
-                    // stale team row rides until the ball's next
-                    // moving tick names the grave (class 10 ≠ 3 →
-                    // neutral).
-                    self.g.ent[j].f144 = gv as u16;
+            // ⭐⭐⭐ THE RE-POINT WALKS THE TICK-TOP BALL ROSTER, NOT
+            // THE POOL (`var_u32_36462[1]`, HIDDEN VA 0x46681
+            // `mov 0x8e72(%ebp),%ebp`) — so a SEIZING tick, which
+            // blanks every roster head, re-points NOTHING. See
+            // [`crate::engine::features::no_mc1_grave_repoint_chain`]
+            // for the bytes and the mc1hwl2 t=15762 witness. Retail's
+            // only member tests are `model65 == 39` and `+144 ==
+            // corpse`: membership is the class gate and there is no
+            // reap test, so a slot the tick recycled is read on its
+            // NEW bytes.
+            if crate::engine::features::no_mc1_grave_repoint_chain() {
+                for j in 1..self.g.ent.len() {
+                    let e = &self.g.ent[j];
+                    if e.class64 == 10 && e.model65 == 39 && e.flags & 0x400 == 0 && e.f144 == me {
+                        self.g.ent[j].f144 = gv as u16;
+                    }
+                }
+            } else {
+                for k in 0..self.g.ball_chain.visible_len() {
+                    let j = self.g.ball_chain.list[k] as usize;
+                    if self.g.ent[j].model65 == 39 && self.g.ent[j].f144 == me {
+                        // +144 only — retail's death sweep (sub_275C0
+                        // :29633-40) re-points and never re-derives;
+                        // the stale team row rides until the ball's
+                        // next moving tick names the grave (class
+                        // 10 ≠ 3 → neutral).
+                        self.g.ent[j].f144 = gv as u16;
+                    }
                 }
             }
         }
@@ -7750,6 +7854,101 @@ mod tests {
             rebound_bit(&w, ri),
             "the death arm blanked +17 bit 7 — retail's `*(a1+70) = 2; \
              return 0;` writes no flags and the corpse keeps deflecting"
+        );
+    }
+
+    /// ⭐⭐⭐ THE GRAVE RE-POINT WALKS THE TICK-TOP BALL ROSTER, NOT
+    /// THE LIVE POOL — SO A SEVERED CHAIN LEAVES THE DEAD WIZARD'S
+    /// BALLS ON HIS OWN `+144`.
+    ///
+    /// `sub_45C10_45F50`'s landing block seeds from `var_u32_36462[1]`
+    /// (HIDDEN VA 0x46681 `mov 0x8e72(%ebp),%ebp`) and steps
+    /// `->next` (0x466be `mov 0x0(%ebp),%ebp`) to the pool-base
+    /// terminator — the same tick-top roster the possession acquire
+    /// and the magnet walk, with the same [`TickChain::cut`] law: a
+    /// member REALLOCATED mid-tick has its `+0` link wiped, and an
+    /// MC1 SEIZURE blanks the head outright, so the rest of the
+    /// roster is unreachable for the rest of that tick.
+    ///
+    /// mc1hwl2 t=15762 is the witness and it certifies the take.
+    /// Rival 3's corpse (slot 449) lands, its 24-jar scatter empties
+    /// the free stack and seizes, every roster head goes null, and
+    /// retail's walk therefore re-points NOTHING: slots 875/938/953
+    /// keep `+144 = 449` and their 5000 + 134 + 3000 stays on the
+    /// dead wizard's ceiling. The port's ascending POOL scan moved
+    /// all three to the grave, and the NEXT tick's census
+    /// (`recompute_mana`) read rival 449 back at the intrinsic 1000
+    /// while the 8134 landed on the grave's own `+136` through the
+    /// owner-credit fallback — the take's ONLY divergence in 28,580
+    /// ticks (t=15763: slot 132 `mana_max` retail 0 / port 8134,
+    /// slot 449 retail 9134 / port 1000).
+    ///
+    /// PAIR-BLIND, hence a unit test: the head is INHERITED (the
+    /// 15762→15763 pair is clean — the importer hands the port
+    /// retail's own `+144` rows), and `+144`/`ball_chain` are not in
+    /// the graded projection at all.
+    #[test]
+    fn the_grave_repoint_walks_the_tick_top_ball_roster() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let me = w.rivals[ri].ent;
+
+        // Three of the rival's own mana balls, ASCENDING by slot, so
+        // a pool scan and a chain walk disagree only once the chain
+        // is cut.
+        let ball = |w: &mut World| {
+            let (x, y) = (110u16 << 8, 110u16 << 8);
+            let z = w.g.ground_z(x, y) as i16;
+            let s = w.g.spawn_mana_ball(x, y, z).expect("mana ball");
+            w.g.ent[s].f144 = me;
+            w.g.ent[s].f140 = 1000;
+            s
+        };
+        let head = ball(&mut w);
+        let mid = ball(&mut w);
+        let tail = ball(&mut w);
+        assert!(head < mid && mid < tail, "roster order is by slot");
+
+        // TOP OF TICK: the roster is filed with all three.
+        w.g.rebuild_ball_chain();
+        assert_eq!(w.g.ball_chain.visible_len(), 3, "all three are members");
+
+        // MID-TICK: `head` is freed and immediately re-popped by some
+        // other spawner, which wipes its `+0` link. `new_event` lowers
+        // the cut to 1 — the walk sees the reallocated node and
+        // NOTHING PAST IT.
+        w.g.free_entity(head);
+        let reborn = w.g.new_event().expect("reborn");
+        assert_eq!(reborn, head, "the free stack re-pops the same slot");
+        w.g.ent[head].class64 = 10;
+        w.g.ent[head].model65 = 39;
+        w.g.ent[head].f144 = me;
+        assert_eq!(w.g.ball_chain.visible_len(), 1, "the walk stops one node past the reuse");
+        // Non-vacuity: both survivors are still live, still the
+        // rival's, and still perfectly good candidates — only the CUT
+        // hides them, so a POOL scan takes all three.
+        for b in [mid, tail] {
+            assert!(
+                w.g.ent[b].class64 == 10 && w.g.ent[b].model65 == 39 && w.g.ent[b].f144 == me,
+                "the trap balls are live in the pool"
+            );
+        }
+
+        w.rival_death_impact(ri, i);
+
+        let gv = (1..w.g.ent.len())
+            .find(|&j| w.g.ent[j].class64 == 10 && w.g.ent[j].model65 == 40)
+            .expect("the landing planted a (10,40) grave");
+        assert_eq!(
+            w.g.ent[head].f144, gv as u16,
+            "the one VISIBLE roster member is re-pointed at the grave"
+        );
+        assert_eq!(
+            (w.g.ent[mid].f144, w.g.ent[tail].f144),
+            (me, me),
+            "the members PAST the severed link keep the dead wizard's +144 — \
+             retail walks the roster, never the pool (mc1hwl2 t=15762)"
         );
     }
 

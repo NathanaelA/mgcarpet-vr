@@ -173,6 +173,22 @@ pub struct Mc1Input {
     /// integrating the re-centred cursor (mc2l0 t=598: speed 80→0 in
     /// one boundary, x/y/z pinned ~200 ticks, yaw −1/tick).
     pub mc2_park: bool,
+    /// MC2 (dig Q7): `sub_5D530`'s FORCED-STOP one-shot, `byte[1] & 8`
+    /// — shipped `NETHERW.EXE` 0x81d39 `mov ah,[ebx+0xd]` / `test
+    /// ah,0x8` / `and dl,0xf7` / `<epilogue>`, i.e. EF:59951-55
+    /// `if (byte[1] & 8) { byte[1] &= 0xF7; return; }`.
+    ///
+    /// ⚠ IT VETOES `sub_5D530` ONLY. `sub_5F380`'s command
+    /// integration runs at EF:60302, a separate call TWENTY-SEVEN
+    /// statements ahead of `sub_5D530(a1x)` at EF:60329, so the target
+    /// speed and the strafe register keep stepping through a stop —
+    /// which is exactly what mc2l30 records while the whirlwind holds
+    /// the wizard (t=2986-2999: `pose.strafe` 48→44→40→56→72→80 and
+    /// `pose.tgt_speed` 64→48→…→−64 both keep marching while x/y/z and
+    /// `act_speed` are frozen). It is the mirror image of
+    /// [`Self::no_command`], which skips the command pass and keeps
+    /// the mover.
+    pub mc2_stop: bool,
 }
 
 /// What the move reports back to the sim boundary.
@@ -544,7 +560,7 @@ impl Default for Mc2Row {
 /// The MC2-only carpet channels (trace §5) layered over [`Mc1State`]
 /// — the shared pose/speed/strafe state stays in the MC1 struct so
 /// the renderer/camera derivation is model-agnostic.
-#[derive(Debug, Clone, Copy, Default, Hash)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Mc2Ext {
     /// `moveSpeed_0x14C_332` (0..3): the stagger/web SLOW — scales
     /// the pose delta, forward and strafe speed by (4−n)/4. Drives
@@ -571,6 +587,48 @@ pub struct Mc2Ext {
     pub nudge_latch: bool,
     /// The tuning row (selected by map type at level hand-off).
     pub row: Mc2Row,
+    /// ⭐ `sub_33340`'s camera-roll cranks owed to THIS tick's mover
+    /// (EF:24344-46, `roll_0x155_341 += 28` while under 256), one per
+    /// visit that reached the `v40` block. Retail lands them at the
+    /// FUNNEL's slot, between the input pass's `rollDelta` (EF:38336-37
+    /// / 0x77480, which reads the PRE-crank accumulator) and
+    /// `sub_5D530`'s `roll += rollDelta` (0x81d6d) — so the mover's own
+    /// filter delta must be computed from the un-cranked value and the
+    /// crank folded in beside it. Set by the carpet's dispatch from
+    /// [`PlayerWhirl::bumps`], drained here.
+    pub whirl_bumps: u8,
+}
+
+/// ⚠ `whirl_bumps` IS HASH-TRANSPARENT, exactly like the snapshot
+/// codec's exclusion of it: the carpet's own dispatch sets it and the
+/// mover in the SAME call drains it, so it is always 0 at every
+/// boundary a state hash is taken at — and hashing it would move every
+/// existing `flight_tier_golden_state_hashes` pin for a field that can
+/// never be observed there (measured: it does, on all eight). Every
+/// other field hashes exactly as the old `derive(Hash)` did, in
+/// declaration order. ⛔ DO NOT PUT `Hash` BACK IN THE DERIVE.
+impl std::hash::Hash for Mc2Ext {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let Mc2Ext {
+            move_speed,
+            move_speed_ctr,
+            mobilize,
+            mobilize_ctr,
+            add,
+            water_ctr,
+            nudge_latch,
+            row,
+            whirl_bumps: _,
+        } = self;
+        move_speed.hash(state);
+        move_speed_ctr.hash(state);
+        mobilize.hash(state);
+        mobilize_ctr.hash(state);
+        add.hash(state);
+        water_ctr.hash(state);
+        nudge_latch.hash(state);
+        row.hash(state);
+    }
 }
 
 impl Mc2Ext {
@@ -759,12 +817,36 @@ pub fn mc2_move(
         st.act_speed = v;
     }
 
+    // `sub_5D530`'s early return — everything from here down is
+    // inside retail's `else` (see [`Mc1Input::mc2_stop`]). The
+    // caller owns the `byte[1] &= 0xF7` clear.
+    if inp.mc2_stop {
+        return moved;
+    }
+
     // ---- sub_5D530 (EF:59610), statement order ----
     // (0) pose: the filtered delta (EF:38060-66, ÷4 toward zero),
     // slow-scaled while the web slow is active (EF:59622-30), then
     // yaw as a RATE and the published absolute aim pitch.
     let dr = ((2 * inp.stick_x as i32 - st.roll_f as i32) / 4) as i16;
     let dp = ((2 * inp.stick_y as i32 - st.pitch_f as i32) / 4) as i16;
+    // ⭐⭐⭐ THE FUNNEL'S CRANK LANDS BETWEEN THE INPUT PASS AND THE
+    // MOVER. `rollDelta_0x4_4` is computed in `PlayerEvents_51BB0`
+    // (EF:38336-37 / `NETHERW.EXE` 0x77480 `movsx eax,byte [eax+0x3]`
+    // — the stick is a signed BYTE — then `movsx edx,[ecx+0x155]` and
+    // `mov [ecx+0x4],ax`) from the accumulator AS IT STOOD AT THE
+    // FRAME HEAD; `sub_33340` then cranks that accumulator by 28 per
+    // seizure at the funnel's own slot (0x57c86); `sub_5D530` finally
+    // adds the stored delta (0x81d6d). The port fuses the input pass
+    // into the mover, so the crank has to be folded in HERE, after
+    // `dr` is taken off the un-cranked value.
+    let mut cranks = std::mem::take(&mut ext.whirl_bumps);
+    while cranks > 0 {
+        if st.roll_f < 256 {
+            st.roll_f = st.roll_f.wrapping_add(28);
+        }
+        cranks -= 1;
+    }
     if ext.move_speed > 0 {
         st.roll_f += ext.slow_scale(dr as i32) as i16;
         st.pitch_f += ext.slow_scale(dp as i32) as i16;
@@ -1153,6 +1235,10 @@ impl Snap for Mc2Ext {
             water_ctr,
             nudge_latch,
             row,
+            // Intra-tick only: the carpet's dispatch sets it and the
+            // mover in the SAME call drains it, so it never crosses a
+            // snapshot boundary and takes no SNAPSHOT_VERSION bump.
+            whirl_bumps: _,
         } = self;
         w.put(move_speed);
         w.put(move_speed_ctr);
@@ -1173,6 +1259,7 @@ impl Snap for Mc2Ext {
             water_ctr: r.get()?,
             nudge_latch: r.get()?,
             row: r.get()?,
+            whirl_bumps: 0,
         })
     }
 }

@@ -133,6 +133,26 @@ pub(crate) fn no_mc2_m21_wrapper_tail() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M21_WRAPPER_TAIL").is_some())
 }
+/// A/B toggle for the m2 PHASE-7 WRAPPER JIGGLE (`sub_1F8A0`'s middle
+/// block, EF:11567-74 — see [`Gen::m2_wrapper_jiggle`]): set
+/// `MGC_NO_MC2_M2_WRAPPER_JIGGLE` to restore the pre-dig behaviour,
+/// where a STAGE-HELD `(5,2)` took no wander jiggle at all and its
+/// per-entity LCG ran two draws per 8 ticks behind retail's.
+pub(crate) fn no_mc2_m2_wrapper_jiggle() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M2_WRAPPER_JIGGLE").is_some())
+}
+/// A/B toggle for the m2 PHASE-7 WRAPPER'S LUNGE RE-ARM
+/// (`sub_1F8A0`'s LAST statement, EF:11576 — see
+/// [`Gen::m2_wrapper_lunge_rearm`]): set
+/// `MGC_NO_MC2_M2_LUNGE_REARM` to restore the pre-dig behaviour,
+/// where a STAGE-HELD `(5,2)` the legs had just promoted to the
+/// chase kept its ctor `slot % 100` countdown, so the lunge speed
+/// `5 * minSpeed / 2` fired dozens of ticks late (or never).
+pub(crate) fn no_mc2_m2_lunge_rearm() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M2_LUNGE_REARM").is_some())
+}
 /// A/B toggle for the METAMORPH CLOAK law (`sub_6A030`, EXE
 /// 0x8E92F `or dl,0x21` / 0x8EA50 `and cl,0xdf`, EF:56335 /
 /// EF:56403): set `MGC_NO_METAMORPH_CLOAK` to restore the
@@ -416,6 +436,146 @@ impl Gen {
         self.mc2_set_sprite(i, 3);
         self.mc2_shift_rot(i, 128, 128);
         Some(i)
+    }
+
+    /// ⭐⭐⭐ **THE m2 PHASE-7 WRAPPER ENDS IN A TWO-DRAW WANDER
+    /// JIGGLE, AND IT FIRES FOR EVERY STAGE-HELD `(5,2)`.**
+    /// `sub_1F8A0` (EF:11563-77) is the model-2 `8*2+7 = 23` wrapper
+    /// and its whole body is
+    /// ```text
+    ///   sub_1D5D0(a1x, 16);
+    ///   if (!(byte_0x3E_62 & 7) && (unsigned __int8)(StageVar2_0x49_73 - 1) <= 8u) {
+    ///       rand = 9377*rand + 9439;   v1 = 2 * ((int)(rand % 0x9D) / 79);
+    ///       rand = 9377*rand + 9439;   roll_0x20_32 += rand % 0x55 * (v1 - 1);
+    ///       roll_0x20_32 &= 0x7ff;
+    ///   }
+    ///   if (actionIndex_0x45_69 == 18) dword_0x10_16 = 1;
+    /// ```
+    /// SHIPPED EXE (NETHERW.EXE file 0x440A0 = the `sub_1D5D0` call
+    /// with `push 0x10`, so this is unambiguously the m2 wrapper):
+    /// ```text
+    ///   440a8  6a 10              push 0x10
+    ///   440ab  e8 20 dd ff ff     call 0x41dd0        ; sub_1D5D0
+    ///   440b0  8a 63 3e           mov  ah,[ebx+0x3e]
+    ///   440b6  f6 c4 07           test ah,0x7
+    ///   440b9  0f 85 7b 00 00 00  jne  0x4413a        ; off-cadence: SKIP
+    ///   440bf  8a 53 49           mov  dl,[ebx+0x49]  ; StageVar2
+    ///   440c2  fe ca              dec  dl
+    ///   440c4  80 fa 08           cmp  dl,0x8
+    ///   440c7  77 71              ja   0x4413a        ; kinds 1..9 only
+    ///   440cd  2e ff 24 85 78 f8  jmp  [cs:eax*4+0xf878]  ; 9-entry table,
+    ///                                                     ; ONE body follows
+    ///   440d5  66 69 43 14 a1 24  imul ax,[ebx+0x14],0x24a1   ; 9377
+    ///   440db  05 df 24 00 00     add  eax,0x24df             ; 9439
+    ///   440e0  b9 9d 00 00 00     mov  ecx,0x9d               ; 157
+    ///   440f3  b9 4f 00 00 00     mov  ecx,0x4f               ; 79
+    ///   44106  66 69 43 14 a1 24  imul ax,[ebx+0x14],0x24a1   ; second draw
+    ///   44119  b9 55 00 00 00     mov  ecx,0x55               ; 85
+    ///   44124  8d 46 ff           lea  eax,[esi-0x1]          ; v1 - 1
+    ///   44127  0f af c2           imul eax,edx
+    ///   4412c  66 8b 53 20        mov  dx,[ebx+0x20]          ; roll
+    ///   44132  66 89 53 20        mov  [ebx+0x20],dx
+    ///   44136  80 63 21 07        and  byte [ebx+0x21],0x7    ; &= 0x7FF
+    /// ```
+    /// The function ends at 0x4414a and there is exactly ONE body
+    /// between the table jump and the `cmp byte [ebx+0x45],0x12` tail,
+    /// so all nine table entries land on 0x440d5 — the decompile's
+    /// `<= 8u` collapse is right.
+    ///
+    /// The `& 7` gate is the SAME 8-tick cadence the `sub_1D5D0` legs
+    /// use, and the `StageVar2` it reads is the one the legs JUST
+    /// WROTE (a wizard-watch promotion to 10 suppresses the jiggle on
+    /// the release tick). This is [`crate::mc2::stagevars`]'s
+    /// "⚠ OWED: the held seam runs FOUR more wrapper tails here"
+    /// register, now witnessed.
+    ///
+    /// WITNESS — `recordings/mc2l1.mgcr` slot 24, a `(5,2)` on
+    /// StageVar1 6 / StageVar2 2 (the kind-2 graze leash) at action 23.
+    /// Retail's own `rand` lane steps **exactly 2 LCG draws on every
+    /// `f63 & 7 == 0` tick and 4 on every `f63 & 0x3F == 0` tick**
+    /// (t=1573 phase 0: 39121→64269 = 4 steps; t=1581 phase 8:
+    /// 64269→14443 = 2; t=1589 phase 16: →21321 = 2; … t=1637 phase
+    /// 64: 29727→51547 = 4). The port had ONLY `sub_1DDA0`'s
+    /// `& 0x3F` pair, so it drew 2 every 64 ticks and 0 on the other
+    /// seven cadence ticks: `rand` retail 64269 vs port 47919 at
+    /// t=1573 and a period-8 head every 8 ticks to the end of the
+    /// take — **3,645 of the take's 3,713 excess resets.**
+    ///
+    /// `roll` (`f34`) is UNGRADED, so only the `rand` lane shows.
+    ///
+    /// 🏦 OWED, NOT LANDED — the wrapper's LAST line
+    /// `if (actionIndex == 18) dword_0x10_16 = 1` (the `f26` lunge
+    /// countdown re-arm, which `m2_tick`'s arms 0/1/3/_ already carry
+    /// on the UNHELD path) is also missing from both seams. It has no
+    /// witness in this corpus (no held `(5,2)` was promoted to 18 on a
+    /// wrapper tick here) and wants its own A/B.
+    ///
+    /// `MGC_NO_MC2_M2_WRAPPER_JIGGLE=1` restores the old behaviour.
+    pub(crate) fn m2_wrapper_jiggle(&mut self, i: usize) {
+        if no_mc2_m2_wrapper_jiggle() {
+            return;
+        }
+        {
+            let e = &self.ent[i];
+            if e.f63 & 7 != 0 || !matches!(e.site_z, 1..=9) {
+                return;
+            }
+        }
+        let v = self.mc2_rand(i);
+        let sign = 2 * ((v % 0x9D) / 79) as i32 - 1;
+        let r = self.mc2_rand(i);
+        let e = &mut self.ent[i];
+        e.f34 = ((e.f34 as i32 + (r % 0x55) as i32 * sign) as u16) & 0x7FF;
+    }
+
+    /// ⭐⭐⭐ **THE m2 PHASE-7 WRAPPER RE-ARMS THE LUNGE COUNTDOWN ON
+    /// THE RELEASE TICK, AND THAT IS WHERE THE `speed = 160` LUNGE
+    /// COMES FROM.**
+    ///
+    /// `sub_1F8A0`'s last statement is
+    /// `if (actionIndex_0x45_69 == 18) dword_0x10_16 = 1;`
+    /// (EF:11576) — the SAME line `m2_tick`'s arms 0/1/3/_ carry, and
+    /// it reads the action the `sub_1D5D0` legs JUST WROTE, so it
+    /// fires on the tick a held `(5,2)` is released into the chase.
+    ///
+    /// SHIPPED EXE — NETHERW.EXE file 0x4413A, the fall-through of
+    /// the wrapper's `& 7` cadence gate (`jne 0x4413a` at 0x440B9),
+    /// so it is UNCONDITIONAL on the cadence and on `StageVar2`:
+    /// ```text
+    ///   4413a  80 7b 45 12              cmpb $0x12,0x45(%ebx)   ; action == 18
+    ///   4413e  75 07                    jne  0x44147
+    ///   44140  c7 43 10 01 00 00 00     movl $0x1,0x10(%ebx)    ; @0x10 = 1
+    ///   44147  5d 5e 5b c3              pop/pop/pop/ret
+    /// ```
+    ///
+    /// The next tick `m2_tick`'s arm 2 sees `f26 == 1`, decrements it
+    /// to 0 and takes `f126 = 5 * f128 / 2 = 160`. Without the re-arm
+    /// the countdown is still the ctor's `slot % 100` seed (24, 25,
+    /// 26, 28 … on mc2l1) so the lunge fired that many ticks late or
+    /// not at all, and the port ran the chase at `f128` (64) or the
+    /// ctor's `minSpeed / 2` (32) where retail ran 160.
+    ///
+    /// WITNESS — `recordings/mc2l1.mgcr`, 22 of the take's 34 excess
+    /// resets. Every one is the same shape: a `(5,2)` on `StageVar1 6
+    /// / StageVar2 2` (the wizard-watch leash) at action 23 with
+    /// `@0x10 == slot % 100`; on the release tick the legs write
+    /// `StageVar2 = 10`, action 18, `target = 111`, and `@0x10` drops
+    /// to **1** — e.g. slot 28 t=4310 `@0x10=28` -> t=4311 `@0x10=1`
+    /// -> t=4312 `@0x10=0, speed=160` (port: `@0x10=28`, speed 32).
+    ///
+    /// ⚠ This is the "🏦 OWED, NOT LANDED" register on
+    /// [`Gen::m2_wrapper_jiggle`], whose "no held `(5,2)` was promoted
+    /// to 18 on a wrapper tick here" was a FALSE CONFIDENT NEGATIVE:
+    /// the promotion does not need the `& 7` cadence, only the legs.
+    ///
+    /// `MGC_NO_MC2_M2_LUNGE_REARM=1` restores the old behaviour.
+    pub(crate) fn m2_wrapper_lunge_rearm(&mut self, i: usize) {
+        if no_mc2_m2_lunge_rearm() {
+            return;
+        }
+        if self.ent[i].tick70 == M2_BASE + 2 {
+            self.ent[i].f26 = 1;
+        }
     }
 
     /// The wake yelp `(rand & 1) + 12` (:11483 / :11524).

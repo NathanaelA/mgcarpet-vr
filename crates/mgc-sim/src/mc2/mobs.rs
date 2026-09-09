@@ -225,6 +225,16 @@ pub(crate) fn no_mc2_frames89() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FRAMES89").is_some())
 }
 
+/// A/B toggle for the ARCHER ACQUIRE **Scan B** (`sub_1FAA0` :11811):
+/// set `MGC_NO_MC2_ARCHER_SCANB_M9_ONLY` to restore the pre-dig
+/// "unnatural fallback", where an archer whose model-9 quarry was
+/// EXTINCT re-ran the scan over model 3 (worms) and locked one.
+/// The law is retail's single hard-coded model-9 chain walk.
+pub(crate) fn no_mc2_archer_scanb_m9_only() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ARCHER_SCANB_M9_ONLY").is_some())
+}
+
 /// `x_BYTE_D8A2E[38]` (EF:2297) — DRAW TYPE -> animation frame count.
 /// Verified byte-for-byte against the shipped `NETHERW.EXE` at file
 /// offset **0xEE22E** (the data segment sits 0xF000 BELOW the code
@@ -1838,44 +1848,90 @@ impl Gen {
                         wizard && self.mc2_wanted_live(s)
                     });
                     if target.is_none() {
-                        // Scan B: nearest model-9 creature, no cone
-                        // (:11811). RETAIL-OBSERVED EXTENSION
-                        // (player-replayed mc2:04, 2026-07-24): the
-                        // retail archers shoot until every skeleton
-                        // is dead, THEN start shooting the worms —
-                        // the monster-hunter design ("archers target
-                        // unnatural creatures"). The decompile's
-                        // Scan B walks only chain[9] and the retail
-                        // mechanism is unrecovered, so the port falls
-                        // back to the next UNNATURAL model when the
-                        // watched one is EXTINCT — never before, so
-                        // the battle order is preserved. Set = worms
-                        // (m3); extend if other levels surface more.
+                        // Scan B (:11811): the nearest model-9 creature
+                        // on the TICK-TOP per-model roster, `d2 <=
+                        // v_28²` — no cone, no self test, and no
+                        // life/reap re-test (the roster settled those
+                        // when it was built, the [`Gen::mc2_pack_scan`]
+                        // law). ONE chain, ONE walk, then straight on
+                        // to the pack Scan C.
+                        //
+                        // ⭐⭐⭐ **SETTLED IN THE SHIPPED
+                        // `NETHERW.EXE`** (code file = VA + 0x24800),
+                        // because the whole question is whether a
+                        // second model is reachable. `sub_1FAA0`'s
+                        // Scan B loads its chain head with a SINGLE
+                        // CONSTANT displacement —
+                        // `A1 A4 41 00 00` `mov eax,[0x41a4]` at file
+                        // 0x44539 and `8B 80 27 96 00 00`
+                        // `mov eax,[eax+0x9627]` at 0x44545 — where
+                        // the pack Scan C two blocks below indexes the
+                        // SAME array by the walker's own model:
+                        // `0F BE 43 40` `movsx eax,byte [ebx+0x40]` at
+                        // 0x445E8 and `8B B4 82 03 96 00 00`
+                        // `mov esi,[edx+eax*4+0x9603]` at 0x445EF.
+                        // 0x9627 − 0x9603 = 0x24 = 9*4, so the
+                        // decompile's `bytearray_38403x[36/4]` is exact
+                        // and index 9 is BAKED IN. Between 0x44539 and
+                        // the `85 F6 / 74 3B` `test esi,esi; jz <ScanC>`
+                        // at 0x4458C there is no loop back, no second
+                        // chain load, no extinction test and no
+                        // fallback of any kind.
+                        //
+                        // ⚠ THIS REVERSES `docs/DEVIATIONS.md`'s
+                        // *mobs.rs::archer_brain (Scan B unnatural
+                        // fallback)* entry, which invented an
+                        // extinct-then-worms retry off a 2026-07-24
+                        // retail REPLAY observation. The recording
+                        // overrules it: mc2l4 pair 485→486 slot 229 is
+                        // an archer with every skeleton dead — retail
+                        // takes the pack (`f52 0 → 219`, `action 33 →
+                        // 35`, two wander draws and nothing else) while
+                        // the port locked worm slot 176 (`target96 176`,
+                        // `f66/f67 = 5/3`), stopped (`speed 30 → 0`)
+                        // and re-sprited to 206. Retail archers reach a
+                        // worm through the RETALIATION arm (`jy >= 1`
+                        // → `word_0x96_150 = word_0x26_38`, action 34,
+                        // :11713-19), not through an acquire.
+                        // `MGC_NO_MC2_ARCHER_SCANB_M9_ONLY=1` restores
+                        // the fallback.
                         let e = &self.ent[i];
                         let row = &BEHAVIOR[e.row156 as usize];
                         let range = (row.v_28 as i32) * (row.v_28 as i32);
                         let (ex, ey) = (e.x, e.y);
-                        for model in [9u8, 3] {
-                            let mut best: Option<(u16, i32)> = None;
-                            let mut extinct = true;
-                            for (j, c) in self.ent.iter().enumerate().skip(1) {
-                                if c.class64 == 5
-                                    && c.model65 == model
-                                    && c.act_life >= 0
-                                    && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
-                                    && c.flags & 0x400 == 0
-                                {
-                                    extinct = false;
-                                    let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
-                                    if d2 <= range && best.is_none_or(|(_, bd)| d2 < bd) {
-                                        best = Some((j as u16, d2));
+                        if no_mc2_archer_scanb_m9_only() {
+                            for model in [9u8, 3] {
+                                let mut best: Option<(u16, i32)> = None;
+                                let mut extinct = true;
+                                for (j, c) in self.ent.iter().enumerate().skip(1) {
+                                    if c.class64 == 5
+                                        && c.model65 == model
+                                        && c.act_life >= 0
+                                        && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+                                        && c.flags & 0x400 == 0
+                                    {
+                                        extinct = false;
+                                        let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                                        if d2 <= range && best.is_none_or(|(_, bd)| d2 < bd) {
+                                            best = Some((j as u16, d2));
+                                        }
                                     }
+                                }
+                                target = best.map(|(s, _)| s);
+                                if !extinct {
+                                    break;
+                                }
+                            }
+                        } else {
+                            let mut best: Option<(u16, i32)> = None;
+                            for &s in self.mob_chains.visible(9) {
+                                let c = &self.ent[s as usize];
+                                let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                                if d2 <= range && best.is_none_or(|(_, bd)| d2 < bd) {
+                                    best = Some((s, d2));
                                 }
                             }
                             target = best.map(|(s, _)| s);
-                            if !extinct {
-                                break;
-                            }
                         }
                     }
                     if let Some(t) = target {
@@ -3700,6 +3756,25 @@ impl Gen {
                 if e.model65 == 4 && e.tick70 == e.model65.wrapping_mul(8).wrapping_add(2) {
                     self.archer_aim(i);
                 }
+            }
+            // ⭐ A LAW ON ONE CALL PATH IS NOT LANDED — the m2
+            // phase-7 wrapper's wander jiggle (`sub_1F8A0`,
+            // EF:11567-74, [`Gen::m2_wrapper_jiggle`]) reads the
+            // `StageVar2` the case body JUST WROTE, so a `(5,2)` a
+            // controlled handler drops back into a held kind 1..9
+            // takes it here too. UNWITNESSED on this seam (mc2l1's
+            // witness is the stage-held seam) — the same
+            // `MGC_NO_MC2_M2_WRAPPER_JIGGLE` switch covers it.
+            if self.ent[i].model65 == 2 {
+                self.m2_wrapper_jiggle(i);
+                // A LAW ON ONE CALL PATH IS NOT LANDED — the same
+                // wrapper's LAST statement, the lunge-countdown re-arm
+                // (`if (actionIndex == 18) dword_0x10_16 = 1`,
+                // EF:11576 / NETHERW.EXE 0x4413A), also reads the
+                // action the case body just wrote. UNWITNESSED on this
+                // seam (mc2l1's 22 witnesses are all stage-held); the
+                // same `MGC_NO_MC2_M2_LUNGE_REARM` switch covers it.
+                self.m2_wrapper_lunge_rearm(i);
             }
             return;
         }

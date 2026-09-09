@@ -2612,6 +2612,36 @@ impl World {
             let r = &st.ents[slot];
             if slot == human_slot as usize {
                 self.g.ent[slot] = Ent::default();
+                // ⭐⭐⭐ THE HUMAN'S PINNED SEAT HAD NO IMPORT LANE FOR
+                // THE WHIRLWIND LATCHES (dig Q7 — the lane census's
+                // "a port register with NO import seat"). The port's
+                // representation zeroes this record deliberately (see
+                // `mc2_spawn_human_record`), which is right for class,
+                // pose and links — but `sub_33340`'s victim body keeps
+                // FOUR live words on it, and every one of them is in
+                // the capture: the grab latch `byte[3] & 0x10`
+                // (`flags & 0x1000_0000`), the mover-veto one-shot
+                // `byte[1] & 8` (`flags & 0x800` — the very bit two
+                // lines above already reads into `mc2_carpet_stall`),
+                // the latched swirl heading `word_0x30_48` and the
+                // per-entity LCG `rand_0x14_20`. Without them every
+                // segmented reset handed the funnel an UNGRABBED
+                // wizard and it re-ran the inner LIFT arm on a victim
+                // retail was already dragging: mc2l30 t=2986 is the
+                // exemplar (retail `flags 268438029`, bit 28 set,
+                // steps the near-grab +114/+56/128; the port re-lifted
+                // him onto the eye).
+                if !crate::mc2::tail::no_mc2_ww_human_grab() {
+                    let e = &mut self.g.ent[slot];
+                    if r.flags & 0x800 != 0 {
+                        e.flags |= crate::mc2::mobs::F_STOP;
+                    }
+                    if r.flags & 0x1000_0000 != 0 {
+                        e.flags |= crate::mc2::tail::F_GRABBED;
+                    }
+                    e.f50 = r.f30 as i16;
+                    e.rand = r.rand as u32;
+                }
                 continue;
             }
             if r.class3f == 0 {
@@ -5832,6 +5862,7 @@ pub fn mc2_state_from_retail(st: &RetailMc2, slot: u16, row: Mc2Row) -> (Mc1Stat
             water_ctr: p.water_ctr as u16,
             nudge_latch: p.nudge_latch != 0,
             row,
+            whirl_bumps: 0,
         },
     )
 }

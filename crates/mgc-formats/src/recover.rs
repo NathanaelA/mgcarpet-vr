@@ -183,6 +183,14 @@ pub fn cheat_fired_mc2(prev: &Notify, cur: &Notify) -> Option<Cheat> {
     cheat_named(cur).filter(|_| cur.fired_since_mc2(prev))
 }
 
+/// `MGC_NO_MC2_WHIRL_ROLL_CRANK=1` — the kill switch shared with the
+/// sim half (`mgc_sim::engine::world::no_mc2_whirl_roll_crank`); the
+/// stick inversion and the mover must move together or they disagree.
+pub fn no_mc2_whirl_roll_crank() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WHIRL_ROLL_CRANK").is_some())
+}
+
 /// Invert the stick filter across one recorded tick: find a stick
 /// value whose increment `(2·stick − acc)/4` (trunc toward zero, the
 /// :49018 law) lands the accumulator exactly on acc@N+1. The mover
@@ -807,6 +815,33 @@ pub fn recover_pair_mc2(
     // clause stays for the modal park; the mb & 3 guard covers both
     // against the mc2l3 t=605 zero-crossing false positive.
     let ci = cp.play_index as usize;
+    // ⭐⭐⭐ THE STICK INVERSION HAS A SECOND WRITER TO UNDO.
+    // `recover_stick` inverts `roll_acc[t] = roll_acc[t-1] +
+    // trunc((2*stick - roll_acc[t-1]) / 4)` — but MC2's whirlwind
+    // cranks the SAME accumulator by 28 on every NOT-YET-GRABBED visit
+    // (`sub_33340` EF:24344-46 / `NETHERW.EXE` 0x57c86, and `sub_5D530`
+    // reads that very word at 0x81d6d / 0x81df9). The seizure's own
+    // fingerprint is in the recorded pool: those arms write the swirl
+    // heading into the victim's `word_0x30_48` (0x57d51) every tick
+    // they hold you, and nothing else writes the HUMAN's +30.
+    // Without this, mc2l1 t=272/273/277/279/283/1343/1344 invert to NO
+    // stick at all — retail's +35 at t=272 is outside the signed-byte
+    // range the input pass reads (0x77482 `movsx eax,byte [eax+0x3]`)
+    // — and the free run fabricates a centred cursor; mc2l30 t=2973
+    // inverts to 85 where retail's cursor was 29, and the mover's
+    // `yaw += roll/8` then steps the carpet 1 unit wide in x.
+    // ⚠ ONE crank, not a count: the grabbed arms skip the `v40` block
+    // (0x57c61 `jnz 0x57d65`) and a repeat visit inside one tick is not
+    // separable from the recorded pair here. See the dig note.
+    let whirl_crank = matches!((pst.ents.get(ci), st.ents.get(ci)), (Some(p), Some(c))
+        if c.f30 != 0 && c.f30 != p.f30 && p.class3f == 3 && p.model40 == 0);
+    let crank = |acc: i16| -> i16 {
+        if whirl_crank && acc < 256 && !no_mc2_whirl_roll_crank() {
+            28
+        } else {
+            0
+        }
+    };
     let full_stop = key_held(input_end, 14);
     let mc2_park = matches!((pst.ents.get(ci), st.ents.get(ci)), (Some(p), Some(c))
         if mc2_park_witness(cp.cmd_speed, mb, c.speed, p.x == c.x && p.y == c.y, full_stop));
@@ -819,7 +854,10 @@ pub fn recover_pair_mc2(
             || (c.y.wrapping_sub(p.y) as i16).unsigned_abs() > 2048);
     let cur_speed = st.ents.get(ci).map_or(0, |c| c.speed);
     RecoveredPair {
-        stick_x: recover_stick(pp.roll_acc as i16, cp.roll_acc as i16),
+        stick_x: recover_stick(
+            pp.roll_acc as i16,
+            (cp.roll_acc as i16).wrapping_sub(crank(pp.roll_acc as i16)),
+        ),
         stick_y: recover_stick(pp.pitch_acc as i16, cp.pitch_acc as i16),
         move_byte: mb,
         fire_left,
@@ -1272,5 +1310,47 @@ mod respawn_dating_tests {
         // this test under `MGC_NO_MC1_RESPAWN_STATE_DATING=1` and the
         // bare key fires on a pair with no revival in it, so the
         // assertion fails. Every other row holds under both arms.
+    }
+}
+
+#[cfg(test)]
+mod whirl_crank_tests {
+    use super::*;
+
+    /// ⭐⭐⭐ **THE WHIRLWIND CRANKS THE SAME ACCUMULATOR THE STICK
+    /// INVERSION READS, AND WITHOUT UNDOING IT THE INVERSION IS EITHER
+    /// IMPOSSIBLE OR SILENTLY WRONG.** `sub_33340`'s human arm
+    /// (EF:24344-46; `NETHERW.EXE` file 0x57c67 `cmp byte [ebp-0x4],0`
+    /// / 0x57c73 `mov cx,[eax+0x155]` / 0x57c7a `cmp cx,0x100` /
+    /// 0x57c83 `add esi,0x1c` / 0x57c86 `mov [eax+0x155],si`) adds 28
+    /// to `roll_0x155_341`, and `sub_5D530` reads that very field
+    /// (0x81d69 `mov ax,[ecx+0x4]` / 0x81d6d `add [ecx+0x155],ax`, and
+    /// 0x81df9 `movsx edx,word [edx+0x155]` for the yaw rate). The
+    /// stick itself is a signed BYTE (`PlayerEvents_51BB0` 0x77482
+    /// `movsx eax,byte [eax+0x3]`), which is why the ±127 clamp is the
+    /// failure witness.
+    ///
+    /// Both rows are the recorded corpus, not synthetic:
+    /// - mc2l1 t=271→272 `roll_acc` 167 → 202 — NO byte-range stick
+    ///   reaches +35, so the free run fabricated a centred cursor and
+    ///   drove the accumulator to 126 instead;
+    /// - mc2l30 t=2972→2973 `roll_acc` 33 → 67 — recoverable BOTH
+    ///   ways, and the crank-free answer (85) is the wrong one: it
+    ///   lands `yaw += roll/8` on 121 where retail had 117, and the
+    ///   mover then steps the carpet to x 50981 against retail's
+    ///   50980. That single unit was the take's free-run horizon.
+    #[test]
+    fn the_whirlwind_crank_is_part_of_the_stick_inversion() {
+        // mc2l1 t=272 — impossible without the crank.
+        assert_eq!(recover_stick(167, 202), None);
+        assert_eq!(recover_stick(167, 202 - 28), Some(98));
+        // …and the recovered cursor is CONTINUOUS with its neighbour
+        // (t=271 is 44 with the crank, 102 without): the crank-free
+        // series jumps, the cranked one does not.
+        assert_eq!(recover_stick(155, 167 - 28), Some(44));
+        // mc2l30 t=2973 — recoverable either way, and only the
+        // cranked answer reproduces retail's mover.
+        assert_eq!(recover_stick(33, 67), Some(85));
+        assert_eq!(recover_stick(33, 67 - 28), Some(29));
     }
 }

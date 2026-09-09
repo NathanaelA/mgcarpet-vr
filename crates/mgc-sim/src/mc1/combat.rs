@@ -47,6 +47,19 @@ fn no_ball_merge_fix() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_BALL_MERGE_FIX").is_some())
 }
 
+/// `MGC_NO_EFFECT_RING_LIVE_OPERANDS=1` restores the pre-dig HOISTED
+/// operands in the four class-10 ring sprayers (`blast_ring_tick`,
+/// `spreader_tick`, `napalm_tick`, `napalm_tick_hw`). Retail drives all
+/// four loops off ONE register holding the sprayer's pool pointer and
+/// re-reads `+72/+74/+76` (position) per iteration, `+24`/`+30`/`+44`/`+26`
+/// AFTER each allocation, and `+26` again after the loop — so when the
+/// allocator SEIZES the sprayer's own record for one of its children the
+/// rest of the spray reads the CHILD's fields. See `blast_ring_tick`.
+fn no_effect_ring_live_operands() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_EFFECT_RING_LIVE_OPERANDS").is_some())
+}
+
 /// `MGC_NO_PARTNER_SOFTKILL_FIX=1` restores the port's invented
 /// `flags & 0x400 == 0` clause in [`Gen::ball_merge_candidates`]'
 /// tile-ring walk. Retail's `sub_11D10` has NO reap test: an
@@ -281,6 +294,77 @@ fn no_player_chain_seat() -> bool {
 fn no_m8_acquire() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_M8_ACQUIRE").is_some())
+}
+
+/// `MGC_NO_MC1_FLIGHT_SPEED_STEP=1` restores the pre-dig CLAMPED
+/// class-9 flight speed servo, `+126 += (+128 - +126).clamp(-2, 2)`.
+///
+/// ⭐ RETAIL'S SERVO IS A **SIGN TIMES TWO**, AND IT NEVER CLAMPS.
+/// `CARPET.EXE` 0x539DA (file 0x6C1D2) is the shape, read off the
+/// shipped LE binary:
+///
+/// ```text
+///     movswl 0x80(%ebx),%ecx      ; minSpeed
+///     movswl 0x7e(%ebx),%eax      ; actSpeed
+///     sub    %eax,%ecx            ; gap
+///     jne    .diff
+///     xor    %eax,%eax            ; gap == 0 -> 0
+///     jmp    .apply
+///  .diff:
+///     cltd / xor %edx,%eax / sub %edx,%eax   ; |gap|
+///     idiv   %edi                 ; gap / |gap| = SIGN
+///  .apply:
+///     lea    0x0(,%eax,2),%ecx    ; * 2
+///     add / mov %ax,(%esi)        ; +126 += 2 * sign   -- NO CLAMP
+/// ```
+///
+/// The two forms agree whenever the gap is 0 or |gap| >= 2, and
+/// differ ONLY when |gap| == 1: retail steps 2, OVERSHOOTS, and then
+/// oscillates about minSpeed forever, while `.clamp` steps 1 and
+/// pins. An odd gap needs an odd input, which is why it hid.
+///
+/// ⭐⭐⭐ IT IS THE **WHOLE CLASS-9 FLIGHT FAMILY**, NOT ONE HANDLER.
+/// The class-9 dispatch table (`CARPET.EXE` file 0x9CF34, stride 14,
+/// `{u32 tag, u16 state, u32 handler, u32 1}`, 21 rows 0x00-0x14)
+/// names five servo-bearing handlers, and a scan of the shipped
+/// binary for the `99 31 d0 29 d0` abs idiom followed by a scale-by-2
+/// finds EXACTLY those five sites and no others:
+///
+/// ```text
+///   VA 0x52802  sub_52770  (:62671)  states 02/04/05/06/0B/0F/10/11/14 via sub_53060
+///   VA 0x53152  sub_530C0  (:63097)  states 07 (via sub_530B0) and 08
+///   VA 0x539DA  sub_53980  (:63478)  state 0A, the TARGETED castle-ball arm
+///   VA 0x53C2A  sub_53B50  (:63571)  state 0A's untargeted tail call
+///   VA 0x53E52  sub_53DC0  (:63680)  state 0C, the storm carrier
+/// ```
+///
+/// Not one of the five clamps. ⭐⭐ **`HIDDEN.EXE` CARRIES THE SAME
+/// FIVE, AND THE PORT SHARES THIS CODE WITH HW.** The same scan over
+/// the HW binary finds exactly five, at the SAME offset inside each
+/// twin of the decompile's `sub_MC1_HW` pairs — `sub_52AB0` 0x52B42,
+/// `sub_53400` 0x53492, `sub_53CC0` 0x53D1A, `sub_53E90` 0x53F6A,
+/// `sub_54100` 0x54192 — and none of those clamps either.
+///
+/// The MC2 twin landed first as
+/// [`crate::engine::features::no_mc2_castle_ball_speed_step`]
+/// (`NETHERW.EXE` 0x66B73 with `lea esi,[eax*2+0x0]` and 0x66DEB with
+/// `add %eax,%eax` — same semantics, two encodings), and the MC1
+/// `sub_530C0` site landed earlier still under `MGC_NO_M8_ACQUIRE`;
+/// this switch covers the family, that site included.
+fn no_mc1_flight_speed_step() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_FLIGHT_SPEED_STEP").is_some())
+}
+
+/// Retail's class-9 flight speed servo: `2 * SIGN(minSpeed - actSpeed)`.
+/// See [`no_mc1_flight_speed_step`] for the bytes and the five sites.
+#[inline]
+fn flight_speed_step(gap: i16) -> i16 {
+    if no_mc1_flight_speed_step() {
+        gap.clamp(-2, 2)
+    } else {
+        2 * gap.signum()
+    }
 }
 
 /// `MGC_NO_ACQUIRE_HUMAN_BUCKET0=1` restores the pre-dig
@@ -2852,7 +2936,7 @@ impl Gen {
             }
         }
         let e = &mut self.ent[i];
-        e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+        e.f126 += flight_speed_step(e.f128 - e.f126);
         let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (yaw, pitch, speed) = {
             let e = &self.ent[i];
@@ -3050,7 +3134,7 @@ impl Gen {
     /// rebound reflect defends, hw:58806).
     fn proj_firewall_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let e = &mut self.ent[i];
-        e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+        e.f126 += flight_speed_step(e.f128 - e.f126);
         // The m16 child runs the acquire cone in BOTH variants, but
         // the YAW cone forks: base MC1's jump table (CARPET.EXE
         // 0x544CC[0x10] = 0x54682, read off the shipped LE binary —
@@ -3185,7 +3269,7 @@ impl Gen {
         // the ctor +128 (:63565-67 and the :63472-76 upgrade twin).
         if mc1 {
             let e = &mut self.ent[i];
-            e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+            e.f126 += flight_speed_step(e.f128 - e.f126);
         }
         let (px, py, pz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (dx, dy) = (self.ent[i].dest_x, self.ent[i].dest_y);
@@ -3363,7 +3447,7 @@ impl Gen {
         }
         {
             let e = &mut self.ent[i];
-            e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+            e.f126 += flight_speed_step(e.f128 - e.f126);
         }
         let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (yaw, pitch, speed) = {
@@ -3615,7 +3699,7 @@ impl Gen {
     /// (:63027-38).
     fn proj_generic_tick(&mut self, i: usize, ctx: &MobCtx, fire_trail: bool) -> bool {
         let e = &mut self.ent[i];
-        e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+        e.f126 += flight_speed_step(e.f128 - e.f126);
         // ⭐ ACQUISITION IS ONE-SHOT, AND IT SNAPS. `sub_52770` opens
         // by testing the target slot (+146): with a target it goes
         // straight to the tracker, and WITHOUT one it runs the acquire
@@ -3754,7 +3838,7 @@ impl Gen {
         e.f126 += if no_m8_acquire() {
             (e.f128 - e.f126).clamp(-2, 2)
         } else {
-            2 * (e.f128 - e.f126).signum()
+            flight_speed_step(e.f128 - e.f126)
         };
         // Move — and RELINK, before the probe (:63103-05: `sub_41C70`
         // to the stepped point, then `sub_11980` at the moved self).
@@ -4200,7 +4284,7 @@ impl Gen {
         // 324 across the crater bolt's nine airborne ticks.
         {
             let e = &mut self.ent[i];
-            e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+            e.f126 += flight_speed_step(e.f128 - e.f126);
         }
         let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (yaw, pitch, speed) = {
@@ -6386,11 +6470,15 @@ impl Gen {
         // exactly the victim life slope the mc1l5 take records.
         let amt = self.ent[i].f44 as u32 / self.ent[i].max_life.max(1);
         self.area_write(i, 0, amt, ctx, false, false);
-        let wave = self.ent[i].f26;
-        let (x, y, z, own, f44) = {
+        // Live operands, as in `blast_ring_tick`: :31164-79 re-reads
+        // `+72/+74/+76` per cell and `+24`/`+44`/`+26` after the
+        // allocation, and the wave counter at :31184 is read live.
+        let live = !no_effect_ring_live_operands();
+        let hoisted = {
             let e = &self.ent[i];
-            (e.x, e.y, e.z, e.id24, e.f44)
+            (e.x, e.y, e.z, e.id24, e.f44, e.f26)
         };
+        let wave = hoisted.5;
         let cells = self.ring_cells_pub(0, 1);
         // :31160 — ONE cloud-LCG step after the iterator opens,
         // BEFORE the per-cell jitter pairs. Without it every flame's
@@ -6401,9 +6489,23 @@ impl Gen {
         for (dx, dy) in cells {
             let d1 = self.ent_rand(i);
             let d2 = self.ent_rand(i);
+            let (x, y, z) = if live {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z)
+            } else {
+                (hoisted.0, hoisted.1, hoisted.2)
+            };
             let fx = x.wrapping_add((112 * dx as i32 + (d1 % 0x81) as i32 - 64 - 96) as u16);
             let fy = y.wrapping_add((112 * dy as i32 + (d2 % 0x81) as i32 - 64 - 96) as u16);
             if let Some(f) = self.spawn_effect(6, fx, fy, z) {
+                // :31167-79 — every operand below is read off the cloud
+                // AFTER the allocation, so a seizing child reads itself.
+                let (own, f44, wave) = if live {
+                    let e = &self.ent[i];
+                    (e.id24, e.f44, e.f26)
+                } else {
+                    (hoisted.3, hoisted.4, hoisted.5)
+                };
                 let e = &mut self.ent[f];
                 e.id24 = own;
                 // Inherited, not the flame ctor's 50 (:31168) —
@@ -6425,6 +6527,7 @@ impl Gen {
                 e.flags |= 0x10080;
             }
         }
+        let wave = if live { self.ent[i].f26 } else { wave };
         self.ent[i].f26 = wave + 1;
         if wave >= 14 {
             self.ent[i].flags |= 0x400;
@@ -6471,7 +6574,10 @@ impl Gen {
         self.extents(i, 192u16.wrapping_mul(var26 as u16), 512);
         let amt = self.ent[i].f44 as u32 / self.ent[i].max_life.max(1);
         self.area_write(i, 0, amt, ctx, false, false);
-        let (x, y, z, own, yaw) = {
+        // Live operands, as in `blast_ring_tick` (hw:29757-70 and the
+        // hw:29772 ring step).
+        let live = !no_effect_ring_live_operands();
+        let hoisted = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.id24, e.f30)
         };
@@ -6486,9 +6592,21 @@ impl Gen {
         for (dx, dy) in self.ring_cells_pub(var26 as i32, var26 as i32) {
             let d1 = self.ent_rand(i);
             let d2 = self.ent_rand(i);
+            let (x, y, z) = if live {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z)
+            } else {
+                (hoisted.0, hoisted.1, hoisted.2)
+            };
             let fx = x.wrapping_add((160 * dx as i32 + (d1 % 0x81) as i32 - 64 - 96) as u16);
             let fy = y.wrapping_add((160 * dy as i32 + (d2 % 0x81) as i32 - 64 - 96) as u16);
             if let Some(f) = self.spawn_effect(0, fx, fy, z) {
+                let (own, yaw) = if live {
+                    let e = &self.ent[i];
+                    (e.id24, e.f30)
+                } else {
+                    (hoisted.3, hoisted.4)
+                };
                 let e = &mut self.ent[f];
                 e.id24 = own;
                 e.f30 = yaw; // child copies the cloud's yaw (var30)
@@ -6499,6 +6617,7 @@ impl Gen {
                 e.f26 = 0;
             }
         }
+        let var26 = if live { self.ent[i].f26 } else { var26 };
         self.ent[i].f26 = (var26 + 2) % 7;
         false
     }
@@ -6794,7 +6913,12 @@ impl Gen {
             self.ent[i].flags |= 2;
             self.snd(3, i); // :28152
         }
-        let (x, y, z, owner, aim, radius, inherit) = {
+        // The same live-operand law as `blast_ring_tick`: sub_25130 keeps
+        // `a1` in one register and re-reads `+72/+74/+76` per cell
+        // (:28167-70) and `+24`/`+30`/`+16` AFTER the allocation
+        // (:28173-76), so a self-seizure re-homes the rest of the spray.
+        let live = !no_effect_ring_live_operands();
+        let hoisted = {
             let e = &self.ent[i];
             (
                 e.x,
@@ -6806,6 +6930,7 @@ impl Gen {
                 e.flags & 0x10000,
             )
         };
+        let radius = hoisted.5;
         let cells = self.ring_cells_pub(radius, radius);
         for (dx, dy) in cells {
             // :28161-63 — the per-cell draw is the SKIP TEST alone: spawn
@@ -6824,9 +6949,21 @@ impl Gen {
             let j1 = (self.ent_rand(i) % 0x81) as i32 - 64;
             let j2 = (self.ent_rand(i) % 0x81) as i32 - 64;
             // x - 96 + 192·dx + jitter (:28167-70), 2x2-center recenter.
+            let (x, y, z) = if live {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z)
+            } else {
+                (hoisted.0, hoisted.1, hoisted.2)
+            };
             let fx = x.wrapping_add((192 * dx as i32 + j1 - 96) as u16);
             let fy = y.wrapping_add((192 * dy as i32 + j2 - 96) as u16);
             if let Some(f) = self.spawn_effect(0, fx, fy, z) {
+                let (owner, aim, inherit) = if live {
+                    let e = &self.ent[i];
+                    (e.id24, e.f30, e.flags & 0x10000)
+                } else {
+                    (hoisted.3, hoisted.4, hoisted.6)
+                };
                 self.ent[f].id24 = owner;
                 self.ent[f].f30 = aim; // :28176 — inherit the spreader's f30
                 self.ent[f].flags |= 0x80 | inherit;
@@ -6865,20 +7002,52 @@ impl Gen {
         }
         let per_tick = (self.ent[i].f44 as u32) / self.ent[i].max_life.max(1);
         self.area_write(i, 0, per_tick, ctx, false, false);
-        let (x, y, z, owner) = {
+        // ⭐⭐ THE SPRAYER'S OWN RECORD IS A LEGAL ALLOCATION VICTIM.
+        // `a1x` never leaves `%ebx` in the shipped routine (CARPET.EXE
+        // file 0x3e4d8 = VA 0x25CE0 + 0x187f8): the position operands are
+        // re-read INSIDE the loop — `movswl 0x48(%ebx),%esi` at 0x3e5cd
+        // (+72 x), `movswl 0x4a(%ebx),%eax` at 0x3e5ff (+74 y),
+        // `mov 0x4c(%ebx),%ax` at 0x3e614 (+76 z) — and `+24`/`+30` are
+        // read AFTER the allocator returns (`mov 0x18(%ebx),%ax` at
+        // 0x3e632 and `mov 0x1e(%ebx),%ax` at 0x3e63a, the call at
+        // 0x3e624 being sub_373F0_377B0 = file 0x4fbe8), with the ring
+        // step reading `+26` off `%ebx` once more after the loop
+        // (`mov 0x1a(%ebx),%dx` at 0x3e68b). When the free stack is empty
+        // `new_event` SEIZES a recycle victim, and that victim can be the
+        // ring itself: `%ebx` then aliases the child fire, so the rest of
+        // the spray is laid around the CHILD's position, every member
+        // takes the child's `+24` (which `new_event` stamped = its own
+        // slot), and the ring step lands on the child's `+26` = 0 -> 2.
+        // mc1l37 t=5670 is exactly that: ring slot 69, f26 = 5, seized by
+        // its own first child; retail stamps `id24` = 69 on all 26 fires
+        // and shifts members 2..26 by the (682, 402) child-minus-ring
+        // delta, while the port's hoisted copies kept the ring's owner
+        // (504), its position, and wrote `(5+2)%11 = 7` over the child's
+        // `+26`. Same shape at t=23620 (ring slot 702, owner 523).
+        let hoisted = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.id24)
         };
+        let live = !no_effect_ring_live_operands();
         let _ = self.ent_rand(i); // pre-loop draw (:28699)
         let cells = self.ring_cells_pub(radius, radius);
         for (dx, dy) in cells {
             // x - 96 + 160·dx + rand%0x81 - 64 (:28707-09): the -96
             // recenters the ring table's 2x2 zero block.
+            let (x, y, z) = if live {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z)
+            } else {
+                (hoisted.0, hoisted.1, hoisted.2)
+            };
             let j1 = (self.ent_rand(i) % 0x81) as i32 - 64;
             let j2 = (self.ent_rand(i) % 0x81) as i32 - 64;
             let fx = x.wrapping_add((160 * dx as i32 + j1 - 96) as u16);
             let fy = y.wrapping_add((160 * dy as i32 + j2 - 96) as u16);
             if let Some(f) = self.spawn_effect(0, fx, fy, z) {
+                // :28716 / 0x3e632 — read AFTER the allocation, so a
+                // seizing child self-assigns the ctor's own-slot stamp.
+                let owner = if live { self.ent[i].id24 } else { hoisted.3 };
                 self.ent[f].id24 = owner;
                 // :28717 — the ring's children inherit its +30 exactly
                 // as the spreader's do (:28176 above). The port set
@@ -6893,7 +7062,14 @@ impl Gen {
                 self.ent[f].f26 = 0;
             }
         }
-        self.ent[i].f26 = ((radius + 2) % 11) as i16;
+        // 0x3e68b — `+26` is re-read off `%ebx` after the loop, NOT the
+        // radius the ring opened with.
+        let step = if live {
+            self.ent[i].f26.max(0) as i32
+        } else {
+            radius
+        };
+        self.ent[i].f26 = ((step + 2) % 11) as i16;
         false
     }
 
@@ -8412,4 +8588,302 @@ impl Gen {
 #[allow(dead_code)]
 pub(crate) fn global_draw(rand: &mut u32) -> u32 {
     lcg32(rand)
+}
+
+
+/// Law W5's other three call paths — `spreader_tick`, `napalm_tick`
+/// and `napalm_tick_hw`. `blast_ring_tick` is corpus-pinned by
+/// `conformance/fixtures/mc1l37/a-sprayer-seized-by-its-own-child-reads-live-operands.mgcr`
+/// (ring slot 69, t=5670); these three measure as ZERO CHANGE across
+/// the whole corpus — no take ever exhausted the pool inside one of
+/// them — so a rig is the only witness they can have.
+#[cfg(test)]
+mod ring_seizure_tests {
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::mc1::mobs::MobCtx;
+    use crate::patches::WorldPatches;
+    use crate::verbs::VerbSet;
+
+    /// The sprayer's original owner id — deliberately NOT any pool
+    /// slot the rig allocates, so "the members took the alias's `+24`"
+    /// cannot be confused with "the members kept the sprayer's".
+    const OWNER: u16 = 504;
+    /// The sprayer's original `+30` (heading), likewise distinctive.
+    const AIM: u16 = 724;
+    /// Every ring cell in the rig is this delta, so each spray step is
+    /// `pitch * 100` units along both axes — far enough that the
+    /// ±64 jitter can never blur "around the ring" into "around the
+    /// child".
+    const CELL: i32 = 100;
+
+    fn flat_gen(rings: Vec<Vec<(u8, u8)>>, verbs: VerbSet) -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings,
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC1, verbs)
+    }
+
+    fn ctx() -> MobCtx {
+        MobCtx {
+            px: 60000,
+            py: 60000,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// A SEARCH.DAT stand-in whose ring `idx` is `n` copies of `CELL`.
+    /// [`Gen::ring_cells`] drops the last cell of the outermost ring
+    /// it fetches (the stop code), hence the `n + 1`.
+    fn rings_at(idx: usize, n: usize) -> Vec<Vec<(u8, u8)>> {
+        let mut r: Vec<Vec<(u8, u8)>> = (0..32).map(|_| vec![(0u8, 0u8), (0, 0)]).collect();
+        r[idx] = vec![(CELL as u8, CELL as u8); n + 1];
+        r
+    }
+
+    /// THE SELF-SEIZURE RIG. Stage a class-10 sprayer at (1000, 1000)
+    /// with a distinctive owner/aim, then EMPTY THE FREE STACK and put
+    /// the sprayer itself on top of the recycle stack, so the very
+    /// first `new_event` inside its own spray loop hands back the
+    /// sprayer's own slot — exactly retail's `sub_373F0`
+    /// (`CARPET.EXE` file 0x4fbe8) sacrificing a live victim when the
+    /// free list is dry. `refill` stays clear so the rig cannot
+    /// re-seize the newborn fires it just made.
+    fn rig(
+        rings: Vec<Vec<(u8, u8)>>,
+        verbs: VerbSet,
+        model: u8,
+        var26: i16,
+        dummies: usize,
+    ) -> (Gen, usize, Vec<usize>) {
+        let mut g = flat_gen(rings, verbs);
+        let s = g.spawn_effect(model, 1000, 1000, 100).expect("sprayer slot");
+        g.ent[s].id24 = OWNER;
+        g.ent[s].f30 = AIM;
+        g.ent[s].act_life = 5;
+        // The one-shot sound latch already tripped (`+16 & 2`), and
+        // the `0x10000` marker the spreader's children INHERIT.
+        g.ent[s].flags |= 2 | 0x10000;
+        g.ent[s].f26 = var26;
+        // Recycle victims for the spray members that follow the
+        // seizure, parked far outside the sprayer's damage extents.
+        let members: Vec<usize> = (0..dummies)
+            .map(|k| {
+                let d = g.new_event().expect("victim slot");
+                g.ent[d].class64 = 10;
+                g.ent[d].model65 = 3;
+                g.ent[d].x = 60000;
+                g.ent[d].y = 60000 + k as u16 * 8;
+                d
+            })
+            .collect();
+        g.free.clear();
+        // `mc2_recycle_pop` takes the LAST element first.
+        let mut stack: Vec<u16> = members.iter().rev().map(|&d| d as u16).collect();
+        stack.push(s as u16);
+        g.mc2_recycle.stack = stack;
+        g.mc2_recycle.refill = false;
+        (g, s, members)
+    }
+
+    /// The origin a spray member was laid around, with the constant
+    /// `pitch * CELL - 96` step removed. What is left is the `rand %
+    /// 0x81 - 64` jitter, so this lands within 64 of the position the
+    /// loop actually read for that member.
+    fn origin_of(x: u16, pitch: i32) -> i32 {
+        x as i32 - pitch * CELL + 96
+    }
+
+    /// The four assertions every self-seizing sprayer owes, on the
+    /// FIRST member laid after the seizure.
+    fn assert_reads_the_alias(g: &Gen, sprayer: usize, member: usize, pitch: i32) {
+        assert!(
+            g.ent[sprayer].class64 == 10 && g.ent[sprayer].model65 != 3,
+            "the sprayer's own slot must have been seized for its first child"
+        );
+        assert_eq!(
+            g.ent[sprayer].id24, sprayer as u16,
+            "the child's `+24` is read off the alias AFTER the allocation, so it \
+             self-assigns `new_event`'s own-slot stamp — not the sprayer's {OWNER}"
+        );
+        assert_ne!(
+            g.ent[member].model65, 3,
+            "the second spray member must actually have been allocated"
+        );
+        assert_eq!(
+            g.ent[member].id24, sprayer as u16,
+            "every later member takes the ALIAS's owner, not the sprayer's {OWNER}"
+        );
+        let laid_around = origin_of(g.ent[member].x, pitch);
+        assert!(
+            (laid_around - g.ent[sprayer].x as i32).abs() <= 64,
+            "member laid around the CHILD at x={} (measured origin {laid_around})",
+            g.ent[sprayer].x
+        );
+        assert!(
+            (laid_around - 1000).abs() > 1000,
+            "…and NOT around the sprayer's own x=1000 (measured origin {laid_around})"
+        );
+    }
+
+    /// ⭐⭐⭐ **THE FIRE-SPREADER KEEPS ITS EMITTER IN ONE REGISTER, SO
+    /// SEIZING ITS OWN RECORD RE-HOMES THE REST OF THE SPRAY** — law
+    /// W5's second call path, `sub_25130` (:28127-76).
+    ///
+    /// Byte-proved in the shipped `CARPET.EXE` (file = VA + 0x187f8;
+    /// the routine begins at file 0x3d928 = VA 0x25130). `a1x` never
+    /// leaves `%ebx`: the ring pitch is `69 44 24 0c c0 00 00 00`
+    /// (`imul eax,[esp+0xc],0xc0` = 192) and the position operands are
+    /// re-read INSIDE the loop — `0f bf 4b 48` (`movsx ecx,word
+    /// [ebx+0x48]`, +72 x) at file 0x3d9f2, `0f bf 43 4a` (+74 y) at
+    /// 0x3da24, `66 8b 43 4c` (+76 z) at 0x3da39. The allocator call
+    /// `e8 9a 21 01 00` (`call sub_373F0`) sits at file 0x3da49, and
+    /// EVERY operand the child is stamped from is read AFTER it:
+    /// `66 8b 53 18` (+24 owner) at 0x3da55, `66 8b 53 1e` (+30 aim)
+    /// at 0x3da5d, and `8b 53 10 / 81 e2 00 00 01 00` (+16 masked with
+    /// 0x10000, the inherited marker) at 0x3da65.
+    ///
+    /// So when the free stack is dry and `new_event` sacrifices the
+    /// spreader ITSELF, `%ebx` aliases the newborn fire: the remaining
+    /// cells are laid around the CHILD's position, they take the
+    /// child's `+24` (which `new_event` just set to its own slot), the
+    /// child's `+30` (0, not the spreader's heading) and the child's
+    /// `+16` (which carries no 0x10000 to inherit).
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_EFFECT_RING_LIVE_OPERANDS=1`
+    /// hoists all six operands above the loop; the members then sit
+    /// around the spreader's own x=1000, carry `id24 = 504`,
+    /// `f30 = 724` and the inherited 0x10000.
+    #[test]
+    fn a_self_seized_spreader_lays_its_ring_around_its_own_child() {
+        let (mut g, s, members) = rig(rings_at(2, 4), VerbSet::MC1, 1, 2, 4);
+        g.spreader_tick(s);
+        assert!(
+            g.mc2_recycle.seized >= 2,
+            "the rig must have seized the spreader and at least one more slot"
+        );
+        assert_reads_the_alias(&g, s, members[0], 192);
+        assert_eq!(
+            g.ent[members[0]].f30, 0,
+            "+30 is read off the alias too — the newborn's 0, not the spreader's {AIM}"
+        );
+        assert_eq!(
+            g.ent[members[0]].flags & 0x10000,
+            0,
+            "…and so is the inherited +16 marker: the newborn has none to pass on"
+        );
+    }
+
+    /// ⭐⭐⭐ **THE WALL-OF-FIRE CLOUD DOES IT TOO, AND ITS WAVE
+    /// COUNTER IS THE PROOF** — law W5's third call path, base-MC1
+    /// `sub_29780` (:31140-84).
+    ///
+    /// `CARPET.EXE` file 0x41f78 = VA 0x29780, same `%ebx` idiom:
+    /// pitch `6b 44 24 0c 70` (`imul eax,[esp+0xc],0x70` = 112) at
+    /// file 0x4200a, `0f bf 4b 48` (+72 x) at 0x4200f, `0f bf 43 4a`
+    /// (+74 y) at 0x4203e, `66 8b 43 4c` (+76 z) at 0x42053, the
+    /// allocator `e8 80 db 00 00` (`call sub_373F0`) at 0x42063, and
+    /// then AFTER it `66 8b 53 18` (+24 owner) at 0x42071,
+    /// `66 8b 53 2c` (+44 damage) at 0x42079, `66 83 7b 1a 00`
+    /// (`cmp word [ebx+0x1a],0x0` — the +26 WAVE test that picks the
+    /// child's life 14 or 1) at 0x42081, and `0f bf 53 1a` (+26 again,
+    /// `<<8` then halved = wave·128 into the child's +46) at 0x420af.
+    /// The wave step after the loop re-reads it once more:
+    /// `66 8b 43 1a / 40 / 66 89 43 1a / 66 3d 0e 00` at file 0x420ee.
+    ///
+    /// A cloud that seizes its own record therefore reads its
+    /// newborn's `+26` = 0 for the rest of the tick: the child gets
+    /// the WAVE-0 fourteen-tick ground patch instead of a one-tick
+    /// sheet, later members ride `+46 = 7·128` (the flame ctor's own
+    /// `+26 = 7`) instead of `wave·128`, and the post-loop step lands
+    /// on the child's counter.
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_EFFECT_RING_LIVE_OPERANDS=1` —
+    /// the seized slot then keeps life 1, the members read
+    /// `f46 = 2·128 = 256`, and the cloud's counter steps 2 → 3.
+    #[test]
+    fn a_self_seized_napalm_cloud_lays_its_waves_around_its_own_child() {
+        // `napalm_tick` walks rings 0..=1, so the rig fills both.
+        let mut r: Vec<Vec<(u8, u8)>> = (0..32).map(|_| vec![(0u8, 0u8), (0, 0)]).collect();
+        r[0] = vec![(CELL as u8, CELL as u8); 2];
+        r[1] = vec![(CELL as u8, CELL as u8); 3];
+        let (mut g, s, members) = rig(r, VerbSet::MC1, 53, 2, 4);
+        assert!(!g.is_hidden_worlds(), "this leg is the base-MC1 branch");
+        g.napalm_tick(s, &ctx());
+        assert!(g.mc2_recycle.seized >= 2, "the rig must have self-seized");
+        assert_reads_the_alias(&g, s, members[0], 112);
+        assert_eq!(
+            g.ent[s].act_life, 14,
+            "the wave test read the NEWBORN's +26 = 0, so the child took the \
+             persistent wave-0 patch life"
+        );
+        assert_eq!(
+            g.ent[members[0]].f46, 7 * 128,
+            "later members ride the alias's +26 (the flame ctor's 7), not wave 2"
+        );
+        assert_eq!(
+            g.ent[s].f26, 8,
+            "and the post-loop wave step lands on the child's counter (7 + 1), \
+             not the cloud's (2 + 1)"
+        );
+    }
+
+    /// ⭐⭐⭐ **AND THE HIDDEN WORLDS GEOMETRY, WHOSE RING RADIUS IS
+    /// THE SAME `+26`** — law W5's fourth call path, `sub_29780`'s
+    /// `IsHiddenWord` branch (`reference/remc1hw/sub_main.cpp`
+    /// :29740-72).
+    ///
+    /// Byte-proved in the shipped `HIDDEN.EXE` (same file = VA +
+    /// 0x187f8 mapping): the branch's extents write
+    /// `0f bf 53 1a / lea eax,[edx*4] / sub / shl 8 / sar 2` (192·var26)
+    /// is at file 0x421d4, its pitch is `69 44 24 0c a0 00 00 00`
+    /// (160) at file 0x42265, and the loop re-reads `0f bf 73 48`
+    /// (+72 x) at 0x4226d, `0f bf 43 4a` (+74 y) at 0x4229f and
+    /// `66 8b 43 4c` (+76 z) at 0x422b4. The allocator
+    /// `e8 df de 00 00` sits at file 0x422c4 and BOTH inherited
+    /// operands are read after it: `66 8b 43 18` (+24) at 0x422d2 and
+    /// `66 8b 43 1e` (+30 yaw) at 0x422da. The ring step
+    /// `66 8b 53 1a / 83 c2 02 / idiv si(7) / 66 89 53 1a` re-reads
+    /// `+26` off `%ebx` after the loop, at file 0x4232b.
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_EFFECT_RING_LIVE_OPERANDS=1` —
+    /// the members then keep the cloud's yaw 724 and its owner 504,
+    /// sit around x=1000, and the radius steps (3 + 2) % 7 = 5 instead
+    /// of the newborn's (0 + 2) % 7 = 2.
+    #[test]
+    fn a_self_seized_hw_napalm_cloud_lays_its_ring_around_its_own_child() {
+        let (mut g, s, members) = rig(rings_at(3, 4), VerbSet::MC1HW, 53, 3, 4);
+        assert!(g.is_hidden_worlds(), "this leg is the HW branch");
+        g.napalm_tick(s, &ctx());
+        assert!(g.mc2_recycle.seized >= 2, "the rig must have self-seized");
+        assert_reads_the_alias(&g, s, members[0], 160);
+        assert_eq!(
+            g.ent[members[0]].f30, 0,
+            "+30 is read off the alias — the newborn's 0, not the cloud's {AIM}"
+        );
+        assert_eq!(
+            g.ent[s].f26, 2,
+            "the ring step reads the child's +26 = 0 -> (0 + 2) % 7, not (3 + 2) % 7"
+        );
+    }
 }

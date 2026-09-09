@@ -461,6 +461,16 @@ fn no_rival_fall_carry() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_RIVAL_FALL_CARRY").is_some())
 }
 
+/// A/B toggle for **THE KNOCKBACK BEARING READS A FREED SOURCE**: set
+/// `MGC_NO_KNOCK_FROM_DEAD_SOURCE` to restore the pre-dig guard, where
+/// the MC2 wizard-damage arm only stamped `yaw_0x1E_30`/`moveBoost` when
+/// the mail source was still a LIVE pool record. Retail's gate is
+/// `word_0x62_98 != 0` alone (EF:61012/61037). See the write site.
+fn no_knock_from_dead_source() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_KNOCK_FROM_DEAD_SOURCE").is_some())
+}
+
 /// A/B toggle for **`sub_12A70`'s LETHAL RETURN IS THE HOUSEKEEPING'S,
 /// NOT THE BRAIN'S**: set `MGC_NO_RIVAL_DEATH_BRAIN` to restore the
 /// pre-dig behaviour, where [`World::mc2_rival_alive`]'s lethal branch
@@ -2907,12 +2917,34 @@ impl World {
         // ⚠ Retail's source is always a pool entity; the port stamps
         // human-fired mail with [`PLAYER_TARGET`], so that case reads
         // the pinned human pose — the MC1 twin's own note, verbatim.
+        //
+        // ⭐⭐⭐ AND THE SOURCE NEED NOT STILL BE ALIVE. The only gate
+        // retail has is `if (v8)` on `word_0x62_98` itself (EF:61012);
+        // `v15x = Entities_EA3E4[v14]` (EF:61037) is a bare table index
+        // with NO `class_0x3F_63` test, and `position_0x4C_76` survives
+        // a free (`sub_49FE0` clears the class byte alone), so the
+        // bearing is taken from the dead projectile's LAST position.
+        // The proof that retail dereferences a freed record here is
+        // eight lines down in its own arm: the flood-killer suppression
+        // reads `v15x->class_0x3F_63 == 10 && v15x->model_0x40_64 == 67`
+        // off the same pointer. This arm's `class64 != 0` was an
+        // INVENTED GUARD, and it is silent until the fatal hit comes
+        // from a projectile that expires on the very tick it lands —
+        // then the register keeps the PREVIOUS hit's bearing and the
+        // whole death fall flies the wrong way.
+        // Witness mc2l4 t=8541: rival 292 is killed by slot 247, a
+        // (0,2) husk already freed that tick but still parked at
+        // (31866, 60047). Retail stamps bearing 1314 from it; the port
+        // held the stale 385 and the t=8542 death fall landed the
+        // corpse — and with it the grave, the revived (10,1) and the
+        // whole class-15 token scatter — a constant (+137, -81) off.
         let attacker = if src == PLAYER_TARGET {
             Some((self.human_pose.0, self.human_pose.1))
         } else {
             let s = src as usize;
-            (s != 0 && s < self.g.ent.len() && self.g.ent[s].class64 != 0)
+            (s != 0 && s < self.g.ent.len())
                 .then(|| (self.g.ent[s].x, self.g.ent[s].y))
+                .filter(|_| !no_knock_from_dead_source() || self.g.ent[s].class64 != 0)
         };
         if let Some((ax, ay)) = attacker {
             let (vx, vy) = (self.g.ent[i].x, self.g.ent[i].y);
@@ -6237,12 +6269,32 @@ impl World {
                         }
                     } else {
                         self.mc2_rivals[ri].vdes = 0;
-                        let wizard_target = matches!(self.mc2_rivals[ri].target, PLAYER_TARGET)
-                            || self
-                                .mc2_rivals
-                                .iter()
-                                .any(|r| r.ent == self.mc2_rivals[ri].target);
-                        if wizard_target {
+                        // ⭐⭐ THE WEAVE GATE IS THE TARGET'S **MODEL
+                        // BYTE**, NOT ITS IDENTITY. NETHERW.EXE 0x1396A
+                        // reads `[esi+0x40]` off `Entities[word_0x96_150]`
+                        // and takes the weave on model 0 or 1 — no class
+                        // test, no roster lookup. The two wizard shapes
+                        // ARE (3,0) and (3,1), which is why the identity
+                        // reading held up until a rival hunted a
+                        // non-wizard that shares the model: mc2l1 t=449,
+                        // rival 138 in state 0xD onto the (5,1) mana
+                        // creature at slot 60 — retail rolls the entity
+                        // LCG and snaps the yaw 105 → 607, the port sat
+                        // still. Model 0 stands in for the human, whose
+                        // record retail reaches through its real slot.
+                        let weave_target = if crate::engine::features::no_mc2_weave_model_gate() {
+                            matches!(self.mc2_rivals[ri].target, PLAYER_TARGET)
+                                || self
+                                    .mc2_rivals
+                                    .iter()
+                                    .any(|r| r.ent == self.mc2_rivals[ri].target)
+                        } else {
+                            match self.mc2_rivals[ri].target {
+                                PLAYER_TARGET => true,
+                                t => matches!(self.g.ent[t as usize].model65, 0 | 1),
+                            }
+                        };
+                        if weave_target {
                             self.mc2_rival_weave(ri, i);
                         }
                         self.mc2_rival_hover(i, tz.saturating_add(512));
@@ -8287,6 +8339,29 @@ impl World {
             self.mc2_rivals[ri].grace = 0;
             let i = self.mc2_rivals[ri].ent as usize;
             self.g.ent[i].mail[0] = (u32::MAX / 4, 1);
+        }
+    }
+
+    /// Test hook: hand a rival wizard a damage letter from an
+    /// ARBITRARY pool source (`str_0x5E_94.word_0x62_98`), so a test
+    /// can pin WHICH record the knockback bearing is taken off.
+    #[doc(hidden)]
+    pub fn debug_hit_mc2_rival(&mut self, slot: u8, src: u16, amount: u32) {
+        if let Some(ri) = self.mc2_rivals.iter().position(|r| r.slot == slot) {
+            self.mc2_rivals[ri].grace = 0;
+            let i = self.mc2_rivals[ri].ent as usize;
+            self.g.ent[i].mail[0] = (amount, src);
+        }
+    }
+
+    /// Test hook: retail's free (`sub_49FE0`) as the knockback bearing
+    /// sees it — the CLASS BYTE alone goes to zero and
+    /// `position_0x4C_76` stands. That is the exact state mc2l4's slot
+    /// 247 is in on the tick its hit kills rival 292.
+    #[doc(hidden)]
+    pub fn debug_mc2_free_in_place(&mut self, slot: usize) {
+        if let Some(e) = self.g.ent.get_mut(slot) {
+            e.class64 = 0;
         }
     }
 
