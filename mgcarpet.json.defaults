@@ -62,6 +62,7 @@
       "map_trigger_areas": false
     },
     "enhancement": {
+      "autocontrasting_markers": true,
       "expose_jar_spells": false,
       "fire": "classic",
       "hud_transparency": "off",

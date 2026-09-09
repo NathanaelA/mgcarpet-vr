@@ -705,11 +705,15 @@ fn mc2_map_dots(
             }
             _ => continue,
         };
+        // The ring's reference: the owner's steady bright colour for a
+        // team-linked (blinking) dot, else the dot's own.
+        let reference = team(p.team).map(|(bright, _)| bright).unwrap_or(color);
         out.push(mgc_render::MapDot {
             x: p.x,
             z: p.z,
             color,
             size,
+            halo: dot_wants_halo(p.class, p.model).then_some(reference),
         });
     }
     out
@@ -725,6 +729,36 @@ fn mc2_map_dots(
 ///
 /// MC2 worlds dispatch to [`mc2_map_dots`] — the real
 /// DrawMinimapEntities_B_61A00 law.
+/// Which dots wear the self-contrast halo (player design 2026-09-09,
+/// families ruled the same day: "some markers should not have a halo
+/// at all, such as trees"): the things you HUNT on poor-contrast ground
+/// — creatures (5), mana balls ((10,39)/(10,57): MC1's wild and owned
+/// spheres, MC2's 0x27/0x39 are the same models), the DWELLING FLAGS
+/// (10,45) captured (owner colour) and uncaptured (magenta), spell
+/// jars/tokens (12/15); rival wizards get theirs from the rival-dot
+/// builder. Scenery (2), portals and every other class-10 static carry
+/// none — and neither do the CIVILIANS, class-5 models 12..=14 in both
+/// games (the villager blue / MC2 colour-15 dots): you never target
+/// them, and their ring hid the black-vs-blue difference from the
+/// monsters on daylight maps — nor the EFFECTS, class 9 (the spell
+/// projectiles: lightning, fireballs, magnets, …): dense, transient,
+/// never a target, and their rings merged into "a black streak" along a
+/// lightning bolt (player, same day; the class had been carried under
+/// the mistaken label "wizard carpets").
+///
+/// The ring is black or white by a reference colour's brightness
+/// (`mgc_render::halo_color`); the builders hand `MapDot::halo` the
+/// steady PRIMARY of a blinking pair — the team colour — so the ring
+/// holds still while the dot blinks between its primary and the
+/// off-phase shade (player: "most of the blinking is between a primary
+/// colour and background, so the choice is usually clear").
+pub fn dot_wants_halo(class: u8, model: u8) -> bool {
+    matches!(
+        (class, model),
+        (5, 0..=11 | 15..) | (10, 39 | 45 | 57) | (12 | 15, _)
+    )
+}
+
 pub fn map_dots_from_poses(
     game: GameId,
     poses: &[LivePose],
@@ -834,11 +868,15 @@ pub fn map_dots_from_poses(
             (12, _) => red,
             _ => continue,
         };
+        // The ring's reference: the team's primary shade `v` for a
+        // team-coloured (blinking) dot, else the dot's own colour.
+        let reference = team.map(|(v, _)| v).unwrap_or(color);
         out.push(mgc_render::MapDot {
             x: p.x,
             z: p.z,
             color,
             size,
+            halo: dot_wants_halo(p.class, p.model).then_some(reference),
         });
     }
     out
@@ -1857,6 +1895,7 @@ pub fn rival_reveals(
                     z: r.z,
                     color,
                     size: 1,
+                    halo: Some(color), // a rival wizard: hunted
                 });
                 (color, 4.0)
             }
@@ -2023,6 +2062,13 @@ pub fn map_dots(things: &[Thing], palette: &[[u8; 4]; 256]) -> Vec<mgc_render::M
             z: t.y as f32 + 0.5,
             color,
             size: 1,
+            // `Thing` carries u16 class/model; an out-of-byte value is a
+            // no-halo dot, never a panic in the map builder.
+            halo: dot_wants_halo(
+                u8::try_from(t.class).unwrap_or(u8::MAX),
+                u8::try_from(t.model).unwrap_or(u8::MAX),
+            )
+            .then_some(color),
         });
     }
     out

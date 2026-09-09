@@ -487,6 +487,18 @@ pub struct RenderEnhancement {
     /// instead, never both). Families with no icon built keep their
     /// dots.
     pub map_marker_icons: bool,
+    /// The self-contrasting marker halo (deliberate deviation, player
+    /// design 2026-09-09): every hunted map marker — creature, mana
+    /// ball, dwelling flag, spell jar, rival wizard and the icon-swap
+    /// miniatures — wears a one-pixel ring, pure black under a bright
+    /// marker and pure white under a dark one, so it stays legible on
+    /// any ground (the wizard grave's bones on barren, mana on snow).
+    /// The ring reads a STEADY reference colour (the team primary for
+    /// blinking flags/balls), so it never blinks, and stays one pixel
+    /// at every marker scale. Scenery, civilians and spell effects
+    /// carry none. Also lifts the dots to screen-space quads at marker
+    /// scale 1 (the baked texel cannot take a ring).
+    pub autocontrasting_markers: bool,
     /// Fog the fullscreen map beyond the world's true extent
     /// (deliberate deviation): the world wraps toroidally, so the
     /// player-centered map repeats entities past ±half a world from
@@ -517,6 +529,7 @@ impl Default for RenderEnhancement {
             expose_jar_spells: false,
             map_marker_scale: 1.0,
             map_marker_icons: false,
+            autocontrasting_markers: true,
             map_extent_fog: false,
             fire: FireEffects::default(),
             lightning: LightningEffects::default(),

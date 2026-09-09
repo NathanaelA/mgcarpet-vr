@@ -705,6 +705,7 @@ impl UiAssets {
         pixels: &[u8],
         sprite: u16,
         palette: &[[u8; 4]; 256],
+        half: bool,
     ) -> Option<mgc_render::MapStamp> {
         let e = index.sprites.get(sprite as usize)?;
         let f = e.frames.first()?;
@@ -721,6 +722,7 @@ impl UiAssets {
         }
         let y0 = self.atlas_h as usize;
         self.atlas_rgba.resize((y0 + h) * dst_w * 4, 0);
+        let mut rgb = Vec::with_capacity(w * h);
         for y in 0..h {
             let srow = (f.y as usize + y) * src_w + f.x as usize;
             for x in 0..w {
@@ -729,6 +731,7 @@ impl UiAssets {
                     continue; // transparent
                 }
                 let c = palette[src as usize];
+                rgb.push(c);
                 let i = ((y0 + y) * dst_w + x) * 4;
                 self.atlas_rgba[i..i + 3].copy_from_slice(&c[..3]);
                 self.atlas_rgba[i + 3] = 255;
@@ -736,19 +739,39 @@ impl UiAssets {
         }
         self.atlas_h += h as u32;
         let (mut sw, mut sh) = (e.width as u32, e.height as u32);
-        // Exactly 2x smaller than the spell-stamp rule would draw:
-        // min(native, 12)/2 per axis via the shared long-side factor.
-        let scale = (6.0 / sw.max(sh) as f32).min(0.5);
+        // The spell-stamp rule: min(native, 12) on the long side via the
+        // shared factor. Player-sized 2026-09-09 (back UP from the
+        // 2026-08-07 halving, min(native, 12)/2): with the self-contrast
+        // halo the dots read right at marker scale 1 and these
+        // miniatures were the one family left too small — "2x their
+        // current size at 1x". The halo itself stays one static pixel.
+        // `half` keeps a family at the 2026-08-07 size: the standing
+        // stones (2,1), which come in circles and clusters and
+        // dominated the view at the full rule (player ruling
+        // 2026-09-09; the player's word for them is "dolmen").
+        let scale = (12.0 / sw.max(sh) as f32).min(1.0) * if half { 0.5 } else { 1.0 };
         sw = ((sw as f32 * scale) as u32).max(1);
         sh = ((sh as f32 * scale) as u32).max(1);
-        Some(mgc_render::MapStamp::new(
+        let mut stamp = mgc_render::MapStamp::new(
             0.0,
             0.0,
             sw,
             sh,
             [0.0, y0 as f32, e.width as f32, e.height as f32],
             [0.5, 1.0],
-        ))
+        );
+        // The SELF-CONTRAST HALO (player design 2026-09-09): the
+        // renderer draws the miniature's silhouette one screen pixel
+        // out in each direction, black or white by the glyph's mean
+        // brightness (`mgc_render::halo_color`). One pixel at EVERY marker
+        // scale — the player's ruling after the first cut (two baked
+        // rings that scaled with the stamp) outweighed the 4-6 px
+        // glyphs.
+        stamp.halo = Some(mgc_render::MarkerHalo {
+            color: marker_glyph_color(&rgb),
+            alpha: mgc_render::MARKER_HALO_ALPHA[0],
+        });
+        Some(stamp)
     }
 
     /// The pre-composited icon-on-slab tile for a spell; `variant`
@@ -2992,6 +3015,35 @@ pub fn selector_quads(
     }
 
     (quads, hover)
+}
+
+/// A glyph's mean sRGB colour (0..1 per channel) over its opaque
+/// texels `rgb` — the reference that picks the halo ink
+/// (`mgc_render::halo_color`). An empty glyph reads black.
+fn marker_glyph_color(rgb: &[[u8; 4]]) -> [f32; 3] {
+    if rgb.is_empty() {
+        return [0.0; 3];
+    }
+    let n = rgb.len() as f32 * 255.0;
+    let sum = rgb.iter().fold([0.0f32; 3], |a, c| {
+        [a[0] + c[0] as f32, a[1] + c[1] as f32, a[2] + c[2] as f32]
+    });
+    [sum[0] / n, sum[1] / n, sum[2] / n]
+}
+
+#[cfg(test)]
+mod marker_halo_tests {
+    use super::*;
+
+    #[test]
+    fn glyph_colour_is_the_mean_over_opaque_texels() {
+        let c = marker_glyph_color(&[[255, 0, 0, 255], [0, 0, 255, 255]]);
+        assert!((c[0] - 0.5).abs() < 1e-6 && c[1] == 0.0 && (c[2] - 0.5).abs() < 1e-6);
+        assert_eq!(marker_glyph_color(&[]), [0.0; 3]);
+        // …and the dark bones take a white ring.
+        let bones = marker_glyph_color(&[[60, 40, 20, 255]]);
+        assert_eq!(mgc_render::halo_color(bones), [1.0; 3], "white under dark bones");
+    }
 }
 
 #[cfg(test)]

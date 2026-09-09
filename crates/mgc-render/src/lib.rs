@@ -98,6 +98,56 @@ pub struct MapDot {
     /// Pixel side length: 1 for the standard dot, 2 for the
     /// original's grown portal dot (sub_48710 v60).
     pub size: u8,
+    /// The self-contrast halo when the renderer's halo is on (player
+    /// design 2026-09-09): the things you HUNT on poor-contrast ground
+    /// — creatures, wizards, mana balls, dwelling flags, spell jars —
+    /// not the scenery (trees, portals) or the civilians, which the
+    /// player ruled should carry none. `Some(palette index)` = the
+    /// ring's REFERENCE colour, whose complement ([`halo_color`]) is
+    /// the ink; for a BLINKING dot that is the steady PRIMARY (the
+    /// team colour), never the off-phase shade, so the ring holds
+    /// still while the dot blinks. `None` = no ring.
+    pub halo: Option<u8>,
+}
+
+/// The marker halo opacities (player design 2026-09-09, re-sized on
+/// the first playtest the same day): every enhanced map marker — the
+/// icon-swap miniatures ([`MapStamp::halo`], four silhouette copies)
+/// and the screen-space dots (one solid quad under each dot,
+/// [`project_map_dots`]) — wears ONE translucent ring, exactly one
+/// screen pixel wide at EVERY marker scale (player ruling: the halo
+/// stays static, only the marker scales), in the luminance OPPOSITE
+/// to its own, so it contrasts with itself and stays legible on any
+/// ground. `[0]` = the icon miniatures, `[1]` = the dots. Both well
+/// under the player's 0.4 ceiling: the first cut's two rings at
+/// 0.85/0.4 turned the map "into one big halo" at scale 1.25, the
+/// second's 0.5 single ring was still "excessive".
+pub const MARKER_HALO_ALPHA: [f32; 2] = [0.45, 0.6];
+
+/// The halo's screen-pixel offsets — the 4-neighbourhood, so a
+/// straight edge takes exactly one copy (no alpha stacking; only a
+/// concave corner doubles up).
+const MARKER_HALO_OFFSETS: [[f32; 2]; 4] = [[-1.0, 0.0], [1.0, 0.0], [0.0, -1.0], [0.0, 1.0]];
+
+/// The halo ink for a marker of sRGB colour `c` (0..1): pure BLACK
+/// under a marker brighter than mid-grey, pure WHITE under a darker
+/// one — by the reference colour's brightness alone, no hue. Player
+/// ruling 2026-09-09 after five rules in one day: ground-first
+/// black/white (a mover's ring changed as it travelled), the
+/// stationary/mover split (blinking flags flipped their ring), the RGB
+/// complement ("the choice is correct — purple gets green — and the
+/// contrast is terrible"). The player tunes the opacity
+/// ([`MARKER_HALO_ALPHA`]) against this rule. Returned in sRGB.
+pub fn halo_color(c: [f32; 3]) -> [f32; 3] {
+    let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    if lum > 0.5 { [0.0; 3] } else { [1.0; 3] }
+}
+
+/// [`halo_color`] of an 8-bit palette colour as a linear-space UI tint
+/// with the given alpha.
+fn halo_tint(c: &[u8], alpha: f32) -> [f32; 4] {
+    let ink = halo_color([c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]);
+    [srgb_to_linear(ink[0]), srgb_to_linear(ink[1]), srgb_to_linear(ink[2]), alpha]
 }
 
 /// A [`MapDot`] lifted out of the map-texture bake for screen-space
@@ -110,6 +160,9 @@ struct ScreenDot {
     z: f32,
     size: f32,
     tint: [f32; 4],
+    /// The ring's linear-space tint (from the reference colour at the
+    /// dot alpha, [`halo_tint`]); `None` = no ring.
+    ink: Option<[f32; 4]>,
 }
 
 /// A tinted circle on the overhead map (the trigger-volume overlay —
@@ -156,6 +209,22 @@ pub struct MapStamp {
     /// palette-baked sprites, the team colour for the white-masked
     /// font glyphs (DrawText's `color` argument).
     pub tint: [f32; 4],
+    /// The self-contrast halo (player design 2026-09-09): `Some` draws
+    /// the stamp's silhouette in flat ink at ±1 screen pixel in x and y
+    /// UNDER the stamp — one pixel wide at every marker scale (player
+    /// ruling: only the marker scales, the halo stays static). The ink
+    /// is resolved at draw time against the GROUND under the marker
+    /// ([`halo_ink`]); the stamp carries its glyph's own luminance and
+    /// the ring's alpha.
+    pub halo: Option<MarkerHalo>,
+}
+
+/// A marker's halo request: the marker's own mean colour (sRGB 0..1 —
+/// it picks the ink, [`halo_color`]) and the ring's alpha.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MarkerHalo {
+    pub color: [f32; 3],
+    pub alpha: f32,
 }
 
 impl MapStamp {
@@ -170,6 +239,7 @@ impl MapStamp {
             anchor,
             offset: [0.0, 0.0],
             tint: [1.0, 1.0, 1.0, 1.0],
+            halo: None,
         }
     }
 }
@@ -378,6 +448,17 @@ fn project_map_stamps(
     let bounds = [cx - half_x, cy - half_y, half_x * 2.0, half_y * 2.0];
     let mut quads = Vec::new();
     for st in stamps {
+        // The halo ink from the glyph's mean colour ([`halo_color`]),
+        // linearised for the UI pass.
+        let halo = st.halo.map(|h| {
+            let ink = halo_color(h.color);
+            [
+                srgb_to_linear(ink[0]),
+                srgb_to_linear(ink[1]),
+                srgb_to_linear(ink[2]),
+                h.alpha,
+            ]
+        });
         // Base image in [0, tiles); the −tiles sibling per axis covers
         // every offset a ≤full-world (stretched ≤~1.42×half) pane can
         // show. (The map screen's √2 zoom-out CAN reach farther on a
@@ -422,6 +503,23 @@ fn project_map_stamps(
                     w,
                     h,
                 ];
+                // The halo: the stamp's silhouette (ui.wgsl mode 2 —
+                // negative uv width — flat `tint` over the texel
+                // coverage) one screen pixel out in each direction,
+                // under the stamp itself. Static one pixel: the
+                // offsets are NOT scaled.
+                if let Some(ink) = halo {
+                    for [ox, oy] in MARKER_HALO_OFFSETS {
+                        let hr = [rect[0] + ox, rect[1] + oy, w, h];
+                        if let Some((hr, huv)) = clip_quad_to(hr, st.uv, bounds) {
+                            quads.push(UiQuad {
+                                rect: hr,
+                                uv: [huv[0], huv[1], -huv[2], huv[3]],
+                                tint: ink,
+                            });
+                        }
+                    }
+                }
                 if let Some((rect, uv)) = clip_quad_to(rect, st.uv, bounds) {
                     quads.push(UiQuad {
                         rect,
@@ -456,6 +554,7 @@ fn project_map_dots(
     round: bool,
     aspect: f32,
     dot_px: f32,
+    halo_px: f32,
 ) -> Vec<UiQuad> {
     let half_tiles = zoom * 0.5;
     let tiles = MAP_TILES as f32;
@@ -463,6 +562,9 @@ fn project_map_dots(
     let bounds = [cx - half_x, cy - half_y, half_x * 2.0, half_y * 2.0];
     let mut quads = Vec::new();
     for d in dots {
+        // The ring's tint was resolved at the dot lift from the
+        // reference colour; `None` = a no-halo family.
+        let ring = if halo_px > 0.0 { d.ink } else { None };
         let bx = (d.x - px).rem_euclid(tiles);
         let bz = (d.z - pz).rem_euclid(tiles);
         for dx in [bx, bx - tiles] {
@@ -485,6 +587,16 @@ fn project_map_dots(
                 let scx = cx + nx * half_x;
                 let scy = cy + ny * half_y;
                 let side = d.size * dot_px;
+                // The self-contrast halo: one faint ring `halo_px` wide
+                // (one pixel at marker scale 1), a solid quad
+                // alpha-blended under the dot.
+                if let Some(tint) = ring {
+                    let hs = side + 2.0 * halo_px;
+                    let rect = [scx - hs * 0.5, scy - hs * 0.5, hs, hs];
+                    if let Some((rect, uv)) = clip_quad_to(rect, [0.0; 4], bounds) {
+                        quads.push(UiQuad { rect, uv, tint });
+                    }
+                }
                 let rect = [scx - side * 0.5, scy - side * 0.5, side, side];
                 // Solid quad (uv.z == 0); the zero uv survives the
                 // proportional clip untouched.
@@ -1685,6 +1797,12 @@ pub struct Renderer {
     /// lifts the dots out of the bake into `screen_dots`, drawn
     /// screen-space at a size that no longer varies with radar zoom.
     marker_scale: f32,
+    /// The self-contrast marker halo (`autocontrasting_markers`,
+    /// default on): the dot rings, the stamps' rings (`MapStamp::halo`
+    /// is stripped when off), and — so 1x is not the one scale without
+    /// a ring — the lift of the dots to screen space at
+    /// `marker_scale == 1.0`.
+    marker_halo: bool,
     /// The dots lifted out of the texture bake when `marker_scale !=
     /// 1.0` (tile position, palette color resolved to a linear tint).
     /// Refreshed with the map texture every `update_map`.
@@ -3119,6 +3237,7 @@ impl Renderer {
             ui_quads: Vec::new(),
             map_stamps: Vec::new(),
             marker_scale: 1.0,
+            marker_halo: false,
             screen_dots: Vec::new(),
             map_path: None,
             objective_marks: Vec::new(),
@@ -3182,6 +3301,21 @@ impl Renderer {
     /// take effect at the next map recompose (every sim tick).
     pub fn set_marker_scale(&mut self, scale: f32) {
         self.marker_scale = scale.clamp(0.25, 8.0);
+    }
+
+    /// The self-contrast marker halo (player design 2026-09-09; the
+    /// `autocontrasting_markers` option, default on): the dot rings,
+    /// the 1x dot lift, and the icon miniatures' rings alike. See
+    /// [`MARKER_HALO_ALPHA`].
+    pub fn set_marker_halo(&mut self, on: bool) {
+        self.marker_halo = on;
+    }
+
+    /// Dots bake into the map texture (the faithful surface-texel
+    /// marker) only at scale 1 with the halo off; otherwise they lift
+    /// to screen-space quads.
+    fn bake_dots(&self) -> bool {
+        self.marker_scale == 1.0 && !self.marker_halo
     }
 
     /// Fog the map screens beyond the world's true (heading-rotated)
@@ -3928,7 +4062,7 @@ impl Renderer {
 
         // Overhead map for the book screen, composed on the CPU through
         // the engine's map color path.
-        let map_rgba = map_pixels_impl(level, overlay, self.marker_scale == 1.0);
+        let map_rgba = map_pixels_impl(level, overlay, self.bake_dots());
         self.refresh_screen_dots(level, overlay);
         let map_extent = wgpu::Extent3d {
             width: n as u32,
@@ -4157,7 +4291,7 @@ impl Renderer {
         let n = MAP_TILES as u32;
         self.refresh_screen_dots(level, overlay);
         if let Some(map_tex) = &self.map_tex {
-            let map_rgba = map_pixels_impl(level, overlay, self.marker_scale == 1.0);
+            let map_rgba = map_pixels_impl(level, overlay, self.bake_dots());
             self.queue.write_texture(
                 map_tex.as_image_copy(),
                 &map_rgba,
@@ -4181,7 +4315,7 @@ impl Renderer {
     /// out with its palette color resolved to a linear tint. Runs with
     /// every map recompose so blink phases keep their cadence.
     fn refresh_screen_dots(&mut self, level: &LevelView, overlay: &MapOverlay) {
-        self.screen_dots = if self.marker_scale == 1.0 {
+        self.screen_dots = if self.bake_dots() {
             Vec::new()
         } else {
             overlay
@@ -4199,6 +4333,9 @@ impl Renderer {
                             srgb_to_linear(c[2] as f32 / 255.0),
                             1.0,
                         ],
+                        ink: d
+                            .halo
+                            .map(|r| halo_tint(&level.palette[r as usize][..3], MARKER_HALO_ALPHA[1])),
                     }
                 })
                 .collect()
@@ -4399,8 +4536,21 @@ impl Renderer {
         aspect: f32,
         scale: f32,
     ) -> Vec<UiQuad> {
+        // With the halo off the miniatures draw bare: the app sets
+        // `MapStamp::halo` unconditionally, the option decides here.
+        let bare: Vec<MapStamp>;
+        let stamps: &[MapStamp] = if self.marker_halo {
+            &self.map_stamps
+        } else {
+            bare = self
+                .map_stamps
+                .iter()
+                .map(|s| MapStamp { halo: None, ..*s })
+                .collect();
+            &bare
+        };
         project_map_stamps(
-            &self.map_stamps,
+            stamps,
             cx,
             cy,
             half_x,
@@ -5307,6 +5457,11 @@ impl Renderer {
                         round,
                         aspect,
                         dot_px,
+                        // The halo ring: ONE screen pixel at every
+                        // marker scale (player ruling — the halo stays
+                        // static, only the marker scales), under the
+                        // enhanced-markers option only.
+                        if self.marker_halo { 1.0 } else { 0.0 },
                     );
                 }
                 stamp_quads.extend(self.map_stamp_quads(
@@ -6150,6 +6305,7 @@ mod tests {
             z,
             size,
             tint: [0.5, 0.25, 0.125, 1.0],
+            ink: None,
         };
         let (cx, cy, hx, hy) = (200.0, 200.0, 200.0, 200.0);
         // At the player: centered on the pane center, side dot_px per
@@ -6167,6 +6323,7 @@ mod tests {
             false,
             1.0,
             6.0,
+            0.0,
         );
         assert_eq!(q.len(), 2);
         assert_eq!(q[0].rect, [cx - 3.0, cy - 3.0, 6.0, 6.0]);
@@ -6189,6 +6346,7 @@ mod tests {
             false,
             1.0,
             4.0,
+            0.0,
         );
         assert_eq!(q.len(), 1);
         let center = (
@@ -6215,8 +6373,100 @@ mod tests {
             true,
             1.0,
             4.0,
+            0.0,
         );
         assert!(q.is_empty(), "outside the disc");
+    }
+
+    /// The dot halo (player design 2026-09-09): one faint ring `halo_px`
+    /// wide a side under the dot in the dot's pre-resolved ink; no ring
+    /// for a no-halo family, none when `halo_px` is 0.
+    #[test]
+    fn screen_dot_halo_ring_draws_under_the_dot_in_its_ink() {
+        let (cx, cy, hx, hy) = (200.0, 200.0, 200.0, 200.0);
+        let ink = [0.0, 1.0, 1.0, MARKER_HALO_ALPHA[1]]; // a red dot's cyan
+        let red = ScreenDot {
+            x: 50.0,
+            z: 128.0,
+            size: 1.0,
+            tint: [1.0, 0.0, 0.0, 1.0],
+            ink: Some(ink),
+        };
+        let q = project_map_dots(&[red], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, 6.0, 1.5);
+        assert_eq!(q.len(), 2, "ring, dot");
+        assert_eq!(q[0].rect, [cx - 4.5, cy - 4.5, 9.0, 9.0], "ring: +1 halo px a side");
+        assert_eq!(q[1].rect, [cx - 3.0, cy - 3.0, 6.0, 6.0], "the dot itself");
+        assert_eq!(q[0].tint, ink, "the ring wears the resolved ink");
+        assert_eq!(q[1].tint, red.tint);
+        let q = project_map_dots(&[red], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, 6.0, 0.0);
+        assert_eq!(q.len(), 1, "halo off: no ring");
+        // Scenery/civilians are lifted with `ink: None` and get no ring.
+        let tree = ScreenDot { ink: None, ..red };
+        let q = project_map_dots(&[tree], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, 6.0, 1.0);
+        assert_eq!(q.len(), 1, "no ring on a no-halo dot");
+    }
+
+    /// The ink: black under a bright reference, white under a dark one,
+    /// hue ignored — and the palette lift carries the dot alpha.
+    #[test]
+    fn halo_color_is_black_or_white_by_brightness() {
+        assert_eq!(halo_color([1.0, 0.0, 0.0]), [1.0; 3], "red (lum 0.21) → white");
+        assert_eq!(halo_color([0.0, 0.0, 1.0]), [1.0; 3], "blue → white");
+        assert_eq!(halo_color([1.0, 1.0, 0.0]), [0.0; 3], "yellow (lum 0.93) → black");
+        assert_eq!(halo_color([0.0; 3]), [1.0; 3], "black → white");
+        assert_eq!(halo_color([1.0; 3]), [0.0; 3], "white → black");
+        assert_eq!(halo_tint(&[255, 255, 255], 0.2), [0.0, 0.0, 0.0, 0.2]);
+        assert_eq!(halo_tint(&[20, 20, 60], 0.2), [1.0, 1.0, 1.0, 0.2]);
+    }
+
+    /// The stamp halo (player design 2026-09-09): four mode-2
+    /// silhouette copies (negative uv width) at ±1 screen pixel in x
+    /// and y, in the stamp's `halo` ink, BEFORE the stamp — and the
+    /// offsets stay one pixel at any marker scale.
+    #[test]
+    fn stamp_halo_is_four_one_pixel_silhouettes_under_the_stamp_at_any_scale() {
+        let (cx, cy, hx, hy) = (200.0, 200.0, 200.0, 200.0);
+        for scale in [1.0f32, 2.5] {
+            let mut st = stamp_at(50.0, 128.0);
+            st.halo = Some(MarkerHalo {
+                color: [0.0, 0.0, 1.0], // a dark (blue) glyph → white ring
+                alpha: MARKER_HALO_ALPHA[0],
+            });
+            let q = project_map_stamps(&[st], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, scale);
+            assert_eq!(q.len(), 5, "4 halo copies + the stamp (scale {scale})");
+            let main = q[4];
+            assert_eq!(main.uv, [0.0, 0.0, 16.0, 15.0]);
+            assert_eq!(main.tint, [1.0; 4]);
+            let mut seen = Vec::new();
+            for h in &q[..4] {
+                assert_eq!(h.uv, [0.0, 0.0, -16.0, 15.0], "mode-2 silhouette");
+                assert_eq!(h.tint, [1.0, 1.0, 1.0, MARKER_HALO_ALPHA[0]], "white under a dark glyph");
+                assert_eq!(h.rect[2..], main.rect[2..], "same size as the stamp");
+                seen.push((h.rect[0] - main.rect[0], h.rect[1] - main.rect[1]));
+            }
+            seen.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            assert_eq!(
+                seen,
+                vec![(-1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (1.0, 0.0)],
+                "exactly one pixel out, unscaled (scale {scale})"
+            );
+        }
+        let q = project_map_stamps(&[stamp_at(50.0, 128.0)], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, 1.0);
+        assert_eq!(q.len(), 1, "no halo, no copies");
+    }
+
+    /// The UI shader is only ever compiled by wgpu at runtime, so keep
+    /// its WGSL parsing and validating under `cargo test` (the marker
+    /// halo changed its alpha keying, 2026-09-09).
+    #[test]
+    fn ui_shader_parses_and_validates() {
+        let module = wgpu::naga::front::wgsl::parse_str(include_str!("ui.wgsl"))
+            .expect("ui.wgsl parses");
+        let mut v = wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        );
+        v.validate(&module).expect("ui.wgsl validates");
     }
 
     fn stamp_at(x: f32, z: f32) -> MapStamp {
@@ -6274,7 +6524,7 @@ mod tests {
                 false,
                 pw / ph,
                 1.0,
-            );
+        );
             assert!(
                 !quads.is_empty(),
                 "stamp vanished at yaw {yaw:.3} (step {i})"
@@ -6329,7 +6579,7 @@ mod tests {
                 false,
                 pw / ph,
                 scale,
-            )
+        )
         };
         let q1 = run(1.0);
         let q2 = run(2.0);

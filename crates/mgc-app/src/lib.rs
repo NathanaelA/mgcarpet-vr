@@ -802,7 +802,15 @@ fn capture_marker_icons(
         let Some(sprite) = entities::pose_sprite_id(level.game, p.type_index) else {
             continue;
         };
-        if let Some(stamp) = ui.append_world_icon(sidx, spx, sprite, &level.palette_rgba) {
+        // The STANDING STONE (2,1) in both games stays at half the
+        // rule: stone circles and clusters dominated the map at full
+        // size (player ruling 2026-09-09). ⚠ NAMING: the player calls
+        // these stones "dolmens"; the code and the decompile call (2,2)
+        // — the regen SHRINE (`AddDolmen_4ADF0`) — the dolmen, and
+        // (2,1) the stone (`AddStone_4AD70`). The shrine keeps the
+        // full rule.
+        let half = (p.class, p.model) == (2, 1);
+        if let Some(stamp) = ui.append_world_icon(sidx, spx, sprite, &level.palette_rgba, half) {
             bucket.insert(p.type_index, stamp);
             grew = true;
         }
@@ -2658,6 +2666,18 @@ impl App {
             "render.enhancement.map_extent_fog" => {
                 if let Some(r) = &mut self.renderer {
                     r.set_extent_fog(self.cfg.render.enhancement.map_extent_fog);
+                }
+            }
+            "render.enhancement.autocontrasting_markers" => {
+                if let Some(r) = &mut self.renderer {
+                    r.set_marker_halo(self.cfg.render.enhancement.autocontrasting_markers);
+                    // The halo also decides the 1x dot bake-vs-lift,
+                    // which lives in the tick-throttled map recompose —
+                    // run it now so the toggle shows live in the menu.
+                    if let Some(sess) = self.session.as_deref() {
+                        let overlay = map_overlay(&sess.level, &self.cfg);
+                        r.update_map(&sess.level.view, &overlay);
+                    }
                 }
             }
             "render.preference.fog_distance" => {
@@ -7073,6 +7093,7 @@ impl ApplicationHandler for App {
                 }
                 renderer.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
                 renderer.set_marker_scale(self.cfg.render.enhancement.map_marker_scale);
+                renderer.set_marker_halo(self.cfg.render.enhancement.autocontrasting_markers);
                 renderer.set_extent_fog(self.cfg.render.enhancement.map_extent_fog);
                 renderer.set_fog_distance(self.cfg.render.preference.fog_distance as f32);
                 renderer.set_hud_transparent(self.hud_transparent());

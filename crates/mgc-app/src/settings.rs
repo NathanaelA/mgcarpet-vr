@@ -975,6 +975,34 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · enhancement",
+            label: "autocontrasting_markers",
+            // Preference, not Enhancement: a map-legibility aid with no
+            // bearing on the run (like smooth shading / HUD opacity),
+            // which is what lets it ship ON — the stock run must still
+            // roll up Faithful (`stock_run_is_faithful`).
+            class: Preference,
+            key: None,
+            cli: None,
+            cfg_path: "render.enhancement.autocontrasting_markers",
+            read: toggle!(c => render.enhancement.autocontrasting_markers),
+            desc: "Give the hunted map markers - creatures, mana, dwelling \
+                   flags, spell jars, rival wizards and the marker \
+                   miniatures - a one-pixel halo, black under a bright \
+                   marker and white under a dark one, so they stay \
+                   readable on any ground (bones on barren, mana on \
+                   snow). Scenery, civilians and spell effects get none. \
+                   Always one pixel, whatever the marker-size slider.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.enhancement.autocontrasting_markers = v,
+                descs: [
+                    "Bare markers, as retail draws them.",
+                    "Hunted markers wear a black-or-white contrast halo.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · enhancement",
             label: "map_extent_fog",
             class: Enhancement,
             key: None,
