@@ -4315,6 +4315,19 @@ impl World {
                     e.act_life = life;
                     e.f26 = 0;
                 }
+                // No window crosses the death. The strict arm below
+                // zeroes the scattered token's `word_0x2E_46`, so no
+                // effect body ever runs again; the KEPT token must end
+                // its window the same way — through the expiry the
+                // countdown would have reached — or a live speed
+                // window keeps slamming the flight columns on the
+                // corpse and on the respawned wizard alike. The castle
+                // column (2) counts something else and is left alone.
+                // See [`World::player_death_clear_effects`].
+                if spell != 2 && self.g.ent[m].f26 > 0 {
+                    self.g.ent[m].f26 = 0;
+                    self.mc2_cast_expire(spell, m);
+                }
                 continue;
             }
             {

@@ -8676,6 +8676,9 @@ impl World {
         // ARMED like retail (no reset until the next reaper site).
         self.g.rebuild_recycle(0x20400);
         self.g.player_mail = [(0, 0); 6];
+        // The timed effects die with the tokens the scatter below
+        // turns into jars — see [`Self::player_death_clear_effects`].
+        self.player_death_clear_effects();
         // Jar scatter (:55519-47): the 24 slots remember the MODELS
         // (re-instantiated on respawn); the manifestation entities
         // become world jars again, thrown into a ±1-tile box with
@@ -8712,6 +8715,18 @@ impl World {
         if self.patches.no_spell_loss && !strict {
             for m in self.human_spell_tokens() {
                 let s = self.g.ent[m].model65 as usize;
+                // No burst crosses the death. The strict scatter ends
+                // every window by turning the record into a jar (its
+                // `+48` becomes the jar's ttl); the KEPT token needs the
+                // same end, or a speed burst — the one machine whose
+                // corpse-refused tick merely decrements (:65190) —
+                // outlives the dead wait and re-slams the flight
+                // columns on the respawned wizard. See
+                // [`Self::player_death_clear_effects`].
+                self.g.ent[m].f26 = 0;
+                if matches!(s, 2 | 21) {
+                    self.g.ent[m].flags &= !0x80; // the spell-ACTIVE bit
+                }
                 let (d1, d2, d3) = {
                     let r = match cs {
                         Some(c) => &mut self.g.ent[c].rand,
@@ -8988,6 +9003,10 @@ impl World {
         // :48640 → sound 14).
         self.g.snd_player(14);
         self.player.state = LifeState::Alive;
+        // No timed effect crosses a death (the landing already ran
+        // this; an imported corpse's landing may never have) — see
+        // [`Self::player_death_clear_effects`].
+        self.player_death_clear_effects();
         self.player.life = PLAYER_LIFE_MAX;
         self.player.grace = 100;
         self.player.regen_delay = 0;
@@ -9319,6 +9338,10 @@ impl World {
         self.set_notification("has died.", 100, [0xFF, 0, 0]);
         // The 26-token scatter — the book keeps its BOOLEAN marker so
         // the respawn re-mints exactly the spells that were owned.
+        // The scatter zeroes every window counter, so the player-side
+        // effect latches those windows drove end here with them — see
+        // [`Self::player_death_clear_effects`].
+        self.player_death_clear_effects();
         self.mc2_scatter_spells(player);
         // The grave + the owned-sphere re-point (EF:60164-77). It
         // spawns at the CORPSE's position — `a1x->position_0x4C_76`,
@@ -9489,6 +9512,10 @@ impl World {
         self.player.invisible = false;
         self.g.player_invisible = false;
         self.player.state = LifeState::Alive;
+        // No timed effect crosses a death — see
+        // [`Self::player_death_clear_effects`] (the landing's call is
+        // the primary; this is the belt for an imported corpse).
+        self.player_death_clear_effects();
         self.player.grace = 100;
         self.player.killer = 0;
         self.player.fall_speed = 0;
@@ -13778,6 +13805,49 @@ impl World {
         if m != 0 {
             self.g.ent[m as usize].f26 = 0;
         }
+    }
+
+    /// THE DEATH LANDING ENDS EVERY TIMED SPELL EFFECT ON THE HUMAN.
+    ///
+    /// Retail has no such line because it needs none: every timed
+    /// effect there IS its token's per-tick body, and the landing's
+    /// jar scatter (`sub_46480` :55519-47 / `sub_5E310` EF:60153-61)
+    /// zeroes each token's burst counter (`+48` / `word_0x2E_46`) and
+    /// turns the record into a pickup jar, so from the next dispatch
+    /// on no body runs and no register is re-slammed. The port mirrors
+    /// those bodies in PLAYER-SIDE latches — `accel`/`speed_boost`
+    /// (the thrust-model override the enhanced mover and the HUD
+    /// read), `heal_active`, `beyond_sight` — which nothing but the
+    /// token's own END arm ever clears. A scattered token never
+    /// reaches its END arm (MC2's `mc2_cast_expire` runs only from a
+    /// counter that reaches 0 by decrement; a strict MC1 jar leaves
+    /// the class-12 machine altogether), so the latch outlived the
+    /// effect: a wizard killed under Accelerate kept its ×3 override
+    /// through the whole dead wait AND past the respawn, and the
+    /// enhanced mover kept propelling the corpse (player report
+    /// 2026-09-09). Same class for a live Heal or Beyond Sight.
+    ///
+    /// The record-borne bits are deliberately NOT here: `shield`
+    /// (`+17 0x40`, SET-only — the absorb is its only clear),
+    /// `invisible` and `rebound` are retail's own wizard-record bits
+    /// with their own retail-measured death/respawn behaviour (MC2's
+    /// respawn lifts the cloak at EF:43698, `mc2_player_respawn`).
+    /// The speed MAIL (`pending_speed_base`) is left standing too — a
+    /// token below the carpet may have posted it this very tick and
+    /// the frozen death-dive columns are retail law (mc1hwl1
+    /// t=8237-42, [`mc1_no_speed_token_hard_gate`]).
+    ///
+    /// Called at both games' touchdown (beside the scatter) and again
+    /// at both respawns — the respawn call is the belt for an
+    /// imported corpse whose landing this world never ran.
+    pub(crate) fn player_death_clear_effects(&mut self) {
+        self.player.accel = 0;
+        self.player.accel_held = false;
+        self.player.accel_mc2_factor = 0;
+        self.player.speed_boost = 0.0;
+        self.accel_veto = (false, false);
+        self.player.heal_active = false;
+        self.player.beyond_sight = false;
     }
 
     /// Total ch0 damage the player has taken (a running stat; under
@@ -24773,6 +24843,91 @@ mod tests {
         assert!(!w.take_restart(), "no restart with a castle standing");
         let owned_after = w.loadout().owned.iter().filter(|&&o| o).count();
         assert!(owned_after >= 24, "the spell inventory re-instantiated");
+    }
+
+    /// THE LANDING ENDS THE TIMED EFFECTS (player report 2026-09-09:
+    /// a wizard killed under Accelerate kept its x3 override through
+    /// the dead wait and past the respawn). Retail's scatter zeroes
+    /// every token's burst counter so no effect body runs again; the
+    /// port's player-side latches must die at the same moment — see
+    /// [`World::player_death_clear_effects`]. The record-borne bits
+    /// (shield/invisible/rebound) are NOT in scope here.
+    #[test]
+    fn the_death_landing_ends_accelerate_heal_and_beyond_sight() {
+        let mut w = bare_creature_world(2);
+        w.set_dev_spells(true);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let c =
+            w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128)
+                .unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..60 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        // The player's own configuration: the book is permanent, so
+        // the tokens stay live through the death and the landing has
+        // to end their bursts itself.
+        w.set_patches(crate::patches::WorldPatches {
+            no_spell_loss: true,
+            ..crate::patches::WorldPatches::RETAIL
+        });
+        // A live Accelerate window (held, 200 ticks left), Heal and
+        // Beyond Sight.
+        let tok = w.player.owned[2] as usize;
+        assert!(tok != 0, "dev spells own an Accelerate token");
+        w.g.ent[tok].f26 = 200;
+        w.g.ent[tok].flags |= 0x80;
+        w.player.accel = 1;
+        w.player.accel_held = true;
+        w.player.speed_boost = 3.0;
+        w.player.heal_active = true;
+        w.player.beyond_sight = true;
+        w.player.shield = true; // record-borne: must survive untouched
+        assert_eq!(w.accel_override(), Some(3.0));
+
+        w.player.grace = 0;
+        // 60000: the standing shield bit quarters ONE hit (15000 >
+        // the 10000 life ceiling still kills).
+        hit_player(&mut w, 60000, 1);
+        w.tick(firing_line(), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Falling);
+        // The FALL keeps the override: retail's state-2 dispatch
+        // still moves the carpet on its frozen boosted columns.
+        assert!(w.accel_override().is_some(), "the fall glides on the boost");
+
+        w.tick(grounded_line(), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Dead);
+        assert_eq!(w.accel_override(), None, "touchdown ends the override");
+        assert_eq!(w.player.accel, 0);
+        assert_eq!(w.player.accel_mc2_factor, 0);
+        assert!(!w.player.heal_active, "heal latch dropped");
+        assert!(!w.player.beyond_sight, "beyond-sight latch dropped");
+        assert!(!w.player.shield, "the standing bit was spent by the absorb, not by this law");
+        assert_eq!(w.g.ent[tok].f26, 0, "the kept token's burst is over");
+        assert_eq!(w.g.ent[tok].flags & 0x80, 0, "…and its ACTIVE bit down");
+        let _ = w.take_speed_base();
+
+        // Nothing re-arms across the dead wait or the respawn.
+        for _ in 0..5 {
+            w.tick(grounded_line(), PlayerCommand::default());
+            assert_eq!(w.accel_override(), None, "no override on the corpse");
+        }
+        w.tick(
+            grounded_line(),
+            PlayerCommand {
+                respawn: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(w.vitals().state, LifeState::Alive);
+        assert_eq!(w.accel_override(), None, "the respawn flies unboosted");
+        let _ = w.take_speed_base();
+        for _ in 0..3 {
+            w.tick(firing_line(), PlayerCommand::default());
+            assert_eq!(w.accel_override(), None, "…and stays so");
+            assert_eq!(w.take_speed_base(), None, "no speed mail from a dead burst");
+        }
     }
 
     /// The intermittent hand-spell eater (player report mc1:49 +
@@ -45024,6 +45179,114 @@ mod tests {
             .filter(|e| e.class64 == 15 && e.tick70 == e.model65.wrapping_mul(3) && e.id24 == PLAYER_TARGET)
             .count();
         assert_eq!(live, owned.len(), "no duplicate manifestations");
+    }
+
+    /// The MC2 twin of `the_death_landing_ends_accelerate_heal_and_beyond_sight`:
+    /// the scatter zeroes the speed window's `word_0x2E_46`, so
+    /// `mc2_cast_expire(3)` — the only writer that used to drop
+    /// `accel`/`accel_mc2_factor` — never runs for a scattered token,
+    /// and the x3 override rode the corpse into the respawn (player
+    /// report 2026-09-09, enhanced throttle). The landing must end it.
+    #[test]
+    fn mc2_death_landing_ends_the_speed_window_override() {
+        let mut w = mc2_flat_world();
+        w.player.grace = 0;
+        let (cx, cy) = mc2_pos(60, 60);
+        let _castle = mc2_give_castle(&mut w, cx, cy);
+        w.player.accel = 1;
+        w.player.accel_mc2_factor = 3;
+        w.player.speed_boost = 3.0;
+        w.player.heal_active = true;
+        w.player.beyond_sight = true;
+        assert_eq!(w.accel_override(), Some(3.0));
+
+        let (px, py) = mc2_pos(80, 80);
+        let ground = w.g.ground_z(px, py) as i16;
+        w.player.life = -3060;
+        w.player.state = LifeState::Falling;
+        w.player.fall_speed = 0;
+        w.player.killer = 0;
+        let floor = ground + w.mc2_carpet_row().clearance;
+        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Dead, "the fall lands");
+        assert_eq!(w.accel_override(), None, "touchdown ends the override");
+        assert_eq!(w.player.accel, 0);
+        assert_eq!(w.player.accel_mc2_factor, 0);
+        assert!(!w.player.heal_active);
+        assert!(!w.player.beyond_sight);
+
+        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        assert_eq!(w.accel_override(), None, "no override on the corpse");
+        w.tick(
+            PlayerPose::level(cx, cy, 1792, 0),
+            PlayerCommand {
+                respawn: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(w.vitals().state, LifeState::Alive);
+        assert_eq!(w.accel_override(), None, "the respawn flies unboosted");
+        w.tick(PlayerPose::level(cx, cy, 1792, 0), PlayerCommand::default());
+        assert_eq!(w.accel_override(), None, "…and stays so");
+    }
+
+    /// …and under `no_spell_loss` (the player's configuration) the
+    /// KEPT speed token's window must end at the landing too: the
+    /// cosmetic scatter leaves the live token's `word_0x2E_46`
+    /// running, so without this the respawned wizard's carpet was
+    /// re-slammed to 240 every tick until the window drained.
+    #[test]
+    fn mc2_no_spell_loss_death_landing_ends_the_kept_speed_window() {
+        let mut w = mc2_flat_world();
+        w.set_patches(crate::patches::WorldPatches {
+            no_spell_loss: true,
+            ..crate::patches::WorldPatches::RETAIL
+        });
+        w.player.grace = 0;
+        let (cx, cy) = mc2_pos(60, 60);
+        let _castle = mc2_give_castle(&mut w, cx, cy);
+        let (px, py) = mc2_pos(80, 80);
+        let ground = w.g.ground_z(px, py) as i16;
+        let floor = ground + w.mc2_carpet_row().clearance;
+        // A live speed window on an owned token.
+        let m = w.mc2_new_spell_token(3, px, py, floor).expect("speed token");
+        w.g.ent[m].id24 = PLAYER_TARGET;
+        w.g.ent[m].flags |= 1;
+        w.g.ent[m].f44 = 0;
+        w.g.ent[m].f26 = 100;
+        w.g.ent[m].f28 = 100;
+        w.g.ent[m].f30 = 3;
+        w.mc2_book.ent[3] = m as u16;
+        w.player.accel = 1;
+        w.player.accel_mc2_factor = 3;
+        w.player.speed_boost = 3.0;
+
+        w.player.life = -3060;
+        w.player.state = LifeState::Falling;
+        w.player.fall_speed = 0;
+        w.player.killer = 0;
+        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Dead, "the fall lands");
+        assert_eq!(w.mc2_book.ent[3], m as u16, "the book keeps its live token");
+        assert_eq!(w.g.ent[m].f26, 0, "the kept token's window is over");
+        assert_eq!(w.accel_override(), None, "touchdown ends the override");
+        let _ = w.take_speed_base();
+
+        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        w.tick(
+            PlayerPose::level(cx, cy, 1792, 0),
+            PlayerCommand {
+                respawn: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(w.vitals().state, LifeState::Alive);
+        let _ = w.take_speed_base();
+        for _ in 0..3 {
+            w.tick(PlayerPose::level(cx, cy, 1792, 0), PlayerCommand::default());
+            assert_eq!(w.accel_override(), None, "the respawn flies unboosted");
+            assert_eq!(w.take_speed_base(), None, "no speed mail from a dead window");
+        }
     }
 
     /// **DEATH DOES NOT COST THE MC2 SPELLBOOK, AND THE RESET'S MANA

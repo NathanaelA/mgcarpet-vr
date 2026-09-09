@@ -1643,7 +1643,18 @@ impl Simulation {
         // speed. Deliberately tier-independent: the original also
         // bypasses its own control scheme here — it writes the carpet
         // speed (a horizontal quantity) directly.
-        let over = self.world.as_ref().and_then(|w| w.accel_override());
+        // A DEAD wizard's dispatch runs no move at all (retail state
+        // 3, `sub_463B0` :55575 / `sub_5E6C0` EF:60216), so no spell
+        // may propel the corpse: the override is refused from the
+        // touchdown on. The FALL keeps it — retail's state-2 dispatch
+        // still moves the carpet on its frozen (boosted) speed
+        // columns, and this is that glide's float analog.
+        let corpse = self.world.as_ref().is_some_and(|w| w.player_dead());
+        let over = if corpse {
+            None
+        } else {
+            self.world.as_ref().and_then(|w| w.accel_override())
+        };
         let thrust = if over.is_some() { 0.0 } else { input.thrust };
         let ax = fwd[0] * thrust + right[0] * input.strafe;
         let ay = 0.0;
