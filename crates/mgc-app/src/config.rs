@@ -973,6 +973,13 @@ pub struct GameplayPatches {
     /// range to hide it wakes every creature on the map instead.
     /// `patched` (default): segments trail properly at any range.
     pub mc1_fix_dragon_tail: PatchArm,
+    /// No phantom castle at the map origin (MC2). Retail re-paints
+    /// every wizard, corpse and balloon overlapping a building that
+    /// just finished as if it were a castle; a dead rival lying on a
+    /// village then raises level-7 castle terrain at (0,0), at sea
+    /// level, whenever a hut completes under it. `patched` (default):
+    /// only castles are re-painted.
+    pub mc2_phantom_castle: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -989,6 +996,7 @@ impl Default for GameplayPatches {
             castle_latch_bug: PatchArm::Patched,
             no_spell_loss: PatchArm::Patched,
             mc1_fix_dragon_tail: PatchArm::Patched,
+            mc2_phantom_castle: PatchArm::Patched,
         }
     }
 }
@@ -1009,6 +1017,7 @@ impl GameplayPatches {
             castle_latch_bug: PatchArm::Retail,
             no_spell_loss: PatchArm::Retail,
             mc1_fix_dragon_tail: PatchArm::Retail,
+            mc2_phantom_castle: PatchArm::Retail,
         }
     }
 
@@ -1027,6 +1036,7 @@ impl GameplayPatches {
             ball_owner_recolor: PatchArm::Retail,
             no_spell_loss: PatchArm::Retail,
             mc1_fix_dragon_tail: PatchArm::Retail,
+            mc2_phantom_castle: PatchArm::Retail,
             ..Self::default()
         }
     }
@@ -1255,7 +1265,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 26;
+const DEFAULTS_VERSION: u64 = 27;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

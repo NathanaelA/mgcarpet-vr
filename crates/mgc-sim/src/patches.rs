@@ -107,6 +107,20 @@ pub struct WorldPatches {
     /// whole ecology (player-ruled 2026-09-07, DEFAULT ON). The
     /// damage intake stays awake-gated.
     pub mc1_fix_dragon_tail: bool,
+    /// **MC2's PHANTOM CASTLE AT THE MAP ORIGIN** (player-reported
+    /// 2026-09-10, DEFAULT ON). Retail's building-completion tail
+    /// `sub_377A0` castle-re-paints EVERY class-3 record overlapping
+    /// the finished plot, model unchecked, minting a (10,42) painter
+    /// at that record's spare axis `@0x9A` with its `@0x10` word as
+    /// the BUILD00 row. On a castle those are the site and the level;
+    /// on a dead rival wizard they are a never-scouted (0,0,0) and the
+    /// respawn countdown — a corpse lying on a village re-raises
+    /// castle rows at the origin, at sea level, every time a hut
+    /// finishes under it (mc2l22 t=20868; on demand on mc2l1: kill
+    /// Nyphur over the mana-magnet basins, destroy a dwelling). Both
+    /// games' retail shows some of it (the outline for countdown bytes
+    /// 7..76). Patched: only castles (3,2) are re-painted.
+    pub mc2_phantom_castle: bool,
 }
 
 impl WorldPatches {
@@ -122,6 +136,7 @@ impl WorldPatches {
         castle_latch_bug: false,
         no_spell_loss: false,
         mc1_fix_dragon_tail: false,
+        mc2_phantom_castle: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -142,5 +157,6 @@ impl WorldPatches {
         castle_latch_bug: true,
         no_spell_loss: false,
         mc1_fix_dragon_tail: false,
+        mc2_phantom_castle: false,
     };
 }

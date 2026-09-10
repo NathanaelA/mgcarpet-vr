@@ -2092,19 +2092,25 @@ impl Gen {
             self.ent[i].flags |= 0x400;
             return false;
         };
-        // The working frame = the level row's footprint, widened to
-        // the largest accumulated row. BUILD00 rows 1-7 are
-        // 8/21/21/35/35/48/48 — monotone non-decreasing, row 7 =
-        // 48×48 like row 6; the 1×1 rows are 8-16 and are never a
-        // castle level. So this widening loop is a no-op for every
-        // reachable level (kept as belt-and-braces for modded tabs).
-        let (mut w, mut h) = (def.w as usize, def.h as usize);
-        for r in 1..=row {
-            if let Some(rd) = self.assets.build_tab.get(r) {
-                w = w.max(rd.w as usize);
-                h = h.max(rd.h as usize);
-            }
-        }
+        // ⭐ THE WORKING FRAME IS THE ROW'S OWN FOOTPRINT, NOT A
+        // WIDENED ONE. Retail sizes the delta scratch from
+        // `posistruct[byte_0x46_70]` alone (EF:27760-79: `memset(v30,
+        // 0, 2 * v4 * v36)` over the row's width/height) and the rise
+        // loop walks exactly that frame (EF:27846). For a castle level
+        // (rows 1-7: 8/21/21/35/35/48/48, monotone) every accumulated
+        // row fits, so the old widening loop was a no-op there — but
+        // `sub_377A0` also mints painters with a WIZARD's `@0x10` byte
+        // as the row (see `mc2_building_tick`), and rows 8..76 are the
+        // 1x1 spacers and the village footprints, SMALLER than the
+        // castle rings accumulated into them. Retail then paints the
+        // codes of every row per map cell (the level-7 outline appears
+        // in full) but only the cells INSIDE the small frame rise; the
+        // delta writes for the rest land outside its scratch buffer
+        // (heap, `x_DWORD_E9C38`) and never reach the terrain. Widening
+        // the frame invented a full 48x48 relief there. The port clips
+        // those writes instead — the terrain outcome retail's own
+        // frame produces, minus the heap damage nothing can model.
+        let (w, h) = (def.w as usize, def.h as usize);
         let cx = (self.ent[i].x.wrapping_add(128) >> 8) as u8;
         let cy = (self.ent[i].y.wrapping_add(128) >> 8) as u8;
         let tlx = cx.wrapping_sub((w / 2) as u8);
@@ -2178,13 +2184,16 @@ impl Gen {
             // loses a tile whenever D is even and d odd (EF:27798:
             // v33 = (v36>>1) - v8), sitting every interior ring one
             // tile toward -x/-y of the outer ring.
-            let offx = w / 2 - rw / 2;
-            let offy = h / 2 - rh / 2;
+            // Signed: a row larger than the frame starts BEFORE it.
+            let offx = (w / 2) as i32 - (rw / 2) as i32;
+            let offy = (h / 2) as i32 - (rh / 2) as i32;
             for dy in 0..rh {
                 for dx in 0..rw {
                     let c = &cells[2 * (dy * rw + dx)..2 * (dy * rw + dx) + 2];
-                    let gx = tlx.wrapping_add((offx + dx) as u8);
-                    let gy = tly.wrapping_add((offy + dy) as u8);
+                    let (fx, fy) = (offx + dx as i32, offy + dy as i32);
+                    let in_frame = fx >= 0 && fy >= 0 && (fx as usize) < w && (fy as usize) < h;
+                    let gx = tlx.wrapping_add(fx as u8);
+                    let gy = tly.wrapping_add(fy as u8);
                     // THE CASTLE AS A WEAPON (EF:27826-27): while the
                     // kill bit is set, EVERY cell of the cumulative
                     // footprint is purged on EVERY tick of the rise —
@@ -2197,9 +2206,11 @@ impl Gen {
                     if kill {
                         self.mc2_building_clear_tile(tile(gx, gy), owner);
                     }
-                    if c[1] != 0xff {
+                    // Out-of-frame deltas are retail's heap writes —
+                    // no terrain effect (see the frame law above).
+                    if c[1] != 0xff && in_frame {
                         let t = tile(gx, gy);
-                        delta[(offy + dy) * w + offx + dx] =
+                        delta[fy as usize * w + fx as usize] =
                             c[1] as i32 + datum - self.t.height[t] as i32;
                     }
                     if do_paint && c[0] != 0xff {

@@ -8814,7 +8814,12 @@ impl World {
             alive,
             (self.player.mc2_respawn_timer & 0xFF) as u8,
         ));
-        if self.g.mc2_building_tick(i, human) {
+        // Patch option `mc2_phantom_castle` (docs/DEVIATIONS.md): the
+        // completion tail re-paints castles only. Retail's walk (and
+        // every strict/conformance run) hands the re-paint to every
+        // class-3 record — the phantom level-7 castle at the origin.
+        let castle_only = self.patches.mc2_phantom_castle && !self.strict_retail;
+        if self.g.mc2_building_tick(i, human, castle_only) {
             self.terrain_dirty = true;
             self.entities_dirty = true;
         }
@@ -36137,7 +36142,7 @@ mod tests {
         let pops = [f[f.len() - 1], f[f.len() - 2], f[f.len() - 3]];
         // Complete the build on this call.
         w.g.ent[b].act_life = 1;
-        assert!(w.g.mc2_building_tick(b, Some(((x, y, gz), human as u16, true, 0))));
+        assert!(w.g.mc2_building_tick(b, Some(((x, y, gz), human as u16, true, 0)), false));
         let parents: Vec<u16> = pops.iter().map(|&p| w.g.ent[p as usize].id24).collect();
         assert_eq!(
             parents,
@@ -36154,7 +36159,7 @@ mod tests {
         let h2 = w2.g.new_event().expect("slot");
         let before = w2.g.free.len();
         w2.g.ent[b2].act_life = 1;
-        assert!(w2.g.mc2_building_tick(b2, Some(((x, y, gz), h2 as u16, false, 0))));
+        assert!(w2.g.mc2_building_tick(b2, Some(((x, y, gz), h2 as u16, false, 0)), false));
         assert_eq!(w2.g.free.len(), before, "no painter for a dead human");
     }
 
@@ -36208,7 +36213,7 @@ mod tests {
             let row = (w.player.mc2_respawn_timer & 0xFF) as u8;
             assert!(w
                 .g
-                .mc2_building_tick(b, Some(((x, y, gz), human as u16, true, row))));
+                .mc2_building_tick(b, Some(((x, y, gz), human as u16, true, row)), false));
             let e = &w.g.ent[pop];
             assert_eq!((e.class64, e.model65), (10, 42), "the painter was minted");
             (e.f71, e.f80, e.f82)
@@ -36245,6 +36250,136 @@ mod tests {
             (w1, h1),
             "the painter really does size itself from the row it was handed"
         );
+    }
+
+    /// ⭐ THE PHANTOM CASTLE AT THE MAP ORIGIN — `sub_377A0`'S CLASS-3
+    /// WALK STAMPS EACH MEMBER'S `dword_0x10_16` LOW BYTE VERBATIM, AND
+    /// ON A DEAD RIVAL THAT WORD IS THE RESPAWN COUNTDOWN.
+    ///
+    /// Player-reported 2026-09-10 (mc2l22-retarded t=20868; reproduced
+    /// on demand on mc2l1): a full level-7 castle, outline and relief,
+    /// centred on world (0,0) at sea level, attached to nothing. The
+    /// building-completion tail re-paints every class-3 record
+    /// overlapping the finished plot as if it were a castle
+    /// (`sub_5FBD0` EF:61522-30: painter at the record's `@0x9A`,
+    /// row = its `@0x10` low byte, NO clamp). A rival in action-3
+    /// dead-wait carries the 1200 countdown there and, with an
+    /// authored or no castle, a never-scouted (0,0,0) axis. The port
+    /// carried an INVENTED `.clamp(0, 7)` on that arm — every
+    /// countdown value >= 7 became row 7, the 48x48 level-7 pad.
+    ///
+    /// Three laws pinned here, none visible to a graded lane (`b46`
+    /// is ungraded and the terrain sits under nobody):
+    ///   1. the row is the raw low byte (307 → 51, 1200 → 176);
+    ///   2. a sign-extended negative row (176 = −80) paints nothing;
+    ///   3. the painter's frame is the row's OWN footprint — rows
+    ///      accumulated into a smaller frame rise only inside it
+    ///      (EF:27760-79 sizes the scratch from `posistruct[row]`
+    ///      alone; the rest of retail's writes are heap, not terrain).
+    #[test]
+    fn a_dead_rivals_repaint_row_is_its_countdown_byte_not_a_clamp() {
+        use crate::engine::features::{tile, BuildDef};
+        // Synthetic BUILD00: row 0 empty; row 1 = a 2x2 pad at height
+        // 40 (no paint codes); row 2 = a 1x1 spacer like the shipped
+        // rows 8-16 (no pad, no code).
+        let rig = || {
+            let mut w = mc2_flat_world();
+            w.g.assets.build_tab = vec![
+                BuildDef { offset: 0, w: 0, h: 0 },
+                BuildDef { offset: 0, w: 2, h: 2 },
+                BuildDef { offset: 8, w: 1, h: 1 },
+            ];
+            w.g.assets.build_dat = vec![0xff, 40, 0xff, 40, 0xff, 40, 0xff, 40, 0xff, 0xff];
+            w
+        };
+        let (x, y) = mc2_pos(100, 100);
+        // A finishing building with a dead-wait rival corpse on it
+        // (class 3 model 1, action 3, `f26` = the countdown, spare axis
+        // never scouted); the carpet is handed in dead so only the
+        // pooled walk mints.
+        let mint = |countdown: i16, model: u8, castle_only: bool| -> (World, usize, usize) {
+            let mut w = rig();
+            let gz = w.g.ground_z(x, y) as i16;
+            let b = w.g.mc2_spawn_building(x, y, gz, 0).expect("the building");
+            let human = w.g.new_event().expect("slot");
+            let r = w.g.new_event().expect("rival");
+            {
+                let e = &mut w.g.ent[r];
+                e.class64 = 3;
+                e.model65 = model;
+                e.tick70 = 3;
+                e.f26 = countdown;
+                e.x = x;
+                e.y = y;
+                e.z = gz;
+                e.f80 = 256;
+                e.f82 = 256;
+                e.dest_x = 0;
+                e.dest_y = 0;
+                e.site_z = 0;
+                e.id24 = r as u16;
+            }
+            let f = w.g.free.clone();
+            let pop = f[f.len() - 1] as usize;
+            w.g.ent[b].act_life = 1;
+            assert!(w.g.mc2_building_tick(
+                b,
+                Some(((x, y, gz), human as u16, false, 0)),
+                castle_only
+            ));
+            (w, pop, r)
+        };
+        // (1) The row is the countdown's low byte — 307 & 0xFF = 51,
+        // not the clamp's 7 — and the painter sits on the corpse's
+        // (0,0,0) axis, parented to the corpse.
+        let (w, p, r) = mint(307, 1, false);
+        let e = &w.g.ent[p];
+        assert_eq!((e.class64, e.model65), (10, 42), "the painter was minted");
+        assert_eq!(e.f71, 51, "row = the rival's @0x10 low byte, unclamped");
+        assert_eq!((e.x, e.y, e.z), (0, 0, 0), "minted at the never-scouted spare axis");
+        assert_eq!(e.id24, r as u16, "parented to the corpse");
+        // (2) 1200 → byte 176 = −80: a negative row selects the empty
+        // row 0 and the painter runs its whole window touching nothing.
+        let (mut w, p, _) = mint(1200, 1, false);
+        assert_eq!(w.g.ent[p].f71, 176);
+        let cells = [(0u8, 0u8), (255, 255), (255, 0), (0, 255), (1, 1)];
+        let before: Vec<u8> = cells.iter().map(|&(cx, cy)| w.g.t.height[tile(cx, cy)]).collect();
+        for _ in 0..21 {
+            w.g.mc2_castle_painter_tick(p);
+        }
+        let after: Vec<u8> = cells.iter().map(|&(cx, cy)| w.g.t.height[tile(cx, cy)]).collect();
+        assert_eq!(before, after, "a sign-extended negative row paints nothing");
+        // (3) Countdown 2 → row 2, a 1x1 frame. Rows 1..=2 accumulate:
+        // row 1's 2x2 pad starts one cell BEFORE the frame on both
+        // axes, so only its (1,1) cell lands inside — cell (0,0) rises
+        // to pad 40 + datum 0; the three clipped cells hold. A widened
+        // frame would have raised all four.
+        let (mut w, p, _) = mint(2, 1, false);
+        assert_eq!(w.g.ent[p].f71, 2);
+        let h0: Vec<u8> = cells.iter().map(|&(cx, cy)| w.g.t.height[tile(cx, cy)]).collect();
+        for _ in 0..21 {
+            w.g.mc2_castle_painter_tick(p);
+        }
+        assert_eq!(w.g.t.height[tile(0, 0)], 40, "the in-frame cell rises to pad + datum");
+        for (k, &(cx, cy)) in cells.iter().enumerate().skip(1) {
+            assert_eq!(
+                w.g.t.height[tile(cx, cy)],
+                h0[k],
+                "cell ({cx},{cy}) is outside the row's own frame and must not move"
+            );
+        }
+        // (4) The `mc2_phantom_castle` patch arm: the walk re-paints
+        // castles (3,2) only — the corpse mints nothing, a castle with
+        // the same countdown word (its level) still does.
+        let (w, p, _) = mint(307, 1, true);
+        assert_ne!(
+            (w.g.ent[p].class64, w.g.ent[p].model65),
+            (10, 42),
+            "patched: a wizard corpse is not re-painted"
+        );
+        let (w, p, r) = mint(1, 2, true);
+        let e = &w.g.ent[p];
+        assert_eq!((e.class64, e.model65, e.f71, e.id24), (10, 42, 1, r as u16), "patched: castles still are");
     }
 
     /// ⭐⭐⭐ THE CAVE-IN'S SURVIVAL POCKET IS CARVED AROUND THE
@@ -37265,7 +37400,7 @@ mod tests {
             "maxMana_0x8C_140 is dead on a building — retail never writes it"
         );
         for _ in 0..30 {
-            w.g.mc2_building_tick(b, None);
+            w.g.mc2_building_tick(b, None, false);
         }
         assert_eq!(w.g.ent[b].tick70, 52, "the 30-tick build parks the house");
         assert_eq!(
@@ -37287,7 +37422,7 @@ mod tests {
             e.tick70 = 51;
             e.act_life = 1;
         }
-        w.g.mc2_building_tick(b, None);
+        w.g.mc2_building_tick(b, None, false);
         assert_eq!(w.g.ent[b].tick70, 52);
         assert_eq!(
             w.g.ent[b].act_life,

@@ -1966,6 +1966,34 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc2_phantom_castle",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_phantom_castle",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_phantom_castle.on(),
+                faithful: false,
+            },
+            desc: "No phantom castle at the map origin (MC2). When a village \
+                   building finishes, retail re-paints every wizard, corpse and \
+                   balloon overlapping it as if it were a castle; a dead rival \
+                   lying on a village then raises level-7 castle terrain at \
+                   (0,0), at sea level, each time a hut completes under it. \
+                   This re-paints castles only.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_phantom_castle = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Corpses on villages raise castle terrain at (0,0), as retail.",
+                    "Only castles are re-painted (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2175,8 +2203,9 @@ mod tests {
         // ruling — the mine's trigger is retail's, so the whole
         // detonation column is unconditional too (DEVIATIONS.md).
         // ball_owner_recolor added 2026-09-06 (presentation-only),
-        // no_spell_loss + mc1_fix_dragon_tail 2026-09-07.
-        assert_eq!(patches, 11, "all eleven patches ship on");
+        // no_spell_loss + mc1_fix_dragon_tail 2026-09-07,
+        // mc2_phantom_castle 2026-09-10.
+        assert_eq!(patches, 12, "all twelve patches ship on");
     }
 
     #[test]

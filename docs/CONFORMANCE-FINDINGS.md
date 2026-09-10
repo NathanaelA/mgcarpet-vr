@@ -904,6 +904,38 @@ post-fix).
 
 ## Resolved
 
+- **ROUND 129 (2026-09-10) — THE PHANTOM LEVEL-7 CASTLE AT THE MAP ORIGIN.** Player-reported:
+  a full L7 castle outline + relief centred on world (0,0) at sea level, attached to no building,
+  sporadic, port and retail. `mc2l22-retarded.mgcr` (port take, input+hash) replayed under a
+  probed HEAD build (bit-exact 62,802/62,802; ⚠ the stale `target/release/mgcarpet` of 09-09
+  23:26 desyncs it at t=22267): ONE painter mint after t=20800 — **t=20868, slot 568, (0,0,0),
+  row 7, parent 453 = a (3,1) rival in action-3 dead-wait, `f26` 307, corpse at (211,179) over a
+  completing building, `dest` (0,0), `site_z` 0**. Retail law (EF:27452 `sub_377A0` → EF:61522
+  `sub_5FBD0`): the completion tail castle-re-paints EVERY class-3 record overlapping the plot,
+  painter at the record's `@0x9A`, row = its `@0x10` LOW BYTE, no clamp; the painter tick
+  (EF:27648) loops rows `1..=byte` with the delta scratch and rise loop sized from
+  `posistruct[byte]` ALONE. **The port's pooled arm carried an INVENTED `.clamp(0, 7)`** (the
+  round-99 class again, one arm over) — countdown ≥ 7 → row 7 → the 48×48 pad, 100% of the
+  time, where retail shows the outline for bytes 7..76 (~30% of the wait), residue for 77..127,
+  nothing for ≥ 128. Player REPRODUCED ON DEMAND on mc2l1 (kill Nyphur over the opening
+  mana-magnet basins, destroy a dwelling; the castle-less corpse holds 1200 forever) and on
+  RETAIL by the same recipe: no terrain, only the (10,42)'s map-effect marker at (0,0) (byte
+  176 = −80). LANDED: raw byte on the pooled arm; the painter frame = the row's own footprint
+  with out-of-frame deltas clipped (the widening loop was a documented no-op for rows 1-7);
+  PATCH OPTION `mc2_phantom_castle` (default on, castles-only re-paint; retail/strict verbatim).
+  Pin `a_dead_rivals_repaint_row_is_its_countdown_byte_not_a_clamp` (no graded lane sees `b46`
+  or terrain under nobody). Corpus census (all ten MC2 retail takes, every (10,42) birth): the
+  only non-castle parents are the HUMAN (rows 0 / 176, the registered class) and castle
+  BALLOONS (3,3) (row 0, `@0x10` = 0) — no rival-wizard painter, no row byte in 1..=127 on a
+  non-castle parent, so no take exercises the changed rows and there is no retail witness to
+  cut. ⚠ Checked against mc1l48's painter wound: MC1's `sub_47020_47360` (:56100) has the
+  same shape but one caller (the castle transform machine); 389 painter births in the take,
+  rows 1..7 only — NOT this class. DEVIATIONS.md patch entry + OOB amendment. GATE: `cargo
+  test --release` **1151 passed / 0 failed** (incl. the new pin; the tracked defaults baseline
+  re-stamped `_version` 27 for the new key) · fixtures **522/522** · whole-corpus
+  `replay --segmented --brief`: **ALL THIRTY LINES BYTE-IDENTICAL** to the baseline. The port
+  take `mc2l22-retarded.mgcr` (recorded under the bug) now desyncs at t=20868 — the mint tick —
+  which is the fix showing its face; it is not a conformance oracle.
 - **ROUND 126 (2026-09-10) — mc2l24 CERTIFIED MODULO REGISTERED DEVIATIONS; SIX
   CAPTURE RULES RETIRED.** Third mc2l24 wave (rounds 124-125 before it: 7,505 → 55
   segments). Fourteen Opus digs, thirteen laws (every one under an `MGC_NO_*` switch, cited

@@ -3058,10 +3058,16 @@ impl Gen {
     /// — None on the load-time carousel (an APPROX like the
     /// concurrent raise: retail would mint for a wizard overlapping
     /// at load; the recording's seed state already carries those).
+    /// `castle_only` is the `mc2_phantom_castle` PATCH arm
+    /// (docs/DEVIATIONS.md): the completion tail re-paints CASTLES
+    /// (3,2) only, skipping the wizards, corpses and balloons retail's
+    /// model-unchecked class-3 walk also hands to `sub_5FBD0`. Off
+    /// (retail, every conformance/strict path) the walk is verbatim.
     pub(crate) fn mc2_building_tick(
         &mut self,
         i: usize,
         human: Option<((u16, u16, i16), u16, bool, u8)>,
+        castle_only: bool,
     ) -> bool {
         // EF:27234-36 — the opener, ahead of everything including the
         // `IsNextEvent0A_2A_37740` carousel: on the FIRST countdown
@@ -3188,7 +3194,10 @@ impl Gen {
                 // the pool — the pre-fix order, kept for native
                 // play (the painter is a row-0 no-op there anyway).
                 let human_in_walk = slot != 0;
-                let human_hit = alive && wd(pose.0, bx) < bw + pw && wd(pose.1, by) < bh + pw;
+                let human_hit = !castle_only
+                    && alive
+                    && wd(pose.0, bx) < bw + pw
+                    && wd(pose.1, by) < bh + pw;
                 let n = self.ent.len().max(slot + 1);
                 for w in 1..n {
                     if human_in_walk && w == slot {
@@ -3234,10 +3243,40 @@ impl Gen {
                     if e.class64 != 3 || e.flags & 0x400 != 0 {
                         continue;
                     }
+                    // `mc2_phantom_castle` (patched arm): only a
+                    // CASTLE's re-paint is meaningful — see the row
+                    // note below for what the others paint.
+                    if castle_only && e.model65 != 2 {
+                        continue;
+                    }
                     if wd(e.x, bx) < bw + e.f80 as i32 && wd(e.y, by) < bh + e.f82 as i32 {
+                        // ⭐ THE ROW IS THE MEMBER'S `dword_0x10_16` LOW
+                        // BYTE, VERBATIM — `sub_5FBD0` (EF:61522-30)
+                        // does `indexx->byte_0x46_70 = a1x->dword_0x10_16`
+                        // with no clamp, for EVERY class-3 member. On a
+                        // castle that is its level (0..7). On a RIVAL
+                        // WIZARD it is whatever the record holds — a
+                        // dead one in action-3 dead-wait carries the
+                        // 1200 respawn countdown (`mc2_rival_dead_wait`,
+                        // never counted down on a castle-less corpse),
+                        // and its spare axis `@0x9A` (`dest_x/dest_y/
+                        // site_z`) is (0,0,0) unless a castle site was
+                        // ever scouted. The port carried an INVENTED
+                        // `.clamp(0, 7)` here, which turned every
+                        // countdown value >= 7 into BUILD00 row 7 — a
+                        // full 48x48 level-7 castle painted at the map
+                        // origin at sea level whenever a building
+                        // finished under a dead rival's corpse
+                        // (mc2l22-retarded t=20868, rival 453 f26=307;
+                        // reproduced on demand on mc2l1 with Nyphur's
+                        // corpse). Retail stamps byte 51 / 176 there
+                        // and paints only what `mc2_castle_painter_tick`
+                        // makes of such a row — see the frame law in
+                        // that tick. Same class as the round-99 human
+                        // arm (`MGC_NO_MC2_PAINTER_ROW_VERBATIM`).
                         let (dest, row, own) = (
                             (e.dest_x, e.dest_y, e.site_z),
-                            e.f26.clamp(0, 7) as u8,
+                            e.f26 as u8,
                             e.id24,
                         );
                         if self
