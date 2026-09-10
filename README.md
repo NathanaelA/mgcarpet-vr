@@ -26,8 +26,13 @@ AI tools.
 ## Quickstart (playtesting)
 
 1. Get the `mgcarpet` binary: a
-   [release](../../releases) archive for Linux/Windows, or build it
-   yourself (below).
+   [release](../../releases) archive for Linux, Windows or macOS, or
+   build it yourself (below). The macOS archive is a universal binary
+   (Apple Silicon + Intel) that CI builds and unit-tests but nobody has
+   yet played on real hardware — reports welcome. It is unsigned, so
+   macOS quarantines it on download; release it once with
+   `xattr -dr com.apple.quarantine <the unpacked folder>` (or right-click
+   → Open on the binary).
 2. Copy your installed GOG game directories into a `gamedata/` folder
    next to the binary — see [gamedata/README.md](gamedata/README.md)
    for the expected layout. Any subset works (MC1 only is fine).
