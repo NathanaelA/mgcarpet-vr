@@ -18,6 +18,7 @@ pub fn golden_skip(what: &str) {
 /// bake with community-overlay files applied (docs/MODDING.md).
 /// Goldens run against pristine bakes only; every suite's
 /// `baked_root()` gates on this.
+#[allow(dead_code)] // not every suite gates on it
 pub fn modded_bake(root: &std::path::Path) -> bool {
     if root.join("MODDED").exists() {
         golden_skip(

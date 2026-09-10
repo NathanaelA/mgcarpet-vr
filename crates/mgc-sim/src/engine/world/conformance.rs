@@ -2148,10 +2148,10 @@ impl World {
                 "b3d",
                 if piece {
                     some(e.f69 as i64)
-                } else if worm22 {
-                    None // f46 holds @0x2A there; @0x3D is dead on the worm
-                } else if pyramid {
-                    None // f46 holds @0x2C there; @0x3D is dead on the pyramid
+                } else if worm22 || pyramid {
+                    // f46 holds @0x2A on the worm and @0x2C on the
+                    // pyramid; @0x3D is dead on both.
+                    None
                 } else if c == 5
                     || (c == 10 && matches!(m, 45 | 78))
                     || orb_breathe_at_3d(c, m)

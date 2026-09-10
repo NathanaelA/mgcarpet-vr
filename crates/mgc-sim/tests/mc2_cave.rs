@@ -1232,6 +1232,7 @@ fn mc2_cave_enhanced_funnel_never_breaches_ceiling() {
 ///    retail's per-arm `sub_57F20` — deferring it to the sweep's end
 ///    let a river head's re-popped ring tick one sweep early and over-
 ///    dug the rims: floor-0 cells 1,800 against retail's 1,747.
+///
 /// Retail record 0 counts (whole plane): type 36 = 464, 37 = 125,
 /// 39 = 127, floor 0 = 1,747.
 #[test]

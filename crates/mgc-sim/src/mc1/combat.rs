@@ -7314,6 +7314,9 @@ impl Gen {
     /// its ceiling off the carpet record `Entities_EA3E4[424]`, the
     /// port off the player column (`ctx.pmana_max`) — the same
     /// indirection MC1's [`Gen::mc1_ball_owner_contest`] uses.
+    // Four arms resolve to `oi` on purpose: each is a separate retail
+    // branch with its own EF citation, kept one-to-one.
+    #[allow(clippy::if_same_then_else)]
     fn mc2_ball_owner_contest(
         &self,
         oi: u16,

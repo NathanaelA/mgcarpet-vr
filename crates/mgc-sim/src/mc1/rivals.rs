@@ -1981,7 +1981,7 @@ impl World {
                     // `MGC_NO_MC1_RIVAL_LEARN_SEAT=1` restores the
                     // unconditional registration.
                     if crate::engine::features::no_mc1_rival_learn_seat()
-                        || self.rivals[ri].acq.iter().any(|&e| e == 0)
+                        || self.rivals[ri].acq.contains(&0)
                     {
                         self.rivals[ri].acq_push(m as u16);
                     } else {

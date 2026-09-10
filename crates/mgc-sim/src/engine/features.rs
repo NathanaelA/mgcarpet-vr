@@ -923,8 +923,8 @@ pub(crate) struct Gen {
     /// slams an ABSOLUTE heading into `word_0x30_48` AND
     /// `yaw_0x1C_28` (EF:24350-56), writes `actSpeed_0x82_130 = 80`
     /// and kicks `roll_0x155_341 += 28` (EF:24345-49), then displaces
-    /// the victim by `MoveEntity_57FA0(&pred, word_0x30_48, 0, v30)`
-    /// + `CopyEntityPosition_57CF0` (EF:24380/24395) — a POSITION
+    /// the victim by `MoveEntity_57FA0(&pred, word_0x30_48, 0, v30)` +
+    /// `CopyEntityPosition_57CF0` (EF:24380/24395) — a POSITION
     /// WRITE. **Nothing in `sub_33340` ever touches
     /// `moveBoost_0x1E_30`**, retail's knock register, so carrying
     /// the funnel on [`Gen::player_knock`] was an invented write on a
@@ -1536,13 +1536,6 @@ impl std::hash::Hash for Mc1GuardReg {
         }
     }
 }
-
-/// `MGC_NO_JAR_WATER_SINK=1` restores the pre-dig jar z-servo: a
-/// bare `.max(ground)` floor with no water leg. Retail's `sub_42090`
-/// (:52605) moves the floor to **-768** when the position is over
-/// water (`sub_11760 & 1`) AND the ground reads 0, steps only 25% of
-/// the fall once the record is at or below the ground, and returns -1
-/// the tick z lands exactly on -768 — which is the caller's
 
 /// `MGC_NO_PRECLEAR_INCLUSIVE=1` restores the pre-dig EXCLUSIVE castle
 /// pre-clear box (`<` instead of retail's `<=`) — see the citation at
@@ -2194,6 +2187,12 @@ pub(crate) fn no_mc1_payload_child_reap_gate() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_PAYLOAD_CHILD_REAP_GATE").is_some())
 }
 
+/// `MGC_NO_JAR_WATER_SINK=1` restores the pre-dig jar z-servo: a
+/// bare `.max(ground)` floor with no water leg. Retail's `sub_42090`
+/// (:52605) moves the floor to **-768** when the position is over
+/// water (`sub_11760 & 1`) AND the ground reads 0, steps only 25% of
+/// the fall once the record is at or below the ground, and returns -1
+/// the tick z lands exactly on -768 — which is the caller's
 /// (:64766-70) soft-free. Kept so one binary can be A/B'd.
 pub(crate) fn no_jar_water_sink() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

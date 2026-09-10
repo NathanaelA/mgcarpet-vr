@@ -33907,7 +33907,6 @@ mod tests {
             e.max_life = 100;
             e.act_life = 100;
             let (ex, ey) = (x, y);
-            drop(e);
             w.g.link(j, ex, ey, 400);
             j
         };
@@ -34434,7 +34433,7 @@ mod tests {
     /// state-1 arm with `f71 == 0` and `f63 & 7 == 0` reads
     /// `sext16(pad.y)`: for y ≥ 0x8000 that is negative — nonzero,
     /// NOT > 4 (state 1 kept), parity = y's; for a positive y it is
-    /// > 4 (stamp 4) with y's parity deciding the wander draw. A body
+    /// `> 4` (stamp 4) with y's parity deciding the wander draw. A body
     /// walked BEFORE the pad reads the pre-walk residue (the seed).
     ///
     /// Witness: mc2l24 t=33370 births bodies 5 and 95 around the
@@ -37966,6 +37965,7 @@ mod tests {
     ///     v34 + rand % v34` with `v34 = 384` for the human (`0x57c19
     ///     mov eax,0x180`), `byte[3] |= 0x10` and `word_0x30_48 =
     ///     yaw_0x1C_28` (0x57d2c-0x57d34).
+    ///
     /// `v30` stays 0, so the closing `MoveEntity_57FA0` does not step.
     ///
     /// The human is class 3 model 0 — exactly what `v40` selects — and

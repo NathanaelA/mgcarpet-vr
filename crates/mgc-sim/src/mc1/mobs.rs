@@ -138,8 +138,8 @@ fn no_m4m9_arm_scratch_target() -> bool {
 /// call 0x1a800` (84 = m14, CORPSE). The write itself is one
 /// instruction, `66 C7 80 10 02 00 00 C8 00` = `mov word
 /// [eax+0x210],200`, at file 0x357C2 / 0x37E12 / 0x3827A / 0x38722
-/// (`file = VA + 0x187f8`), reached past `mov dl,[eax+0x74a4]` (POOL
-/// + 65 = the killer's model) `test dl,dl / cmp dl,1` — the
+/// (`file = VA + 0x187f8`), reached past `mov dl,[eax+0x74a4]` (POOL +
+/// 65 = the killer's model) `test dl,dl / cmp dl,1` — the
 /// `model <= 1` gate — off `mov eax,[edx+eax*4+0x7503]` (POOL + 160,
 /// the wizext). Kept so one binary can be A/B'd; read once, a
 /// whole-process arm.

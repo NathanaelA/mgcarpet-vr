@@ -4392,29 +4392,6 @@ impl Snap for Mc2Spellbook {
     }
 }
 
-/// ⭐⭐⭐ ROUND 98 — **SHIELD III DECREMENTS BEFORE IT BILLS.**
-///
-/// `sub_6A480`'s two arms differ ONLY in the order of their four
-/// statements (EF:56513-15 vs EF:56525-28, and the shipped `NETHERW.EXE` at file
-/// `0x8ECDD` / `0x8ED0B` — `off = 0x34800 + linear − 0x10000`):
-///
-/// ```text
-///   life_0x1A == 0 :  byte[1] |= 0x40 ; sub_68DE0 ; word_0x2E_46--
-///   life_0x1A == 1 :  byte[2] |= 0x40 ; word_0x2E_46-- ; sub_68DE0
-/// ```
-///
-/// `sub_68DE0` (EF:55569) keys the FULL-COST debit on
-/// `word_0x2E_46 == word_0x30_48`, so in the second arm — where the
-/// counter is already one lower — the debit is unreachable and the
-/// call always lands in the else (`if (v2 && manaRegen > 0)
-/// manaRegen = 0`), whose `v2` is the POST-decrement counter.
-///
-/// The lane is FREE-RUN ONLY (`manaRegen_0x88_136` is not in
-/// `EntObsMc2`, and the pair importer reconstructs the delta from
-/// retail's own post-tick counter, so it was already right) — hence
-/// a unit test and no fixture. Kill switch:
-/// `MGC_NO_MC2_SHIELD3_PREDECREMENT=1`, which restores the shared
-/// skeleton and makes BOTH assertions below fail.
 #[cfg(test)]
 mod fools_retaliation_arm_tests {
     //! The two ABSENCES in `sub_36770`/`sub_36850`'s enumerated store

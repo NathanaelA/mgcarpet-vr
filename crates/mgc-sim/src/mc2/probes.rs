@@ -666,8 +666,8 @@ mod tests {
         // ⭐ AND TRUNCATION IS THE TIE-BREAKER: two candidates at
         // genuinely different squared distances tie in retail, so the
         // FIRST in walk order keeps the seat (`cmp %edx,%eax; jae`,
-        // file 0x3a8cb). mc2l22 t=15113 is the witness in the corpus.
+        // file 0x3a8cb). mc2l22 t=15113 is the witness in the corpus:
+        // 900 units² further out, the same truncated root.
         assert_eq!(Gen::isqrt(2560 * 2560), Gen::isqrt(2560 * 2560 + 900));
-        assert!(2560 * 2560 < 2560 * 2560 + 900);
     }
 }

@@ -4688,7 +4688,7 @@ mod debuff_knock_tests {
     fn the_mine_ladder_swallows_a_fireball_and_refuses_possession() {
         let mut g = flat_gen();
         const OWNER: u16 = 343;
-        let mut mine_at = |g: &mut Gen, x: u16| {
+        let mine_at = |g: &mut Gen, x: u16| {
             let m = g.new_event().expect("mine slot");
             let e = &mut g.ent[m];
             e.class64 = 10;

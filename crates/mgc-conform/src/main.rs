@@ -1038,6 +1038,7 @@ fn trace(args: &Args) -> i32 {
 ///   slots; the MAX wins because a slot the dispatcher skipped only
 ///   reads LOWER (mc1l49: slots 1..3 = 18/18/21 → 18, the settle at
 ///   which its ten craters match).
+///
 /// `None` when the record has no decodable state (older takes).
 fn retail_record0_phase(
     first: &mgc_formats::mgcr::TickRecord,
