@@ -14146,8 +14146,33 @@ impl World {
     ///   producing a share above 100.
     pub fn player_mana_share_pct(&self) -> u8 {
         let claimed = self.player.mana_max.saturating_sub(WIZARD_BASE_MANA) as u64;
-        let world = self.player.world_mana.max(1) as u64;
+        let world = self.claimable_world_mana().max(1) as u64;
         (claimed * 100 / world).min(100) as u8
+    }
+
+    /// The world total AS A DENOMINATOR FOR "how much of it is mine":
+    /// the census figure minus the guard the MC2 census seeds it with.
+    ///
+    /// `sub_60F00` starts MC2's total at 1 (EF:61960 — a divide-by-zero
+    /// guard for the type-0 objective, which keeps dividing by the
+    /// seeded figure and is left alone). Nothing in the level can ever
+    /// own that 1, so every world-relative ratio topped out at
+    /// `Σ / (Σ + 1)`: the castle panel's banked ruler
+    /// (`ui.rs::hud_quads`, 64 px × `banked / world`, snapped) came out
+    /// one pixel short of its track at exactly the window scales whose
+    /// bar end lands on a half pixel (1080p's 2.25×), and the save
+    /// header's share read 99% with every dwelling owned, every sphere
+    /// collected and no creature left. mc2l22 t=65556 is the witness:
+    /// owned 2,121,812 of a census 2,121,813.
+    ///
+    /// MC1 seeds with the human's OWN intrinsic 1000 (:56867), which
+    /// `mana_max` carries too, so its ratios already close and it is
+    /// left as retail draws it.
+    pub fn claimable_world_mana(&self) -> u32 {
+        match self.game {
+            GameId::Mc2 => self.player.world_mana.saturating_sub(1),
+            _ => self.player.world_mana,
+        }
     }
 
     /// Spellbook/HUD snapshot.
@@ -14204,7 +14229,9 @@ impl World {
             },
             mana_max: self.player.mana_max,
             banked: self.player.banked,
-            world_mana: self.player.world_mana,
+            // The HUD's denominator, seed-free — see
+            // [`Self::claimable_world_mana`].
+            world_mana: self.claimable_world_mana(),
             castle: castle_slot.map(|c| {
                 let e = &self.g.ent[c];
                 (
@@ -21513,6 +21540,41 @@ mod tests {
         // And a zero denominator must not divide by zero.
         w.player.world_mana = 0;
         assert_eq!(w.player_mana_share_pct(), 100);
+    }
+
+    /// **FULL OWNERSHIP READS 100% AND A FULL RULER UNDER MC2.** The
+    /// MC2 census seeds its world total at 1 (a divide-by-zero guard
+    /// nobody can own), so `Σ / world` topped out at `Σ / (Σ + 1)` —
+    /// 99% in the save header and, at 1080p's 2.25× (bar end on a
+    /// half pixel), a castle-panel ruler one pixel short of its track.
+    /// mc2l22 t=65556: the human owns 2,121,812 of a census 2,121,813
+    /// with every dwelling, sphere and creature accounted for.
+    #[test]
+    fn mc2_full_ownership_closes_the_world_ratio() {
+        let mut w = mc2_flat_world();
+        let owned = 2_121_812u32;
+        w.player.mana_max = WIZARD_BASE_MANA + owned;
+        w.player.banked = owned;
+        w.player.world_mana = owned + 1; // the census figure, seed included
+        assert_eq!(w.player_mana_share_pct(), 100, "the save header's share");
+        let view = w.loadout();
+        assert_eq!(view.world_mana, owned, "the HUD denominator drops the seed");
+        // The castle panel's banked ruler: 64 px × banked/world, drawn
+        // through `snap` (independent rounding of both edges). At
+        // 2.25× the track ends at (58 + 64) × 2.25 = 274.5 → 275; the
+        // fill must land there too.
+        let frac = view.banked as f32 / view.world_mana.max(1) as f32;
+        let s = 2.25f32;
+        let fill_end = (58.0 * s + 64.0 * frac * s).round();
+        let track_end = ((58.0 + 64.0) * s).round();
+        assert_eq!(fill_end, track_end, "no one-pixel gap at 2.25×");
+        // Nothing owned still reads 0, and MC1 keeps retail's own
+        // base-seeded denominator.
+        w.player.mana_max = WIZARD_BASE_MANA;
+        assert_eq!(w.player_mana_share_pct(), 0);
+        let mut m1 = flat_world();
+        m1.player.world_mana = 1000;
+        assert_eq!(m1.loadout().world_mana, 1000, "MC1 untouched");
     }
 
     /// `banked` is the CASTLE panel's numerator and is not

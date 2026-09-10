@@ -1021,6 +1021,25 @@ impl GameplayPatches {
         }
     }
 
+    /// The pinned policy with the PRESENTATION-ONLY arms taken back
+    /// from the player's own config. `ball_owner_recolor` (the viewport
+    /// sprite family of a far-claimed sphere), `mc2_dweller_invisibility`
+    /// (the (5,23) proximity conceal) and `win2_movie_score` (the
+    /// ending's music pick) never touch the sim, the hash or the pose —
+    /// nothing a take grades — so pinning them to retail under
+    /// `--replay` / `--record` bought no fidelity and read as "my
+    /// patches are broken" (player report 2026-09-10: a mc2l22 replay
+    /// showed distant spheres in the old owner's colour and dwellers
+    /// visible map-wide with both toggles plainly on).
+    pub fn with_presentation_of(self, user: &Self) -> Self {
+        Self {
+            ball_owner_recolor: user.ball_owner_recolor,
+            mc2_dweller_invisibility: user.mc2_dweller_invisibility,
+            win2_movie_score: user.win2_movie_score,
+            ..self
+        }
+    }
+
     /// The pre-option hard-wired behavior set: what native play ran
     /// before the patches became options. Port recordings taped
     /// before the header carried a patch policy replay under this

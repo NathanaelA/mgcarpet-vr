@@ -1135,11 +1135,23 @@ impl Gen {
     }
 
     /// 3D distance (`sub_583F0`, 16-bit deltas).
+    ///
+    /// ⚠ WRAPPING, EXPLICITLY. The squares are summed in retail's own
+    /// 32-bit register and a `dz` spanning the full i16 range squares
+    /// past `i32::MAX` on its own (mc2l22 replay, `m12_tick`'s
+    /// building scan against a record whose z sits at the far end of
+    /// the axis). A release build wrapped silently — retail's result —
+    /// while a dev build's overflow check panicked the app
+    /// (2026-09-10). Same bits in both profiles now.
     pub(crate) fn mc2_dist3(a: (u16, u16, i16), b: (u16, u16, i16)) -> u32 {
         let dx = (b.0.wrapping_sub(a.0)) as i16 as i32;
         let dy = (b.1.wrapping_sub(a.1)) as i16 as i32;
         let dz = (b.2 as i32) - (a.2 as i32);
-        Self::isqrt((dx * dx + dy * dy + dz * dz) as u32)
+        let sq = dx
+            .wrapping_mul(dx)
+            .wrapping_add(dy.wrapping_mul(dy))
+            .wrapping_add(dz.wrapping_mul(dz));
+        Self::isqrt(sq as u32)
     }
 
     /// `sub_1BD90` (:8945) — PATROL: inbox/life head, transitions,

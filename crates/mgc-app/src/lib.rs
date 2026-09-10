@@ -10145,8 +10145,10 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         // retail-source and post-policy port takes run the retail
         // arms; a pre-option port take replays under the legacy
         // hard-wired set it was recorded against.
+        // The presentation-only arms stay the player's
+        // (`GameplayPatches::with_presentation_of`): they grade nothing.
         cfg.gameplay.patches = match file.patch_policy() {
-            Ok(p) => p,
+            Ok(p) => p.with_presentation_of(&cfg.gameplay.patches),
             Err(e) => {
                 eprintln!("error: {}: {e}", path.display());
                 return std::process::ExitCode::FAILURE;
@@ -10181,7 +10183,8 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     // matches by construction (the port header stamps
     // `"patches": "retail"`). Player-ruled 2026-08-08.
     if args.record.is_some() {
-        cfg.gameplay.patches = config::GameplayPatches::retail_all();
+        cfg.gameplay.patches =
+            config::GameplayPatches::retail_all().with_presentation_of(&cfg.gameplay.patches);
         println!("record: retail-bug patches run their RETAIL arms for this session");
     }
     // Re-derive the offline pool params after the replay pin — which

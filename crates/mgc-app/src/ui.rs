@@ -847,6 +847,38 @@ impl UiAssets {
         })
     }
 
+    /// A wizard SUB-PANEL background, cropped to its 128×44 section.
+    ///
+    /// ⭐ THE DAY BANK'S SUB-PANEL IS 129×45 (`tests/panel_probe.rs`,
+    /// 2026-09-10): its 128×44 image sits one column to the right —
+    /// column 0 is transparent for all 44 rows and row 44 is empty bar
+    /// one stray pixel — so blitted whole at the section origin its
+    /// ruler recess landed at +59..=122 against the bars' +58..=121,
+    /// and its transparent column showed the backdrop as a one-pixel
+    /// seam beside the radar cap. Night/fog/cave and both MC1 banks
+    /// are 128×44 with the recess at +58..=121. Anchoring the crop at
+    /// the sprite's RIGHT/TOP takes the leading column and the
+    /// trailing row off and every variant lays out alike.
+    ///
+    /// THE PORT'S OWN RULE (player-ruled 2026-09-10, after a retail
+    /// day-level capture showed the strip drifting 1 px, then 2 px,
+    /// then overlapping the left spell panel — retail stacks the raw
+    /// sprite widths): every sub-panel occupies EXACTLY one 128×44
+    /// section. Oversize art is cropped to it, undersize art is
+    /// stretched to it; the section grid never moves.
+    fn panel_quad_tint(&self, id: usize, x: f32, y: f32, scale: f32, tint: [f32; 4]) -> Option<UiQuad> {
+        let (sx, sy, w, h) = self.sprite_rects.get(id).copied().flatten()?;
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let (cw, ch) = ((w as f32).min(HUD_SECTION), (h as f32).min(PANEL_H));
+        Some(UiQuad {
+            rect: snap([x, y, HUD_SECTION * scale, PANEL_H * scale]),
+            uv: [sx as f32 + (w as f32 - cw), sy as f32, cw, ch],
+            tint,
+        })
+    }
+
     /// Blit `begSprTab[id]` into an explicit destination rect (for the
     /// spellbook: the slab stretches to the cell, the icon draws at a
     /// uniform-scaled centered rect so it never distorts).
@@ -1576,6 +1608,8 @@ const BAR_W: f32 = 64.0;
 const BAR_X: f32 = 58.0; // bars start +58 from the sub-panel origin
 /// One HUD section = 640/5 = 128 native px (the 5×20% top strip).
 const HUD_SECTION: f32 = 128.0;
+/// A wizard sub-panel's native height (the strip's 2..46 band).
+const PANEL_H: f32 = 44.0;
 
 /// The non-4:3 presentation law — ONE source, shared with the
 /// renderer (which anchors the radar disc, the map panes and the world
@@ -1587,10 +1621,69 @@ pub use mgc_render::HudFrame;
 /// value/max fraction of the 64-px ruler. Faithful sub_22810 (:26991)
 /// draws ONLY the clamped colored fill, straight on the panel marble —
 /// no background track — and skips fills under 2px.
-fn bar(quads: &mut Vec<UiQuad>, s: f32, x: f32, y: f32, h: f32, frac: f32, color: [f32; 4]) {
+/// A wizard sub-panel's SNAPPED screen frame — every bar drawn into
+/// the panel art is laid out in it, so a bar's edges land where the
+/// sprite's own texel boundaries rasterize.
+///
+/// ⭐ THE ONE-PIXEL GAP (player, 2026-09-10: a level-7 castle's ruler
+/// never closed). The panel sprite is snapped as a WHOLE (`snap` on
+/// its outer rect), so its origin can round half a pixel away from
+/// `ox * s`; the bars used to be snapped on their OWN edges from the
+/// unrounded `(ox + 58) * s`. The ruler recess in the art is exactly
+/// columns 58..=121 (`tests/panel_probe.rs`), so a full 64-px fill is
+/// meant to cover it edge to edge — and at every scale where `ox * s`
+/// lands on a half pixel (1080p's 2.25×: 126 × 2.25 = 283.5) the two
+/// roundings disagreed by one pixel and the recess showed through at
+/// one end, whatever the fraction. Mapping through the sprite's
+/// snapped origin and its effective per-texel scale makes the fill's
+/// edges the sprite's edges.
+struct PanelFrame {
+    x0: f32,
+    y0: f32,
+    sx: f32,
+    sy: f32,
+}
+
+impl PanelFrame {
+    /// The frame of a sub-panel sprite drawn at native `(ox, 2)` with
+    /// scale `s` — the same `snap` `sprite_quad_tint` applies to it.
+    fn new(ox: f32, s: f32, dims: (f32, f32)) -> Self {
+        let r = snap([ox * s, 2.0 * s, dims.0 * s, dims.1 * s]);
+        Self {
+            x0: r[0],
+            y0: r[1],
+            sx: r[2] / dims.0,
+            sy: r[3] / dims.1,
+        }
+    }
+
+    /// The first screen pixel that shows native column/row `c` of the
+    /// sprite. The UI atlas is sampled NEAREST (`mgc-render`, the "ui"
+    /// sampler), so pixel `p` shows texel `floor((p + 0.5 − x0) / sx)`
+    /// and texel `c` begins at the first `p` with `p + 0.5 >= x0 + c·sx`.
+    /// ⚠ NOT `.round()`: an exact half (2.25× puts column 58 at 414.5)
+    /// belongs to the EARLIER pixel under this rule, and `round` would
+    /// put the bar one pixel right of the art there.
+    fn first_px(origin: f32, c: f32, scale: f32) -> f32 {
+        (origin + c * scale - 0.5).ceil()
+    }
+
+    /// A native panel-relative span → screen rect: `[first(x),
+    /// first(x + w))` on both axes, so the fill covers exactly the
+    /// pixels the sprite's own columns `x..x+w` occupy.
+    fn rect(&self, x: f32, y: f32, w: f32, h: f32) -> [f32; 4] {
+        let xa = Self::first_px(self.x0, x, self.sx);
+        let xb = Self::first_px(self.x0, x + w, self.sx);
+        let ya = Self::first_px(self.y0, y - 2.0, self.sy);
+        let yb = Self::first_px(self.y0, y - 2.0 + h, self.sy);
+        [xa, ya, xb - xa, yb - ya]
+    }
+}
+
+fn bar(quads: &mut Vec<UiQuad>, pf: &PanelFrame, x: f32, y: f32, h: f32, frac: f32, color: [f32; 4]) {
     let fill = (BAR_W * frac.clamp(0.0, 1.0)).max(0.0);
     if fill >= 2.0 {
-        quads.push(solid([x * s, y * s, fill * s, h * s], color));
+        quads.push(solid(pf.rect(x, y, fill, h), color));
     }
 }
 
@@ -1598,10 +1691,10 @@ fn bar(quads: &mut Vec<UiQuad>, s: f32, x: f32, y: f32, h: f32, frac: f32, color
 /// these per balloon (sub_22E50 :27338-39, `sub_22810(x, y, 64, 2,
 /// frac, color)`). Just the colored fill; the panel marble shows
 /// between them.
-fn thin_bar(quads: &mut Vec<UiQuad>, s: f32, x: f32, y: f32, frac: f32, color: [f32; 4]) {
+fn thin_bar(quads: &mut Vec<UiQuad>, pf: &PanelFrame, x: f32, y: f32, frac: f32, color: [f32; 4]) {
     let fill = (BAR_W * frac.clamp(0.0, 1.0)).max(0.0);
     if fill >= 1.0 {
-        quads.push(solid([x * s, y * s, fill * s, 2.0 * s], color));
+        quads.push(solid(pf.rect(x, y, fill, 2.0), color));
     }
 }
 
@@ -1669,6 +1762,9 @@ pub fn hud_quads(
     //   C (v24, `a1x`)     = the player's OWN wizard — self life + mana
     //                        capacity/banked, drawn UNCONDITIONALLY.
     let cap_w = assets.sprite_dims(SPR_PANEL_BG).map_or(124.0, |(w, _)| w);
+    // The sub-panel section — the bars' layout frame. The art is
+    // cropped to it (`panel_quad_tint`), whatever a bank's sprite is.
+    let panel_dims = (HUD_SECTION, PANEL_H);
     push_opt(
         &mut quads,
         assets.sprite_quad_tint(SPR_PANEL_BG, 2.0 * s, 2.0 * s, s, panel_tint),
@@ -1690,11 +1786,11 @@ pub fn hud_quads(
     // keeps blinking after the goal is met. MC2's own ramp blinks
     // white/blue-ish; reusing the MC1 white/transparent marker is a
     // deliberate deviation (docs/DEVIATIONS.md).
-    let win_tick = |quads: &mut Vec<UiQuad>, ox: f32| {
+    let win_tick = |quads: &mut Vec<UiQuad>, pf: &PanelFrame| {
         if loadout.win_pct > 0 && goal_blink {
-            let tx = (ox + BAR_X) * s + BAR_W * s * (loadout.win_pct as f32 / 100.0).min(1.0);
+            let tx = BAR_X + BAR_W * (loadout.win_pct as f32 / 100.0).min(1.0);
             for y in [26.0, 38.0] {
-                quads.push(solid([tx, y * s, 2.0 * s, 2.0 * s], MANA_WHITE));
+                quads.push(solid(pf.rect(tx, y, 2.0, 2.0), MANA_WHITE));
             }
         }
     };
@@ -1715,10 +1811,11 @@ pub fn hud_quads(
     };
     push_opt(
         &mut quads,
-        assets.sprite_quad_tint(slot_a_bg, v22 * s, 2.0 * s, s, panel_tint),
+        assets.panel_quad_tint(slot_a_bg, v22 * s, 2.0 * s, s, panel_tint),
     );
     if let Some((_stored, capacity, level)) = castle {
         let ox = v22;
+        let pf = PanelFrame::new(ox, s, panel_dims);
         // Castle-level glyph [43+level] (emblem/heart/orb/digit baked
         // in) then the divider [42].
         push_opt(
@@ -1735,7 +1832,7 @@ pub fn hud_quads(
         let hp = loadout
             .castle_hp
             .map_or(1.0, |(cur, max)| cur.max(0) as f32 / max.max(1) as f32);
-        bar(&mut quads, s, ox + BAR_X, 10.0, 10.0, hp, LIFE_RED);
+        bar(&mut quads, &pf, BAR_X, 10.0, 10.0, hp, LIFE_RED);
         // Mana capacity + banked, world-relative (y=28), overlaid
         // (:27240-66 verbatim): capacity (castle +136) in v27 =
         // byte_99B58[1+2·team] — the GREY family, same index as the
@@ -1747,8 +1844,8 @@ pub fn hud_quads(
             let c = if alert_blink { METER_GREY } else { MANA_WHITE };
             bar(
                 &mut quads,
-                s,
-                ox + BAR_X,
+                &pf,
+                BAR_X,
                 28.0,
                 10.0,
                 capacity as f32 / world,
@@ -1757,8 +1854,8 @@ pub fn hud_quads(
         } else {
             bar(
                 &mut quads,
-                s,
-                ox + BAR_X,
+                &pf,
+                BAR_X,
                 28.0,
                 10.0,
                 capacity as f32 / world,
@@ -1766,15 +1863,15 @@ pub fn hud_quads(
             );
             bar(
                 &mut quads,
-                s,
-                ox + BAR_X,
+                &pf,
+                BAR_X,
                 28.0,
                 10.0,
                 loadout.banked as f32 / world,
                 MANA_WHITE,
             );
         }
-        win_tick(&mut quads, ox);
+        win_tick(&mut quads, &pf);
     }
 
     // === Slot B: the mana balloons (:27278-344). The marble [54]
@@ -1792,10 +1889,11 @@ pub fn hud_quads(
     };
     push_opt(
         &mut quads,
-        assets.sprite_quad_tint(slot_b_bg, v23 * s, 2.0 * s, s, panel_tint),
+        assets.panel_quad_tint(slot_b_bg, v23 * s, 2.0 * s, s, panel_tint),
     );
     if !balloons.is_empty() {
         let ox = v23;
+        let pf = PanelFrame::new(ox, s, panel_dims);
         let roster = balloons.len().min(3);
         push_opt(
             &mut quads,
@@ -1811,8 +1909,8 @@ pub fn hud_quads(
         for (i, slot) in balloons.iter().enumerate().take(3) {
             let Some((hp, cargo)) = *slot else { continue };
             let y = 2.0 * i as f32;
-            thin_bar(&mut quads, s, ox + BAR_X, 12.0 + y, hp, LIFE_RED);
-            thin_bar(&mut quads, s, ox + BAR_X, 30.0 + y, cargo, MANA_WHITE);
+            thin_bar(&mut quads, &pf, BAR_X, 12.0 + y, hp, LIFE_RED);
+            thin_bar(&mut quads, &pf, BAR_X, 30.0 + y, cargo, MANA_WHITE);
         }
     }
 
@@ -1827,10 +1925,11 @@ pub fn hud_quads(
     };
     push_opt(
         &mut quads,
-        assets.sprite_quad_tint(slot_c_bg, v24 * s, 2.0 * s, s, panel_tint),
+        assets.panel_quad_tint(slot_c_bg, v24 * s, 2.0 * s, s, panel_tint),
     );
     {
         let ox = v24;
+        let pf = PanelFrame::new(ox, s, panel_dims);
         // Base wizard glyph [43] + divider [42] (:27358-72; the alert
         // /grace variant swaps a blended copy — we keep the plain draw).
         push_opt(
@@ -1845,8 +1944,8 @@ pub fn hud_quads(
         // 0x7B red) — this is where player life belongs (:27375).
         bar(
             &mut quads,
-            s,
-            ox + BAR_X,
+            &pf,
+            BAR_X,
             10.0,
             10.0,
             vitals.life as f32 / vitals.life_max.max(1) as f32,
@@ -1857,8 +1956,8 @@ pub fn hud_quads(
         // (:27376-77).
         bar(
             &mut quads,
-            s,
-            ox + BAR_X,
+            &pf,
+            BAR_X,
             28.0,
             10.0,
             loadout.mana_max as f32 / world,
@@ -1866,14 +1965,14 @@ pub fn hud_quads(
         );
         bar(
             &mut quads,
-            s,
-            ox + BAR_X,
+            &pf,
+            BAR_X,
             28.0,
             10.0,
             loadout.mana as f32 / world,
             MANA_WHITE,
         );
-        win_tick(&mut quads, ox);
+        win_tick(&mut quads, &pf);
     }
     // --- Equipped-spell panels (sub_23D40) at x=510 and x=574. ---
     // Frame [1]/[2] (64x44), then the icon [spell+6] at its NATIVE 62x34
@@ -3164,6 +3263,57 @@ mod tests {
     }
 
     use super::*;
+
+    /// **A FULL RULER ENDS WHERE THE PANEL ART'S RECESS ENDS, AT EVERY
+    /// SCALE.** The recess is native columns 58..=121 of the 128-wide
+    /// sub-panel sprite (`tests/panel_probe.rs`); the sprite is snapped
+    /// as a whole, so its texel boundary `c` rasterizes at
+    /// `round(x0 + c·sx)`. The old bar snapped its own edges from the
+    /// unrounded `(ox + 58) * s`, which at 2.25× (1080p) put a full
+    /// fill's right edge at 558 against the recess's 559 — the player's
+    /// one-pixel gap, at any fraction. `PanelFrame` closes it.
+    #[test]
+    fn panel_bars_land_on_the_sprite_s_texel_boundaries() {
+        let dims = (128.0, 44.0);
+        // Nearest sampling: pixel p shows texel floor((p + 0.5 - x0)/sx).
+        let shows = |origin: f32, scale: f32, p: f32| ((p + 0.5 - origin) / scale).floor();
+        for &s in &[1.0f32, 1.25, 1.5, 1.6, 1.875, 2.0, 2.25, 2.5, 3.0] {
+            for &ox in &[126.0f32, 254.0, 382.0] {
+                let pf = PanelFrame::new(ox, s, dims);
+                let sprite = snap([ox * s, 2.0 * s, dims.0 * s, dims.1 * s]);
+                let (sx, sy) = (sprite[2] / dims.0, sprite[3] / dims.1);
+                let full = pf.rect(BAR_X, 28.0, BAR_W, 10.0);
+                let (l, r) = (full[0], full[0] + full[2]);
+                // The fill's first and last pixels sit on the recess's
+                // first and last columns (58 and 121), and the pixels
+                // just outside it on the border columns (57 and 122).
+                assert_eq!(shows(sprite[0], sx, l), 58.0, "first fill px, s={s} ox={ox}");
+                assert_eq!(shows(sprite[0], sx, l - 1.0), 57.0, "px before, s={s} ox={ox}");
+                assert_eq!(shows(sprite[0], sx, r - 1.0), 121.0, "last fill px, s={s} ox={ox}");
+                assert_eq!(shows(sprite[0], sx, r), 122.0, "px after, s={s} ox={ox}");
+                let (t, b) = (full[1], full[1] + full[3]);
+                assert_eq!(shows(sprite[1], sy, t), 26.0, "top row, s={s} ox={ox}");
+                assert_eq!(shows(sprite[1], sy, b - 1.0), 35.0, "bottom row, s={s} ox={ox}");
+            }
+        }
+        // The discriminating cases, spelled out. At the "nice" scales
+        // (2.0, 2.25, 3.0) the old independent snapping happened to
+        // agree with the art; at a window like 968×484 (s = 484/480)
+        // the old left edge sat one pixel RIGHT of the recess and the
+        // fill's last pixel one short of it — the player's "placed one
+        // pixel off" (2026-09-10). And 2.25× is where a plain
+        // `.round()` of the boundary would land one pixel right.
+        let s = 484.0f32 / 480.0;
+        let old_left = ((126.0f32 + BAR_X) * s).round();
+        let pf = PanelFrame::new(126.0, s, dims);
+        let new = pf.rect(BAR_X, 28.0, BAR_W, 10.0);
+        assert_eq!(old_left, 186.0, "the old left edge");
+        assert_eq!(new[0], 185.0, "the recess's first column");
+        let pf = PanelFrame::new(126.0, 2.25, dims);
+        let new = pf.rect(BAR_X, 28.0, BAR_W, 10.0);
+        assert_eq!(new[0], 414.0);
+        assert_eq!(new[0] + new[2], 558.0);
+    }
 
     /// The invariant that makes the whole non-4:3 law safe to land: at
     /// any 4:3 size every anchor collapses onto the authored native
