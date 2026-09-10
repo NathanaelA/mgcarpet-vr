@@ -1,46 +1,27 @@
 # mgcarpet
 
-A modern, cross-platform engine for Bullfrog's **Magic Carpet** (1994), its
-**Hidden Worlds** expansion, and **Magic Carpet 2: The Netherworlds** (1995).
+A modern, cross-platform engine reimplementation of Bullfrog's
+**Magic Carpet** (1994), its **Hidden Worlds** expansion, and
+**Magic Carpet 2: The Netherworlds** (1995), written from scratch in Rust
+on wgpu (WGSL shaders), winit and cpal.
 
-Built with heavy use of Claude Code (Fable/ Opus) as well as other AI tools.
+Questions, bug reports, playtesting: the Magic Carpet Discord —
+https://discord.gg/GR55HCbJJ4
 
-This is an engine-only reimplementation: it ships no game content and
+## About
+
+This is a from-scratch engine reimplementation: it ships no game content and
 requires original game data from a legally owned copy (both games are sold
 on [GOG](https://www.gog.com/en/game/magic_carpet) —
 [MC2 here](https://www.gog.com/en/game/magic_carpet_2_the_netherworlds)).
-The goal is one engine that plays both games — with fixed-timestep
-simulation (game speed independent of framerate), GPU rendering with real
-draw distance, save-anywhere, and modern platform support — while treating
-the original gameplay as the specification: behavioral fidelity by
-default, deviations deliberate and opt-in.
+The goal is one engine that plays both games and the expansion — with
+fixed-timestep simulation (game speed independent of framerate), GPU
+rendering with real draw distance, save-anywhere, and modern platform
+support — while treating the original gameplay as the specification:
+behavioral fidelity by default, deviations deliberate and opt-in.
 
-## Architecture
-
-```
-gamedata/  (your GOG installs — never committed)
-    │
-    ▼
-mgc-import  ── the only code that understands Bullfrog formats (RNC,
-    │          DAT/TAB, XMI, seeded terrain generation). Runs once per
-    │          machine; expands everything into baked packages. All
-    │          procedural/seeded data is expanded here — the engine never
-    │          sees a seed.
-    ▼
-mgc-formats ── the baked package format: the sole data contract
-    │
-    ▼
-mgc-sim     ── pure, headless, deterministic simulation core
-mgc-render  ── wgpu renderer (reads sim state, interpolates between ticks)
-mgc-audio   ── cpal output + the ported original mixer + FLAC music
-mgc-app     ── winit shell: window, input, fixed-timestep game loop
-```
-
-Verification strategy: original-engine output is the oracle. Expanded
-terrain and parsed data are validated byte-for-byte against reference
-dumps produced by the original code ([remc2] for MC2, instrumented DOSBox
-for MC1). Fixtures live outside git (derived from copyrighted data); their
-SHA-256 hashes are committed as pins.
+It is built with heavy use of Claude Code (Fable / Opus) as well as other
+AI tools.
 
 ## Quickstart (playtesting)
 
@@ -94,6 +75,55 @@ SHA-256 hashes are committed as pins.
    bootstrap `mgcarpet.json.defaults`, simply run the game once. Then copy
    the file to `mgcarpet.json` and make your desired tweaks.
 
+## Current Status
+
+Both games and the expansion are playable end to end. The simulation is
+bit-exact against retail gameplay recordings across the certified takes,
+strange and quirky retail behaviour included, and every remaining
+divergence is registered rather than papered over.
+
+Deviations from the retail game are deliberate — bug fixes or playability
+improvements — and nearly all of them can be switched back to the retail
+behaviour with a toggle.
+
+The main issue of all retail Magic Carpet games is the dreaded entity pool
+with its highly limited size and frequent overflows, resulting in strange
+gameplay issues, sometimes crashes. This port turns it into a parameter,
+one of the main reasons why gameplay of levels with heavy activity tends
+to be a lot smoother. Increasing the parameter also allows playing some of
+the original hidden levels that were removed from the campaign for various
+reasons, one of them being that they don't even load correctly due to limited
+entity pool size.
+
+Detailed conformance report is TODO.
+
+## Architecture
+
+```
+gamedata/  (your GOG installs — never committed)
+    │
+    ▼
+mgc-import  ── the only code that understands Bullfrog formats (RNC,
+    │          DAT/TAB, XMI, seeded terrain generation). Runs once per
+    │          machine; expands everything into baked packages. All
+    │          procedural/seeded data is expanded here — the engine never
+    │          sees a seed.
+    ▼
+mgc-formats ── the baked package format: the sole data contract
+    │
+    ▼
+mgc-sim     ── pure, headless, deterministic simulation core
+mgc-render  ── wgpu renderer (reads sim state, interpolates between ticks)
+mgc-audio   ── cpal output + the ported original mixer + FLAC music
+mgc-app     ── winit shell: window, input, fixed-timestep game loop
+```
+
+Verification strategy: original-engine output is the oracle. Expanded
+terrain and parsed data are validated byte-for-byte against reference
+dumps produced by the original code ([Magic Carpet 2 HD][remc2] for MC2,
+instrumented DOSBox for MC1). Fixtures live outside git (derived from copyrighted data); their
+SHA-256 hashes are committed as pins.
+
 ## Building
 
 ```sh
@@ -127,17 +157,6 @@ evolves in lockstep with the code. Community-authored levels in this
 format are original works and freely shareable (unlike packages baked
 from the copyrighted game data, which stay on your machine).
 
-## Status
-
-MC1 is playable at a state slowly approaching near-parity, while being
-tested and player-certified as faithful across the core games.
-The porting record — what each subsystem does, how it was verified,
-and where it deliberately deviates — is being assembled in
-docs/FIDELITY.md; docs/ROADMAP.md is the working log. MC2 levels parse
-and render (environment bundles, terrain generated natively by the
-importer's port of the original algorithm); its gameplay port comes
-after MC1.
-
 ## Credits and prior art
 
 This project stands on years of community reverse engineering. It would
@@ -149,9 +168,9 @@ not exist without:
   understandable at all.
 - **Tim Hobbs (thobbsinteractive) and contributors** —
   [Magic Carpet 2 HD](https://github.com/thobbsinteractive/magic-carpet-2-hd),
-  the actively maintained continuation (play MC2 today: go there), whose
-  codebase serves as this project's behavioral reference, and whose
-  `DataFileRNC` implementation our RNC decoder is ported from.
+  the actively maintained continuation of remc2, whose codebase serves as
+  this project's behavioral reference, and whose `DataFileRNC`
+  implementation our RNC decoder is ported from.
 - **Michael Howard** —
   [MagicCarpetFileFormat](https://github.com/michaelhoward/MagicCarpetFileFormat),
   the MC1 level format specification our parser is built against.
