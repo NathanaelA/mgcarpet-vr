@@ -1269,9 +1269,17 @@ fn mc2_level_015_lava_moats_are_carved() {
     // stray 1 at x=220 in retail too) with the 88 mesa plateau below.
     for x in [200u8, 220, 236] {
         for y in 156..=158u8 {
-            assert_eq!(p.height[y as usize * 256 + x as usize], 0, "channel cell ({x},{y})");
+            assert_eq!(
+                p.height[y as usize * 256 + x as usize],
+                0,
+                "channel cell ({x},{y})"
+            );
         }
-        assert_eq!(p.height[162 * 256 + x as usize], 88, "plateau cell ({x},162)");
+        assert_eq!(
+            p.height[162 * 256 + x as usize],
+            88,
+            "plateau cell ({x},162)"
+        );
     }
 }
 

@@ -666,8 +666,7 @@ impl Ent {
 /// Manual Hash: contributes to the state hash ONLY while hits are
 /// pending — hash-transparent when idle (the Planes ceiling / Rec par3
 /// discipline).
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Mc2PlayerDebuffs {
     pub(crate) slow: u8,
     pub(crate) stun: u8,
@@ -768,8 +767,7 @@ pub(crate) const SCRATCH: usize = 0;
 /// (fixpoint loop, this module) and the runtime world tick
 /// (`mgc_sim::world`, one pass per turn) — in the original these are
 /// the same pool and the same handlers.
-#[derive(Hash)]
-#[derive(Clone)]
+#[derive(Hash, Clone)]
 pub(crate) struct Gen {
     pub(crate) t: Planes,
     pub(crate) assets: FeatureAssets,
@@ -1248,8 +1246,7 @@ pub(crate) struct Gen {
 /// fields). Entries are `(owner, hp_factor[stage-1],
 /// part_type[stage-1])` for stages 1..=7 (retail slots 1..7 / 10..16
 /// of the 19-byte array — slots 0/8/9/17/18 are never addressed).
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Mc2CastleResearch(pub Vec<(u16, [u8; 7], [u8; 7])>);
 
 impl std::hash::Hash for Mc2CastleResearch {
@@ -1270,8 +1267,7 @@ impl std::hash::Hash for Mc2CastleResearch {
 /// area-spell effect ticks award BATCH counts (retail's single
 /// `sub_6D8B0(id, spell, hits)` call per pass — one award, one
 /// level-up notification), so the mail carries the amount.
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Mc2XpMail(pub Vec<(u16, u16, i32)>);
 
 impl std::hash::Hash for Mc2XpMail {
@@ -1295,8 +1291,7 @@ impl std::hash::Hash for Mc2XpMail {
 /// Bit 15 of an entry marks a push made by the DOWNGRADE
 /// (`sub_605E0`): the castle-death token purge drains those alone
 /// (round 112, `castle::no_mc2_purge_on_downgrade_only`).
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Mc2LadderMail(pub Vec<u16>);
 
 impl std::hash::Hash for Mc2LadderMail {
@@ -1320,8 +1315,7 @@ pub struct BoltStrike {
 /// See [`Gen::bolt_fx`] — hash-SILENT ALWAYS (the `slot_gen` class of
 /// field: dropping it changes nothing observable to the sim), unlike
 /// the drained-mail wrappers which hash when non-empty.
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct BoltFx(pub Vec<BoltStrike>);
 
 impl std::hash::Hash for BoltFx {
@@ -1341,8 +1335,7 @@ impl std::hash::Hash for Mc2PredAxis {
 /// See [`Gen::mc2_beam_defer`] — hash-SILENT ALWAYS. It is armed and
 /// drained inside a single `mc2_lightning_beam_tick`, so it is empty at
 /// every hash and snapshot boundary by construction.
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct BeamDefer {
     /// True while the beam is marching: `mc2_proj_impact` parks instead
     /// of firing.
@@ -1359,8 +1352,7 @@ impl std::hash::Hash for BeamDefer {
 /// 2 = left) requests from the m26 steal roll, drained by the world
 /// tick the same turn (the book lives world-side). Empty at hash
 /// time like a read mailbox; tagged against adjacent-mail aliasing.
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Mc2StealMail(pub Vec<(u16, u8)>);
 
 impl std::hash::Hash for Mc2StealMail {
@@ -1374,8 +1366,7 @@ impl std::hash::Hash for Mc2StealMail {
 
 /// See [`Gen::mc2_spawn_ord`] — hashes to NOTHING while all-zero
 /// (hash-transparent).
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Mc2Ord(pub [u8; 32]);
 
 impl std::hash::Hash for Mc2Ord {
@@ -1428,8 +1419,7 @@ impl std::hash::Hash for Mc2LifeScale {
 ///
 /// Hash-quiet while empty (the [`Mc2Ord`] pattern): MC1 and every
 /// never-full MC2 run hash exactly as they did before the field.
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Mc2Recycle {
     pub(crate) stack: Vec<u16>,
     pub(crate) refill: bool,
@@ -1452,8 +1442,7 @@ impl std::hash::Hash for Mc2Recycle {
 /// without it, (drain=5, scrolls=0) and (drain=0, scrolls=5) feed
 /// identical byte streams (the conditional-hash aliasing class).
 /// Written INSIDE the condition, so zero fields contribute nothing.
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Mc2Quiet<const TAG: u8>(pub i32);
 
 impl<const TAG: u8> std::hash::Hash for Mc2Quiet<TAG> {
@@ -1498,7 +1487,11 @@ impl std::hash::Hash for Mc2Echo {
 /// (10,45) building tick's `getTerrainAlt` leaves the walk's ESI
 /// there, `Gen::m27_v34_publish_building`).
 #[derive(Default, Clone)]
-pub(crate) struct M27V34Slot(pub(crate) Option<u32>, pub(crate) bool, pub(crate) Option<u32>);
+pub(crate) struct M27V34Slot(
+    pub(crate) Option<u32>,
+    pub(crate) bool,
+    pub(crate) Option<u32>,
+);
 
 impl std::hash::Hash for M27V34Slot {
     fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
@@ -1512,8 +1505,7 @@ impl std::hash::Hash for M27V34Slot {
 /// adjacent slot-maps from aliasing (aura_claim={a} + wanted={} vs
 /// its mirror); written only when non-empty, so empty maps stay
 /// transparent.
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct Mc2SlotMap<const TAG: u8>(pub std::collections::BTreeMap<u16, u16>);
 
 /// The per-owner castle-guard register (see [`Gen::mc1_guard_reg`]).
@@ -1549,7 +1541,6 @@ fn preclear_eq() -> i32 {
         0
     }
 }
-
 
 /// `MGC_NO_MC2_SEIZE_BLANK=1` restores the pre-dig reading, in which
 /// MC2's `NewEvent_4A050` recycle arm left the tick-top roster heads
@@ -1747,9 +1738,7 @@ fn mc1_no_row0_shim_227() -> bool {
 /// See [`Gen::OOB_TYPE_SHIM`].
 fn mc1_no_row0_shim_32_39_40_48_89() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var_os("MGC_NO_MC1_ROW0_SHIM_32_39_40_48_89").is_some()
-    })
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_32_39_40_48_89").is_some())
 }
 
 /// `MGC_NO_BEAM_UNLINK=1` restores the pre-dig lightning beam, which
@@ -1995,9 +1984,7 @@ pub(crate) fn no_mc1_rival_token_gate_live_purse() -> bool {
 /// this mechanic.
 pub(crate) fn no_mc1_castle_ball_stepback_moves_ball() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var_os("MGC_NO_MC1_CASTLE_BALL_STEPBACK_MOVES_BALL").is_some()
-    })
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_BALL_STEPBACK_MOVES_BALL").is_some())
 }
 
 /// `MGC_NO_MC1_ERUPTION_COUNTER_REREAD=1` restores the pre-dig
@@ -2394,8 +2381,7 @@ impl std::hash::Hash for DeflectDebit {
 
 /// See [`Gen::mc2_night_shade`] — a bool that hashes to NOTHING when
 /// false (hash-transparent).
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct NightShade(pub bool);
 
 impl std::hash::Hash for NightShade {
@@ -2413,8 +2399,7 @@ impl std::hash::Hash for NightShade {
 /// PRESENTATION-ONLY: never read by any sim rule, so the Hash is a
 /// no-op UNCONDITIONALLY — unlike the quiet counters above it stays
 /// silent even when populated.
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct SlotGens(pub Vec<u32>);
 
 impl std::hash::Hash for SlotGens {
@@ -2432,8 +2417,7 @@ impl std::hash::Hash for SlotGens {
 /// death's ejected ball gets its first magnet ch4 stamp one tick
 /// AFTER the teardown, mc1l0 t=1831→1832). Derived per tick —
 /// hash-silent like [`SlotGens`].
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct TickChain {
     pub list: Vec<u16>,
     /// THE SEVERED CHAIN (ledger §THE SEVERED BALL CHAIN): retail's
@@ -2471,8 +2455,7 @@ impl std::hash::Hash for TickChain {
 /// it was still state 120. Chain walks read LIVE fields off the
 /// members; only MEMBERSHIP (and order) is the snapshot. Derived per
 /// tick — hash-silent like [`TickChain`], never saved.
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct MobChains {
     pub list: Vec<Vec<u16>>,
     /// Per-model severed-chain cut, the [`TickChain::cut`] law: a
@@ -4109,10 +4092,7 @@ impl Gen {
             let (ax, ay) = if legacy {
                 ((cx + dx as i32) as i16, (cy + dy as i32) as i16)
             } else {
-                (
-                    (cx + dx as i8 as i32) as i16,
-                    (cy + dy as i8 as i32) as i16,
-                )
+                ((cx + dx as i8 as i32) as i16, (cy + dy as i8 as i32) as i16)
             };
             // ⭐ THE ABORT IS THE CELL'S RETURN, FULL STOP. Retail's
             // `sub_40D30_41070` (:51711-16) reads `sub_40A10_40D50`'s
@@ -7997,8 +7977,7 @@ impl Gen {
             eprintln!(
                 "[collapse] t={t} slot={i} row={} x0={x0} y0={y0} w={w} h={h} \
                  rand {probe_seed} -> {} draws={n}",
-                e.f71,
-                self.ent[i].rand
+                e.f71, self.ent[i].rand
             );
         }
         self.ent[i].flags |= 0x400;
@@ -8437,8 +8416,7 @@ impl Gen {
                 }
                 // `MGC_NO_MC1_ROW0_SHIM_32_39_40_48_89=1` — see
                 // [`mc1_no_row0_shim_32_39_40_48_89`].
-                if matches!(idx + 257, 32 | 39 | 40 | 48 | 89)
-                    && mc1_no_row0_shim_32_39_40_48_89()
+                if matches!(idx + 257, 32 | 39 | 40 | 48 | 89) && mc1_no_row0_shim_32_39_40_48_89()
                 {
                     return 0;
                 }
@@ -9810,13 +9788,7 @@ mod tests {
         let mut grid = vec![31u8; 1024];
         grid[15 * 32 + 15] = 0;
         let assets = FeatureAssets::parse(&grid, &tab, &dat).unwrap();
-        let mut g = Gen::new(
-            flat_land(10),
-            assets,
-            1,
-            ChassisParams::MC1,
-            VerbSet::MC1,
-        );
+        let mut g = Gen::new(flat_land(10), assets, 1, ChassisParams::MC1, VerbSet::MC1);
         // The NE and SE corners of the checked cell's quad start high;
         // only the NE one is raised by this tick.
         g.t.height[tile(16, 15)] = 14;
@@ -9964,13 +9936,7 @@ mod tests {
 
         // 4. THE PAINTER ITSELF, over mc1l6's own site and course:
         //    18 work ticks converge every cell on the SHIPPED goal.
-        let mut g = Gen::new(
-            flat_land(60),
-            assets,
-            1,
-            ChassisParams::MC1,
-            VerbSet::MC1,
-        );
+        let mut g = Gen::new(flat_land(60), assets, 1, ChassisParams::MC1, VerbSet::MC1);
         let i = g.new_event().unwrap();
         {
             let e = &mut g.ent[i];

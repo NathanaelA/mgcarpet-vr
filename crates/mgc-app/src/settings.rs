@@ -1929,9 +1929,7 @@ pub fn registry() -> Vec<Spec> {
                    that spell can be picked up again. Only MC2's undead \
                    wraith, the one designed theft, still takes a spell.",
             ctl: Ctl::Toggle {
-                set: |c, v| {
-                    c.gameplay.patches.no_spell_loss = crate::config::PatchArm::from_on(v)
-                },
+                set: |c, v| c.gameplay.patches.no_spell_loss = crate::config::PatchArm::from_on(v),
                 descs: [
                     "Death and stale handles can eat spells, as retail.",
                     "The spellbook is permanent; death drops cosmetic jars (default).",

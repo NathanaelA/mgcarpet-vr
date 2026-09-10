@@ -525,10 +525,7 @@ impl Gen {
                                     let e = &self.ent[j];
                                     e.class64 == 3 && e.model65 == 0
                                 };
-                                let deep_sink = BEHAVIOR
-                                    [self.ent[j].row156 as usize]
-                                    .v_14
-                                    < -64;
+                                let deep_sink = BEHAVIOR[self.ent[j].row156 as usize].v_14 < -64;
                                 if !wizard && deep_sink && flood_ground_snap_law() {
                                     pos.2 = ground as i16;
                                 } else {

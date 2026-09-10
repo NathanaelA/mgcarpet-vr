@@ -866,7 +866,14 @@ impl UiAssets {
     /// sprite widths): every sub-panel occupies EXACTLY one 128×44
     /// section. Oversize art is cropped to it, undersize art is
     /// stretched to it; the section grid never moves.
-    fn panel_quad_tint(&self, id: usize, x: f32, y: f32, scale: f32, tint: [f32; 4]) -> Option<UiQuad> {
+    fn panel_quad_tint(
+        &self,
+        id: usize,
+        x: f32,
+        y: f32,
+        scale: f32,
+        tint: [f32; 4],
+    ) -> Option<UiQuad> {
         let (sx, sy, w, h) = self.sprite_rects.get(id).copied().flatten()?;
         if w == 0 || h == 0 {
             return None;
@@ -1680,7 +1687,15 @@ impl PanelFrame {
     }
 }
 
-fn bar(quads: &mut Vec<UiQuad>, pf: &PanelFrame, x: f32, y: f32, h: f32, frac: f32, color: [f32; 4]) {
+fn bar(
+    quads: &mut Vec<UiQuad>,
+    pf: &PanelFrame,
+    x: f32,
+    y: f32,
+    h: f32,
+    frac: f32,
+    color: [f32; 4],
+) {
     let fill = (BAR_W * frac.clamp(0.0, 1.0)).max(0.0);
     if fill >= 2.0 {
         quads.push(solid(pf.rect(x, y, fill, h), color));
@@ -3141,7 +3156,11 @@ mod marker_halo_tests {
         assert_eq!(marker_glyph_color(&[]), [0.0; 3]);
         // …and the dark bones take a white ring.
         let bones = marker_glyph_color(&[[60, 40, 20, 255]]);
-        assert_eq!(mgc_render::halo_color(bones), [1.0; 3], "white under dark bones");
+        assert_eq!(
+            mgc_render::halo_color(bones),
+            [1.0; 3],
+            "white under dark bones"
+        );
     }
 }
 
@@ -3287,13 +3306,29 @@ mod tests {
                 // The fill's first and last pixels sit on the recess's
                 // first and last columns (58 and 121), and the pixels
                 // just outside it on the border columns (57 and 122).
-                assert_eq!(shows(sprite[0], sx, l), 58.0, "first fill px, s={s} ox={ox}");
-                assert_eq!(shows(sprite[0], sx, l - 1.0), 57.0, "px before, s={s} ox={ox}");
-                assert_eq!(shows(sprite[0], sx, r - 1.0), 121.0, "last fill px, s={s} ox={ox}");
+                assert_eq!(
+                    shows(sprite[0], sx, l),
+                    58.0,
+                    "first fill px, s={s} ox={ox}"
+                );
+                assert_eq!(
+                    shows(sprite[0], sx, l - 1.0),
+                    57.0,
+                    "px before, s={s} ox={ox}"
+                );
+                assert_eq!(
+                    shows(sprite[0], sx, r - 1.0),
+                    121.0,
+                    "last fill px, s={s} ox={ox}"
+                );
                 assert_eq!(shows(sprite[0], sx, r), 122.0, "px after, s={s} ox={ox}");
                 let (t, b) = (full[1], full[1] + full[3]);
                 assert_eq!(shows(sprite[1], sy, t), 26.0, "top row, s={s} ox={ox}");
-                assert_eq!(shows(sprite[1], sy, b - 1.0), 35.0, "bottom row, s={s} ox={ox}");
+                assert_eq!(
+                    shows(sprite[1], sy, b - 1.0),
+                    35.0,
+                    "bottom row, s={s} ox={ox}"
+                );
             }
         }
         // The discriminating cases, spelled out. At the "nice" scales

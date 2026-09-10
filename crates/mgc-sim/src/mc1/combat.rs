@@ -28,8 +28,7 @@
 //!   flag yet (OPEN: wizard shields are the spell track).
 
 use crate::engine::features::{
-    Ent, Gen, lcg32, no_mc1_castle_ball_stepback_moves_ball,
-    no_mc1_eruption_counter_reread, tile,
+    Ent, Gen, lcg32, no_mc1_castle_ball_stepback_moves_ball, no_mc1_eruption_counter_reread, tile,
 };
 use crate::mc1::behavior::BEHAVIOR;
 use crate::mc1::mobs::{MC1_MISS_STAMP, MobCtx, PLAYER_TARGET};
@@ -917,13 +916,11 @@ impl Gen {
             // (8 → 7); the port billed the human, and
             // `mc2_blast25_tick`'s `hits != 0 ⇒ act_life = 0` killed
             // the burst on its first tick.
-            let player_in_window = no_mc2_area_window()
-                || no_mc2_area_window_ch34()
-                || {
-                    let (ptx, pty) = ((ctx.px >> 8) as u8, (ctx.py >> 8) as u8);
-                    (-r..=r).any(|dx| (cx + dx) as u8 == ptx)
-                        && (-r..=r).any(|dy| (cy + dy) as u8 == pty)
-                };
+            let player_in_window = no_mc2_area_window() || no_mc2_area_window_ch34() || {
+                let (ptx, pty) = ((ctx.px >> 8) as u8, (ctx.py >> 8) as u8);
+                (-r..=r).any(|dx| (cx + dx) as u8 == ptx)
+                    && (-r..=r).any(|dy| (cy + dy) as u8 == pty)
+            };
             if id != PLAYER_TARGET
                 && player_in_window
                 && self.player_overlap(i, ctx)
@@ -1979,8 +1976,7 @@ impl Gen {
             && matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2)
             && c.id24 as usize != j
             && (matches!((c.class64, c.model65), (15, _) | (10, 42) | (10, 57))
-                || ((c.class64, c.model65) == (10, 78)
-                    && !crate::mc2::proj::no_mine_swallow()))
+                || ((c.class64, c.model65) == (10, 78) && !crate::mc2::proj::no_mine_swallow()))
         {
             return j as u16;
         }
@@ -2079,9 +2075,7 @@ impl Gen {
                 // chain tail, so this fires on the terminating j == 0
                 // pass). A seat that no longer names a member of this
                 // chain falls through to the tail arm below.
-                if seat_here
-                    && j == self.player_chain.next as usize
-                    && self.player_overlap(i, ctx)
+                if seat_here && j == self.player_chain.next as usize && self.player_overlap(i, ctx)
                 {
                     return Some(MailTarget::Player);
                 }
@@ -2125,10 +2119,7 @@ impl Gen {
                 }
                 j = c.next20 as usize;
             }
-            if player_here
-                && (seat_here || player_cell_tail)
-                && self.player_overlap(i, ctx)
-            {
+            if player_here && (seat_here || player_cell_tail) && self.player_overlap(i, ctx) {
                 return Some(MailTarget::Player);
             }
         }
@@ -7317,14 +7308,7 @@ impl Gen {
     // Four arms resolve to `oi` on purpose: each is a separate retail
     // branch with its own EF citation, kept one-to-one.
     #[allow(clippy::if_same_then_else)]
-    fn mc2_ball_owner_contest(
-        &self,
-        oi: u16,
-        oj: u16,
-        fi: i32,
-        fj: i32,
-        ctx: &MobCtx,
-    ) -> u16 {
+    fn mc2_ball_owner_contest(&self, oi: u16, oj: u16, fi: i32, fj: i32, ctx: &MobCtx) -> u16 {
         if no_mc2_ball_owner_ladder() {
             return if fj > fi { oj } else { oi };
         }
@@ -7501,8 +7485,7 @@ impl Gen {
                 // the mana … undug, no corpus row." The row has
                 // arrived. The MC2 twin `sub_10A50` (`NETHERW.EXE`
                 // `0x352D9..0x3532B`) has no flags test either.
-                if j != i && admits(c) && (!no_partner_softkill_fix() || c.flags & 0x400 == 0)
-                {
+                if j != i && admits(c) && (!no_partner_softkill_fix() || c.flags & 0x400 == 0) {
                     out.push(j);
                 }
                 j = next;
@@ -8634,7 +8617,6 @@ pub(crate) fn global_draw(rand: &mut u32) -> u32 {
     lcg32(rand)
 }
 
-
 /// Law W5's other three call paths — `spreader_tick`, `napalm_tick`
 /// and `napalm_tick_hw`. `blast_ring_tick` is corpus-pinned by
 /// `conformance/fixtures/mc1l37/a-sprayer-seized-by-its-own-child-reads-live-operands.mgcr`
@@ -8721,7 +8703,9 @@ mod ring_seizure_tests {
         dummies: usize,
     ) -> (Gen, usize, Vec<usize>) {
         let mut g = flat_gen(rings, verbs);
-        let s = g.spawn_effect(model, 1000, 1000, 100).expect("sprayer slot");
+        let s = g
+            .spawn_effect(model, 1000, 1000, 100)
+            .expect("sprayer slot");
         g.ent[s].id24 = OWNER;
         g.ent[s].f30 = AIM;
         g.ent[s].act_life = 5;
@@ -8882,7 +8866,8 @@ mod ring_seizure_tests {
              persistent wave-0 patch life"
         );
         assert_eq!(
-            g.ent[members[0]].f46, 7 * 128,
+            g.ent[members[0]].f46,
+            7 * 128,
             "later members ride the alias's +26 (the flame ctor's 7), not wave 2"
         );
         assert_eq!(

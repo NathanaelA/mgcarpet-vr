@@ -742,7 +742,13 @@ mod tests {
     fn square_i16(frames: usize) -> Arc<Vec<i16>> {
         Arc::new(
             (0..frames * 2)
-                .map(|i| if ((i / 2) / 20) % 2 == 0 { 20000i16 } else { -20000 })
+                .map(|i| {
+                    if ((i / 2) / 20) % 2 == 0 {
+                        20000i16
+                    } else {
+                        -20000
+                    }
+                })
                 .collect(),
         )
     }

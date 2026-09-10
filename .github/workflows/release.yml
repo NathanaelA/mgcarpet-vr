@@ -28,6 +28,18 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+          # macOS: ONE universal binary (Apple Silicon + Intel) built on
+          # the Apple-Silicon runner — Rust cross-compiles between the
+          # two Apple targets on the same machine, `lipo` joins them.
+          # UNTESTED ON HARDWARE (no Mac among the maintainers): CI
+          # compiles and unit-tests on macos-latest, but nobody has
+          # run the game there. The archive is unsigned and
+          # un-notarised, so Gatekeeper quarantines it — the README's
+          # quickstart carries the one-line `xattr` release.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            extra_target: x86_64-apple-darwin
+            artifact: universal-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -42,30 +54,37 @@ jobs:
       # ⚠ Must equal rust-toolchain.toml's `channel` and ci.yml's.
       - uses: dtolnay/rust-toolchain@1.96.1
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target }}${{ matrix.extra_target && format(',{0}', matrix.extra_target) || '' }}
       - uses: Swatinem/rust-cache@v2
       - name: Linux build dependencies (ALSA headers for cpal)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p mgc-app -p mgc-import
+      - name: Build (second Apple architecture)
+        if: matrix.extra_target
+        run: cargo build --release --target ${{ matrix.extra_target }} -p mgc-app -p mgc-import
       - name: Package
         shell: bash
         run: |
-          name="mgcarpet-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="mgcarpet-${GITHUB_REF_NAME}-${{ matrix.artifact || matrix.target }}"
           mkdir -p "dist/$name"
           bin="target/${{ matrix.target }}/release"
           # mgcarpet = the game; magic-carpet-* = the double-clickable
           # campaign launchers (each just starts mgcarpet --campaign
           # from its own folder — no command line needed).
+          bins="mgcarpet mgc-import magic-carpet-1 magic-carpet-hidden-worlds magic-carpet-2"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp "$bin/mgcarpet.exe" "$bin/mgc-import.exe" \
-               "$bin/magic-carpet-1.exe" "$bin/magic-carpet-hidden-worlds.exe" \
-               "$bin/magic-carpet-2.exe" "dist/$name/"
+            for b in $bins; do cp "$bin/$b.exe" "dist/$name/"; done
+          elif [[ -n "${{ matrix.extra_target }}" ]]; then
+            # Universal binary: both Apple slices joined per executable.
+            bin2="target/${{ matrix.extra_target }}/release"
+            for b in $bins; do
+              lipo -create -output "dist/$name/$b" "$bin/$b" "$bin2/$b"
+              lipo -info "dist/$name/$b"
+            done
           else
-            cp "$bin/mgcarpet" "$bin/mgc-import" \
-               "$bin/magic-carpet-1" "$bin/magic-carpet-hidden-worlds" \
-               "$bin/magic-carpet-2" "dist/$name/"
+            for b in $bins; do cp "$bin/$b" "dist/$name/"; done
           fi
           cp README.md LICENSE "dist/$name/"
           # The GM music soundfont + its license, committed under
@@ -94,7 +113,7 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: mgcarpet-${{ matrix.target }}
+          name: mgcarpet-${{ matrix.artifact || matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.zip

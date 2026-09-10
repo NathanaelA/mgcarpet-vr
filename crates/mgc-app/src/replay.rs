@@ -1664,8 +1664,7 @@ mod tests {
         // ...and a full 8-wizard table: the import seats every rival
         // slot (`rival_ents`/`castle_reg`), where the paused-turn
         // stub only ever needed the local one.
-        pst.wizards
-            .resize(8, mgcr::RetailWizardMc1::default());
+        pst.wizards.resize(8, mgcr::RetailWizardMc1::default());
         pst.ents[3].class64 = 3;
         pst.ents[3].model65 = 0;
         pst.ents[3].f63 = 7;
@@ -1745,10 +1744,7 @@ mod tests {
             "⚠ REVERSION PROBE: moving this poll back into a caller's              loop makes the resync land a whole FRAME late at game              speeds above 1x — the exact shape of the t=8592 bug"
         );
         assert!(
-            !sim.world
-                .as_mut()
-                .expect("stub world")
-                .take_restart(),
+            !sim.world.as_mut().expect("stub world").take_restart(),
             "and it CONSUMED the signal — a second arm would re-anchor              a boundary that already resynced"
         );
     }
@@ -1775,10 +1771,7 @@ mod tests {
             .debug_signal_restart();
         let _ = d.next(&mut sim);
         assert!(
-            sim.world
-                .as_mut()
-                .expect("stub world")
-                .take_restart(),
+            sim.world.as_mut().expect("stub world").take_restart(),
             "a port take's restart belongs to `App::restart_level`"
         );
     }

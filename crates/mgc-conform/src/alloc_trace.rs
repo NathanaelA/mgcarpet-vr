@@ -43,7 +43,11 @@ impl AllocTrace {
         for (name, want, got) in [
             (
                 "free",
-                st.free_stack.iter().copied().filter(keep).collect::<Vec<_>>(),
+                st.free_stack
+                    .iter()
+                    .copied()
+                    .filter(keep)
+                    .collect::<Vec<_>>(),
                 pf.iter().copied().filter(keep).collect::<Vec<_>>(),
             ),
             (

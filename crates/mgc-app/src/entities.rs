@@ -2860,8 +2860,10 @@ mod tests {
 
         // Stamps: the miniature keyed by type row, gated on the
         // toggle, outranked by the debug spell icon.
-        let mini = mgc_render::MapStamp::new(0.0, 0.0, 12, 12, [0.0, 400.0, 24.0, 24.0], [0.5, 1.0]);
-        let spell_icon = mgc_render::MapStamp::new(0.0, 0.0, 8, 8, [64.0, 0.0, 8.0, 8.0], [0.5, 1.0]);
+        let mini =
+            mgc_render::MapStamp::new(0.0, 0.0, 12, 12, [0.0, 400.0, 24.0, 24.0], [0.5, 1.0]);
+        let spell_icon =
+            mgc_render::MapStamp::new(0.0, 0.0, 8, 8, [64.0, 0.0, 8.0, 8.0], [0.5, 1.0]);
         let mut icons = MapIcons::default();
         icons.jar_icons.insert(42, mini);
         icons.static_icons.insert(7, mini);
@@ -2959,7 +2961,12 @@ mod tests {
         assert!(mc1.iter().all(|b| !b.conceal), "MC1 never conceals");
     }
 
-    fn rival(slot: u8, name: &'static str, invisible: bool, metamorphed: bool) -> mgc_sim::engine::world::RivalView {
+    fn rival(
+        slot: u8,
+        name: &'static str,
+        invisible: bool,
+        metamorphed: bool,
+    ) -> mgc_sim::engine::world::RivalView {
         use mgc_sim::engine::world::RivalView;
         RivalView {
             slot,
@@ -2984,7 +2991,14 @@ mod tests {
                 .map(|b| {
                     b.is_ascii_uppercase().then(|| {
                         (
-                            mgc_render::MapStamp::new(0.0, 0.0, 4, 7, [b as f32, 0.0, 4.0, 7.0], [0.0, 0.0]),
+                            mgc_render::MapStamp::new(
+                                0.0,
+                                0.0,
+                                4,
+                                7,
+                                [b as f32, 0.0, 4.0, 7.0],
+                                [0.0, 0.0],
+                            ),
                             4.0,
                         )
                     })
@@ -3024,7 +3038,9 @@ mod tests {
         let mut dead = rival(4, "GH", false, false);
         dead.alive = false;
         assert_eq!(
-            rival_reveals(GameId::Mc1, &[dead], Some(0), Mc2MapEnv::Day, &pal, &icons).1.len(),
+            rival_reveals(GameId::Mc1, &[dead], Some(0), Mc2MapEnv::Day, &pal, &icons)
+                .1
+                .len(),
             0
         );
     }
@@ -3047,17 +3063,26 @@ mod tests {
             assert_eq!((st.x, st.z), (10.0, 20.0));
             assert_eq!(st.offset, [2.0 + 4.0 * k as f32, 0.0]);
             assert_eq!(st.uv[0], b"ABC"[k] as f32);
-            assert!(st.tint[0] > 0.99 && st.tint[1] < 0.01, "MC1 tint = the odd team entry");
+            assert!(
+                st.tint[0] > 0.99 && st.tint[1] < 0.01,
+                "MC1 tint = the odd team entry"
+            );
         }
         let (d2, s2) = rival_reveals(GameId::Mc2, &r, Some(0), Mc2MapEnv::Day, &pal, &icons);
         assert_eq!(s2[0].offset, [4.0, 0.0]);
-        assert!(s2[0].tint[1] > 0.99 && s2[0].tint[0] < 0.01, "MC2 tint = the bright entry");
+        assert!(
+            s2[0].tint[1] > 0.99 && s2[0].tint[0] < 0.01,
+            "MC2 tint = the bright entry"
+        );
         assert_eq!((d2[0].color, d2[0].size), (MC2_TEAM_DAY[2].0, 1));
         // A byte the font lacks advances by the fallback width.
         let r = [rival(2, "A-B", false, false)];
         let (_, s3) = rival_reveals(GameId::Mc1, &r, Some(0), Mc2MapEnv::Day, &pal, &icons);
         assert_eq!(s3.len(), 2);
-        assert_eq!(s3[1].offset[0], 2.0 + 4.0 + crate::ui::GLYPH_FALLBACK_ADVANCE);
+        assert_eq!(
+            s3[1].offset[0],
+            2.0 + 4.0 + crate::ui::GLYPH_FALLBACK_ADVANCE
+        );
     }
 
     /// The rival tag chrome: MC2 resolves the retail bldgprmbuffer

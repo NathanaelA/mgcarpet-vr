@@ -349,9 +349,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     // pst→st names the spell wizard `w` cast at
                     // pt+1 — the decision the picker took at pt.
                     if crt_trace() {
-                        for (w, (a, b)) in
-                            pst.wizards.iter().zip(&st.wizards).enumerate().take(8)
-                        {
+                        for (w, (a, b)) in pst.wizards.iter().zip(&st.wizards).enumerate().take(8) {
                             for s in 0..24 {
                                 if b.cooldown[s] > a.cooldown[s] {
                                     eprintln!(

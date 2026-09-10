@@ -1181,7 +1181,10 @@ impl Gen {
         // absence — and the lightning walk `sub_66750` (EF:58409)
         // calls it as a bare statement and IGNORES the verdict, so the
         // deferred beam keeps its impact too.
-        if !matches!(act, 1 | 18 | 30) && !self.mc2_beam_defer.armed && self.mc2_mine_swallow(i, victim) {
+        if !matches!(act, 1 | 18 | 30)
+            && !self.mc2_beam_defer.armed
+            && self.mc2_mine_swallow(i, victim)
+        {
             self.ent[i].flags |= 0x400; // DisableEntityDrawing04_57F10
             return;
         }
@@ -1961,7 +1964,11 @@ impl Gen {
                     0 => (0u32, 0i32),
                     crate::mc1::mobs::PLAYER_TARGET => {
                         let f = if self.player_rebound { 0x8000 } else { 0 }
-                            | if self.mc2_rebound_precise.0 != 0 { 0x10 } else { 0 };
+                            | if self.mc2_rebound_precise.0 != 0 {
+                                0x10
+                            } else {
+                                0
+                            };
                         (f, ctx.pmana.min(i32::MAX as u32) as i32)
                     }
                     j if (self.ent[j as usize].class64 == 3) => {
@@ -2760,7 +2767,10 @@ impl Gen {
                 let f36 = Self::pitch_toward(e.z, tz, dh);
                 let row = &BEHAVIOR[e.row156 as usize];
                 let (cy, cp) = (row.v_2, row.v_6);
-                if std::env::var("MGC_H1_TRACE").ok().is_some_and(|v| v == i.to_string()) {
+                if std::env::var("MGC_H1_TRACE")
+                    .ok()
+                    .is_some_and(|v| v == i.to_string())
+                {
                     let e = &self.ent[i];
                     eprintln!(
                         "H1 slot={i} tgt={} self=({},{},{}) t=({tx},{ty},{tz}) dh={dh} f34={f34} f36={f36} cy={cy} cp={cp} pitch={pitch} row={}",
@@ -3701,10 +3711,7 @@ impl Gen {
                     // retail — finding no eligible candidate at all —
                     // returns 0 and fires straight down the caster's
                     // own post-tick pose (209 / 81).
-                    if charm_eligible
-                        && !no_mc2_aim_charm_filter()
-                        && !self.mc2_charm_eligible(v)
-                    {
+                    if charm_eligible && !no_mc2_aim_charm_filter() && !self.mc2_charm_eligible(v) {
                         continue;
                     }
                     if charm_eligible && no_mc2_aim_charm_filter() {
@@ -4543,7 +4550,9 @@ mod debuff_knock_tests {
     #[test]
     fn an_action_18_bolt_that_struck_dies_even_on_a_dry_pool() {
         let mut g = flat_gen();
-        let victim = g.spawn_mana_ball(40 * 256, 40 * 256, 400).expect("the sphere");
+        let victim = g
+            .spawn_mana_ball(40 * 256, 40 * 256, 400)
+            .expect("the sphere");
         let bolt = g.new_event().expect("bolt slot");
         {
             let e = &mut g.ent[bolt];
@@ -4662,11 +4671,7 @@ mod debuff_knock_tests {
             e.z = 400;
         }
         g.mc2_proj_impact(bolt2, mine as u16, &ctx(), None);
-        assert_eq!(
-            count(&g, (10, 17)),
-            1,
-            "a disarmed mine no longer swallows"
-        );
+        assert_eq!(count(&g, (10, 17)), 1, "a disarmed mine no longer swallows");
     }
 
     /// ⭐⭐⭐ THE LADDER'S LOW END IS `0 IN, 1 OUT` — a plain (9,0)

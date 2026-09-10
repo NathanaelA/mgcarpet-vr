@@ -648,8 +648,7 @@ impl AiState {
 /// wizard's position/yaw/life/speed live on its pool entity (class 3
 /// model 1); carried mana rides the entity's f140 mirror for the
 /// census.
-#[derive(Hash)]
-#[derive(Clone)]
+#[derive(Hash, Clone)]
 pub(crate) struct Rival {
     /// Player slot (1..=7); slot 0 = the human, never a Rival.
     pub slot: u8,
@@ -1171,10 +1170,7 @@ impl World {
             // arm (:55621-22) runs `sub_463B0` — the watch aim. The
             // rest of that handler (the respawn countdown, the
             // castle-bound release) is what elimination takes away.
-            if self.g.ent[i].tick70 == 3
-                && husk_watch_gate()
-                && self.rivals[ri].human_driven
-            {
+            if self.g.ent[i].tick70 == 3 && husk_watch_gate() && self.rivals[ri].human_driven {
                 self.rival_watch_track(i);
             }
             return;
@@ -2663,9 +2659,7 @@ impl World {
         if live_purse_legacy() {
             return !full || r.mana >= self.spells()[spell].possess_mana;
         }
-        !full
-            || self.g.ent[i].f140
-                >= self.spells()[spell].possess_mana.min(i32::MAX as u32) as i32
+        !full || self.g.ent[i].f140 >= self.spells()[spell].possess_mana.min(i32::MAX as u32) as i32
     }
 
     /// Buff flags derive from the manifestations' burst counters
@@ -3194,8 +3188,7 @@ impl World {
         };
         if e.class64 == 12
             || crate::engine::features::no_mc1_token_raw48()
-            || (e.class64 == 0
-                && crate::engine::features::no_mc1_token_raw48_native())
+            || (e.class64 == 0 && crate::engine::features::no_mc1_token_raw48_native())
         {
             // Class 12 — a live manifestation: `f26` IS the `+48`
             // home and the one the native token machine keeps up to
@@ -3902,8 +3895,8 @@ impl World {
             // same id test — a human-owned manifestation (a BALLOON
             // stamps `+24` with the caster's carpet id) is not guarded
             // by its own caster. See `ball_guard_excludes_own_id`.
-            let human_is_own_id = bid == PLAYER_TARGET
-                || (self.mc1_carpet_slot != 0 && bid == self.mc1_carpet_slot);
+            let human_is_own_id =
+                bid == PLAYER_TARGET || (self.mc1_carpet_slot != 0 && bid == self.mc1_carpet_slot);
             let human_guard = if ball_guard_excludes_own_id() && human_is_own_id {
                 None
             } else if ball_guard_is_tick_top() {
@@ -4215,10 +4208,11 @@ impl World {
                         // low-memory constant 0 — the human's row.
                         let target = self.rivals[ri].target;
                         let model_only = war_clear_is_model_only();
-                        let hit = target == PLAYER_TARGET
-                            || self.g.ent.get(target as usize).is_some_and(|e| {
-                                e.model65 <= 1 && (model_only || e.class64 == 3)
-                            });
+                        let hit =
+                            target == PLAYER_TARGET
+                                || self.g.ent.get(target as usize).is_some_and(|e| {
+                                    e.model65 <= 1 && (model_only || e.class64 == 3)
+                                });
                         if hit {
                             // A carpet answers with its own wizext's
                             // `+48`; a record with no wizext reads
@@ -6120,7 +6114,10 @@ mod tests {
             .find(|&p| w.g.ent[p].class64 == 9 && w.g.ent[p].model65 == 3)
             .expect("the meteor arm mints its (9,3) bolt");
         assert_eq!(w.g.ent[bolt].f26, 42, "the meteor arm stopped banking");
-        assert_eq!(w.wiz_charge[ws], 0, "the meteor arm left the meter standing");
+        assert_eq!(
+            w.wiz_charge[ws], 0,
+            "the meteor arm left the meter standing"
+        );
 
         // (b) ⭐ THE WITNESS — spell 15, the zigzag lightning.
         // `sub_57470_579A0` (:65806-61) spawns `sub_373F0_377B0(
@@ -6191,8 +6188,7 @@ mod tests {
             w.rivals[ri].mana
         );
         assert_eq!(
-            w.g.ent[i].f140,
-            w.rivals[ri].mana as i32,
+            w.g.ent[i].f140, w.rivals[ri].mana as i32,
             "the +140 purse mirror clamped a wrapped word — retail's \
              :55703 debits the record's own +140 RAW"
         );
@@ -6849,7 +6845,9 @@ mod tests {
         };
         w.rivals[ri].hate[0] = 60_000;
         // A hated human-owned keep, well inside the rival's raid range.
-        let c = w.g.spawn_fireball(rx.wrapping_add(3_000), ry, rz).expect("castle slot");
+        let c =
+            w.g.spawn_fireball(rx.wrapping_add(3_000), ry, rz)
+                .expect("castle slot");
         {
             let e = &mut w.g.ent[c];
             e.class64 = 3;
@@ -6920,10 +6918,9 @@ mod tests {
         }
         let (bx, by) = (w.g.ent[i].x.wrapping_add(1_000), w.g.ent[i].y);
         w.g.move_relink(b, bx, by, rz);
-        let far = w
-            .g
-            .spawn_fireball(bx.wrapping_add(20_000), by, rz)
-            .expect("carpet slot");
+        let far =
+            w.g.spawn_fireball(bx.wrapping_add(20_000), by, rz)
+                .expect("carpet slot");
         {
             let e = &mut w.g.ent[far];
             e.class64 = 3;
@@ -7847,8 +7844,7 @@ mod tests {
         );
         assert_eq!(w.g.ent[i].tick70, 2, "the intake killed it into the fall");
         assert_eq!(
-            w.g.ent[m].f26,
-            SPELLS[14].count as i16,
+            w.g.ent[m].f26, SPELLS[14].count as i16,
             "the burst is untouched — only the token's own tick spends it"
         );
         assert!(
@@ -7925,7 +7921,11 @@ mod tests {
         w.g.ent[head].class64 = 10;
         w.g.ent[head].model65 = 39;
         w.g.ent[head].f144 = me;
-        assert_eq!(w.g.ball_chain.visible_len(), 1, "the walk stops one node past the reuse");
+        assert_eq!(
+            w.g.ball_chain.visible_len(),
+            1,
+            "the walk stops one node past the reuse"
+        );
         // Non-vacuity: both survivors are still live, still the
         // rival's, and still perfectly good candidates — only the CUT
         // hides them, so a POOL scan takes all three.
@@ -8110,8 +8110,7 @@ mod tests {
         let r = &w.rivals[ri];
         assert_eq!(r.knock_mag, 0, "v_22 is cleared on every arm");
         assert_eq!(
-            r.hate,
-            [HATE_NEUTRAL; 8],
+            r.hate, [HATE_NEUTRAL; 8],
             "str_456[kx].var_u16_4 = 24607 on every arm"
         );
         if respawn_clear_list() {

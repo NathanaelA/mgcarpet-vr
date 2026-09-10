@@ -105,7 +105,18 @@ fn native_tornado_probe() {
         if t.class == 11 || (t.class == 10 && t.model == 22) {
             eprintln!(
                 "thing slot {} kind {:?} ({},{}) at ({},{}) dis_id {} swi_id {} swi_sz {} parent {} child {} par3 {:?}",
-                t.slot, t.kind, t.class, t.model, t.x, t.y, t.dis_id, t.swi_id, t.swi_sz, t.parent, t.child, t.par3
+                t.slot,
+                t.kind,
+                t.class,
+                t.model,
+                t.x,
+                t.y,
+                t.dis_id,
+                t.swi_id,
+                t.swi_sz,
+                t.parent,
+                t.child,
+                t.par3
             );
         }
     }
@@ -136,11 +147,20 @@ fn native_tornado_probe() {
         sim.sync_flyer_from_carpet();
         eprintln!("PARKED at {:?}", p);
     }
-    let forced: Option<u16> = std::env::var("PROBE_FORCE_TILES").ok().and_then(|v| v.parse().ok());
-    let ticks: u64 = std::env::var("PROBE_TICKS").ok().and_then(|v| v.parse().ok()).unwrap_or(400);
+    let forced: Option<u16> = std::env::var("PROBE_FORCE_TILES")
+        .ok()
+        .and_then(|v| v.parse().ok());
+    let ticks: u64 = std::env::var("PROBE_TICKS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
     let mut placed = false;
     let input = FlightInput {
-        thrust: if std::env::var_os("PROBE_ENHANCED").is_some() { 1.0 } else { 0.0 },
+        thrust: if std::env::var_os("PROBE_ENHANCED").is_some() {
+            1.0
+        } else {
+            0.0
+        },
         ..FlightInput::default()
     };
     for t in 0..ticks {
@@ -155,7 +175,10 @@ fn native_tornado_probe() {
             sim.carpet.yaw = 0;
             sim.sync_flyer_from_carpet();
             placed = true;
-            eprintln!("t={t} PLACED carpet at ({}, {}) next to head {:?}", sim.carpet.x, sim.carpet.y, h);
+            eprintln!(
+                "t={t} PLACED carpet at ({}, {}) next to head {:?}",
+                sim.carpet.x, sim.carpet.y, h
+            );
         }
         let c = sim.carpet;
         if hs.is_empty() && t % 20 != 0 {
@@ -164,7 +187,21 @@ fn native_tornado_probe() {
         let f = sim.flyer;
         eprintln!(
             "t={t} carpet ({}, {}, {}) yaw {} act {} tgt {} strafe {} roll_f {} | flyer ({:.1}, {:.1}, {:.1}) yaw {:.2} v ({:.2}, {:.2}) | heads {:?}",
-            c.x, c.y, c.z, c.yaw, c.act_speed, c.tgt_speed, c.strafe, c.roll_f, f.x, f.z, f.y, f.yaw, f.vx, f.vz, hs
+            c.x,
+            c.y,
+            c.z,
+            c.yaw,
+            c.act_speed,
+            c.tgt_speed,
+            c.strafe,
+            c.roll_f,
+            f.x,
+            f.z,
+            f.y,
+            f.yaw,
+            f.vx,
+            f.vz,
+            hs
         );
     }
 }

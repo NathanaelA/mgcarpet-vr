@@ -4634,10 +4634,7 @@ impl Gen {
                 // `sub_1A120` in the wrapper, so every non-lethal exit
                 // the core's damage prologue takes still reaches it.
                 // See [`Gen::militia_chase_wanted_tail`].
-                if (model, role) == (4, 2)
-                    && !no_hit_trailers()
-                    && !no_m4_chase_wanted_trailer()
-                {
+                if (model, role) == (4, 2) && !no_hit_trailers() && !no_m4_chase_wanted_trailer() {
                     self.militia_chase_wanted_tail(i, base);
                 }
                 return;

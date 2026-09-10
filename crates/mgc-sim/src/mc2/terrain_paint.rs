@@ -771,7 +771,14 @@ impl Gen {
             let step_x = dx / steps;
             let mut rem_x = dx - steps * step_x;
             for _ in 0..steps {
-                self.mc2_spawn_road_walker(px, py, x2, y2, if step_y >= 0 { 28 } else { 27 }, step_y + rem_y);
+                self.mc2_spawn_road_walker(
+                    px,
+                    py,
+                    x2,
+                    y2,
+                    if step_y >= 0 { 28 } else { 27 },
+                    step_y + rem_y,
+                );
                 self.mc2_road_strip_y(px as u8, py as u8, step_y, rem_y);
                 py += step_y + rem_y;
                 let adv_x = rem_x + step_x;
@@ -793,7 +800,14 @@ impl Gen {
                 self.mc2_spawn_road_walker(px, py, x2, y2, 29, adv_x);
                 self.mc2_road_strip_x(px as u8, py as u8, adv_x);
                 px += adv_x;
-                self.mc2_spawn_road_walker(px, py, x2, y2, if step_y >= 0 { 28 } else { 27 }, step_y + rem_y);
+                self.mc2_spawn_road_walker(
+                    px,
+                    py,
+                    x2,
+                    y2,
+                    if step_y >= 0 { 28 } else { 27 },
+                    step_y + rem_y,
+                );
                 self.mc2_road_strip_y(px as u8, py as u8, step_y, rem_y);
                 py += step_y + rem_y;
                 rem_x = 0;

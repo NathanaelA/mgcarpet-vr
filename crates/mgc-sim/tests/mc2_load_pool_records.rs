@@ -83,7 +83,11 @@ fn mc2_level_022_road_walkers_put_the_buildings_on_slots_184_down_to_59() {
     assert_eq!(slots.len(), 126, "the 126 load-time (10,45) buildings");
     let min = slots.iter().map(|s| s.0).min().unwrap();
     let max = slots.iter().map(|s| s.0).max().unwrap();
-    assert_eq!((min, max), (59, 184), "21 road legs = 184 walker records ahead of them");
+    assert_eq!(
+        (min, max),
+        (59, 184),
+        "21 road legs = 184 walker records ahead of them"
+    );
     // First THING (row 32 at (129,217)) → the HIGHEST slot; last THING
     // (row 26 at (83,2)) → the lowest: retail record 0, slots 184 / 59.
     let at = |tile: (u8, u8)| slots.iter().find(|s| s.1 == tile).map(|s| s.0);

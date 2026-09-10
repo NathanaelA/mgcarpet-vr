@@ -515,8 +515,7 @@ impl World {
         // and hands the chain back REVERSED. Walk THROUGH a
         // non-linkable record on both legs instead of stopping at it.
         // Shares MC2's kill switch; see [`chain_ghost_splice`].
-        let mc1_linkable =
-            |r: &RetailEntMc1| r.class64 != 0 && r.flags & 4 != 0;
+        let mc1_linkable = |r: &RetailEntMc1| r.class64 != 0 && r.flags & 4 != 0;
         let splice = chain_ghost_splice();
         let hop = |mut s: usize, back: bool| -> usize {
             let mut guard = 0usize;
@@ -596,10 +595,7 @@ impl World {
         // accepted only when it really shares his tile. 0 = tail.
         // See [`crate::engine::features::PlayerChain`].
         {
-            let cell = crate::engine::features::tile(
-                (carpet.x >> 8) as u8,
-                (carpet.y >> 8) as u8,
-            );
+            let cell = crate::engine::features::tile((carpet.x >> 8) as u8, (carpet.y >> 8) as u8);
             let succ = hop(carpet.next20 as usize, false);
             let next = if succ != 0
                 && succ < n
@@ -2152,10 +2148,7 @@ impl World {
                     // f46 holds @0x2A on the worm and @0x2C on the
                     // pyramid; @0x3D is dead on both.
                     None
-                } else if c == 5
-                    || (c == 10 && matches!(m, 45 | 78))
-                    || orb_breathe_at_3d(c, m)
-                {
+                } else if c == 5 || (c == 10 && matches!(m, 45 | 78)) || orb_breathe_at_3d(c, m) {
                     // ⭐ THE (10,78) MAGIC MINE JOINED 2026-09-04: its
                     // `@0x3D` is the LIVE SHOT COUNTER of a detonation
                     // burst — `sub_3A8B0` case 2 sizes it 6 or 1 from
@@ -4153,9 +4146,7 @@ fn mc2_applied_mana_delta(
             // ordering intact: the afford gate reads the purse BEFORE
             // the debit, exactly as it does at the token's own slot.
             delta = 0;
-        } else if v2 != 0
-            && !crate::mc2::cast::NO_MID_BURST_REGEN_PIN.contains(&spell)
-            && delta > 0
+        } else if v2 != 0 && !crate::mc2::cast::NO_MID_BURST_REGEN_PIN.contains(&spell) && delta > 0
         {
             // The mid-burst PIN. Spell 2 is exempt: the castle's
             // timer is an upgrade LOCK, so its body never reaches
@@ -4298,8 +4289,10 @@ pub(crate) fn mc2_piece_target96_lane() -> bool {
 /// the TIER INDEX and its port home is `f44` (`sub_3A8B0` case 0,
 /// NETHERW.EXE 0x5F2B4).
 pub(crate) fn c10_2a_in_f140(model: u8) -> bool {
-    matches!(model, 0 | 6 | 9 | 11 | 17 | 18 | 19 | 65 | 66 | 71 | 74 | 76 | 77)
-        || c10_amount_at_2a(model)
+    matches!(
+        model,
+        0 | 6 | 9 | 11 | 17 | 18 | 19 | 65 | 66 | 71 | 74 | 76 | 77
+    ) || c10_amount_at_2a(model)
         || (matches!(model, 1 | 15 | 22 | 25 | 67 | 75) && c10_field_home())
 }
 
@@ -5021,9 +5014,7 @@ pub(crate) fn import_ent_mc2(
         // `obs_project_mc2` reads it back from.
         id24: if r.owner28 != 0
             && !(r.class3f == 5 && r.model40 == 10)
-            && !(r.class3f == 5
-                && r.sv2 == 14
-                && !crate::mc2::mobs::no_mc2_alliance_parent_seat())
+            && !(r.class3f == 5 && r.sv2 == 14 && !crate::mc2::mobs::no_mc2_alliance_parent_seat())
         {
             tr(r.owner28)
         } else if r.f1a != 0 {
@@ -7923,37 +7914,55 @@ mod tests {
         // BELOW the carpet, mid-burst → the pin (mc2l3 t=9034-9035:
         // recorded 100, mana FLAT).
         let (st, ply) = burst_closure(167, carpet(100, 0), 109, tok(1, 2, 3, 100));
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]), 0);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            0
+        );
 
         // BELOW the carpet, FIRST tick → the recompute is wiped; the
         // debit itself is left to `World::mc2_same_frame_debit`, which
         // is what keeps the afford gate reading the pre-debit purse
         // (mc2l3 t=8445, the 40,000 Create Castle out of 41,359).
         let (st, ply) = burst_closure(167, carpet(1000, 0), 114, tok(2, 101, 101, 40000));
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]), 0);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            0
+        );
 
         // BELOW the carpet, the CASTLE's upgrade LOCK (timer parked,
         // not counting) → no pin at all: mc2l3 t=8446+ climbs +1000.
         let (st, ply) = burst_closure(167, carpet(1000, 0), 114, tok(2, 100, 101, 40000));
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]), 1000);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            1000
+        );
 
         // ABOVE the carpet → the record already holds the token's own
         // stamp; it is applied verbatim (mc2l24 slot 118 vs carpet
         // 116, recorded −100 then 0).
         let (st, ply) = burst_closure(116, carpet(-100, 0), 118, tok(1, 2, 3, 100));
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]), -100);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            -100
+        );
 
         // A DETACHED jar (the wraith steal's action 78) never reaches
         // `sub_68DE0`, so it pins nothing.
         let mut stolen = tok(1, 2, 3, 100);
         stolen.action45 = 78;
         let (st, ply) = burst_closure(167, carpet(100, 0), 109, stolen);
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]), 100);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            100
+        );
 
         // Action 12, the level-end sequence: the regen block is in the
         // action-0 body alone, so NOTHING is applied (mc2l3 t=22621+).
         let (st, ply) = burst_closure(167, carpet(100, 12), 109, tok(1, 0, 3, 100));
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]), 0);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            0
+        );
     }
 
     /// ⭐⭐⭐ **A REFUSED TOKEN TICK NEVER REACHES `sub_68DE0`, AND
@@ -7992,11 +8001,17 @@ mod tests {
         // collapses the window instead of calling `sub_68DE0`, and the
         // recomputed +100 is applied in full.
         let (st, ply) = burst_closure(116, carpet(100, 64), 6, tok(0, 5, 5, 100));
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]), 100);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            100
+        );
         // The same token one tick earlier, affordable: the first-tick
         // wipe stands (the port's own pass lands the debit).
         let (st, ply) = burst_closure(116, carpet(100, 292), 6, tok(0, 5, 5, 100));
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]), 0);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            0
+        );
 
         // mc2l24 t=40238: Shield III (spell 6, tier `life_0x1A == 1`)
         // on the LAST tick of a 301-tick window — `@0x2E` 1 → 0 before
@@ -8004,17 +8019,26 @@ mod tests {
         let mut t3 = tok(6, 1, 301, 0);
         t3.b46 = 2;
         let (st, ply) = burst_closure(116, carpet(345, 645_325), 40, t3);
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]), 345);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            345
+        );
         // …and one tick earlier it still pins (`@0x2E - 1 == 1`).
         let mut t3 = tok(6, 2, 301, 0);
         t3.b46 = 2;
         let (st, ply) = burst_closure(116, carpet(345, 645_325), 40, t3);
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]), 0);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            0
+        );
         // Shield I/II (`life_0x1A == 0`) keep the ordinary order: the
         // call comes FIRST, so the last tick still pins.
         let mut t1 = tok(6, 1, 101, 0);
         t1.b46 = 0;
         let (st, ply) = burst_closure(116, carpet(345, 645_325), 40, t1);
-        assert_eq!(mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]), 0);
+        assert_eq!(
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            0
+        );
     }
 }

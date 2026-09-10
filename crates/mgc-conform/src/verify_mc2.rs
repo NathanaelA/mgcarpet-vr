@@ -1180,7 +1180,10 @@ fn mc2_no_bump_action(class: u8, action: u8) -> bool {
         // comes back BYTE-IDENTICAL, so only mc2l22's `(10,77)` is
         // carrying debt.
         10 if no_bump_class10() => {
-            matches!(action, 0x27 | 0x2E | 0x2F | 0x31 | 0x32 | 0x3F | 0x52 | 0x54)
+            matches!(
+                action,
+                0x27 | 0x2E | 0x2F | 0x31 | 0x32 | 0x3F | 0x52 | 0x54
+            )
         }
         _ => false,
     }

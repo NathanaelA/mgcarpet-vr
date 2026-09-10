@@ -57,7 +57,10 @@ fn run(args: &Args) -> Result<(), String> {
     let mut rec = Recording::open(path)?;
     let mut timg = rec.header.channels.terrain.as_ref().map(TerrainImage::new);
     if !rec.skip_to(from, timg.as_mut())? {
-        return Err(format!("{}: no record at or after t={from}", path.display()));
+        return Err(format!(
+            "{}: no record at or after t={from}",
+            path.display()
+        ));
     }
 
     // Header: verbatim, plus provenance.
@@ -116,7 +119,8 @@ fn run(args: &Args) -> Result<(), String> {
                         serde_json::from_str(line).map_err(|e| format!("t={t}: {e}"))?;
                     let trec = TickRecord::from_value(&v)?;
                     if let Some(block) = &trec.terrain {
-                        img.apply(block).map_err(|e| format!("t={t}: terrain: {e}"))?;
+                        img.apply(block)
+                            .map_err(|e| format!("t={t}: terrain: {e}"))?;
                     }
                     let blob = img.base_blob().ok_or_else(|| {
                         format!(
@@ -152,7 +156,9 @@ fn run(args: &Args) -> Result<(), String> {
          terrain {}, ORIGINAL tick numbers kept",
         path.display(),
         out.display(),
-        args.to.map(|t| t.to_string()).unwrap_or_else(|| "END".to_string()),
+        args.to
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "END".to_string()),
         if rebased {
             "measured, re-based at first record"
         } else {

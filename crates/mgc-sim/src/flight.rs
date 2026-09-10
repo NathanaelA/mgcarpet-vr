@@ -336,7 +336,11 @@ pub fn mc1_duel_tail(
     let v22 = 3 * max_speed as i32 / 2;
     if v22 != 0 {
         let denom = 1024 / v22;
-        let mut v23 = if denom != 0 { (dist - hold as i32) / denom } else { 0 };
+        let mut v23 = if denom != 0 {
+            (dist - hold as i32) / denom
+        } else {
+            0
+        };
         v23 = v23.clamp(-v22, v22);
         let bearing = Gen::angle_between(spos.0, spos.1, vpos.0, vpos.1);
         Gen::polar_step(cand, bearing, aim_pitch, v23 as i16);

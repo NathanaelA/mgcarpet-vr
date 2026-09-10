@@ -1131,13 +1131,7 @@ fn load_level(
                     // (sync_world re-derives with the real flags; the
                     // wraith's unconditional concealment is in already).
                     entities::billboards_from_poses(
-                        game_id,
-                        &poses,
-                        dims,
-                        false,
-                        false,
-                        false,
-                        false,
+                        game_id, &poses, dims, false, false, false, false,
                     ),
                     // No dwelling is claimed at load time, so the
                     // owned-buildings highlight is vacuously off here
@@ -1995,9 +1989,10 @@ struct App {
 /// The frontend's (level-less) audio bundle: the game's own
 /// `assets/<game>-audio`, when baked.
 fn frontend_audio_dir(is_mc2: bool) -> Option<PathBuf> {
-    let d = get_baked_directory()
-        .join("assets")
-        .join(if is_mc2 { "mc2-audio" } else { "mc1-audio" });
+    let d =
+        get_baked_directory()
+            .join("assets")
+            .join(if is_mc2 { "mc2-audio" } else { "mc1-audio" });
     d.is_dir().then_some(d)
 }
 
@@ -2040,7 +2035,11 @@ fn audio_gains(cfg: &config::Config) -> (f32, f32, f32) {
     (
         if a.sound { a.sfx_volume } else { 0.0 },
         if a.music { a.music_volume } else { 0.0 },
-        if a.sound && a.speech { a.sfx_volume } else { 0.0 },
+        if a.sound && a.speech {
+            a.sfx_volume
+        } else {
+            0.0
+        },
     )
 }
 
@@ -8832,8 +8831,7 @@ fn run_map(
         let idle = mgc_sim::engine::world::PlayerCommand::default();
         for _ in 0..settle {
             let alt = w.ground_height_tiles(px, pz) + 2.0;
-            let pose =
-                mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+            let pose = mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
             w.tick(pose, idle);
         }
         if let (Some(shading), Some(angle)) =

@@ -303,24 +303,20 @@ pub(crate) const D8A2E_FRAMES: [u8; 38] = [
 /// Only SEVEN rows resolve to a count other than 1: 7, 222, 237 -> 16
 /// and 244, 332, 333, 334 -> 11.
 pub(crate) const MC2_SPRITE_DRAW_TYPE: [u8; 347] = [
-    20, 20, 17, 17, 17, 17, 17, 36, 21, 21, 21, 21, 21, 21, 21, 21, 21, 17, 21, 21,
-    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 0, 17, 17, 17, 0,
-    17, 21, 21, 0, 17, 21, 17, 17, 17, 17, 17, 21, 21, 21, 21, 21, 21, 21, 21, 21,
-    0, 0, 17, 17, 17, 0, 0, 21, 21, 21, 21, 21, 21, 21, 21, 17, 21, 1, 17, 0,
-    0, 0, 17, 0, 0, 17, 17, 17, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
-    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
-    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
-    21, 21, 21, 21, 21, 21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 19, 21, 21, 17, 17,
-    17, 20, 20, 19, 17, 17, 20, 17, 17, 21, 21, 21, 1, 21, 21, 21, 21, 20, 20, 20,
-    0, 20, 36, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 17, 16, 20, 20,
-    17, 20, 20, 17, 11, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
-    17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 0, 20, 0, 17, 17, 17, 17, 17, 17, 17,
-    1, 21, 1, 17, 1, 17, 17, 17, 17, 17, 17, 17, 17, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 0, 0, 17, 17, 0, 17, 21,
-    21, 21, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 11, 11, 11, 17, 17, 17, 0, 0,
-    21, 17, 17, 17, 17, 17, 0,
+    20, 20, 17, 17, 17, 17, 17, 36, 21, 21, 21, 21, 21, 21, 21, 21, 21, 17, 21, 21, 21, 21, 21, 21,
+    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 0, 17, 17, 17, 0, 17, 21, 21, 0, 17, 21, 17, 17,
+    17, 17, 17, 21, 21, 21, 21, 21, 21, 21, 21, 21, 0, 0, 17, 17, 17, 0, 0, 21, 21, 21, 21, 21, 21,
+    21, 21, 17, 21, 1, 17, 0, 0, 0, 17, 0, 0, 17, 17, 17, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
+    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
+    21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 19, 21, 21, 17, 17, 17,
+    20, 20, 19, 17, 17, 20, 17, 17, 21, 21, 21, 1, 21, 21, 21, 21, 20, 20, 20, 0, 20, 36, 0, 0, 0,
+    0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 17, 16, 20, 20, 17, 20, 20, 17, 11, 0, 17, 17, 17, 17, 17, 17,
+    17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 0, 20, 0, 17, 17, 17,
+    17, 17, 17, 17, 1, 21, 1, 17, 1, 17, 17, 17, 17, 17, 17, 17, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 17, 17, 17, 17, 17, 17, 17, 17, 0, 0, 17, 17, 0, 17, 21, 21, 21, 1, 1, 0, 0, 0, 0, 0, 0,
+    0, 0, 11, 11, 11, 17, 17, 17, 0, 0, 21, 17, 17, 17, 17, 17, 0,
 ];
 
 /// Retail's frame count for a particle-param row:
@@ -3205,10 +3201,8 @@ impl Gen {
                 // the pool — the pre-fix order, kept for native
                 // play (the painter is a row-0 no-op there anyway).
                 let human_in_walk = slot != 0;
-                let human_hit = !castle_only
-                    && alive
-                    && wd(pose.0, bx) < bw + pw
-                    && wd(pose.1, by) < bh + pw;
+                let human_hit =
+                    !castle_only && alive && wd(pose.0, bx) < bw + pw && wd(pose.1, by) < bh + pw;
                 let n = self.ent.len().max(slot + 1);
                 for w in 1..n {
                     if human_in_walk && w == slot {
@@ -3285,11 +3279,8 @@ impl Gen {
                         // makes of such a row — see the frame law in
                         // that tick. Same class as the round-99 human
                         // arm (`MGC_NO_MC2_PAINTER_ROW_VERBATIM`).
-                        let (dest, row, own) = (
-                            (e.dest_x, e.dest_y, e.site_z),
-                            e.f26 as u8,
-                            e.id24,
-                        );
+                        let (dest, row, own) =
+                            ((e.dest_x, e.dest_y, e.site_z), e.f26 as u8, e.id24);
                         if self
                             .mc2_spawn_wizard_painter(dest, row, own, w as u16)
                             .is_some()
@@ -3414,7 +3405,12 @@ impl Gen {
     /// here) and 332 of level 5's 820 cells — mc2l22's four rival
     /// castles and mc2l4/mc2l6's level-1 stumps were absent from the
     /// generated terrain while the takes certified.
-    pub(crate) fn mc2_stamp_build_row_instant(&mut self, pos: (u16, u16, i16), row: u8, owner: u16) {
+    pub(crate) fn mc2_stamp_build_row_instant(
+        &mut self,
+        pos: (u16, u16, i16),
+        row: u8,
+        owner: u16,
+    ) {
         let Some(def) = self.assets.build_tab.get(row as usize).copied() else {
             return;
         };
@@ -3431,7 +3427,11 @@ impl Gen {
         if std::env::var_os("MGC_SCULPT_TRACE").is_some() {
             let pads = cells.chunks(2).filter(|c| c[1] != 0xff).count();
             let codes = cells.chunks(2).filter(|c| c[0] != 0xff).count();
-            eprintln!("SCULPT castle-row-stamp row={row} w={w} h={h} pads={pads} codes={codes} at ({},{})", pos.0 >> 8, pos.1 >> 8);
+            eprintln!(
+                "SCULPT castle-row-stamp row={row} w={w} h={h} pads={pads} codes={codes} at ({},{})",
+                pos.0 >> 8,
+                pos.1 >> 8
+            );
         }
         let cx = ((pos.0.wrapping_add(128)) >> 8) as u8;
         let cy = ((pos.1.wrapping_add(128)) >> 8) as u8;
@@ -4189,15 +4189,11 @@ impl Gen {
                 // — see `Self::mc2_doom_hit_retarget`. Retail has ONE
                 // `sub_1E700`; this is its third call path
                 // (`sub_1E9C0` 0x43333), so the law lands here too.
-                if (atk != 0 || Self::summon_null_attacker_law())
-                    && !same_species
-                    && atk != own
-                {
+                if (atk != 0 || Self::summon_null_attacker_law()) && !same_species && atk != own {
                     self.ent[i].f146 = atk;
                     let flee =
                         BEHAVIOR[self.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0;
-                    self.ent[i].tick70 =
-                        mdl.wrapping_mul(8).wrapping_add(if flee { 6 } else { 2 });
+                    self.ent[i].tick70 = mdl.wrapping_mul(8).wrapping_add(if flee { 6 } else { 2 });
                 }
             }
             _ => {
@@ -4451,10 +4447,11 @@ impl Gen {
         }
         self.ent[i].f146 = atk;
         let flee = BEHAVIOR[self.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0;
-        self.ent[i].tick70 = self.ent[i]
-            .model65
-            .wrapping_mul(8)
-            .wrapping_add(if flee { 6 } else { 2 });
+        self.ent[i].tick70 =
+            self.ent[i]
+                .model65
+                .wrapping_mul(8)
+                .wrapping_add(if flee { 6 } else { 2 });
         atk
     }
 
@@ -4500,12 +4497,7 @@ impl Gen {
         self.mc2_doom_target_probe(t, ctx, true)
     }
 
-    fn mc2_doom_target_probe(
-        &self,
-        t: u16,
-        ctx: &MobCtx,
-        home: bool,
-    ) -> Option<(u16, u16, i16)> {
+    fn mc2_doom_target_probe(&self, t: u16, ctx: &MobCtx, home: bool) -> Option<(u16, u16, i16)> {
         let law = Self::doom_dead_target_law();
         if t == PLAYER_TARGET {
             if law && ctx.pdead {
@@ -5053,7 +5045,11 @@ impl Gen {
         // EF:10974-77 — `v9` = the parent's lock, else its attacker.
         let v9 = match self.ent.get(parent as usize) {
             Some(p) if parent != PLAYER_TARGET && parent != 0 => {
-                if p.f146 != 0 { p.f146 } else { p.f40 }
+                if p.f146 != 0 {
+                    p.f146
+                } else {
+                    p.f40
+                }
             }
             _ => self.mc2_alliance_parent_attacker(i, parent),
         };
@@ -5370,7 +5366,6 @@ mod tests {
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
     }
 
-
     fn w3v_ctx() -> crate::mc1::mobs::MobCtx {
         crate::mc1::mobs::MobCtx {
             px: 0,
@@ -5386,7 +5381,6 @@ mod tests {
             mc2_turn: 0,
         }
     }
-
 
     /// ⭐ ROUND 104 — **THE TANK'S HIT LATCHES ITS ATTACKER AS ITS
     /// TARGET.** `sub_252E0`, the m18 head, ends `if (result >= 1) {
@@ -5431,7 +5425,6 @@ mod tests {
         assert_eq!(g.ent[i].f71, 1, "…sub-state 1, the watch");
     }
 
-
     /// ⭐ ROUND 104 — **THE FOOTPRINT CLEAR STAMPS BOTH HALVES OF THE
     /// KILLER PAIR.** `sub_57390` (EF:39801-03) is
     /// `life_0x8 = -1; word_0x24_36 = a2; word_0x26_38 = a2;`. The
@@ -5474,7 +5467,6 @@ mod tests {
         );
     }
 
-
     /// ⭐⭐⭐ ROUND 98 — **THE MC2 COLUMN NEVER SEEDED `byte_0x5D_93`.**
     ///
     /// `x_BYTE_D8A2E` is the SAME table MC1 ships pre-baked as
@@ -5503,8 +5495,8 @@ mod tests {
     /// from the shipped art. Self-skips without a baked bundle.
     #[test]
     fn mc2_sprite_draw_types_are_the_day_banks_flag_high_bytes() {
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../baked/assets/mc2-day");
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked/assets/mc2-day");
         let Ok(bundle) = mgc_formats::bundle::Bundle::load(&dir) else {
             return;
         };
@@ -5527,7 +5519,8 @@ mod tests {
                 (flags[&(p.word_0 as u32)] >> 8) as u8
             };
             assert_eq!(
-                super::MC2_SPRITE_DRAW_TYPE[row], want,
+                super::MC2_SPRITE_DRAW_TYPE[row],
+                want,
                 "row {row} (sprite {})",
                 p.word_0
             );
@@ -5539,7 +5532,15 @@ mod tests {
             .collect();
         assert_eq!(
             odd,
-            vec![(7, 16), (222, 16), (237, 16), (244, 11), (332, 11), (333, 11), (334, 11)]
+            vec![
+                (7, 16),
+                (222, 16),
+                (237, 16),
+                (244, 11),
+                (332, 11),
+                (333, 11),
+                (334, 11)
+            ]
         );
     }
 
@@ -5673,13 +5674,17 @@ mod tests {
         // One wyvern per phase, all StageVar2 13 (Summon Army).
         let mut slots = Vec::new();
         for phase in 0u8..8 {
-            let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+            let i = g
+                .mc2_spawn_m16(40 * 256, 40 * 256, 400)
+                .expect("a pool slot");
             g.ent[i].site_z = 13;
             g.ent[i].tick70 = 16 * 8 + phase;
             slots.push((phase, i));
         }
         // A StageVar2 == 0 creature is never on this arm at all.
-        let plain = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+        let plain = g
+            .mc2_spawn_m16(40 * 256, 40 * 256, 400)
+            .expect("a pool slot");
         g.ent[plain].site_z = 0;
         g.ent[plain].tick70 = 16 * 8 + 1;
 
@@ -5752,7 +5757,9 @@ mod tests {
         g.link(v, 60 * 256, 60 * 256, 400);
         g.ent[v].act_life = -1;
 
-        let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+        let i = g
+            .mc2_spawn_m16(40 * 256, 40 * 256, 400)
+            .expect("a pool slot");
         g.ent[i].tick70 = 16 * 8 + 2; // the attack slot
         g.ent[i].f146 = v as u16;
         g.ent[i].f63 = 0; // the 8-tick aim throttle is OPEN
@@ -5809,9 +5816,7 @@ mod tests {
     /// before it ran.
     fn q24_new_hive(g: &Gen, before: &[usize]) -> usize {
         let fresh: Vec<usize> = (1..g.ent.len())
-            .filter(|s| {
-                g.ent[*s].class64 == 5 && g.ent[*s].model65 == 9 && !before.contains(s)
-            })
+            .filter(|s| g.ent[*s].class64 == 5 && g.ent[*s].model65 == 9 && !before.contains(s))
             .collect();
         assert_eq!(fresh.len(), 1, "the consume sweep splits exactly once");
         fresh[0]
@@ -5851,10 +5856,7 @@ mod tests {
             g.ent[child].id24, hive as u16,
             "sub_20940 copies @0x1A with no gate (NETHERW.EXE 0x45434-0x4543B)"
         );
-        assert_ne!(
-            child, hive,
-            "the fixture must actually mint a new record"
-        );
+        assert_ne!(child, hive, "the fixture must actually mint a new record");
     }
 
     /// ⭐⭐⭐ …AND ITS SIBLING `sub_203D0` DOES NOT — **A SPLIT IN A

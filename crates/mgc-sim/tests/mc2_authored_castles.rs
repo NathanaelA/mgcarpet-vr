@@ -50,7 +50,8 @@ fn load(level: &str, bank: &str) -> Option<(World, LevelPackage)> {
         pkg.header.as_ref().map(|h| h.map_type),
         Some(mgc_formats::MapType::Night) | Some(mgc_formats::MapType::Cave)
     );
-    let mut w = World::new_for_game_env(planes, &pkg.things.things, seed, assets, GameId::Mc2, night);
+    let mut w =
+        World::new_for_game_env(planes, &pkg.things.things, seed, assets, GameId::Mc2, night);
     w.set_placeholders(true);
     w.set_mc2_night_shade(night);
     let (cfgs, count) = rival_configs(&pkg);
@@ -170,5 +171,9 @@ fn mc2_level_006_authored_level_1_castle_is_a_16_tile_stump() {
         16,
         "mc2:6 (3,7) level-1 authored castle (retail 16; 0 before round 110)"
     );
-    assert_eq!(castle_tiles(&w, 65, 94), 0, "mc2:6 (3,6) has no authored castle");
+    assert_eq!(
+        castle_tiles(&w, 65, 94),
+        0,
+        "mc2:6 (3,6) has no authored castle"
+    );
 }

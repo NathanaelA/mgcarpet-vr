@@ -2947,7 +2947,15 @@ impl World {
         game: GameId,
         mc2_night: bool,
     ) -> Self {
-        Self::new_full_env(planes, things, seed, assets, game.chassis(), game, mc2_night)
+        Self::new_full_env(
+            planes,
+            things,
+            seed,
+            assets,
+            game.chassis(),
+            game,
+            mc2_night,
+        )
     }
 
     /// The full-control constructor: an explicit chassis under an
@@ -3555,7 +3563,11 @@ impl World {
         let mc2 = matches!(self.g.verbs.movement, MovementVerb::Mc2);
         let base = match self.g.owner_team(e.f144) {
             Some(team) => {
-                let art = if mc2 { crate::mc2::color_art(team) } else { team };
+                let art = if mc2 {
+                    crate::mc2::color_art(team)
+                } else {
+                    team
+                };
                 105 + 8 * art as u16
             }
             None => 52,
@@ -4469,11 +4481,7 @@ impl World {
     /// `manaRegen_0x88_136` flips 100 → 1000 at t=2458, exactly the
     /// apply-then-select order. Re-probing every dolmen at the
     /// destination spent the 40 a tick early.
-    fn mc2_regen_boost_warp(
-        &self,
-        pre: (u16, u16, i16),
-        dest: (u16, u16, i16),
-    ) -> (bool, bool) {
+    fn mc2_regen_boost_warp(&self, pre: (u16, u16, i16), dest: (u16, u16, i16)) -> (bool, bool) {
         let (at_castle, dest_dolmen) = self.mc2_regen_boost(dest);
         if mc2_warp_dolmen_phase_off() {
             return (at_castle, dest_dolmen);
@@ -5789,13 +5797,8 @@ impl World {
         if mc1_duel_grip_exact_off() && !mc1_duel_yaw_drag_off() {
             if let Some((victim, _, _)) = self.duel {
                 let ve = &self.g.ent[victim as usize];
-                d.s.yaw = crate::flight::mc1_duel_turn(
-                    d.s.yaw,
-                    probe_pre.0,
-                    probe_pre.1,
-                    ve.x,
-                    ve.y,
-                );
+                d.s.yaw =
+                    crate::flight::mc1_duel_turn(d.s.yaw, probe_pre.0, probe_pre.1, ve.x, ve.y);
             }
         }
         // Publish retail's v_14 (:55780) for the token passes — the
@@ -5986,66 +5989,66 @@ impl World {
     /// call below it is the catch-all for any push from outside a
     /// castle's own tick (the authored-castle spawn at level init).
     fn mc2_drain_ladder_sync(&mut self) {
-            if !self.g.mc2_ladder_sync.0.is_empty() {
-                let mail = std::mem::take(&mut self.g.mc2_ladder_sync.0);
-                // Bit 15 = pushed by a DOWNGRADE (see `Mc2LadderMail`).
-                for c in mail.iter().map(|&raw| raw & 0x7FFF) {
-                    let own = self.g.ent[c as usize].id24;
-                    let human = own == crate::mc1::mobs::PLAYER_TARGET;
-                    // `SpellsEnabled[2]` off the owner's own book: the
-                    // world-side `mc2_book` for the out-of-pool human,
-                    // the per-rival `Mc2Spellbook` otherwise.
-                    let ri = (!human)
-                        .then(|| {
-                            (0..self.mc2_rivals.len())
-                                .find(|&r| self.mc2_rivals[r].ent != 0 && self.mc2_rivals[r].ent == own)
-                        })
-                        .flatten();
-                    let m = match ri {
-                        None if human => self.mc2_book.ent[2] as usize,
-                        None => continue,
-                        Some(r) => self.mc2_rivals[r].book.ent[2] as usize,
-                    };
-                    if m == 0 || self.g.ent[m].class64 != 15 {
-                        continue;
-                    }
-                    let saved = self.g.ent[m].f26;
-                    self.g.ent[m].f26 = 0;
-                    let tier = self.g.ent[m].f71;
-                    if human {
-                        let mailing = (!mc2_recast_surcharge_off()).then_some(c as usize);
-                        self.mc2_set_spell_at(m, tier, mailing.or_else(|| self.player_castle()));
-                    } else {
-                        // The rival column's own SetSpell — same
-                        // `SetSpell_6D5E0`, priced off the caster's own
-                        // castle rung (`rival_castle`, which at drain time
-                        // resolves the mailing castle itself: a downgrade
-                        // has already written its new `f26`, and the
-                        // level-0 destruction's 0x400 stamp makes the
-                        // lookup miss into the rung-0 price retail reads
-                        // off the castle it just decremented to 0).
-                        self.mc2_rival_set_spell(m, tier, own);
-                    }
-                    self.g.ent[m].f26 = saved;
+        if !self.g.mc2_ladder_sync.0.is_empty() {
+            let mail = std::mem::take(&mut self.g.mc2_ladder_sync.0);
+            // Bit 15 = pushed by a DOWNGRADE (see `Mc2LadderMail`).
+            for c in mail.iter().map(|&raw| raw & 0x7FFF) {
+                let own = self.g.ent[c as usize].id24;
+                let human = own == crate::mc1::mobs::PLAYER_TARGET;
+                // `SpellsEnabled[2]` off the owner's own book: the
+                // world-side `mc2_book` for the out-of-pool human,
+                // the per-rival `Mc2Spellbook` otherwise.
+                let ri = (!human)
+                    .then(|| {
+                        (0..self.mc2_rivals.len())
+                            .find(|&r| self.mc2_rivals[r].ent != 0 && self.mc2_rivals[r].ent == own)
+                    })
+                    .flatten();
+                let m = match ri {
+                    None if human => self.mc2_book.ent[2] as usize,
+                    None => continue,
+                    Some(r) => self.mc2_rivals[r].book.ent[2] as usize,
+                };
+                if m == 0 || self.g.ent[m].class64 != 15 {
+                    continue;
                 }
-                // ⭐⭐⭐ `sub_605E0`'s LEVEL-0 **RIVAL** ARM (EF:61645-58) —
-                // the CASTLE-DEATH TOKEN PURGE. It runs AFTER `sub_60810`
-                // (the ladder + the `sub_60780` re-price drained just
-                // above) and after `sub_5F890(a1x, 1)`, because retail
-                // reads `SpellsEnabled[2]` for both of those BEFORE it
-                // zeroes the slot. Riding the ladder mail is what puts it
-                // in that order: the mail carries exactly the castles that
-                // took a level this tick, with `f26` already stepped.
-                // …and ONLY behind a downgrade's push (`sub_605E0` is
-                // the purge's only home — the ctor's and the upgrade's
-                // ladder rebuilds have no such tail; round 112, see
-                // `castle::no_mc2_purge_on_downgrade_only`).
-                for raw in mail {
-                    if raw & 0x8000 != 0 || crate::mc2::castle::no_mc2_purge_on_downgrade_only() {
-                        self.mc2_castle_death_token_purge((raw & 0x7FFF) as usize);
-                    }
+                let saved = self.g.ent[m].f26;
+                self.g.ent[m].f26 = 0;
+                let tier = self.g.ent[m].f71;
+                if human {
+                    let mailing = (!mc2_recast_surcharge_off()).then_some(c as usize);
+                    self.mc2_set_spell_at(m, tier, mailing.or_else(|| self.player_castle()));
+                } else {
+                    // The rival column's own SetSpell — same
+                    // `SetSpell_6D5E0`, priced off the caster's own
+                    // castle rung (`rival_castle`, which at drain time
+                    // resolves the mailing castle itself: a downgrade
+                    // has already written its new `f26`, and the
+                    // level-0 destruction's 0x400 stamp makes the
+                    // lookup miss into the rung-0 price retail reads
+                    // off the castle it just decremented to 0).
+                    self.mc2_rival_set_spell(m, tier, own);
+                }
+                self.g.ent[m].f26 = saved;
+            }
+            // ⭐⭐⭐ `sub_605E0`'s LEVEL-0 **RIVAL** ARM (EF:61645-58) —
+            // the CASTLE-DEATH TOKEN PURGE. It runs AFTER `sub_60810`
+            // (the ladder + the `sub_60780` re-price drained just
+            // above) and after `sub_5F890(a1x, 1)`, because retail
+            // reads `SpellsEnabled[2]` for both of those BEFORE it
+            // zeroes the slot. Riding the ladder mail is what puts it
+            // in that order: the mail carries exactly the castles that
+            // took a level this tick, with `f26` already stepped.
+            // …and ONLY behind a downgrade's push (`sub_605E0` is
+            // the purge's only home — the ctor's and the upgrade's
+            // ladder rebuilds have no such tail; round 112, see
+            // `castle::no_mc2_purge_on_downgrade_only`).
+            for raw in mail {
+                if raw & 0x8000 != 0 || crate::mc2::castle::no_mc2_purge_on_downgrade_only() {
+                    self.mc2_castle_death_token_purge((raw & 0x7FFF) as usize);
                 }
             }
+        }
     }
 
     /// `sub_68BF0`'s REFERENCE POSE — the position `sub_68C70`'s
@@ -6120,8 +6123,7 @@ impl World {
         // out-of-pool carpet, so `MGC_PLIFE_TRACE` diffs the `Player`
         // lanes here instead. Both are print-only.
         let plt = plife_trace_window();
-        let mut plt_prev: Option<[(&'static str, i64); 5]> =
-            plt.map(|_| plife_lanes(&self.player));
+        let mut plt_prev: Option<[(&'static str, i64); 5]> = plt.map(|_| plife_lanes(&self.player));
         macro_rules! wt_check {
             ($label:expr) => {
                 if let (Some((ws, wf)), Some(prev)) = (wt, wt_prev.as_mut()) {
@@ -9017,8 +9019,7 @@ impl World {
             // Three ticks after the first, t=22708→22709 spends the
             // promoted CHARGED stage on a raw 248: life −62, mana −62,
             // residue 62.
-            let armed =
-                self.player.shield_armed && !crate::mc2::cast::no_mc2_shield_armed();
+            let armed = self.player.shield_armed && !crate::mc2::cast::no_mc2_shield_armed();
             if self.player.shield || armed {
                 if self.player.shield {
                     amt /= 4;
@@ -12223,7 +12224,13 @@ impl World {
         // −2146963936, port 2147483647 — the pair's only dirty lane).
         // `MGC_NO_MC1_MANA_CENSUS_WRAP=1` restores the clamps.
         let sat = crate::engine::features::no_mc1_mana_census_wrap();
-        let add32 = |a: u32, b: u32| if sat { a.saturating_add(b) } else { a.wrapping_add(b) };
+        let add32 = |a: u32, b: u32| {
+            if sat {
+                a.saturating_add(b)
+            } else {
+                a.wrapping_add(b)
+            }
+        };
         for r in &mut self.rivals {
             r.mana_max = WIZARD_BASE_MANA; // the intrinsic base (u32_322, :55031-33)
         }
@@ -12359,7 +12366,11 @@ impl World {
         self.player.world_mana = world;
         // The castle overflow ejector reads the house tally
         // (sub_47130 :56185-89 — wizext u32_308).
-        self.g.banked_houses = if sat { houses.min(i32::MAX as u32) as i32 } else { houses as i32 };
+        self.g.banked_houses = if sat {
+            houses.min(i32::MAX as u32) as i32
+        } else {
+            houses as i32
+        };
         // Retail's census writes each wizard CARPET's +136 directly
         // (:56860-907 accumulates on the entity) — the ceiling lives
         // on the pool record, and every afford gate AND the recorder
@@ -13573,8 +13584,7 @@ impl World {
         // jar poll and the native encoding only changes how `+70` is
         // spelled. See the strict arm in [`World::class12_tick`] for
         // the citation and the mc1l49 witness.
-        if !crate::engine::features::no_mc1_acq_list_full()
-            && !self.mc1_acq.iter().any(|&e| e <= 0)
+        if !crate::engine::features::no_mc1_acq_list_full() && !self.mc1_acq.iter().any(|&e| e <= 0)
         {
             return;
         }
@@ -13747,8 +13757,7 @@ impl World {
         // the `match spell` tail (`5 => beyond_sight = active`).
         // WITNESS mc1l48 t=64292-64396, the human's token 106 — see
         // [`mc1_beyond_sight_token_off`].
-        let skeleton =
-            matches!(spell, 4 | 14) || (spell == 5 && !mc1_beyond_sight_token_off());
+        let skeleton = matches!(spell, 4 | 14) || (spell == 5 && !mc1_beyond_sight_token_off());
         let mut fired = false;
         let mut gate_failed = false;
         // ⭐⭐⭐ THE GATE IS PER TICK, NOT PER ARM. Every launcher and
@@ -14559,8 +14568,8 @@ impl World {
     /// `MGC_NO_MC2_CORPSE_RAW_KILLER=1` restores the liveness clause.
     pub fn killer_pos(&self) -> Option<(f32, f32)> {
         let k = self.player.killer as usize;
-        let reaped = mc2_corpse_raw_killer_off()
-            && self.g.ent[k.min(self.g.ent.len() - 1)].class64 == 0;
+        let reaped =
+            mc2_corpse_raw_killer_off() && self.g.ent[k.min(self.g.ent.len() - 1)].class64 == 0;
         if k != 0 && k < self.g.ent.len() && !reaped {
             let e = &self.g.ent[k];
             Some((e.x as f32 / 256.0, e.y as f32 / 256.0))
@@ -14834,8 +14843,16 @@ impl World {
                     eprintln!(
                         "SCULPT thing slot={i} ({},{}) x={} y={} dis={} swi_sz={} swi_id={} \
                          parent={} child={} par3={}",
-                        r.class, r.model, r.x, r.y, r.dis_id, r.swi_sz, r.swi_id, r.parent,
-                        r.child, r.par3
+                        r.class,
+                        r.model,
+                        r.x,
+                        r.y,
+                        r.dis_id,
+                        r.swi_sz,
+                        r.swi_id,
+                        r.parent,
+                        r.child,
+                        r.par3
                     );
                 }
             }
@@ -15081,9 +15098,7 @@ impl World {
                     if sculpt_trace() && matches!(self.g.ent[i].model65, 0x50..=0x55) {
                         eprintln!(
                             "SCULPT ran ({},{}) action={}",
-                            self.g.ent[i].class64,
-                            self.g.ent[i].model65,
-                            self.g.ent[i].tick70
+                            self.g.ent[i].class64, self.g.ent[i].model65, self.g.ent[i].tick70
                         );
                     }
                 } else {
@@ -15091,9 +15106,7 @@ impl World {
                     if sculpt_trace() && matches!(self.g.ent[i].model65, 0x50..=0x55) {
                         eprintln!(
                             "SCULPT disable-band ({},{}) action={}",
-                            self.g.ent[i].class64,
-                            self.g.ent[i].model65,
-                            self.g.ent[i].tick70
+                            self.g.ent[i].class64, self.g.ent[i].model65, self.g.ent[i].tick70
                         );
                     }
                     self.g.ent[i].flags |= 0x400;
@@ -18956,10 +18969,7 @@ impl World {
     /// actually reached the `v40` block (0x57c67), i.e. only while the
     /// victim is NOT yet grabbed — the grabbed arms jump over it and
     /// `sub_5D530`'s stop veto freezes the servo instead.
-    fn apply_player_whirl(
-        d: &mut FlightDrive<'_>,
-        whirl: crate::engine::features::PlayerWhirl,
-    ) {
+    fn apply_player_whirl(d: &mut FlightDrive<'_>, whirl: crate::engine::features::PlayerWhirl) {
         if let Some((x, y, z, yaw)) = whirl.grab {
             if whirl.act80 {
                 d.s.act_speed = 80;
@@ -21018,7 +21028,10 @@ mod tests {
         let delta0 = w.player.mana_delta;
         w.g.player_mail[0] = (448, 7);
         w.apply_player_damage(away());
-        assert_eq!(w.player.life, life0, "the ARMED stage NULLS the hit (:60692)");
+        assert_eq!(
+            w.player.life, life0,
+            "the ARMED stage NULLS the hit (:60692)"
+        );
         assert_eq!(
             w.player.mana_delta, delta0,
             "and takes NO mana — only the CHARGED arm pays a quarter"
@@ -22581,10 +22594,9 @@ mod tests {
         // the ShiftRot(1024, 1024) quad, so the summed half-width
         // against the carpet's 121 is 1145. Placed 1000 east of the
         // funnel's eye, it holds the eye and misses the carpet's seat.
-        let d = w
-            .g
-            .mc2_spawn_dolmen(wx.wrapping_add(1000), wy, gz + 1000)
-            .expect("dolmen");
+        let d =
+            w.g.mc2_spawn_dolmen(wx.wrapping_add(1000), wy, gz + 1000)
+                .expect("dolmen");
         assert!(t < d, "funnel {t} must chain below dolmen {d}");
         w.mc2_carpet_slot = (d + 1) as u16;
         w.g.mc2_pinned = crate::engine::features::Mc2Pinned(w.mc2_carpet_slot);
@@ -23067,7 +23079,10 @@ mod tests {
             None,
             "the gate's actLife leg refuses: the effect body never runs"
         );
-        assert_eq!(w.g.ent[m].f26, 99, "the shared decrement still runs (:65259)");
+        assert_eq!(
+            w.g.ent[m].f26, 99,
+            "the shared decrement still runs (:65259)"
+        );
     }
 
     /// The below-carpet half of the walk-order law: mail posted by a
@@ -25990,7 +26005,10 @@ mod tests {
         assert_eq!(w.player.accel_mc2_factor, 0);
         assert!(!w.player.heal_active, "heal latch dropped");
         assert!(!w.player.beyond_sight, "beyond-sight latch dropped");
-        assert!(!w.player.shield, "the standing bit was spent by the absorb, not by this law");
+        assert!(
+            !w.player.shield,
+            "the standing bit was spent by the absorb, not by this law"
+        );
         assert_eq!(w.g.ent[tok].f26, 0, "the kept token's burst is over");
         assert_eq!(w.g.ent[tok].flags & 0x80, 0, "…and its ACTIVE bit down");
         let _ = w.take_speed_base();
@@ -27866,13 +27884,12 @@ mod tests {
             for _ in 0..=extra {
                 w.mc2_doomsday_tick(p, &ctx(0x800)); // inside it
             }
-            let rocks = w
-                .g
-                .ent
-                .iter()
-                .skip(1)
-                .filter(|e| e.class64 == 10 && e.model65 == 14 && e.flags & 0x400 == 0)
-                .count();
+            let rocks =
+                w.g.ent
+                    .iter()
+                    .skip(1)
+                    .filter(|e| e.class64 == 10 && e.model65 == 14 && e.flags & 0x400 == 0)
+                    .count();
             (w.g.ent[p].f44, w.g.ent[p].f26, rocks)
         };
         // The wake tick itself — retail's t=44491, `@0x2A` 0x50 -> 0x60
@@ -27948,8 +27965,7 @@ mod tests {
             "sub_4BD00 stores base + 34·105 into +0xA0"
         );
         assert_ne!(
-            BEHAVIOR[w.g.ent[p].row156 as usize],
-            BEHAVIOR[107],
+            BEHAVIOR[w.g.ent[p].row156 as usize], BEHAVIOR[107],
             "row 107 is the table's all-zero terminator, not a species row"
         );
         // The consequence, stated where retail reads it: the class-3
@@ -28095,10 +28111,9 @@ mod tests {
         // The beam's pyramid; the human stands 40 tiles due EAST.
         let (ax, ay) = mc2_pos(100, 100);
         let agz = w.g.ground_z(ax, ay) as i16;
-        let beam = w
-            .g
-            .mc2_spawn_doomsday(ax, ay, agz)
-            .expect("the beam pyramid");
+        let beam =
+            w.g.mc2_spawn_doomsday(ax, ay, agz)
+                .expect("the beam pyramid");
         {
             let e = &mut w.g.ent[beam];
             e.f71 = 9; // the state whose body IS `sub_21AB0`
@@ -28116,10 +28131,9 @@ mod tests {
         // two SNAP arms that would return before it.
         let (bx, by) = mc2_pos(100, 140);
         let bgz = w.g.ground_z(bx, by) as i16;
-        let witness = w
-            .g
-            .mc2_spawn_doomsday(bx, by, bgz)
-            .expect("the witness pyramid");
+        let witness =
+            w.g.mc2_spawn_doomsday(bx, by, bgz)
+                .expect("the witness pyramid");
         {
             let e = &mut w.g.ent[witness];
             e.f71 = 7;
@@ -28267,10 +28281,7 @@ mod tests {
         // `word_0x2C_44` — slot 5's own turn cap in the take.
         const CAP: i16 = 113;
         let agz = w.g.ground_z(ax, ay) as i16;
-        let pyramid = w
-            .g
-            .mc2_spawn_doomsday(ax, ay, agz)
-            .expect("the pyramid");
+        let pyramid = w.g.mc2_spawn_doomsday(ax, ay, agz).expect("the pyramid");
         {
             let e = &mut w.g.ent[pyramid];
             e.f71 = 7; // the state whose body only decrements +0x10
@@ -28294,11 +28305,7 @@ mod tests {
         w.player.state = LifeState::Dead;
         w.player.life = -1;
         let kgz = w.g.ground_z(kx, ky) as i16;
-        w.pending_respawn = Some((
-            kx as f32 / 256.0,
-            ky as f32 / 256.0,
-            kgz as f32 / 256.0,
-        ));
+        w.pending_respawn = Some((kx as f32 / 256.0, ky as f32 / 256.0, kgz as f32 / 256.0));
 
         // The human's heading puts the relative-yaw bucket at 8, clear
         // of BOTH snap arms (<= 2 at EF:13709 and >= 0xD at EF:13716),
@@ -28392,7 +28399,9 @@ mod tests {
                 // The caster's own lock — what the port used to copy.
                 e.f146 = PLAYER_TARGET;
             }
-            let before: Vec<usize> = (0..w.g.ent.len()).filter(|&j| w.g.ent[j].class64 != 0).collect();
+            let before: Vec<usize> = (0..w.g.ent.len())
+                .filter(|&j| w.g.ent[j].class64 != 0)
+                .collect();
             w.tick(away(), PlayerCommand::default());
             let born = (0..w.g.ent.len())
                 .find(|j| w.g.ent[*j].class64 != 0 && !before.contains(j))
@@ -28758,7 +28767,8 @@ mod tests {
         w.tick(away(), PlayerCommand::default());
         assert!(w.g.ent[s].act_life < 0, "the unlocked summon took the kill");
         assert_eq!(
-            w.g.ent[s].lease(), -3,
+            w.g.ent[s].lease(),
+            -3,
             "the latch reads back as 1 and drains to −3 (EF:10728-30)"
         );
     }
@@ -30949,24 +30959,40 @@ mod tests {
         assert_eq!(w.g.ent[b].f58 & 0xFF, 0, "the distant ball settled");
         let wild = w.g.ent[b].type86;
         assert!((52..=59).contains(&wild), "wild family: {wild}");
-        let pose = |w: &World| w.live_poses().into_iter().find(|p| p.slot == b as u16).unwrap();
+        let pose = |w: &World| {
+            w.live_poses()
+                .into_iter()
+                .find(|p| p.slot == b as u16)
+                .unwrap()
+        };
         assert_eq!(pose(&w).owner_type_index, None, "row and owner agree");
         // The claim lands from afar (the grave sweep / a possess pulse
         // — any ch1 owner write on a settled ball).
         w.g.ent[b].mail[1] = (0, PLAYER_TARGET);
         w.tick(away(), PlayerCommand::default());
         assert_eq!(w.g.ent[b].f144, PLAYER_TARGET, "claimed");
-        assert_eq!(w.g.ent[b].type86, wild, "retail: a settled ball never recolours on intake");
+        assert_eq!(
+            w.g.ent[b].type86, wild,
+            "retail: a settled ball never recolours on intake"
+        );
         let p = pose(&w);
         assert_eq!(p.team, Some(0), "the minimap sees the new owner at once");
-        assert_eq!(p.owner_type_index, Some(105 + (wild - 52)), "...and so does the patched viewport");
+        assert_eq!(
+            p.owner_type_index,
+            Some(105 + (wild - 52)),
+            "...and so does the patched viewport"
+        );
         // Walking into wake range re-arms the ball; its moving arm
         // re-derives the row and the pose override disappears.
         let near = PlayerPose::from_tiles(116.5, 105.0 / 8.0, 110.5, 0.0, 0.0, 0.0);
         for _ in 0..40 {
             w.tick(near, PlayerCommand::default());
         }
-        assert_eq!(w.g.ent[b].type86, 105 + (wild - 52), "retail: approaching recolours it");
+        assert_eq!(
+            w.g.ent[b].type86,
+            105 + (wild - 52),
+            "retail: approaching recolours it"
+        );
         assert_eq!(pose(&w).owner_type_index, None);
     }
 
@@ -30986,12 +31012,20 @@ mod tests {
         assert_eq!(w.g.ent[b].f58 & 0xFF, 0, "the distant sphere settled");
         let wild = w.g.ent[b].type86;
         assert!((52..=59).contains(&wild), "wild family: {wild}");
-        let pose = |w: &World| w.live_poses().into_iter().find(|p| p.slot == b as u16).unwrap();
+        let pose = |w: &World| {
+            w.live_poses()
+                .into_iter()
+                .find(|p| p.slot == b as u16)
+                .unwrap()
+        };
         assert_eq!(pose(&w).owner_type_index, None);
         w.g.ent[b].mail[1] = (0, PLAYER_TARGET);
         w.tick(away(), PlayerCommand::default());
         assert_eq!(w.g.ent[b].f144, PLAYER_TARGET, "claimed");
-        assert_eq!(w.g.ent[b].type86, wild, "retail: no intake recolour on a settled sphere");
+        assert_eq!(
+            w.g.ent[b].type86, wild,
+            "retail: no intake recolour on a settled sphere"
+        );
         let p = pose(&w);
         assert_eq!(p.team, Some(0));
         let own = 105 + 8 * crate::mc2::color_art(0) as u16 + (wild - 52);
@@ -31026,7 +31060,10 @@ mod tests {
             w.g.ent[m].flags |= 0x400;
             w.tick(away(), PlayerCommand::default());
             if patched {
-                assert_eq!(w.g.ent[m].class64, 12, "patched: the token survives the reap");
+                assert_eq!(
+                    w.g.ent[m].class64, 12,
+                    "patched: the token survives the reap"
+                );
                 assert_eq!(w.g.ent[m].flags & 0x400, 0, "…with the kill bit dropped");
                 assert_eq!(w.player.owned[20], m as u16, "…and stays owned");
                 assert!(w.mc1_acq.contains(&(m as i32)));
@@ -31036,12 +31073,18 @@ mod tests {
                 // off its stale model byte until the allocator hands
                 // it to something else (mc1l49: a (10,0) fire, one
                 // tick later — from then on `owned[0]` names it).
-                assert_eq!(w.player.owned[20], m as u16, "retail: a dangling owned entry");
+                assert_eq!(
+                    w.player.owned[20], m as u16,
+                    "retail: a dangling owned entry"
+                );
                 w.g.ent[m].class64 = 10;
                 w.g.ent[m].model65 = 0;
                 w.tick(away(), PlayerCommand::default());
                 assert_eq!(w.player.owned[20], 0, "retail: the spell is gone");
-                assert_eq!(w.player.owned[0], m as u16, "retail: a phantom fireball instead");
+                assert_eq!(
+                    w.player.owned[0], m as u16,
+                    "retail: a phantom fireball instead"
+                );
             }
         }
     }
@@ -31063,8 +31106,14 @@ mod tests {
         w.g.ent[m].class64 = 10;
         w.g.ent[m].model65 = 0;
         w.tick(away(), PlayerCommand::default());
-        assert!(!w.mc1_acq.contains(&(m as i32)), "the stale entry is cleared");
-        assert_eq!(w.player.owned[0], 0, "no fireball registered off the stranger");
+        assert!(
+            !w.mc1_acq.contains(&(m as i32)),
+            "the stale entry is cleared"
+        );
+        assert_eq!(
+            w.player.owned[0], 0,
+            "no fireball registered off the stranger"
+        );
     }
 
     /// `no_spell_loss` ⑴, MC1: death throws cosmetic jars and keeps
@@ -31078,7 +31127,9 @@ mod tests {
         });
         w.set_dev_spells(true);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
-        let c = w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128).unwrap();
+        let c =
+            w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128)
+                .unwrap();
         w.g.ent[c].id24 = PLAYER_TARGET;
         w.g.ent[c].f144 = PLAYER_TARGET;
         for _ in 0..60 {
@@ -31101,12 +31152,25 @@ mod tests {
         w.tick(firing_line(), PlayerCommand::default());
         w.tick(grounded_line(), PlayerCommand::default());
         assert_eq!(w.vitals().state, LifeState::Dead);
-        assert_eq!(w.player.owned, owned_before, "the owned map rides through death");
+        assert_eq!(
+            w.player.owned, owned_before,
+            "the owned map rides through death"
+        );
         assert_eq!(w.mc1_acq, acq_before, "the acquisition list is untouched");
-        assert!(!w.player.death_owned.iter().any(|&b| b), "nothing is banked");
-        assert_eq!(jars(&w), tokens_before.len(), "one cosmetic jar per held spell");
+        assert!(
+            !w.player.death_owned.iter().any(|&b| b),
+            "nothing is banked"
+        );
+        assert_eq!(
+            jars(&w),
+            tokens_before.len(),
+            "one cosmetic jar per held spell"
+        );
         for &m in &tokens_before {
-            assert!(w.g.ent[m].tick70 >= MANIFEST_BASE, "the token stays a manifestation");
+            assert!(
+                w.g.ent[m].tick70 >= MANIFEST_BASE,
+                "the token stays a manifestation"
+            );
         }
 
         w.tick(
@@ -31118,7 +31182,11 @@ mod tests {
         );
         assert_eq!(w.vitals().state, LifeState::Alive);
         assert_eq!(w.mc1_acq, acq_before, "the respawn re-mints nothing");
-        assert_eq!(w.human_spell_tokens(), tokens_before, "the same tokens, no duplicates");
+        assert_eq!(
+            w.human_spell_tokens(),
+            tokens_before,
+            "the same tokens, no duplicates"
+        );
         let (cx, cy) = (w.g.ent[c].x, w.g.ent[c].y);
         assert_eq!(
             (w.g.ent[tokens_before[0]].x, w.g.ent[tokens_before[0]].y),
@@ -32444,10 +32512,9 @@ mod tests {
         // A mana-carrying (5,1) two tiles off the rival: with the human
         // out of range and no ball or castle in the world the cascade
         // falls to arm 8 (the mana hunt), whose handler IS sub_13DD0.
-        let c = w
-            .g
-            .spawn_creature(1, rx.wrapping_add(512), ry, rz)
-            .expect("creature slot");
+        let c =
+            w.g.spawn_creature(1, rx.wrapping_add(512), ry, rz)
+                .expect("creature slot");
         w.g.ent[c].f140 = 5_000;
         w.g.ent[c].id24 = c as u16;
         // The grudge, latched exactly as sub_16540's castle arm leaves it.
@@ -33426,8 +33493,7 @@ mod tests {
             "every other victim survives — this is a pop, not a clear"
         );
         assert_ne!(
-            w.g.ent[victims[0] as usize].class64,
-            0,
+            w.g.ent[victims[0] as usize].class64, 0,
             "the dropped victim is NOT freed: the pop moves the head only"
         );
     }
@@ -34474,7 +34540,10 @@ mod tests {
             let far = PlayerPose::level(0, 0, 0, 0);
             w.mc2_portal_tick(pad, far);
             let published = Some(pad_y as i16 as i32 as u32);
-            assert_eq!(w.g.m27_v34_slot.0, published, "the pad publishes its sign-extended y");
+            assert_eq!(
+                w.g.m27_v34_slot.0, published,
+                "the pad publishes its sign-extended y"
+            );
             // A body on the 0xDA path reads one frame deeper, where the
             // pad left a stack address: the pad value is dropped.
             w.g.ent[b].tick70 = crate::mc2::multipart::M27_BASE + 2;
@@ -34485,7 +34554,12 @@ mod tests {
             w.g.m27_v34_enter(b);
             assert_eq!(w.g.m27_v34_slot.0, published, "the 0xD9 body keeps it");
             w.g.m27_drive(b, &ctx);
-            (w.g.ent[ba].f71, w.g.ent[bb].f71, w.g.ent[bb].rand, w.g.ent[bb].f68)
+            (
+                w.g.ent[ba].f71,
+                w.g.ent[bb].f71,
+                w.g.ent[bb].rand,
+                w.g.ent[bb].f68,
+            )
         };
         let steps = |n: u32| -> u32 {
             let mut x = 1234u32;
@@ -34497,11 +34571,18 @@ mod tests {
         // mc2l24's pad: y 43392 → −22144, even.
         let (fa, fb, rb, f68) = run(43392);
         assert_eq!(fa, 4, "A (before the pad) reads the seed: > 4, stamped");
-        assert_eq!(fb, 1, "B reads −22144: nonzero, NOT > 4 under the signed test");
+        assert_eq!(
+            fb, 1,
+            "B reads −22144: nonzero, NOT > 4 under the signed test"
+        );
         // draw #A, the wander draw (even), plus the integrator's draw
         // when draw #A landed `f68 == 0`.
         let extra = u32::from(f68 == 0);
-        assert_eq!(rb, steps(2 + extra), "B spends the wander draw: the residue is even");
+        assert_eq!(
+            rb,
+            steps(2 + extra),
+            "B spends the wander draw: the residue is even"
+        );
         // A positive ODD y: > 4 (stamped) and the wander draw skipped.
         let (fa, fb, rb, f68) = run(0x4001);
         assert_eq!(fa, 4);
@@ -34509,7 +34590,10 @@ mod tests {
         let extra = u32::from(f68 == 0);
         assert_eq!(rb, steps(1 + extra), "an odd residue skips the wander draw");
         // The comparison itself.
-        assert!(!Gen::m27_v34_gt4(0xFFFF_A980), "a negative residue is not > 4");
+        assert!(
+            !Gen::m27_v34_gt4(0xFFFF_A980),
+            "a negative residue is not > 4"
+        );
         assert!(!Gen::m27_v34_gt4(4));
         assert!(Gen::m27_v34_gt4(5));
     }
@@ -34579,7 +34663,11 @@ mod tests {
         // The rearm arm: 0x25090D, odd: stamped, wander draw skipped.
         let (f71, rand, f68) = run(24448, 3);
         assert_eq!(f71, 4);
-        assert_eq!(rand, steps(1 + u32::from(f68 == 0)), "an odd residue skips the draw");
+        assert_eq!(
+            rand,
+            steps(1 + u32::from(f68 == 0)),
+            "an odd residue skips the draw"
+        );
     }
 
     /// ⭐⭐ THE BRANCH'S WIZARD SCAN WALKS THE TICK-TOP CLASS-3 ROSTER,
@@ -34613,8 +34701,16 @@ mod tests {
             w.g.m27_drive(body, &ctx);
             (w.g.ent[br].f71, w.g.ent[br].f146)
         };
-        assert_eq!(run(false), (2, PLAYER_TARGET), "a live human is found and locked");
-        assert_eq!(run(true), (1, 0), "a corpse is not on the roster: state 1 kept");
+        assert_eq!(
+            run(false),
+            (2, PLAYER_TARGET),
+            "a live human is found and locked"
+        );
+        assert_eq!(
+            run(true),
+            (1, 0),
+            "a corpse is not on the roster: state 1 kept"
+        );
     }
 
     /// ⭐⭐⭐ THE 0xDA AIM PASS LEAVES `target.y − body.y` ON THE v34 SLOT
@@ -34669,17 +34765,28 @@ mod tests {
         let (f71, rand, f68, word) = run(-1912);
         assert_eq!(word, (-1912i32) as u32);
         assert_eq!(f71, 1, "a negative residue is not > 4");
-        assert_eq!(rand, steps(2 + u32::from(f68 == 0)), "even: the wander draw is taken");
+        assert_eq!(
+            rand,
+            steps(2 + u32::from(f68 == 0)),
+            "even: the wander draw is taken"
+        );
         // Odd and negative — no stamp, draw skipped.
         let (f71, rand, f68, _) = run(-1885);
         assert_eq!(f71, 1);
-        assert_eq!(rand, steps(1 + u32::from(f68 == 0)), "odd: the wander draw is skipped");
+        assert_eq!(
+            rand,
+            steps(1 + u32::from(f68 == 0)),
+            "odd: the wander draw is skipped"
+        );
         // Odd and positive — stamped, draw skipped.
         let (f71, rand, f68, _) = run(1001);
         assert_eq!(f71, 4, "1001 is > 4");
         assert_eq!(rand, steps(1 + u32::from(f68 == 0)));
         // The 64K-line carry: slot 76's record straddles it.
-        assert_eq!(Gen::m27_v34_aim_word(76, 10, 4), 0x1_0000u32.wrapping_sub(6));
+        assert_eq!(
+            Gen::m27_v34_aim_word(76, 10, 4),
+            0x1_0000u32.wrapping_sub(6)
+        );
         assert_eq!(Gen::m27_v34_aim_word(75, 10, 4), (-6i32) as u32);
     }
 
@@ -34700,7 +34807,9 @@ mod tests {
         let run = |path_da: bool, hit: bool| -> (u8, u32, u8, Option<u32>) {
             let mut w = mc2_flat_world();
             let ctx = mc2_test_ctx(&w);
-            let house = w.g.mc2_spawn_building(0x4000, 0x4000, 100, 0).expect("house");
+            let house =
+                w.g.mc2_spawn_building(0x4000, 0x4000, 100, 0)
+                    .expect("house");
             w.g.ent[house].tick70 = 52;
             w.g.ent[house].act_life = 1000;
             w.g.ent[house].f26 = 5; // occupants: a hit pops one
@@ -34738,11 +34847,19 @@ mod tests {
         let (f71, rand, f68, deeper) = run(true, false);
         assert_eq!(deeper, Some(29), "the walk's ESI");
         assert_eq!(f71, 4, "29 is > 4");
-        assert_eq!(rand, steps(1 + u32::from(f68 == 0)), "odd: the wander draw is skipped");
+        assert_eq!(
+            rand,
+            steps(1 + u32::from(f68 == 0)),
+            "odd: the wander draw is skipped"
+        );
         // 0xD9 after the same house: the record pointer — stamped, taken.
         let (f71, rand, f68, _) = run(false, false);
         assert_eq!(f71, 4);
-        assert_eq!(rand, steps(2 + u32::from(f68 == 0)), "the pointer class is even");
+        assert_eq!(
+            rand,
+            steps(2 + u32::from(f68 == 0)),
+            "the pointer class is even"
+        );
         // 0xDA after a house that popped an occupant: `Entities[0]` in
         // ESI — the pointer class again.
         let (f71, rand, f68, deeper) = run(true, true);
@@ -35804,7 +35921,6 @@ mod tests {
         );
     }
 
-
     /// ⭐⭐⭐ THE BEAM'S TRAIL BILLBOARDS ARE COLLIDABLE — `sub_66750`
     /// (EF:58336-45) writes SIX fields onto each node (action 14,
     /// class 9, model 9, `id_0x1A_26`, the `(node >= beam) - 1` maxLife
@@ -35855,10 +35971,7 @@ mod tests {
         );
         // byte[0] bit 3 = collidable, the only thing `sub_10780`
         // (EF:3765) asks of a candidate before the xtype filter.
-        let blind = nodes
-            .iter()
-            .filter(|&&i| w.g.ent[i].flags & 8 == 0)
-            .count();
+        let blind = nodes.iter().filter(|&&i| w.g.ent[i].flags & 8 == 0).count();
         assert_eq!(
             blind,
             0,
@@ -36184,7 +36297,11 @@ mod tests {
         // "no paint, no pad" cell is enough to reach the completion tail.
         let rig = || {
             let mut w = mc2_flat_world();
-            w.g.assets.build_tab = vec![BuildDef { offset: 0, w: 1, h: 1 }];
+            w.g.assets.build_tab = vec![BuildDef {
+                offset: 0,
+                w: 1,
+                h: 1,
+            }];
             w.g.assets.build_dat = vec![0xff, 0xff];
             w
         };
@@ -36270,7 +36387,11 @@ mod tests {
         use crate::engine::features::BuildDef;
         let rig = || {
             let mut w = mc2_flat_world();
-            w.g.assets.build_tab = vec![BuildDef { offset: 0, w: 1, h: 1 }];
+            w.g.assets.build_tab = vec![BuildDef {
+                offset: 0,
+                w: 1,
+                h: 1,
+            }];
             w.g.assets.build_dat = vec![0xff, 0xff];
             w
         };
@@ -36286,9 +36407,7 @@ mod tests {
             let pop = f[f.len() - 1] as usize;
             w.g.ent[b].act_life = 1;
             let row = (w.player.mc2_respawn_timer & 0xFF) as u8;
-            assert!(w
-                .g
-                .mc2_building_tick(b, Some(((x, y, gz), human as u16, true, row)), false));
+            assert!(w.g.mc2_building_tick(b, Some(((x, y, gz), human as u16, true, row)), false));
             let e = &w.g.ent[pop];
             assert_eq!((e.class64, e.model65), (10, 42), "the painter was minted");
             (e.f71, e.f80, e.f82)
@@ -36353,16 +36472,28 @@ mod tests {
     ///      alone; the rest of retail's writes are heap, not terrain).
     #[test]
     fn a_dead_rivals_repaint_row_is_its_countdown_byte_not_a_clamp() {
-        use crate::engine::features::{tile, BuildDef};
+        use crate::engine::features::{BuildDef, tile};
         // Synthetic BUILD00: row 0 empty; row 1 = a 2x2 pad at height
         // 40 (no paint codes); row 2 = a 1x1 spacer like the shipped
         // rows 8-16 (no pad, no code).
         let rig = || {
             let mut w = mc2_flat_world();
             w.g.assets.build_tab = vec![
-                BuildDef { offset: 0, w: 0, h: 0 },
-                BuildDef { offset: 0, w: 2, h: 2 },
-                BuildDef { offset: 8, w: 1, h: 1 },
+                BuildDef {
+                    offset: 0,
+                    w: 0,
+                    h: 0,
+                },
+                BuildDef {
+                    offset: 0,
+                    w: 2,
+                    h: 2,
+                },
+                BuildDef {
+                    offset: 8,
+                    w: 1,
+                    h: 1,
+                },
             ];
             w.g.assets.build_dat = vec![0xff, 40, 0xff, 40, 0xff, 40, 0xff, 40, 0xff, 0xff];
             w
@@ -36411,18 +36542,28 @@ mod tests {
         let e = &w.g.ent[p];
         assert_eq!((e.class64, e.model65), (10, 42), "the painter was minted");
         assert_eq!(e.f71, 51, "row = the rival's @0x10 low byte, unclamped");
-        assert_eq!((e.x, e.y, e.z), (0, 0, 0), "minted at the never-scouted spare axis");
+        assert_eq!(
+            (e.x, e.y, e.z),
+            (0, 0, 0),
+            "minted at the never-scouted spare axis"
+        );
         assert_eq!(e.id24, r as u16, "parented to the corpse");
         // (2) 1200 → byte 176 = −80: a negative row selects the empty
         // row 0 and the painter runs its whole window touching nothing.
         let (mut w, p, _) = mint(1200, 1, false);
         assert_eq!(w.g.ent[p].f71, 176);
         let cells = [(0u8, 0u8), (255, 255), (255, 0), (0, 255), (1, 1)];
-        let before: Vec<u8> = cells.iter().map(|&(cx, cy)| w.g.t.height[tile(cx, cy)]).collect();
+        let before: Vec<u8> = cells
+            .iter()
+            .map(|&(cx, cy)| w.g.t.height[tile(cx, cy)])
+            .collect();
         for _ in 0..21 {
             w.g.mc2_castle_painter_tick(p);
         }
-        let after: Vec<u8> = cells.iter().map(|&(cx, cy)| w.g.t.height[tile(cx, cy)]).collect();
+        let after: Vec<u8> = cells
+            .iter()
+            .map(|&(cx, cy)| w.g.t.height[tile(cx, cy)])
+            .collect();
         assert_eq!(before, after, "a sign-extended negative row paints nothing");
         // (3) Countdown 2 → row 2, a 1x1 frame. Rows 1..=2 accumulate:
         // row 1's 2x2 pad starts one cell BEFORE the frame on both
@@ -36431,11 +36572,18 @@ mod tests {
         // frame would have raised all four.
         let (mut w, p, _) = mint(2, 1, false);
         assert_eq!(w.g.ent[p].f71, 2);
-        let h0: Vec<u8> = cells.iter().map(|&(cx, cy)| w.g.t.height[tile(cx, cy)]).collect();
+        let h0: Vec<u8> = cells
+            .iter()
+            .map(|&(cx, cy)| w.g.t.height[tile(cx, cy)])
+            .collect();
         for _ in 0..21 {
             w.g.mc2_castle_painter_tick(p);
         }
-        assert_eq!(w.g.t.height[tile(0, 0)], 40, "the in-frame cell rises to pad + datum");
+        assert_eq!(
+            w.g.t.height[tile(0, 0)],
+            40,
+            "the in-frame cell rises to pad + datum"
+        );
         for (k, &(cx, cy)) in cells.iter().enumerate().skip(1) {
             assert_eq!(
                 w.g.t.height[tile(cx, cy)],
@@ -36454,7 +36602,11 @@ mod tests {
         );
         let (w, p, r) = mint(1, 2, true);
         let e = &w.g.ent[p];
-        assert_eq!((e.class64, e.model65, e.f71, e.id24), (10, 42, 1, r as u16), "patched: castles still are");
+        assert_eq!(
+            (e.class64, e.model65, e.f71, e.id24),
+            (10, 42, 1, r as u16),
+            "patched: castles still are"
+        );
     }
 
     /// ⭐⭐⭐ THE CAVE-IN'S SURVIVAL POCKET IS CARVED AROUND THE
@@ -36638,8 +36790,16 @@ mod tests {
         let mut w = mc2_flat_world();
         // One building type (tag 1) with no chain successor.
         w.g.assets.bldgprm = vec![
-            BldgParam { rate: 20, flags: 0, chain: 0 },
-            BldgParam { rate: 20, flags: 0, chain: 0 },
+            BldgParam {
+                rate: 20,
+                flags: 0,
+                chain: 0,
+            },
+            BldgParam {
+                rate: 20,
+                flags: 0,
+                chain: 0,
+            },
         ];
         // The stage row names THING 40, whose par1 is the tag.
         w.table[40].class = 10;
@@ -36651,7 +36811,9 @@ mod tests {
         assert_eq!(w.mc2_stages[0].state, 1);
         let (x, y) = mc2_pos(100, 100);
         let gz = w.g.ground_z(x, y) as i16;
-        let b = w.g.mc2_spawn_building(x, y, gz, 1).expect("the tagged building");
+        let b =
+            w.g.mc2_spawn_building(x, y, gz, 1)
+                .expect("the tagged building");
         assert_eq!(w.g.ent[b].f71, 1);
         // The tick-top roster as the sweep rebuilds it: intact.
         w.g.bldg_chain.list = vec![b as u16];
@@ -37396,8 +37558,7 @@ mod tests {
         let (locked, successors) = run(false);
         assert_eq!(successors, 1, "the rung rebuilds its chain successor");
         assert_eq!(
-            locked,
-            0,
+            locked, 0,
             "the SUCCESS path still unlocks the whole footprint              (NETHERW.EXE 0x5D180-0x5D1C1)"
         );
 
@@ -38211,8 +38372,8 @@ mod tests {
             "the near-grab arm (0x57d65) is the only writer left: \
              another +56 and nothing from the vetoed mover"
         );
-        let step = ((s.x as i32 - held.0 as i32).pow(2)
-            + (s.y as i32 - held.1 as i32).pow(2)) as f64;
+        let step =
+            ((s.x as i32 - held.0 as i32).pow(2) + (s.y as i32 - held.1 as i32).pow(2)) as f64;
         assert!(
             (step.sqrt() - 128.0).abs() <= 2.0,
             "0x57d65 `mov ecx,0x80` — the near-grab drift is 128 along \
@@ -38299,7 +38460,7 @@ mod tests {
         );
         assert_eq!(dx, 0, "and nothing of it reaches the pose");
         assert_eq!(
-            arm(true).0 .1,
+            arm(true).0.1,
             30,
             "the one-shot is per tick: the register is untouched, not \
              merely un-decayed once"
@@ -38320,7 +38481,6 @@ mod tests {
              (got {dx})"
         );
     }
-
 
     /// **THE AURA PULL IS A PER-TICK HANDSHAKE, AND IT OUTLIVES THE
     /// SETTLE COUNTER.** Retail's magnet (`sub_38D80`, EF:28364-75)
@@ -41831,7 +41991,10 @@ mod tests {
         w.set_mc2_wizards(&cfg, 2);
         let i = w.mc2_rivals[0].ent as usize;
         let m = w.mc2_rivals[0].book.ent[2] as usize;
-        assert!(m != 0 && w.mc2_rivals[0].book.ent[1] != 0, "both tokens minted");
+        assert!(
+            m != 0 && w.mc2_rivals[0].book.ent[1] != 0,
+            "both tokens minted"
+        );
         let c = w
             .rival_castle(w.mc2_rivals[0].ent)
             .expect("the authored castle");
@@ -42145,7 +42308,6 @@ mod tests {
         );
     }
 
-
     /// ROUND 104 — **MC2 HAS A THIRD CAST BUTTON.** `sub_5F380`'s
     /// dispatch tail is three flat `testb`/`call` pairs on the wizard
     /// extension's command word, not two (EF:60850-62):
@@ -42213,7 +42375,6 @@ mod tests {
         // ...and the LEFT hand bit (256) is the one it stamps.
         assert_eq!(w.hand_bits & 0x300, 0x100);
     }
-
 
     /// ROUND 102 — THE DEFENSE RESCAN WALKS THE TICK-TOP CLASS-3 CHAIN,
     /// AND A VICTIM SEIZURE BLANKS IT. `sub_161A0` iterates
@@ -42377,7 +42538,9 @@ mod tests {
         });
         w.set_mc2_wizards(&cfg, 2);
         let i = w.mc2_rivals[0].ent as usize;
-        let c = w.rival_castle(w.mc2_rivals[0].ent).expect("the authored castle");
+        let c = w
+            .rival_castle(w.mc2_rivals[0].ent)
+            .expect("the authored castle");
         // Park the wizard well away from home so the approach steers.
         {
             let (cx, cy) = (w.g.ent[c].x, w.g.ent[c].y);
@@ -42406,7 +42569,11 @@ mod tests {
             "with the word dropped `sub_12FF0` falls to LABEL_14: no roll stamp, \
              even though `rival_castle` would still find the castle"
         );
-        assert_eq!(w.mc2_rivals[0].state, Mc2AiState::Upgrade, "the state stands");
+        assert_eq!(
+            w.mc2_rivals[0].state,
+            Mc2AiState::Upgrade,
+            "the state stands"
+        );
         let _ = roll_stamped;
     }
 
@@ -43806,10 +43973,9 @@ mod tests {
         // The hub's own @0x2C is the RING RADIUS `sub_4F440` stamps
         // after the loop (`word_0x2C_44 = maxSpeed`, EF:36008) — 192.
         assert_eq!(w.g.ent[h].f44, 192, "the hub carries the ring radius");
-        let sats: Vec<usize> =
-            (1..w.g.ent.len())
-                .filter(|&i| w.g.ent[i].class64 == 10 && w.g.ent[i].model65 == 77)
-                .collect();
+        let sats: Vec<usize> = (1..w.g.ent.len())
+            .filter(|&i| w.g.ent[i].class64 == 10 && w.g.ent[i].model65 == 77)
+            .collect();
         assert_eq!(sats.len(), 25, "the orb minted its 25 satellites");
         for s in sats {
             assert_eq!(
@@ -44475,11 +44641,18 @@ mod tests {
         w.player.teleport_return = None;
 
         // Leg 2 (f146 == 1): the return reads the token's axis.
-        w.mc2_cast_teleport(m, PlayerPose { x: 80 << 8, y: 90 << 8, ..here });
-        assert_eq!(w.g.ent[m].f146, 0, "the toggle disarmed");
-        let back = w.take_teleport().expect(
-            "the return leg restores the TOKEN's axis — a pool field survives the import",
+        w.mc2_cast_teleport(
+            m,
+            PlayerPose {
+                x: 80 << 8,
+                y: 90 << 8,
+                ..here
+            },
         );
+        assert_eq!(w.g.ent[m].f146, 0, "the toggle disarmed");
+        let back = w
+            .take_teleport()
+            .expect("the return leg restores the TOKEN's axis — a pool field survives the import");
         assert_eq!(
             (back.0, back.1, back.2),
             (
@@ -48140,7 +48313,6 @@ mod tests {
         );
     }
 
-
     /// ⭐⭐⭐ THE TRIGGER/PORTAL PROBE IS `sub_118C0` AND THE CARPET'S
     /// HALF-WIDTH IS PER-GAME — the fourth reader of the lane
     /// `Gen::player_overlap` already splits. `NETHERW.EXE` 0x34EC0
@@ -48352,15 +48524,29 @@ mod tests {
         w.player.fall_speed = 0;
         w.player.killer = 0;
         let floor = ground + w.mc2_carpet_row().clearance;
-        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        w.tick(
+            PlayerPose::level(px, py, floor, 0),
+            PlayerCommand::default(),
+        );
         assert_eq!(w.vitals().state, LifeState::Dead, "the fall lands");
         for (&s, &m) in owned.iter().zip(&before) {
             assert_eq!(w.mc2_book.ent[s], m, "the book still names its live token");
-            assert_eq!(w.g.ent[m as usize].tick70, (s as u8) * 3, "…which stays a manifestation");
+            assert_eq!(
+                w.g.ent[m as usize].tick70,
+                (s as u8) * 3,
+                "…which stays a manifestation"
+            );
         }
-        assert_eq!(jars(&w), jars_before + owned.len(), "one cosmetic jar per held spell");
+        assert_eq!(
+            jars(&w),
+            jars_before + owned.len(),
+            "one cosmetic jar per held spell"
+        );
 
-        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        w.tick(
+            PlayerPose::level(px, py, floor, 0),
+            PlayerCommand::default(),
+        );
         w.tick(
             PlayerPose::level(cx, cy, 1792, 0),
             PlayerCommand {
@@ -48376,7 +48562,9 @@ mod tests {
             .g
             .ent
             .iter()
-            .filter(|e| e.class64 == 15 && e.tick70 == e.model65.wrapping_mul(3) && e.id24 == PLAYER_TARGET)
+            .filter(|e| {
+                e.class64 == 15 && e.tick70 == e.model65.wrapping_mul(3) && e.id24 == PLAYER_TARGET
+            })
             .count();
         assert_eq!(live, owned.len(), "no duplicate manifestations");
     }
@@ -48407,7 +48595,10 @@ mod tests {
         w.player.fall_speed = 0;
         w.player.killer = 0;
         let floor = ground + w.mc2_carpet_row().clearance;
-        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        w.tick(
+            PlayerPose::level(px, py, floor, 0),
+            PlayerCommand::default(),
+        );
         assert_eq!(w.vitals().state, LifeState::Dead, "the fall lands");
         assert_eq!(w.accel_override(), None, "touchdown ends the override");
         assert_eq!(w.player.accel, 0);
@@ -48415,7 +48606,10 @@ mod tests {
         assert!(!w.player.heal_active);
         assert!(!w.player.beyond_sight);
 
-        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        w.tick(
+            PlayerPose::level(px, py, floor, 0),
+            PlayerCommand::default(),
+        );
         assert_eq!(w.accel_override(), None, "no override on the corpse");
         w.tick(
             PlayerPose::level(cx, cy, 1792, 0),
@@ -48449,7 +48643,9 @@ mod tests {
         let ground = w.g.ground_z(px, py) as i16;
         let floor = ground + w.mc2_carpet_row().clearance;
         // A live speed window on an owned token.
-        let m = w.mc2_new_spell_token(3, px, py, floor).expect("speed token");
+        let m = w
+            .mc2_new_spell_token(3, px, py, floor)
+            .expect("speed token");
         w.g.ent[m].id24 = PLAYER_TARGET;
         w.g.ent[m].flags |= 1;
         w.g.ent[m].f44 = 0;
@@ -48465,14 +48661,20 @@ mod tests {
         w.player.state = LifeState::Falling;
         w.player.fall_speed = 0;
         w.player.killer = 0;
-        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        w.tick(
+            PlayerPose::level(px, py, floor, 0),
+            PlayerCommand::default(),
+        );
         assert_eq!(w.vitals().state, LifeState::Dead, "the fall lands");
         assert_eq!(w.mc2_book.ent[3], m as u16, "the book keeps its live token");
         assert_eq!(w.g.ent[m].f26, 0, "the kept token's window is over");
         assert_eq!(w.accel_override(), None, "touchdown ends the override");
         let _ = w.take_speed_base();
 
-        w.tick(PlayerPose::level(px, py, floor, 0), PlayerCommand::default());
+        w.tick(
+            PlayerPose::level(px, py, floor, 0),
+            PlayerCommand::default(),
+        );
         w.tick(
             PlayerPose::level(cx, cy, 1792, 0),
             PlayerCommand {
@@ -48485,7 +48687,11 @@ mod tests {
         for _ in 0..3 {
             w.tick(PlayerPose::level(cx, cy, 1792, 0), PlayerCommand::default());
             assert_eq!(w.accel_override(), None, "the respawn flies unboosted");
-            assert_eq!(w.take_speed_base(), None, "no speed mail from a dead window");
+            assert_eq!(
+                w.take_speed_base(),
+                None,
+                "no speed mail from a dead window"
+            );
         }
     }
 
@@ -49239,8 +49445,7 @@ mod tests {
         );
         let fresh = mc2_flat_world();
         assert_ne!(
-            rand,
-            fresh.g.ent[1].rand,
+            rand, fresh.g.ent[1].rand,
             "m18's release also SPENDS an entity LCG draw"
         );
     }
@@ -50053,7 +50258,11 @@ mod tests {
             w.g.ent[victim].site_z, 14,
             "the executor's OWN tick is what charms — not the impact"
         );
-        assert_eq!(w.g.ent[victim].lease(), 610, "duration off the record's @0x2A");
+        assert_eq!(
+            w.g.ent[victim].lease(),
+            610,
+            "duration off the record's @0x2A"
+        );
         assert_eq!(
             w.g.mc2_allied.0.get(&(victim as u16)).copied(),
             Some(PLAYER_TARGET),
@@ -50266,10 +50475,7 @@ mod tests {
     fn the_raid_arm_refuses_on_the_castle_token_not_the_grant() {
         // Two rivals; rival 0 keeps the Create-Castle grant, rival 1
         // owns the castle rival 0 is about to raid.
-        let mut w = mc2_brain_world(
-            &[&[(2, 0)], &[(2, 0)]],
-            &[(2, [1000, 1000, 1000])],
-        );
+        let mut w = mc2_brain_world(&[&[(2, 0)], &[(2, 0)]], &[(2, [1000, 1000, 1000])]);
         let me = w.mc2_rivals[0].ent as usize;
         let foe = w.mc2_rivals[1].ent as usize;
         // Rival 1's keep, right beside rival 0 so it is inside the
@@ -50384,8 +50590,7 @@ mod tests {
         w.g.ent[i].flags &= !0x20;
         w.mc2_rival_buffs(0);
         assert_eq!(
-            w.g.ent[m].f26,
-            0,
+            w.g.ent[m].f26, 0,
             "`movw $0x1,0x2e(%ebx)` then `dec` — the window collapses to 0"
         );
 
@@ -50405,5 +50610,4 @@ mod tests {
              (at strength 0 the same cast would have lifted it)"
         );
     }
-
 }

@@ -423,8 +423,8 @@ pub(crate) fn mc2_launch_axis_reach(spell: usize, life: i8) -> Option<(i16, bool
         // so does its reach.
         1 if life == 0 => Some((10240, true, false)),
         1 => Some((0x4000, true, false)),
-        9 => Some((10240, true, false)),      // sub_6AB00 EF:56816
-        13 => Some((0x4000, true, false)),    // sub_6B3E0 EF:57214
+        9 => Some((10240, true, false)),        // sub_6AB00 EF:56816
+        13 => Some((0x4000, true, false)),      // sub_6B3E0 EF:57214
         19 | 24 => Some((0x4000, true, false)), // sub_6C170 / sub_6CD20
         // ⭐ THE TERRAIN-TAIL EIGHT — reach 4096 at pitch 0, then
         // `z = getTerrainAlt(dest)`. sub_6B870 / sub_6BAB0 /
@@ -3708,7 +3708,11 @@ impl World {
             e.f32 = p.pitch;
             // `word_0x26_38` = the (15,14) token SLOT (see
             // [`no_token_slot_backref`]); was the bare index 14.
-            e.f40 = if no_token_slot_backref() { 14 } else { m as u16 };
+            e.f40 = if no_token_slot_backref() {
+                14
+            } else {
+                m as u16
+            };
             e.dest_x = dest.0;
             e.dest_y = dest.1;
             e.site_z = dest.2;

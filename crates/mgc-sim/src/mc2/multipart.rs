@@ -427,9 +427,7 @@ impl Gen {
     /// body — the invented early `return` after the orphan reap.
     fn child_orphan_fallthrough_law() -> bool {
         static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *V.get_or_init(|| {
-            std::env::var_os("MGC_NO_MC2_CHILD_ORPHAN_FALLTHROUGH").is_none()
-        })
+        *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CHILD_ORPHAN_FALLTHROUGH").is_none())
     }
 
     /// `sub_1B6B0` (EF:8696) — the m0/m3 child tick (state 0xE8):
@@ -1537,56 +1535,57 @@ impl Gen {
                     if dead_target {
                         revert = true;
                     } else {
-                    match self.m22_target_castle(target) {
-                        None => revert = true,
-                        Some(c) => {
-                            let (cx, cy) = {
-                                let e = &self.ent[c];
-                                (e.x, e.y)
-                            };
-                            let (ex, ey) = {
-                                let e = &self.ent[i];
-                                (e.x, e.y)
-                            };
-                            // ⭐ RETAIL RE-AIMS THE TARGET, NOT THE
-                            // LIVE HEADING. EF:17348 is one write —
-                            // `a1x->roll_0x20_32 = v5` — and the
-                            // move core (`sub_26FF0` → `sub_1B8C0`,
-                            // EF:17324, already run above) is what
-                            // walks the live yaw toward it, capped
-                            // at row 90's v_2 = 256/tick and one
-                            // frame LATE (the roll posted here is
-                            // first consumed on the NEXT tick).
-                            // mc2l22 t=12183 slot 360 (explain
-                            // t=12182→12183): retail yaw 1467 →
-                            // 1382 — it arrives at the STALE roll
-                            // 1382 — while roll goes 1382 → 1775;
-                            // the snap wrote 1775 into the heading
-                            // a whole slew early. Same law as m4's
-                            // militia (CONFORMANCE-FINDINGS "The
-                            // militiaman turns, never snaps", mc1l0
-                            // t=5051).
-                            let aim = Self::angle_between(ex, ey, cx, cy);
-                            self.ent[i].f34 = aim;
-                            // `EuclideanDistXYZ_58490` is 2-D despite
-                            // the name (Maths:738-42 never reads z —
-                            // the morph::dist2d law). A 3-D check here
-                            // is unsatisfiable: the head cruises at
-                            // chain-ground +384, the castle entity
-                            // sits at ground, so the worm would hover
-                            // at the flag forever, never absorbed.
-                            let d2 = crate::mc2::morph::dist2d(ex, ey, cx as i32, cy as i32);
-                            if self.ent[i].f63 & 3 == 0 && d2 <= 0x100 {
-                                let room = (self.ent[i].f140 + self.ent[c].f140) < self.ent[c].f136;
-                                if room {
-                                    self.ent[i].f26 = 128;
-                                    self.ent[i].tick70 = M22_BASE + 3; // → deposit
-                                } else {
-                                    revert = true;
+                        match self.m22_target_castle(target) {
+                            None => revert = true,
+                            Some(c) => {
+                                let (cx, cy) = {
+                                    let e = &self.ent[c];
+                                    (e.x, e.y)
+                                };
+                                let (ex, ey) = {
+                                    let e = &self.ent[i];
+                                    (e.x, e.y)
+                                };
+                                // ⭐ RETAIL RE-AIMS THE TARGET, NOT THE
+                                // LIVE HEADING. EF:17348 is one write —
+                                // `a1x->roll_0x20_32 = v5` — and the
+                                // move core (`sub_26FF0` → `sub_1B8C0`,
+                                // EF:17324, already run above) is what
+                                // walks the live yaw toward it, capped
+                                // at row 90's v_2 = 256/tick and one
+                                // frame LATE (the roll posted here is
+                                // first consumed on the NEXT tick).
+                                // mc2l22 t=12183 slot 360 (explain
+                                // t=12182→12183): retail yaw 1467 →
+                                // 1382 — it arrives at the STALE roll
+                                // 1382 — while roll goes 1382 → 1775;
+                                // the snap wrote 1775 into the heading
+                                // a whole slew early. Same law as m4's
+                                // militia (CONFORMANCE-FINDINGS "The
+                                // militiaman turns, never snaps", mc1l0
+                                // t=5051).
+                                let aim = Self::angle_between(ex, ey, cx, cy);
+                                self.ent[i].f34 = aim;
+                                // `EuclideanDistXYZ_58490` is 2-D despite
+                                // the name (Maths:738-42 never reads z —
+                                // the morph::dist2d law). A 3-D check here
+                                // is unsatisfiable: the head cruises at
+                                // chain-ground +384, the castle entity
+                                // sits at ground, so the worm would hover
+                                // at the flag forever, never absorbed.
+                                let d2 = crate::mc2::morph::dist2d(ex, ey, cx as i32, cy as i32);
+                                if self.ent[i].f63 & 3 == 0 && d2 <= 0x100 {
+                                    let room =
+                                        (self.ent[i].f140 + self.ent[c].f140) < self.ent[c].f136;
+                                    if room {
+                                        self.ent[i].f26 = 128;
+                                        self.ent[i].tick70 = M22_BASE + 3; // → deposit
+                                    } else {
+                                        revert = true;
+                                    }
                                 }
                             }
                         }
-                    }
                     }
                 }
                 if revert {
@@ -2487,7 +2486,6 @@ impl Gen {
         static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *V.get_or_init(|| std::env::var_os("MGC_NO_M27_SCAN_ROSTER_LIFE").is_none())
     }
-
 
     /// A/B toggle for the M27 `v34` AIM-RESIDUE law (round 128):
     /// `MGC_NO_M27_V34_AIM_RESIDUE` restores the pre-2026-09-10 body,

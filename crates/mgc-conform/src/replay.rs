@@ -962,10 +962,12 @@ impl RStats {
             .map(|s| s.t0)
             .collect();
         if !devs.is_empty()
-            || self
-                .segs
-                .iter()
-                .any(|s| matches!(s.opened_by, SegOpen::Gap | SegOpen::Restart | SegOpen::Roster))
+            || self.segs.iter().any(|s| {
+                matches!(
+                    s.opened_by,
+                    SegOpen::Gap | SegOpen::Restart | SegOpen::Roster
+                )
+            })
         {
             let gaps = self
                 .segs
@@ -1077,10 +1079,7 @@ impl RStats {
                     }
                 );
                 for (id, (rows, bounds)) in &self.roster_hits {
-                    let _ = writeln!(
-                        out,
-                        "     {id}: {rows} row(s) over {bounds} boundary/ies"
-                    );
+                    let _ = writeln!(out, "     {id}: {rows} row(s) over {bounds} boundary/ies");
                 }
             }
         }
@@ -3552,25 +3551,60 @@ mod tests {
         let mut st = RStats::default();
         // Wrong boundary (the floor is a finite tick list).
         assert!(!roster_excuse(
-            &mut st, Some(&r), "mc1l48", 12849, &z, &PairDiff::default(), 681, &ctx
+            &mut st,
+            Some(&r),
+            "mc1l48",
+            12849,
+            &z,
+            &PairDiff::default(),
+            681,
+            &ctx
         ));
         // Off the wound's rect (t=42813's pose head, 100 tiles away).
         assert!(!roster_excuse(
-            &mut st, Some(&r), "mc1l48", 12848, &z, &PairDiff::default(), 681, &off_rect
+            &mut st,
+            Some(&r),
+            "mc1l48",
+            12848,
+            &z,
+            &PairDiff::default(),
+            681,
+            &off_rect
         ));
         // A lane the rule does not name.
         let unnamed = [("pose.act_speed", 80_i64, -16_i64)];
         assert!(!roster_excuse(
-            &mut st, Some(&r), "mc1l48", 12848, &unnamed, &PairDiff::default(), 681, &ctx
+            &mut st,
+            Some(&r),
+            "mc1l48",
+            12848,
+            &unnamed,
+            &PairDiff::default(),
+            681,
+            &ctx
         ));
         // ALL-OR-NOTHING: a claimed lane beside an unclaimed one.
         let mixed = [("pose.z", 1446_i64, 1444_i64), ("pose.x", 0, 1)];
         assert!(!roster_excuse(
-            &mut st, Some(&r), "mc1l48", 12848, &mixed, &PairDiff::default(), 681, &ctx
+            &mut st,
+            Some(&r),
+            "mc1l48",
+            12848,
+            &mixed,
+            &PairDiff::default(),
+            681,
+            &ctx
         ));
         // A different take.
         assert!(!roster_excuse(
-            &mut st, Some(&r), "mc1l49", 12848, &z, &PairDiff::default(), 681, &ctx
+            &mut st,
+            Some(&r),
+            "mc1l49",
+            12848,
+            &z,
+            &PairDiff::default(),
+            681,
+            &ctx
         ));
         assert!(st.roster_ticks.is_empty(), "nothing may be booked");
     }
@@ -3579,7 +3613,7 @@ mod tests {
     /// a kind-less one — can reach a pose row by accident.
     #[test]
     fn a_field_rule_never_reaches_a_pose_row() {
-        use crate::roster::{RowCtx, RowKind, Roster};
+        use crate::roster::{Roster, RowCtx, RowKind};
         let r: Roster = serde_json::from_str(
             r#"{"rules":[
                 {"id":"field-scoped","status":"deviation","note":"",

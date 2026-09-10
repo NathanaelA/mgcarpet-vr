@@ -81,7 +81,11 @@ pub struct Audio {
     /// (player-reported startup lag, 2026-09-08). One entry: it holds
     /// exactly what was resident while the track played, so a muted
     /// game costs no more memory than a playing one.
-    music_cache: Option<(String, bool, (Arc<Vec<i16>>, Option<Arc<Vec<i16>>>, u16, u32))>,
+    music_cache: Option<(
+        String,
+        bool,
+        (Arc<Vec<i16>>, Option<Arc<Vec<i16>>>, u16, u32),
+    )>,
     /// Stream watchdog: last observed heartbeat, ticks it has been
     /// stale, and the reopen retry backoff.
     last_beat: u32,
@@ -563,7 +567,10 @@ mod tests {
             "the same decoded buffer plays again"
         );
         assert!(t.elapsed().as_millis() < 50, "no decode: {:?}", t.elapsed());
-        assert!(a.music_cache.is_none(), "the cache entry moved back into play");
+        assert!(
+            a.music_cache.is_none(),
+            "the cache entry moved back into play"
+        );
         // The arrangement changed under the cache: decode afresh.
         a.stop_music();
         a.set_prefer_gm(false);

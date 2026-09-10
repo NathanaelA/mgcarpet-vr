@@ -3647,7 +3647,10 @@ mod tests {
             "no flat-promotion draw on the paint tick: the paint locks the cell first"
         );
         assert_eq!(g.t.tile_type[se], 8, "the painted type stands");
-        assert_eq!(g.t.height[se], 10, "the rise still ran: 5 × (40 − h) / countdown");
+        assert_eq!(
+            g.t.height[se], 10,
+            "the rise still ran: 5 × (40 − h) / countdown"
+        );
     }
 
     /// Decode the verbatim `x_BYTE_DB038` bytes (EF:2594) and prove
@@ -3901,20 +3904,38 @@ mod tests {
         w.set_mc2_wizards(&configs, 2);
         let wiz = w.mc2_rivals[0].ent as usize;
         let tok = w.mc2_rivals[0].book.ent[2] as usize;
-        assert!(tok != 0 && w.g.ent[tok].class64 == 15, "the rival holds its castle token");
+        assert!(
+            tok != 0 && w.g.ent[tok].class64 == 15,
+            "the rival holds its castle token"
+        );
         let castle = (1..w.g.ent.len())
-            .find(|&j| w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 2 && w.g.ent[j].id24 == wiz as u16)
+            .find(|&j| {
+                w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 2 && w.g.ent[j].id24 == wiz as u16
+            })
             .expect("the authored castle");
-        assert_eq!(w.g.ent[castle].f26, 0, "spawned at level 0, pending the first-tick level-up");
+        assert_eq!(
+            w.g.ent[castle].f26, 0,
+            "spawned at level 0, pending the first-tick level-up"
+        );
         assert!(
             !w.g.mc2_ladder_sync.0.is_empty(),
             "non-vacuous: the ctor's ladder rebuild pushed the castle onto the mail"
         );
         let far = PlayerPose::from_tiles(5.0, 10.0, 5.0, 0.0, 0.0, 0.0);
         w.tick(far, PlayerCommand::default());
-        assert_eq!(w.g.ent[tok].flags & 0x400, 0, "the token stands after the first tick");
-        assert_eq!(w.mc2_rivals[0].book.ent[2], tok as u16, "the book slot stands");
-        assert_eq!(w.g.ent[castle].f26, 1, "the first tick committed the level-up");
+        assert_eq!(
+            w.g.ent[tok].flags & 0x400,
+            0,
+            "the token stands after the first tick"
+        );
+        assert_eq!(
+            w.mc2_rivals[0].book.ent[2], tok as u16,
+            "the book slot stands"
+        );
+        assert_eq!(
+            w.g.ent[castle].f26, 1,
+            "the first tick committed the level-up"
+        );
         // The contrast: a real DOWNGRADE to level 0 still purges.
         w.g.mc2_castle_downgrade(castle, crate::patches::WorldPatches::RETAIL);
         assert_eq!(w.g.ent[castle].f26, 0);
@@ -3923,9 +3944,11 @@ mod tests {
             "the downgrade's push carries the purge mark"
         );
         w.tick(far, PlayerCommand::default());
-        assert_eq!(w.mc2_rivals[0].book.ent[2], 0, "the downgrade to 0 purges the token");
+        assert_eq!(
+            w.mc2_rivals[0].book.ent[2], 0,
+            "the downgrade to 0 purges the token"
+        );
     }
-
 
     /// ⭐⭐⭐ THE CASTLE-DEATH TOKEN PURGE IS GATED ON THE LEVEL'S
     /// GRAPHICS BYTE, `terrain_2FECE.byte_0x2FED2 & 4`.

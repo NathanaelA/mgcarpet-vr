@@ -1595,7 +1595,10 @@ fn a_rival_bolt_carries_its_token_slot_not_a_spell_index() {
             }
         }
     }
-    assert!(seen > 0, "the authored rivals cast class-9 bolts in 2000 ticks");
+    assert!(
+        seen > 0,
+        "the authored rivals cast class-9 bolts in 2000 ticks"
+    );
     bad.sort_unstable();
     bad.dedup();
     assert!(
@@ -1718,7 +1721,9 @@ fn mc2_authored_castle_rows_stage_the_scratch_slot_and_the_scout_inherits_its_z(
     // the rival left tick 8 at 1128.
     assert_eq!(
         zs,
-        vec![1180, 1180, 1180, 1180, 1180, 1180, 1180, 1176, 1176, 1188, 1252, 1316, 1380],
+        vec![
+            1180, 1180, 1180, 1180, 1180, 1180, 1180, 1176, 1176, 1188, 1252, 1316, 1380
+        ],
         "rival 298's z: hover +4 over the servo floor on the whiff ticks, 1176 on the cast tick \
          (retail mc2l4 record 0), then the pad lift (records 1..5)"
     );

@@ -1139,8 +1139,9 @@ fn terrain_compare(
     // (`retail_record0_phase`); `Some(n)` = the caller's explicit count.
     let settle = match settle {
         Some(n) => n,
-        None => retail_record0_phase(&first, family)
-            .ok_or("record 0 carries no decodable state to read the phase from — pass --settle <n>")?,
+        None => retail_record0_phase(&first, family).ok_or(
+            "record 0 carries no decodable state to read the phase from — pass --settle <n>",
+        )?,
     };
     let mut img = mgc_formats::mgcr::TerrainImage::new(&decl);
     img.apply(&mgc_formats::mgcr::TerrainBlock {
@@ -1148,9 +1149,7 @@ fn terrain_compare(
         delta: None,
     })?;
     let (mut w, pristine) = match family {
-        mgc_formats::mgcr::Family::Mc1 => {
-            verify::build_world(&args.baked, &game, level)?
-        }
+        mgc_formats::mgcr::Family::Mc1 => verify::build_world(&args.baked, &game, level)?,
         mgc_formats::mgcr::Family::Mc2 =>
         // planes only — no entity dispatch, so the replay gate cannot apply
         {
@@ -1166,7 +1165,10 @@ fn terrain_compare(
     };
     if std::env::var_os("MGC_POOL_CENSUS").is_some() {
         let rows = w.debug_pool_rows();
-        let row: Vec<String> = rows.iter().map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}")).collect();
+        let row: Vec<String> = rows
+            .iter()
+            .map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}"))
+            .collect();
         eprintln!("POOL CENSUS live={}\n{}", rows.len(), row.join(" "));
     }
     let planes = if settle > 0 {
@@ -1181,8 +1183,15 @@ fn terrain_compare(
         }
         if std::env::var_os("MGC_POOL_CENSUS").is_some() {
             let rows = w.debug_pool_rows();
-            let row: Vec<String> = rows.iter().map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}")).collect();
-            eprintln!("POOL CENSUS AFTER SETTLE live={}\n{}", rows.len(), row.join(" "));
+            let row: Vec<String> = rows
+                .iter()
+                .map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}"))
+                .collect();
+            eprintln!(
+                "POOL CENSUS AFTER SETTLE live={}\n{}",
+                rows.len(),
+                row.join(" ")
+            );
         }
         w.planes_clone()
     } else {
@@ -1266,7 +1275,8 @@ fn mc2_player_start(
         mgc_formats::mgcr::Family::Mc2 => "mc2",
     };
     let lp = baked.join(dir).join(format!("level-{level:03}.mgcl"));
-    let pkg: mgc_formats::LevelPackage = mgc_formats::mgcl::read(std::fs::File::open(lp).ok()?).ok()?;
+    let pkg: mgc_formats::LevelPackage =
+        mgc_formats::mgcl::read(std::fs::File::open(lp).ok()?).ok()?;
     pkg.things
         .things
         .iter()
@@ -1337,7 +1347,11 @@ fn terrain_check(path: &std::path::Path, args: &Args) -> i32 {
                 r.planes.len(),
                 r.planes.first().map_or(0, |p| p.1),
                 r.settle,
-                if args.settle.is_none() { " (recorder phase, read from record 0)" } else { "" }
+                if args.settle.is_none() {
+                    " (recorder phase, read from record 0)"
+                } else {
+                    ""
+                }
             );
             0
         }
@@ -1354,7 +1368,11 @@ fn terrain_check(path: &std::path::Path, args: &Args) -> i32 {
                  base @t={})",
                 detail.join(" · "),
                 r.settle,
-                if args.settle.is_none() { " = recorder phase" } else { "" },
+                if args.settle.is_none() {
+                    " = recorder phase"
+                } else {
+                    ""
+                },
                 r.level,
                 r.base_t
             );

@@ -170,7 +170,9 @@ impl Roster {
             if r.field.is_some() || r.fields.is_some() {
                 let hit = row.field.is_some_and(|rf| {
                     r.field.as_deref() == Some(rf)
-                        || r.fields.as_ref().is_some_and(|fs| fs.iter().any(|f| f == rf))
+                        || r.fields
+                            .as_ref()
+                            .is_some_and(|fs| fs.iter().any(|f| f == rf))
                 });
                 if !hit {
                     return false;

@@ -627,7 +627,11 @@ fn mc2_castle_death_cost() {
     // and taxes only the demolish you chose — so it never rode the
     // MC1 lockout's (now retired) patch.
     let want = 4_000;
-    assert_eq!(w.mc2_book_view().cost[2], want, "the castle-less rebuild price");
+    assert_eq!(
+        w.mc2_book_view().cost[2],
+        want,
+        "the castle-less rebuild price"
+    );
     // The death's own downgrade ladder stamped the level-0
     // rung through the suppressed re-sync (mc2l3 t=265: retail token
     // 10000/99 -> 1000/9 the tick the castle fell) — now priced

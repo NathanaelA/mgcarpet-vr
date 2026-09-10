@@ -2273,14 +2273,22 @@ mod tests {
             "a far-band visit is not a rewind: advanced {} tiles",
             z0 - sim.flyer.z
         );
-        assert!(sim.flyer.yaw.abs() < 1e-3, "the far band writes no heading: {}", sim.flyer.yaw);
+        assert!(
+            sim.flyer.yaw.abs() < 1e-3,
+            "the far band writes no heading: {}",
+            sim.flyer.yaw
+        );
         // Mid ring under the same column: swept and turned.
         let mut sim = rig(4.0);
         let (x0, z0) = (sim.flyer.x, sim.flyer.z);
         for _ in 0..3 {
             sim.step(&FlightInput::default());
         }
-        assert!(sim.flyer.yaw.abs() > 0.5, "the mid ring seizes the heading: {}", sim.flyer.yaw);
+        assert!(
+            sim.flyer.yaw.abs() > 0.5,
+            "the mid ring seizes the heading: {}",
+            sim.flyer.yaw
+        );
         let moved = ((sim.flyer.x - x0).powi(2) + (sim.flyer.z - z0).powi(2)).sqrt();
         assert!(moved > 0.5, "the mid ring sweeps: moved {moved} tiles");
     }

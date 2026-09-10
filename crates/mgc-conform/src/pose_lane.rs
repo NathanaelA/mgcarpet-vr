@@ -170,13 +170,7 @@ fn no_spent_knock() -> bool {
 /// 1..=7. Anything 8 or over survives into the N+1 snapshot and is
 /// [`consumed_knock`]'s business, so this arm REFUSES it rather than
 /// double-counting.
-fn spent_knock_mc2(
-    mag0: i16,
-    mag1: i16,
-    dir1: u16,
-    life0: i32,
-    life1: i32,
-) -> Option<(u16, i16)> {
+fn spent_knock_mc2(mag0: i16, mag1: i16, dir1: u16, life0: i32, life1: i32) -> Option<(u16, i16)> {
     if no_spent_knock() || mag0 != 0 || mag1 != 0 {
         return None;
     }
@@ -464,17 +458,16 @@ impl PoseLane {
             // run since — keying on `model65` mis-fires the restore
             // on t=31601..31603 and makes three clean pairs dirty.
             let restore = match tok.f70 {
-                30 => Some(0i16),         // 10 Teleport, sub_56E50_57380
-                6 => Some(base_speed),    //  2 Accelerate, sub_56380_568B0
-                63 => Some(-base_speed),  // 21 Accel back, sub_57F00_58410
+                30 => Some(0i16),        // 10 Teleport, sub_56E50_57380
+                6 => Some(base_speed),   //  2 Accelerate, sub_56380_568B0
+                63 => Some(-base_speed), // 21 Accel back, sub_57F00_58410
                 _ => None,
             };
             let Some(restore) = restore else { continue };
             // Does the counter reach zero on the coming tick? Either
             // it is already 1, or — Accelerate only — the resisting
             // press latched `v_14` and the machine clamps it to 1.
-            let expires =
-                tok.f48 == 1 || (matches!(tok.f70, 6 | 63) && w0.v14 != 0);
+            let expires = tok.f48 == 1 || (matches!(tok.f70, 6 | 63) && w0.v14 != 0);
             if !expires {
                 continue;
             }
@@ -761,11 +754,8 @@ impl PoseLane {
         // correctly instead of reporting the harness's own error.
         // ⚠ AND THE SCALE IS THE ONE THE FILTER RAN UNDER, not tick
         // N's END latch — `mgc_formats::recover::pair_move_speed`.
-        let ms_eff = mgc_formats::recover::pair_move_speed(
-            p0.move_speed,
-            p1.move_speed,
-            p1.move_speed_ctr,
-        );
+        let ms_eff =
+            mgc_formats::recover::pair_move_speed(p0.move_speed, p1.move_speed, p1.move_speed_ctr);
         let (Some(sx), Some(sy)) = (
             recover_stick_slowed(p0.roll_acc as i16, p1.roll_acc as i16, ms_eff),
             recover_stick_slowed(p0.pitch_acc as i16, p1.pitch_acc as i16, ms_eff),
@@ -867,9 +857,10 @@ impl PoseLane {
         }
         // The magnitude lane first; the WITHIN-TICK SPEND
         // ([`spent_knock_mc2`]) when it has nothing to read.
-        let knock = consumed_knock(p0.knock_mag, p0.knock_dir, p1.knock_mag, p1.knock_dir).or_else(
-            || spent_knock_mc2(p0.knock_mag, p1.knock_mag, p1.knock_dir, e0.life, e1.life),
-        );
+        let knock =
+            consumed_knock(p0.knock_mag, p0.knock_dir, p1.knock_mag, p1.knock_dir).or_else(|| {
+                spent_knock_mc2(p0.knock_mag, p1.knock_mag, p1.knock_dir, e0.life, e1.life)
+            });
         flight::mc2_move(
             &mut s,
             &mut ext,

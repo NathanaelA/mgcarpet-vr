@@ -732,16 +732,17 @@ impl Shadow {
                 // retail freed" — both print as a MEMBER difference.
                 // The PORT's class/model at the same slot separates
                 // them in one glance. Print-only, like the rest.
-                let p = world
-                    .port_ent_lanes_mc2(s, human_slot, false)
-                    .map_or("-".to_string(), |v| {
-                        let m: BTreeMap<&'static str, Option<i64>> = v.into_iter().collect();
-                        format!(
-                            "({},{})",
-                            m.get("class3f").copied().flatten().unwrap_or(-1),
-                            m.get("model40").copied().flatten().unwrap_or(-1),
-                        )
-                    });
+                let p =
+                    world
+                        .port_ent_lanes_mc2(s, human_slot, false)
+                        .map_or("-".to_string(), |v| {
+                            let m: BTreeMap<&'static str, Option<i64>> = v.into_iter().collect();
+                            format!(
+                                "({},{})",
+                                m.get("class3f").copied().flatten().unwrap_or(-1),
+                                m.get("model40").copied().flatten().unwrap_or(-1),
+                            )
+                        });
                 format!("{s}:r{r}p{p}")
             };
             println!(

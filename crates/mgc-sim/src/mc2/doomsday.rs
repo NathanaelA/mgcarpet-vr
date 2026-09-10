@@ -306,7 +306,11 @@ impl Gen {
             // so the seed keeps its launch attitude (yaw 312, pitch
             // 2033) and flies straight where retail locks the avatar
             // and snaps to 280 / 26.
-            e.row156 = if no_mc2_pyramid_behavior_row() { 107 } else { 105 };
+            e.row156 = if no_mc2_pyramid_behavior_row() {
+                107
+            } else {
+                105
+            };
             e.f58 = 64; // byte_0x39_57 awake
             e.f66 = 3; // xtype
             e.f26 = 0;
@@ -465,7 +469,11 @@ impl Gen {
             // = 208. Same at t=44,578 (101 -> 1637), 44,582 (2037 ->
             // 1525), 44,585 (1947 -> 1435), 44,588 (1855 -> 1343) and
             // 44,594 (1669 -> 1157) — every one exact.
-            let snap = if no_mc2_pyramid_snap_high_byte() { 6 } else { 1536 };
+            let snap = if no_mc2_pyramid_snap_high_byte() {
+                6
+            } else {
+                1536
+            };
             self.ent[i].f30 = ctx.pyaw.wrapping_add(snap) & 0x7FF;
             return;
         }

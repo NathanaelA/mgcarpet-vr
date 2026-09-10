@@ -146,8 +146,17 @@ pub fn halo_color(c: [f32; 3]) -> [f32; 3] {
 /// [`halo_color`] of an 8-bit palette colour as a linear-space UI tint
 /// with the given alpha.
 fn halo_tint(c: &[u8], alpha: f32) -> [f32; 4] {
-    let ink = halo_color([c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]);
-    [srgb_to_linear(ink[0]), srgb_to_linear(ink[1]), srgb_to_linear(ink[2]), alpha]
+    let ink = halo_color([
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+    ]);
+    [
+        srgb_to_linear(ink[0]),
+        srgb_to_linear(ink[1]),
+        srgb_to_linear(ink[2]),
+        alpha,
+    ]
 }
 
 /// A [`MapDot`] lifted out of the map-texture bake for screen-space
@@ -4333,9 +4342,9 @@ impl Renderer {
                             srgb_to_linear(c[2] as f32 / 255.0),
                             1.0,
                         ],
-                        ink: d
-                            .halo
-                            .map(|r| halo_tint(&level.palette[r as usize][..3], MARKER_HALO_ALPHA[1])),
+                        ink: d.halo.map(|r| {
+                            halo_tint(&level.palette[r as usize][..3], MARKER_HALO_ALPHA[1])
+                        }),
                     }
                 })
                 .collect()
@@ -6392,17 +6401,63 @@ mod tests {
             tint: [1.0, 0.0, 0.0, 1.0],
             ink: Some(ink),
         };
-        let q = project_map_dots(&[red], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, 6.0, 1.5);
+        let q = project_map_dots(
+            &[red],
+            cx,
+            cy,
+            hx,
+            hy,
+            50.0,
+            128.0,
+            0.0,
+            256.0,
+            false,
+            1.0,
+            6.0,
+            1.5,
+        );
         assert_eq!(q.len(), 2, "ring, dot");
-        assert_eq!(q[0].rect, [cx - 4.5, cy - 4.5, 9.0, 9.0], "ring: +1 halo px a side");
+        assert_eq!(
+            q[0].rect,
+            [cx - 4.5, cy - 4.5, 9.0, 9.0],
+            "ring: +1 halo px a side"
+        );
         assert_eq!(q[1].rect, [cx - 3.0, cy - 3.0, 6.0, 6.0], "the dot itself");
         assert_eq!(q[0].tint, ink, "the ring wears the resolved ink");
         assert_eq!(q[1].tint, red.tint);
-        let q = project_map_dots(&[red], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, 6.0, 0.0);
+        let q = project_map_dots(
+            &[red],
+            cx,
+            cy,
+            hx,
+            hy,
+            50.0,
+            128.0,
+            0.0,
+            256.0,
+            false,
+            1.0,
+            6.0,
+            0.0,
+        );
         assert_eq!(q.len(), 1, "halo off: no ring");
         // Scenery/civilians are lifted with `ink: None` and get no ring.
         let tree = ScreenDot { ink: None, ..red };
-        let q = project_map_dots(&[tree], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, 6.0, 1.0);
+        let q = project_map_dots(
+            &[tree],
+            cx,
+            cy,
+            hx,
+            hy,
+            50.0,
+            128.0,
+            0.0,
+            256.0,
+            false,
+            1.0,
+            6.0,
+            1.0,
+        );
         assert_eq!(q.len(), 1, "no ring on a no-halo dot");
     }
 
@@ -6410,9 +6465,17 @@ mod tests {
     /// hue ignored — and the palette lift carries the dot alpha.
     #[test]
     fn halo_color_is_black_or_white_by_brightness() {
-        assert_eq!(halo_color([1.0, 0.0, 0.0]), [1.0; 3], "red (lum 0.21) → white");
+        assert_eq!(
+            halo_color([1.0, 0.0, 0.0]),
+            [1.0; 3],
+            "red (lum 0.21) → white"
+        );
         assert_eq!(halo_color([0.0, 0.0, 1.0]), [1.0; 3], "blue → white");
-        assert_eq!(halo_color([1.0, 1.0, 0.0]), [0.0; 3], "yellow (lum 0.93) → black");
+        assert_eq!(
+            halo_color([1.0, 1.0, 0.0]),
+            [0.0; 3],
+            "yellow (lum 0.93) → black"
+        );
         assert_eq!(halo_color([0.0; 3]), [1.0; 3], "black → white");
         assert_eq!(halo_color([1.0; 3]), [0.0; 3], "white → black");
         assert_eq!(halo_tint(&[255, 255, 255], 0.2), [0.0, 0.0, 0.0, 0.2]);
@@ -6432,7 +6495,20 @@ mod tests {
                 color: [0.0, 0.0, 1.0], // a dark (blue) glyph → white ring
                 alpha: MARKER_HALO_ALPHA[0],
             });
-            let q = project_map_stamps(&[st], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, scale);
+            let q = project_map_stamps(
+                &[st],
+                cx,
+                cy,
+                hx,
+                hy,
+                50.0,
+                128.0,
+                0.0,
+                256.0,
+                false,
+                1.0,
+                scale,
+            );
             assert_eq!(q.len(), 5, "4 halo copies + the stamp (scale {scale})");
             let main = q[4];
             assert_eq!(main.uv, [0.0, 0.0, 16.0, 15.0]);
@@ -6440,7 +6516,11 @@ mod tests {
             let mut seen = Vec::new();
             for h in &q[..4] {
                 assert_eq!(h.uv, [0.0, 0.0, -16.0, 15.0], "mode-2 silhouette");
-                assert_eq!(h.tint, [1.0, 1.0, 1.0, MARKER_HALO_ALPHA[0]], "white under a dark glyph");
+                assert_eq!(
+                    h.tint,
+                    [1.0, 1.0, 1.0, MARKER_HALO_ALPHA[0]],
+                    "white under a dark glyph"
+                );
                 assert_eq!(h.rect[2..], main.rect[2..], "same size as the stamp");
                 seen.push((h.rect[0] - main.rect[0], h.rect[1] - main.rect[1]));
             }
@@ -6451,7 +6531,20 @@ mod tests {
                 "exactly one pixel out, unscaled (scale {scale})"
             );
         }
-        let q = project_map_stamps(&[stamp_at(50.0, 128.0)], cx, cy, hx, hy, 50.0, 128.0, 0.0, 256.0, false, 1.0, 1.0);
+        let q = project_map_stamps(
+            &[stamp_at(50.0, 128.0)],
+            cx,
+            cy,
+            hx,
+            hy,
+            50.0,
+            128.0,
+            0.0,
+            256.0,
+            false,
+            1.0,
+            1.0,
+        );
         assert_eq!(q.len(), 1, "no halo, no copies");
     }
 
@@ -6460,8 +6553,8 @@ mod tests {
     /// halo changed its alpha keying, 2026-09-09).
     #[test]
     fn ui_shader_parses_and_validates() {
-        let module = wgpu::naga::front::wgsl::parse_str(include_str!("ui.wgsl"))
-            .expect("ui.wgsl parses");
+        let module =
+            wgpu::naga::front::wgsl::parse_str(include_str!("ui.wgsl")).expect("ui.wgsl parses");
         let mut v = wgpu::naga::valid::Validator::new(
             wgpu::naga::valid::ValidationFlags::all(),
             wgpu::naga::valid::Capabilities::all(),
@@ -6485,12 +6578,40 @@ mod tests {
         shifted.offset = [4.0, 0.0];
         shifted.tint = [0.5, 0.25, 1.0, 1.0];
         for yaw in [0.0f32, 1.0, 2.5] {
-            let q0 = project_map_stamps(&[base], cx, cy, hx, hy, 10.0, 10.0, yaw, 64.0, false, 1.0, 2.0);
-            let q1 =
-                project_map_stamps(&[shifted], cx, cy, hx, hy, 10.0, 10.0, yaw, 64.0, false, 1.0, 2.0);
+            let q0 = project_map_stamps(
+                &[base],
+                cx,
+                cy,
+                hx,
+                hy,
+                10.0,
+                10.0,
+                yaw,
+                64.0,
+                false,
+                1.0,
+                2.0,
+            );
+            let q1 = project_map_stamps(
+                &[shifted],
+                cx,
+                cy,
+                hx,
+                hy,
+                10.0,
+                10.0,
+                yaw,
+                64.0,
+                false,
+                1.0,
+                2.0,
+            );
             assert_eq!(q0.len(), 1);
             assert_eq!(q1.len(), 1);
-            assert!((q1[0].rect[0] - q0[0].rect[0] - 8.0).abs() < 1e-3, "yaw {yaw}");
+            assert!(
+                (q1[0].rect[0] - q0[0].rect[0] - 8.0).abs() < 1e-3,
+                "yaw {yaw}"
+            );
             assert!((q1[0].rect[1] - q0[0].rect[1]).abs() < 1e-3, "yaw {yaw}");
             assert_eq!(q1[0].tint, [0.5, 0.25, 1.0, 1.0]);
             assert_eq!(q0[0].tint, [1.0, 1.0, 1.0, 1.0]);
@@ -6524,7 +6645,7 @@ mod tests {
                 false,
                 pw / ph,
                 1.0,
-        );
+            );
             assert!(
                 !quads.is_empty(),
                 "stamp vanished at yaw {yaw:.3} (step {i})"
@@ -6579,7 +6700,7 @@ mod tests {
                 false,
                 pw / ph,
                 scale,
-        )
+            )
         };
         let q1 = run(1.0);
         let q2 = run(2.0);

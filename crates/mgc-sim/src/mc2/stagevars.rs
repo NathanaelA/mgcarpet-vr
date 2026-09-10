@@ -1975,8 +1975,7 @@ mod tests {
             let i = devil_at(&mut g, k);
             g.m21_wrapper_tail(i);
             assert_eq!(
-                g.ent[i].f68,
-                64,
+                g.ent[i].f68, 64,
                 "a2 == {k} carries no side effect in sub_268F0"
             );
             assert_eq!(g.ent[i].f146, 7, "...and does not clear the target");
@@ -2044,7 +2043,8 @@ mod tests {
         let free = summoned_firebug(&mut g, 0);
         g.mc2_creature_tick(free, &ctx);
         assert_eq!(
-            g.ent[free].lease(), 495,
+            g.ent[free].lease(),
+            495,
             "the StageVar2-13 leg ran (lease -1, then -4 on the \
              no-lock fallback)"
         );

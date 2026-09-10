@@ -188,7 +188,10 @@ fn the_basic_possession_bolt_carries_the_launch_aim_point_and_the_ctor_payload()
     // The bolt itself is NOT at its aim point — the lane is a stored
     // destination, not the spawn.
     let bz = lane(&w, slot, "z").expect("z is modelled");
-    assert!(bz > az, "the bolt is born at the fov-lifted muzzle, above the aim point's z");
+    assert!(
+        bz > az,
+        "the bolt is born at the fov-lifted muzzle, above the aim point's z"
+    );
 }
 
 /// ROUND 104 — **THE TERRAIN-TAIL EIGHT.** The round-98 table

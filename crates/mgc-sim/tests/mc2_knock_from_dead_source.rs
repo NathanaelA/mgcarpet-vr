@@ -138,7 +138,6 @@ fn rival_configs(pkg: &LevelPackage) -> ([Option<Mc2RivalConfig>; 8], u16) {
     (out, count)
 }
 
-
 /// The first live class-15 manifestation token: a static, always-
 /// present record parked away from the wizard, and harmless to free
 /// for the one tick this test needs.

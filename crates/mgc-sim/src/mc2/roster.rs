@@ -1110,9 +1110,9 @@ impl Gen {
                             }
                             return;
                         }
-                    // Asleep: f26 stays parked at 0, so the hive squats
-                    // and feeds in place indefinitely — retail never
-                    // walks a hive that no wizard has approached.
+                        // Asleep: f26 stays parked at 0, so the hive squats
+                        // and feeds in place indefinitely — retail never
+                        // walks a hive that no wizard has approached.
                         let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
                         if self.ent[i].f63 as i16 % period == 0 {
                             self.m9_consume_scan(i, true); // sub_20940 arm: unconditional id copy
@@ -2437,12 +2437,7 @@ impl Gen {
     /// life. Free-run witness (`dump-state --port --start 20563`,
     /// mc2l6-rsg t=20564 slot 81): the ONLY two `!=` lanes in the
     /// whole record are `yaw` and `pitch`.
-    pub(crate) fn mc2_summon_head_bearing(
-        &mut self,
-        head: Option<usize>,
-        yaw: u16,
-        pitch: u16,
-    ) {
+    pub(crate) fn mc2_summon_head_bearing(&mut self, head: Option<usize>, yaw: u16, pitch: u16) {
         if no_summon_head_bearing() {
             return;
         }
@@ -4979,9 +4974,9 @@ impl Gen {
         }
         let (speed, sprite) = match self.ent[i].tick70 - M24_BASE {
             0 => (0, 336),
-            2 => (self.ent[i].f128, 335),          // minSpeed_0x84_132
-            6 => (2 * self.ent[i].f130, 335),      // 2 * maxSpeed_0x86_134
-            _ => (self.ent[i].f130, 335),          // maxSpeed_0x86_134
+            2 => (self.ent[i].f128, 335),     // minSpeed_0x84_132
+            6 => (2 * self.ent[i].f130, 335), // 2 * maxSpeed_0x86_134
+            _ => (self.ent[i].f130, 335),     // maxSpeed_0x86_134
         };
         self.ent[i].f126 = speed;
         if self.ent[i].type86 != sprite {
@@ -5020,8 +5015,7 @@ impl Gen {
                     if self.ent[i].tick70 == M24_BASE + 1 {
                         self.m24_acquire(i, ctx);
                     }
-                } else if no_mc2_m24_idle_else_forces_charge()
-                    && self.ent[i].tick70 == M24_BASE + 2
+                } else if no_mc2_m24_idle_else_forces_charge() && self.ent[i].tick70 == M24_BASE + 2
                 {
                     // The pre-dig arm — see below; kept only under the
                     // kill switch.

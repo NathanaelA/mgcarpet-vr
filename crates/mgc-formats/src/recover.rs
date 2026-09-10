@@ -888,9 +888,7 @@ pub fn mc2_crank_witness(p: &RetailEntMc2, c: &RetailEntMc2) -> bool {
     p.class3f == 3
         && p.model40 == 0
         && ((c.f30 != 0 && c.f30 != p.f30)
-            || (!no_mc2_ww_veto_witness()
-                && c.flags & 0x800 != 0
-                && p.flags & 0x1000_0000 == 0))
+            || (!no_mc2_ww_veto_witness() && c.flags & 0x800 != 0 && p.flags & 0x1000_0000 == 0))
 }
 
 /// [`recover_pair_mc2_k`] with the historical ONE-crank assumption.
@@ -1463,7 +1461,10 @@ mod cheat_tests {
         // The port-only win-level code has no retail toast, but its
         // sub-code must round-trip like the rest (the `.mgcr`
         // port-input lane carries it).
-        assert_eq!(Cheat::from_code(Cheat::WinLevel.code()), Some(Cheat::WinLevel));
+        assert_eq!(
+            Cheat::from_code(Cheat::WinLevel.code()),
+            Some(Cheat::WinLevel)
+        );
     }
 }
 
@@ -1620,7 +1621,10 @@ mod respawn_dating_tests {
         // Death B — the same key, dated exactly: SPACE first appears at
         // record 7072 and retail revives across 7071 → 7072. One take,
         // both signs; the state lane lands on the revival either way.
-        assert!(respawn(-1705, 10000, true), "mc1l49 t=7072, the on-time death");
+        assert!(
+            respawn(-1705, 10000, true),
+            "mc1l49 t=7072, the on-time death"
+        );
         // The key stays as CORROBORATION — a revival with no held
         // SPACE across the pair is not the player's respawn command.
         assert!(!respawn(-428, 10000, false), "no key, no respawn");
@@ -1706,12 +1710,20 @@ mod whirl_crank_tests {
         let slow = |s: i32, acc: i32, m: i32| acc + ((2 * s - acc) / 4) * (4 - m) / 4;
         assert_eq!(slow(10, -5, 1), -1, "the replayed (wrong) cursor");
         let sx = recover_stick_slowed(-5, 1, 1).expect("a slowed cursor exists");
-        assert_eq!(slow(sx as i32, -5, 1), 1, "the recovered cursor reproduces retail");
+        assert_eq!(
+            slow(sx as i32, -5, 1),
+            1,
+            "the recovered cursor reproduces retail"
+        );
         // …and the same tick's pitch lane, where the old answer was 1.
         assert_eq!(recover_stick(17, 14), Some(1));
         assert_eq!(slow(1, 17, 1), 15, "the replayed (wrong) cursor");
         let sy = recover_stick_slowed(17, 14, 1).expect("a slowed cursor exists");
-        assert_eq!(slow(sy as i32, 17, 1), 14, "the recovered cursor reproduces retail");
+        assert_eq!(
+            slow(sy as i32, 17, 1),
+            14,
+            "the recovered cursor reproduces retail"
+        );
         // Every reachable slow level round-trips, both signs, across
         // the accumulator's live band.
         for m in 1u8..=3 {
@@ -1763,7 +1775,11 @@ mod whirl_crank_tests {
         // signed byte, 0x77482 `movsx eax,byte [eax+0x3]`), k=1 and
         // k=2 are both legal — the ambiguity the trial step resolves.
         let target = |k: u8| (87i16).wrapping_sub(crank_units(31, k));
-        assert_eq!(recover_stick(31, target(0)), None, "k=0 needs a cursor of 128");
+        assert_eq!(
+            recover_stick(31, target(0)),
+            None,
+            "k=0 needs a cursor of 128"
+        );
         assert_eq!(recover_stick(31, target(1)), Some(72));
         assert_eq!(recover_stick(31, target(2)), Some(14));
     }
@@ -1786,7 +1802,11 @@ mod whirl_crank_tests {
         // (p.f30, c.f30, p.flags, c.flags) as recorded on the human,
         // slot 116, at each head.
         let pair = |pf30: u16, cf30: u16, pflags: u32, cflags: u32| {
-            let mut p = RetailEntMc2 { class3f: 3, model40: 0, ..RetailEntMc2::default() };
+            let mut p = RetailEntMc2 {
+                class3f: 3,
+                model40: 0,
+                ..RetailEntMc2::default()
+            };
             let mut c = p;
             p.f30 = pf30;
             c.f30 = cf30;
@@ -1796,9 +1816,11 @@ mod whirl_crank_tests {
         };
         // mc2l24 t=44613, 46814, 50677 — the heading never moves, the
         // veto latch appears, the grab latch is clear at the head.
-        for (pf30, cf30, pflags, cflags) in
-            [(1390u16, 1390u16, 269u32, 2317u32), (1369, 1369, 525, 2573), (1810, 1810, 525, 2573)]
-        {
+        for (pf30, cf30, pflags, cflags) in [
+            (1390u16, 1390u16, 269u32, 2317u32),
+            (1369, 1369, 525, 2573),
+            (1810, 1810, 525, 2573),
+        ] {
             let (p, c) = pair(pf30, cf30, pflags, cflags);
             assert!(mc2_crank_witness(&p, &c), "the near-arm seizure is a crank");
         }
@@ -1807,18 +1829,28 @@ mod whirl_crank_tests {
         // skips the `v40` block. mc2l24 t=44617: flags 268437773 on
         // BOTH sides, `roll_acc` 65523 -> 65523 with `rollDelta` 0.
         let (p, c) = pair(1369, 1369, 268437773, 268437773);
-        assert!(!mc2_crank_witness(&p, &c), "an already-grabbed wizard is not cranked");
+        assert!(
+            !mc2_crank_witness(&p, &c),
+            "an already-grabbed wizard is not cranked"
+        );
         // A pair with neither witness (mc2l24 t=46813: flags
         // 269 -> 525, no 0x800, heading parked) stays out.
         let (p, c) = pair(1369, 1369, 269, 525);
         assert!(!mc2_crank_witness(&p, &c), "0x100 is not the veto bit");
         // A rival wizard is class 3 model 0 too, but a non-wizard
         // record never reaches 0x57bf3's `[ebp-4] = 1`.
-        let mut p = RetailEntMc2 { class3f: 5, model40: 20, ..RetailEntMc2::default() };
+        let mut p = RetailEntMc2 {
+            class3f: 5,
+            model40: 20,
+            ..RetailEntMc2::default()
+        };
         p.flags = 525;
         let mut c = p;
         c.flags = 2573;
-        assert!(!mc2_crank_witness(&p, &c), "only class 3 model 0 is cranked");
+        assert!(
+            !mc2_crank_witness(&p, &c),
+            "only class 3 model 0 is cranked"
+        );
 
         // The arithmetic the witness buys, at the three heads. Each
         // row is `roll_acc[N] -> roll_acc[N+1]` with the recorded
@@ -1826,10 +1858,18 @@ mod whirl_crank_tests {
         // and the UN-cranked one is what the port inverted instead.
         // t=44613: -147 -> -97, rollDelta 22.
         assert_eq!(recover_stick(-147, -147 + 22), Some(-28));
-        assert_eq!(recover_stick(-147, -97), Some(27), "the crank absorbed into the cursor");
+        assert_eq!(
+            recover_stick(-147, -97),
+            Some(27),
+            "the crank absorbed into the cursor"
+        );
         // t=50677: 205 -> 186, rollDelta -47.
         assert_eq!(recover_stick(205, 205 - 47), Some(7));
-        assert_eq!(recover_stick(205, 186), Some(63), "the crank absorbed into the cursor");
+        assert_eq!(
+            recover_stick(205, 186),
+            Some(63),
+            "the crank absorbed into the cursor"
+        );
         // t=46814: 174 -> 206, rollDelta 4. Un-cranked, the step is
         // +32 and NO signed byte reaches it — the pair was reported
         // stick-unrecoverable and the pose lane gated.
@@ -1857,12 +1897,36 @@ mod whirl_crank_tests {
     /// `roll_acc -23 -> -28`, capture `rollDelta_0x4_4` = -7.
     #[test]
     fn a_slow_stamped_ahead_of_the_carpet_scales_the_same_ticks_filter() {
-        assert_eq!(pair_move_speed(0, 1, 7), 1, "the stamp beat the mover (ctr 8 -> 7)");
-        assert_eq!(pair_move_speed(0, 1, 8), 0, "the stamp landed behind the carpet's slot");
-        assert_eq!(pair_move_speed(1, 0, 0), 1, "the decay walk runs AFTER the filter");
-        assert_eq!(pair_move_speed(2, 1, 8), 2, "a decay to a still-live level, same rule");
-        assert_eq!(pair_move_speed(1, 1, 3), 1, "a steady level is its own answer");
-        assert_eq!(pair_move_speed(3, 3, 7), 3, "a stamp at the cap moves nothing");
+        assert_eq!(
+            pair_move_speed(0, 1, 7),
+            1,
+            "the stamp beat the mover (ctr 8 -> 7)"
+        );
+        assert_eq!(
+            pair_move_speed(0, 1, 8),
+            0,
+            "the stamp landed behind the carpet's slot"
+        );
+        assert_eq!(
+            pair_move_speed(1, 0, 0),
+            1,
+            "the decay walk runs AFTER the filter"
+        );
+        assert_eq!(
+            pair_move_speed(2, 1, 8),
+            2,
+            "a decay to a still-live level, same rule"
+        );
+        assert_eq!(
+            pair_move_speed(1, 1, 3),
+            1,
+            "a steady level is its own answer"
+        );
+        assert_eq!(
+            pair_move_speed(3, 3, 7),
+            3,
+            "a stamp at the cap moves nothing"
+        );
 
         // The forward law, `sub_5D530` 0x81d8b-0x81db1.
         let slow = |s: i32, acc: i32, m: i32| acc + ((2 * s - acc) / 4) * (4 - m) / 4;
@@ -1877,6 +1941,10 @@ mod whirl_crank_tests {
         // RECORDED -7 and lands retail's -28.
         let sx = recover_stick_slowed(-23, -28, ms).expect("a slowed cursor exists");
         assert_eq!((2 * sx as i32 + 23) / 4, -7, "the recorded rollDelta_0x4_4");
-        assert_eq!(slow(sx as i32, -23, 1), -28, "retail's roll_acc at mc2l24 t=8699");
+        assert_eq!(
+            slow(sx as i32, -23, 1),
+            -28,
+            "retail's roll_acc at mc2l24 t=8699"
+        );
     }
 }
