@@ -93,9 +93,10 @@ behaviour with a toggle.
 
 The main issue of all retail Magic Carpet games is the dreaded entity pool
 with its highly limited size and frequent overflows, resulting in strange
-gameplay issues, sometimes crashes. This port turns it into a parameter,
-one of the main reasons why gameplay of levels with heavy activity tends
-to be a lot smoother. Increasing the parameter also allows playing some of
+gameplay issues, sometimes crashes. This port turns it into a parameter
+(default 20000 slots against retail's 1000; set `entity_pool_size` to
+1000 for the retail limit), one of the main reasons why gameplay of
+levels with heavy activity tends to be a lot smoother. Increasing the parameter also allows playing some of
 the original hidden levels that were removed from the campaign for various
 reasons, one of them being that they don't even load correctly due to limited
 entity pool size.

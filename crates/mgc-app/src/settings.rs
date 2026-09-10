@@ -305,7 +305,12 @@ pub fn registry() -> Vec<Spec> {
             domain: Sim,
             group: "sim · parameters",
             label: "entity_pool_size",
-            class: Cheat,
+            // Enhancement, not Cheat, since the 20000 default landed
+            // (player-ruled 2026-09-10): a bigger pool grants no
+            // impossible power, it only stops the world shedding
+            // things — but it IS a deviation from retail, so a stock
+            // run rolls up ENHANCED, never FAITHFUL.
+            class: Enhancement,
             key: None,
             cli: Some("--pool-slots N"),
             cfg_path: "sim.parameters.entity_pool_size",
@@ -313,10 +318,11 @@ pub fn registry() -> Vec<Spec> {
                 val: c.sim.parameters.entity_pool_size.map(|n| n.to_string()),
                 faithful: "per-game default 1000",
             },
-            desc: "Entity pool capacity. Retail caps the world at 1000 things and \
-                   silently drops spawns beyond it; enlarging the pool carries \
-                   rosters the original would have shed. Set from the command \
-                   line or config file; fixed for the run.",
+            desc: "Entity pool capacity, default 20000. Retail caps the world at \
+                   1000 things and silently drops spawns beyond it; the larger \
+                   pool carries rosters the original would have shed. Set to \
+                   1000 for the retail limit. Set from the command line or \
+                   config file; fixed for the run.",
             ctl: Ctl::ReadOnly,
         },
         Spec {
@@ -2182,15 +2188,22 @@ mod tests {
     use crate::config::Config;
 
     #[test]
-    fn stock_run_is_faithful() {
+    fn stock_run_is_enhanced_by_the_pool_alone() {
         // The deliberate default deviations (fog 50, hud opaque) are
-        // all Preference-class, so a stock run
-        // rolls up FAITHFUL (cleanup/visual preferences must not flag
-        // the run).
+        // Preference-class and never flag the run. The ONE
+        // enhancement a stock run carries is the 20000-slot entity
+        // pool (player-ruled 2026-09-10; retail 1000) — so the stock
+        // verdict is ENHANCED with exactly one enhancement and no
+        // cheats, and setting the pool back to 1000 rolls up
+        // FAITHFUL.
         let (verdict, enh, modi, patches) = rollup(&Config::default());
         assert_eq!(modi, 0, "no cheats/instruments on by default");
-        assert_eq!(enh, 0, "no enhancement-class deviation by default");
-        assert_eq!(verdict, Fidelity::Faithful);
+        assert_eq!(enh, 1, "the entity pool is the only stock enhancement");
+        assert_eq!(verdict, Fidelity::Enhanced);
+        let mut retail_pool = Config::default();
+        retail_pool.sim.parameters.entity_pool_size = None;
+        let (verdict, enh, _, _) = rollup(&retail_pool);
+        assert_eq!((verdict, enh), (Fidelity::Faithful, 0), "retail pool = faithful");
         // The default-on retail patches count apart and never flip
         // the verdict (castle_recast_cost, the one retail-default
         // patch, was retired 2026-09-07).

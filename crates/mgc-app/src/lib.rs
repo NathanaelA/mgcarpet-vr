@@ -1014,12 +1014,15 @@ fn load_level(
                     })
                     .unwrap_or_default();
                 let mut chassis = game_id.chassis();
-                if let Some(n) = pool_slots {
-                    chassis.pool_slots = n;
+                if let Some(n) = pool_slots
+                    && n != chassis.pool_slots
+                {
                     println!(
-                        "chassis: pool_slots {n} (limit-removing override; \
-                         G-class — not a faithful run)"
+                        "chassis: pool_slots {n} (retail {}; G-class — not a \
+                         faithful run)",
+                        chassis.pool_slots
                     );
+                    chassis.pool_slots = n;
                 }
                 if let Some(tiles) = awake_range {
                     // 0 = always awake; otherwise (tiles·256)² with a
