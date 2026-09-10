@@ -2219,6 +2219,7 @@ impl Gen {
                 } else {
                     None
                 },
+                from: (ctx.px, ctx.py, ctx.pz, ctx.pyaw & 0x7FF),
                 act80: hact80,
                 // ⚠ ONE CRANK PER *PUBLISHED* SEIZURE, WHICH IS THE
                 // CHANNEL'S ARITY, NOT A CAP ON RETAIL. The grab
@@ -2310,6 +2311,7 @@ impl Gen {
                 heading: Self::angle_between(ex, ey, ctx.px, ctx.py).wrapping_add(591) & 0x7FF,
                 step: 96,
                 grab: None,
+                from: (ctx.px, ctx.py, ctx.pz, ctx.pyaw & 0x7FF),
                 act80: true,
                 // Dig Q6's crank is the OTHER half of the same `v40`
                 // block, so it rides this ladder rung too — under

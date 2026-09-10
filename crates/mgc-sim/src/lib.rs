@@ -1693,11 +1693,117 @@ impl Simulation {
             f.y += f.vy * TICK_DT;
         }
 
+        // ⭐⭐ THE WHIRLWIND'S POSE SEIZURE AND THE DOOMSDAY HURL —
+        // `Gen::player_whirl` / `Gen::player_hurl`. Retail's
+        // `sub_33340` (the funnel) and `sub_21AB0` case 7 (the pyramid
+        // beam) write the victim's POSITION and heading directly,
+        // never the knock register, so digs W4/Q7/X moved the human
+        // off `player_knock` onto these two channels — which the
+        // faithful walk drains at the carpet's own walk slot
+        // (`World::step_player_flight_mc2` / `apply_player_whirl` /
+        // `apply_player_hurl`). This mover HAS no walk slot, and
+        // nothing else reads them, so under the enhanced thrust model
+        // the level-001 arm tornado armed a seizure every tick that
+        // nobody applied: the funnel "barely moves the flyer and does
+        // not rotate it" (player report 2026-09-10 — a regression
+        // from the knock era, when every mover drained the shove).
+        //
+        // ⚠ ONE TICK LATE, SO A DELTA, NOT A POSE. This move runs
+        // AHEAD of the world turn that arms the channel, so what is
+        // drained here was computed from LAST tick's pose
+        // (`whirl.from`). The faithful walk stamps `grab` as an
+        // absolute pose because it consumes it in the same tick;
+        // stamped late it would rewind the flyer by one tick of
+        // motion, and a far-band tail visit (retail's unconditional
+        // `CopyEntityPosition_57CF0` with `v30 = 0`) would freeze him
+        // wherever he stood inside the 12-tile ring. So the position
+        // lands as `grab − from` on the PRE-move pose, and the heading
+        // only when an arm actually wrote one.
+        //
+        // The motion retail's carpet makes on a seizure tick is the
+        // funnel's write plus its own mover AFTER it — `sub_5D530`
+        // either does not run at all (the grab family's `byte[1] & 8`
+        // stop veto) or runs 80 forward along the seized heading
+        // (`actSpeed = 80`, the mid ring). Neither is this tick's
+        // velocity integration above, so a seizure discards it: the
+        // float analog of "the seizure is the whole motion".
+        let mut stopped = false;
+        if let Some(w) = &mut self.world {
+            const RAD: f32 = std::f32::consts::TAU / 2048.0;
+            // An ABSOLUTE 11-bit heading onto the accumulated float
+            // yaw — the nearest representative, so the smoothed camera
+            // never sees a 2π jump.
+            let seize_yaw = |cur: f32, eng: u16| -> f32 {
+                let a = (eng & 0x7FF) as f32 * RAD;
+                let mut d = (a - cur).rem_euclid(std::f32::consts::TAU);
+                if d > std::f32::consts::PI {
+                    d -= std::f32::consts::TAU;
+                }
+                cur + d
+            };
+            stopped = w.mc2_take_player_stop_veto();
+            if let Some(whirl) = w.take_player_whirl() {
+                let (delta, heading) = match whirl.grab {
+                    Some((x, y, z, yaw)) => {
+                        let (fx, fy, fz, fyaw) = whirl.from;
+                        (
+                            (
+                                x.wrapping_sub(fx) as i16 as f32 / 256.0,
+                                y.wrapping_sub(fy) as i16 as f32 / 256.0,
+                                z.wrapping_sub(fz) as f32 / 256.0,
+                            ),
+                            (yaw != fyaw).then_some(yaw),
+                        )
+                    }
+                    None => {
+                        // Dig W4's heading+step form (the mid ring
+                        // without a pinned human record).
+                        let a = (whirl.heading & 0x7FF) as f32 * RAD;
+                        let d = whirl.step as f32 / 256.0;
+                        ((d * a.sin(), -d * a.cos(), 0.0), Some(whirl.heading))
+                    }
+                };
+                if stopped || heading.is_some() || delta != (0.0, 0.0, 0.0) {
+                    f.x = from.0 + delta.0;
+                    f.z = from.1 + delta.1;
+                    f.y = from.2 + delta.2;
+                    if let Some(h) = heading {
+                        f.yaw = seize_yaw(f.yaw, h);
+                    }
+                    if stopped {
+                        f.vx = 0.0;
+                        f.vz = 0.0;
+                    } else if whirl.act80 {
+                        // `actSpeed = 80` (EF:24348): the mover's own
+                        // 80 forward along the seized heading, and the
+                        // cruise re-aimed with it so the momentum
+                        // carries on the tick the funnel lets go.
+                        let (sy, cy) = f.yaw.sin_cos();
+                        f.x += 80.0 / 256.0 * sy;
+                        f.z -= 80.0 / 256.0 * cy;
+                        f.vx = FAITHFUL_CRUISE_TPS * sy;
+                        f.vz = -FAITHFUL_CRUISE_TPS * cy;
+                    }
+                }
+            }
+            if let Some((bearing, dist)) = w.take_player_hurl() {
+                // `MoveEntity_57FA0(&pred, tan2(pyramid, player), 0,
+                // ramp)` — the outward shove, in tiles.
+                let a = (bearing & 0x7FF) as f32 * RAD;
+                let d = dist as f32 / 256.0;
+                f.x += d * a.sin();
+                f.z -= d * a.cos();
+            }
+        }
+
         // Forced knock displacement (the kraken buffet, Type_160
         // v_22/v_24 — :55204-218): part of the move, BEFORE the wall
         // gate, so the drag cannot pull the carpet through a wall.
+        // ⚠ Not on a stop-vetoed tick: `sub_5D530`'s early return sits
+        // ahead of the knock's apply-and-decay, so a pinned tick
+        // neither spends nor decays the impulse (mc2l30 t=2985..2999).
         if let Some(w) = &mut self.world {
-            if let Some((dir, mag)) = w.take_knock_step() {
+            if !stopped && let Some((dir, mag)) = w.take_knock_step() {
                 let a = dir as f32 * std::f32::consts::TAU / 2048.0;
                 let d = mag as f32 / 256.0; // engine units → tiles
                 f.x += d * a.sin();
@@ -2009,7 +2115,7 @@ mod tests {
     /// A minimal living world over flat height-100 terrain (the
     /// mortality boundary tests need World state, not just planes).
     fn flat_world(height: Vec<u8>) -> world::World {
-        use crate::engine::features::{FeatureAssets, Planes};
+        use crate::engine::features::Planes;
         let planes = Planes {
             height,
             tile_type: vec![5; 0x10000],
@@ -2017,6 +2123,25 @@ mod tests {
             angle: vec![5; 0x10000],
             ceiling: Vec::new(),
         };
+        world::World::new(planes, &[], 7, test_assets())
+    }
+
+    /// A bare flat MC2 world (no THINGs, so no start marker and no
+    /// pinned human record — the funnel's `!human_law` arm).
+    fn mc2_flat_world(height: u8) -> world::World {
+        use crate::engine::features::Planes;
+        let planes = Planes {
+            height: vec![height; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        world::World::new_for_game(planes, &[], 7, test_assets(), crate::ids::GameId::Mc2)
+    }
+
+    fn test_assets() -> crate::engine::features::FeatureAssets {
+        use crate::engine::features::FeatureAssets;
         let mut grid = vec![31u8; 1024];
         for y in 0..32i32 {
             for x in 0..32i32 {
@@ -2038,8 +2163,126 @@ mod tests {
             dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
             dat.push(0);
         }
-        let assets = FeatureAssets::parse(&grid, &tab, &dat).unwrap();
-        world::World::new(planes, &[], 7, assets)
+        FeatureAssets::parse(&grid, &tab, &dat).unwrap()
+    }
+
+    /// **THE ENHANCED MOVER IS SWEPT AND TURNED BY A WHIRLWIND.** The
+    /// funnel's human arm rides `Gen::player_whirl` (a POSE seizure —
+    /// heading + step on the mid ring, an absolute pose on the grab
+    /// family), which the faithful walk drains at the carpet's own
+    /// walk slot. The enhanced mover has no walk slot; it drains the
+    /// channel itself, or the tornado arms a seizure every tick that
+    /// nobody applies (player report 2026-09-10, level-001's arm
+    /// tornado: "barely moves the flyer and does not rotate it").
+    ///
+    /// Non-vacuity: with the drain removed from `move_enhanced` the
+    /// flyer here sits still at yaw 0 for the whole run.
+    #[test]
+    fn enhanced_mover_is_swept_and_turned_by_a_whirlwind() {
+        let mut w = mc2_flat_world(100);
+        let (wx, wy) = ((100u16 << 8) | 128, (100u16 << 8) | 128);
+        let gz = w.ground_z_engine(wx, wy);
+        let t = w.g.mc2_spawn_whirlwind(wx, wy, gz).expect("whirlwind");
+        w.g.ent[t].id24 = 7; // someone ELSE's funnel (`sub_33810` case 1)
+        let mut sim = Simulation::with_world(w);
+        sim.thrust_model = ThrustModel::Enhanced;
+        sim.altitude_model = AltitudeModel::ExtendedLift;
+        // Four tiles east of the eye = the MID RING, facing north, no
+        // input at all: every unit of motion below is the funnel's.
+        sim.flyer.x = 104.5;
+        sim.flyer.z = 100.5;
+        sim.flyer.y = 100.0 / 8.0 + 2.0;
+        sim.flyer.yaw = 0.0;
+        sim.sync_carpet_from_flyer();
+        let (x0, z0) = (sim.flyer.x, sim.flyer.z);
+        // Tick 1 arms the channel at the funnel's slot; tick 2's move
+        // drains it.
+        for _ in 0..2 {
+            sim.step(&FlightInput::default());
+        }
+        assert!(
+            sim.flyer.yaw.abs() > 0.5,
+            "the mid ring seizes the heading (tangent + 591): yaw {}",
+            sim.flyer.yaw
+        );
+        let moved = ((sim.flyer.x - x0).powi(2) + (sim.flyer.z - z0).powi(2)).sqrt();
+        assert!(
+            moved > 0.3,
+            "the 96-unit step landed on the float flyer: moved {moved} tiles"
+        );
+        // …and `actSpeed = 80` re-aims the cruise along the seized
+        // heading, so the sweep keeps its retail violence: the next
+        // ticks each cover the step PLUS the cruise.
+        let (x1, z1) = (sim.flyer.x, sim.flyer.z);
+        sim.step(&FlightInput::default());
+        let per_tick = ((sim.flyer.x - x1).powi(2) + (sim.flyer.z - z1).powi(2)).sqrt();
+        assert!(
+            per_tick > (96.0 + 40.0) / 256.0,
+            "step + cruise per tick, not the step alone: {per_tick} tiles"
+        );
+    }
+
+    /// The `human_law` column (a pinned human record: the app's own
+    /// shape) publishes an ABSOLUTE pose on every visit — including a
+    /// far-band visit that displaces nothing. Consumed one tick late,
+    /// that pose must land as a delta: a flyer holding thrust nine
+    /// tiles from the eye (inside the 12-tile ring, outside the
+    /// 0x310000 band) keeps flying, and one four tiles out is swept
+    /// AND turned.
+    ///
+    /// Non-vacuity: stamping `grab` as an absolute pose here freezes
+    /// the far flyer at its first in-ring position (the level-001
+    /// probe under the enhanced model sat at (9.6, 193.8) for seven
+    /// ticks with 6 tiles/s of velocity).
+    #[test]
+    fn enhanced_mover_whirl_seizure_is_a_delta_not_a_rewind() {
+        let rig = |tiles_out: f32| -> Simulation {
+            let mut w = mc2_flat_world(100);
+            let (wx, wy) = ((100u16 << 8) | 128, (100u16 << 8) | 128);
+            let gz = w.ground_z_engine(wx, wy);
+            let t = w.g.mc2_spawn_whirlwind(wx, wy, gz).expect("whirlwind");
+            w.g.ent[t].id24 = 7;
+            // The app's shape: a pinned class-0 human record.
+            let pinned = w.g.new_event().expect("pinned seat");
+            w.g.ent[pinned] = crate::engine::features::Ent::default();
+            w.mc2_carpet_slot = pinned as u16;
+            w.g.mc2_pinned = crate::engine::features::Mc2Pinned(pinned as u16);
+            let mut sim = Simulation::with_world(w);
+            sim.thrust_model = ThrustModel::Enhanced;
+            sim.altitude_model = AltitudeModel::ExtendedLift;
+            sim.flyer.x = 100.5 + tiles_out;
+            sim.flyer.z = 100.5;
+            sim.flyer.y = 100.0 / 8.0 + 2.0;
+            sim.flyer.yaw = 0.0;
+            sim.sync_carpet_from_flyer();
+            sim
+        };
+        let thrust = FlightInput {
+            thrust: 1.0,
+            ..FlightInput::default()
+        };
+        // Far band: the tail visit publishes his own pose back. He
+        // must keep making way north under thrust.
+        let mut sim = rig(9.0);
+        let z0 = sim.flyer.z;
+        for _ in 0..12 {
+            sim.step(&thrust);
+        }
+        assert!(
+            z0 - sim.flyer.z > 1.0,
+            "a far-band visit is not a rewind: advanced {} tiles",
+            z0 - sim.flyer.z
+        );
+        assert!(sim.flyer.yaw.abs() < 1e-3, "the far band writes no heading: {}", sim.flyer.yaw);
+        // Mid ring under the same column: swept and turned.
+        let mut sim = rig(4.0);
+        let (x0, z0) = (sim.flyer.x, sim.flyer.z);
+        for _ in 0..3 {
+            sim.step(&FlightInput::default());
+        }
+        assert!(sim.flyer.yaw.abs() > 0.5, "the mid ring seizes the heading: {}", sim.flyer.yaw);
+        let moved = ((sim.flyer.x - x0).powi(2) + (sim.flyer.z - z0).powi(2)).sqrt();
+        assert!(moved > 0.5, "the mid ring sweeps: moved {moved} tiles");
     }
 
     /// The retail suicide key (Shift+K, MC1 :20492-93 / MC2

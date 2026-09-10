@@ -18849,6 +18849,20 @@ impl World {
                 .is_some_and(|e| e.flags & crate::mc2::mobs::F_STOP != 0)
     }
 
+    /// The same one-shot, read AND cleared — for the ENHANCED mover,
+    /// which has no walk slot and so never reaches the clear in
+    /// [`Self::step_player_flight_mc2`]. Without it a grab's `byte[1]
+    /// |= 8` would stay latched on the human's record until a funnel
+    /// teardown swept it.
+    pub(crate) fn mc2_take_player_stop_veto(&mut self) -> bool {
+        let stop = self.mc2_player_stop_veto();
+        if stop {
+            let cs = self.mc2_carpet_slot as usize;
+            self.g.ent[cs].flags &= !crate::mc2::mobs::F_STOP;
+        }
+        stop
+    }
+
     /// This tick's DOOMSDAY HURL-AWAY BEAM on the human, as
     /// `(bearing, distance)` — see
     /// [`crate::engine::features::PlayerHurl`]. Drained on read at the

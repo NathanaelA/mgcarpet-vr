@@ -2340,6 +2340,19 @@ pub(crate) struct PlayerWhirl {
     /// `roll_f`. A COUNT, not a flag: the ring walk can reach the
     /// not-yet-grabbed block more than once in a tick.
     pub bumps: u8,
+    /// The human's pose (x, y, z, heading) at the HEAD of the tick's
+    /// visits — `ctx.px/py/pz/pyaw`, the pose the funnel's slot read
+    /// before any arm moved him. The faithful walk consumes `grab`
+    /// as an absolute pose in the SAME tick, so it never needs this;
+    /// the enhanced mover consumes one tick late (its move runs
+    /// ahead of the world turn) and applies the seizure as the
+    /// DELTA `grab − from` instead — an absolute pose applied late
+    /// would rewind the flyer to last tick's position, and a
+    /// far-band visit (tail publish, no displacement) would freeze
+    /// him for as long as he stood inside the funnel's 12-tile
+    /// ring. Deliberately NOT hashed: it is the pose lane the tick
+    /// already digests.
+    pub from: (u16, u16, i16, u16),
 }
 
 impl std::hash::Hash for PlayerWhirl {
