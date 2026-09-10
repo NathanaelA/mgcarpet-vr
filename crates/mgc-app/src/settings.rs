@@ -2203,7 +2203,11 @@ mod tests {
         let mut retail_pool = Config::default();
         retail_pool.sim.parameters.entity_pool_size = None;
         let (verdict, enh, _, _) = rollup(&retail_pool);
-        assert_eq!((verdict, enh), (Fidelity::Faithful, 0), "retail pool = faithful");
+        assert_eq!(
+            (verdict, enh),
+            (Fidelity::Faithful, 0),
+            "retail pool = faithful"
+        );
         // The default-on retail patches count apart and never flip
         // the verdict (castle_recast_cost, the one retail-default
         // patch, was retired 2026-09-07).
