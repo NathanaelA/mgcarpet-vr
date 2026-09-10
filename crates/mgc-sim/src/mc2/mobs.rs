@@ -2918,8 +2918,10 @@ impl Gen {
     /// / `mc2_mine_tick`; this is its consumer.
     ///
     /// The gates, read off the shipped EXE statement for statement:
-    /// - model ∈ {1,2,3,4,5,8,9,0xC,0x16,0x17,0x1A,0x1C,0x1E}
-    ///   (0x8D15B-0x8D1AC, the same ladder `sub_68AC0` repeats);
+    /// - model ∈ {0,2,3,4,5,8,9,0xC,0x16,0x17,0x1A,0x1C,0x1E}
+    ///   (0x8D15B-0x8D1AC, the same ladder `sub_68AC0` repeats; shared
+    ///   as `mc2::proj::mc2_mine_ladder` — ⚠ the low end is `0 IN,
+    ///   1 OUT`: the port read it backwards until 2026-09-09);
     /// - `a1x->id_0x1A_26 != 0` and `Entities[owner]->class == 3`
     ///   (0x8D1B2-0x8D1D2) — a WIZARD-owned shot only;
     /// - walk the tick-top roster `dword_38535` (`0x8D1DE: mov
@@ -2964,10 +2966,7 @@ impl Gen {
             let e = &self.ent[i];
             (e.model65, e.id24, e.x, e.y, e.z, e.f30)
         };
-        if !matches!(
-            model,
-            1 | 2 | 3 | 4 | 5 | 8 | 9 | 0x0C | 0x16 | 0x17 | 0x1A | 0x1C | 0x1E
-        ) {
+        if !super::proj::mc2_mine_ladder(model) {
             return false;
         }
         if own == 0 {

@@ -126,6 +126,55 @@ pub(crate) fn no_mine_token_rearm() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MINE_TOKEN_REARM").is_some())
 }
 
+/// A/B toggle for the mine ladder's MODEL-0 ARM: set
+/// `MGC_NO_MINE_LADDER_MODEL0` to restore the pre-dig set, which
+/// admitted the (9,1) possession bolt and omitted the (9,0) FIREBALL.
+pub(crate) fn no_mine_ladder_model0() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MINE_LADDER_MODEL0").is_some())
+}
+
+/// ⭐⭐⭐ THE MAGIC MINE'S PROJECTILE LADDER — the thirteen bolt models
+/// `sub_68940` (the beacon, EF:55407-27) and `sub_68AC0` (the swallow,
+/// EF:55742-60) will bend onto / feed to an owner's armed (10,78).
+/// Both functions repeat the same comparison ladder statement for
+/// statement, so it lives here once and both consumers call it.
+///
+/// ⚠ THE LOW END OF THE LADDER IS `0 IN, 1 OUT`, NOT `1 IN, 0 OUT`.
+/// The port carried `1 | 2 | 3 …` in both consumers for the whole
+/// campaign — the shipped EXE's tail of the ladder (`sub_68940`
+/// 0x2499AA, identical bytes in `sub_68AC0` at 0x249B1A) is
+/// ```text
+///     3c 02              cmp   al,0x2
+///     72 15              jb    +0x15          ; model < 2 →
+///     …
+///     84 c0              test  al,al
+///     0f 85 03 01 00 00  jne   REJECT         ; model 1 → out
+///     (fall through)                          ; model 0 → IN
+/// ```
+/// and remc2's `if (v1 < 2u) { if (v1) return v11; }` (EF:55668-70)
+/// says the same. So retail bends and swallows a plain (9,0) FIREBALL
+/// — the commonest spell in the game — and never touches the (9,1)
+/// possession bolt (whose worker `CastPosses_65F60` calls neither
+/// function anyway, so the stray 1 was dead; the missing 0 was live).
+/// Found 2026-09-09 by backporting our mine laws INTO remc2: diffing
+/// its (correct) ladder against ours was the first time anyone read
+/// the low end of the ladder in the bytes. The only corpus witness of
+/// the swallow was a charged meteor (model 0xC), which is why the
+/// fixture never caught it.
+pub(crate) fn mc2_mine_ladder(model: u8) -> bool {
+    if no_mine_ladder_model0() {
+        return matches!(
+            model,
+            1 | 2 | 3 | 4 | 5 | 8 | 9 | 0x0C | 0x16 | 0x17 | 0x1A | 0x1C | 0x1E
+        );
+    }
+    matches!(
+        model,
+        0 | 2 | 3 | 4 | 5 | 8 | 9 | 0x0C | 0x16 | 0x17 | 0x1A | 0x1C | 0x1E
+    )
+}
+
 /// A/B toggle for `sub_674C0`'s claim-victim gate: set
 /// `MGC_NO_A18_VICTIM_GATE` to restore the pre-dig behaviour, where an
 /// action-18 (leveled possession) bolt minted its impact payload on a
@@ -974,7 +1023,8 @@ impl Gen {
     ///     }
     /// ```
     /// The model ladder is `sub_68940`'s own, repeated statement for
-    /// statement (EF:55407-27) — the same thirteen bolt models.
+    /// statement (EF:55407-27) — the same thirteen bolt models, shared
+    /// as [`mc2_mine_ladder`] (⚠ model 0 IN, model 1 OUT — see there).
     ///
     /// ⚠ THE ARMED GATE IS A ONE-SHOT AND IT IS WHAT KEEPS THE MINE
     /// FROM EATING THE WHOLE BARRAGE. `word_0x36_54` is `-1` from
@@ -1009,10 +1059,7 @@ impl Gen {
             let e = &self.ent[i];
             (e.model65, e.id24, e.x, e.y, e.z, e.f40)
         };
-        if !matches!(
-            model,
-            1 | 2 | 3 | 4 | 5 | 8 | 9 | 0x0C | 0x16 | 0x17 | 0x1A | 0x1C | 0x1E
-        ) {
+        if !mc2_mine_ladder(model) {
             return false;
         }
         let v = victim as usize;
@@ -4620,6 +4667,68 @@ mod debuff_knock_tests {
             1,
             "a disarmed mine no longer swallows"
         );
+    }
+
+    /// ⭐⭐⭐ THE LADDER'S LOW END IS `0 IN, 1 OUT` — a plain (9,0)
+    /// FIREBALL is swallowed, a (9,1) possession bolt is not.
+    ///
+    /// `sub_68AC0`'s ladder tail (shipped NETHERW.EXE 0x249B1A, the
+    /// same bytes as `sub_68940`'s at 0x2499AA): `test al,al; jne
+    /// REJECT` — model 1 leaves, model 0 falls through into the mine
+    /// test. The port listed `1 | 2 | 3 …` in both consumers from the
+    /// day the swallow landed (session 97) until the remc2 backport
+    /// diffed the two ladders (2026-09-09). NON-VACUITY: with
+    /// `MGC_NO_MINE_LADDER_MODEL0` set (the old set) the first half
+    /// fails at "the fireball is swallowed" and the second half at
+    /// "a possession bolt is not". Both halves call
+    /// [`Gen::mc2_mine_swallow`] directly so the action gate at the
+    /// impact site (which already excludes action 1) cannot mask the
+    /// ladder.
+    #[test]
+    fn the_mine_ladder_swallows_a_fireball_and_refuses_possession() {
+        let mut g = flat_gen();
+        const OWNER: u16 = 343;
+        let mut mine_at = |g: &mut Gen, x: u16| {
+            let m = g.new_event().expect("mine slot");
+            let e = &mut g.ent[m];
+            e.class64 = 10;
+            e.model65 = 78;
+            e.tick70 = 85;
+            e.f52 = OWNER;
+            e.f36 = 0; // armed (retail's -1)
+            e.flags |= 8;
+            e.x = x * 256;
+            e.y = 40 * 256;
+            e.z = 400;
+            m
+        };
+        let bolt_at = |g: &mut Gen, model: u8, x: u16| {
+            let b = g.new_event().expect("bolt slot");
+            let e = &mut g.ent[b];
+            e.class64 = 9;
+            e.model65 = model;
+            e.id24 = OWNER;
+            e.f40 = model as u16; // the port's @0x26 lane (spell index)
+            e.x = x * 256;
+            e.y = 40 * 256;
+            e.z = 400;
+            b
+        };
+        let mine0 = mine_at(&mut g, 40);
+        let fireball = bolt_at(&mut g, 0, 40);
+        assert!(
+            g.mc2_mine_swallow(fireball, mine0 as u16),
+            "the fireball is swallowed (model 0 is IN the ladder)"
+        );
+        assert_ne!(g.ent[mine0].f36, 0, "…and the mine is charged");
+
+        let mine1 = mine_at(&mut g, 60);
+        let posses = bolt_at(&mut g, 1, 60);
+        assert!(
+            !g.mc2_mine_swallow(posses, mine1 as u16),
+            "a possession bolt is not (model 1 is OUT of the ladder)"
+        );
+        assert_eq!(g.ent[mine1].f36, 0, "…and that mine is still armed");
     }
 
     /// ⭐⭐ THE BEAM'S RAW-ORIGIN EXEMPTION IS NOT A POOL-VICTIM

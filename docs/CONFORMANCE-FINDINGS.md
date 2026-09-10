@@ -904,6 +904,40 @@ post-fix).
 
 ## Resolved
 
+- **ROUND 130 (2026-09-10) — THE MINE LADDER'S LOW END IS `0 IN, 1 OUT`, FOUND BY BACKPORTING
+  INTO remc2.** The session's task was the reverse of the usual one: carry the port's proven
+  Magic-Mine laws INTO remc2, whose mine is dead upstream (turican0/remc2 #244, mc2-hd #554:
+  "spells just explode against the mine"). remc2's cause is its own — `type_entity_0x6E8E::
+  word_0x36_54` is `uint16_t` there and both `sub_68940` (EF:55701) and `sub_68AC0` (EF:55769)
+  gate on `== -1`, constant false under integer promotion, where the EXE compares the raw word
+  with `0xffff` (0x249A01 / 0x249B4C); a blind three-hunk patch (+ the case-9 sink step) and a
+  separate `sub_662E0` XP pointer-slip patch were handed upstream. Three agents diffed the whole
+  chain (`sub_3A8B0`, `50840`, `6CAC0` + helpers, `67960`, `68940`, `68AC0`, `10780`, six flyer
+  call sites) statement-by-statement against `NETHERW.EXE`: no other behaviour-affecting remc2
+  error — **but the ladder diff caught OURS**. The EXE's projectile ladder tail (`sub_68940`
+  0x2499AA, identical bytes in `sub_68AC0` at 0x249B1A) is `test al,al; jne REJECT`: model **1
+  leaves, model 0 falls through** (remc2 EF:55668-70 agrees). The port's `mc2_mine_swallow`
+  and `mc2_mine_beacon` both listed `1 | 2 | 3 …` since session 97, so a plain **(9,0)
+  fireball never bent onto nor charged its owner's mine** and a (9,1) possession bolt was
+  admitted (dead in practice: `CastPosses_65F60` calls neither function and the impact gate
+  excludes action 1). The only corpus witness of the swallow is a charged meteor (model 0xC),
+  which is why the fixture never saw it. LANDED: one shared predicate
+  `mc2::proj::mc2_mine_ladder` (both consumers), kill switch `MGC_NO_MINE_LADDER_MODEL0`,
+  unit test `the_mine_ladder_swallows_a_fireball_and_refuses_possession` — NON-VACUOUS and
+  selective (fails on its first assertion with the switch set; calls the swallow directly so
+  the impact site's action gate cannot mask the ladder). No recording pin: the whole-corpus
+  sweep is byte-identical, i.e. no take fires a fireball at its owner's armed mine — this is a
+  unit-test-only law (the dedicated mine take, `mine-recording-owed`, would witness it). GATE
+  (binary 042a8836…, pre-change 6244dabf… re-measured first: 30/30 = `brief-baseline.txt`):
+  `cargo test --release` **1152 passed / 0 failed** · fixtures **522/522, 0 regressions** ·
+  whole-corpus `replay --segmented --brief` **ALL THIRTY LINES BYTE-IDENTICAL**. ⚠ Leads from
+  the same audit, unmeasured: `sub_67960`'s tier-III carrier mine-homing acquire (EF:59603-33,
+  no port site); the carrier's lock validation tests life/reap where the port's flyer target is
+  identity-blind; the carrier has NO `sub_10780` probe (only `sub_106C0` vs its lock) where the
+  port's shared any-solid probe can detonate it on a graze; a swallow with `word_0x26_38 == 0`
+  spawns/sounds/returns 1 but WRITES NOTHING in retail (the port disarms unconditionally);
+  `mc2_mine_tick` has no case 8 and no cave-ceiling clamp (EF:29876-82).
+
 - **ROUND 129 (2026-09-10) — THE PHANTOM LEVEL-7 CASTLE AT THE MAP ORIGIN.** Player-reported:
   a full L7 castle outline + relief centred on world (0,0) at sea level, attached to no building,
   sporadic, port and retail. `mc2l22-retarded.mgcr` (port take, input+hash) replayed under a

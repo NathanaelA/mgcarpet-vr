@@ -266,6 +266,22 @@ end to end; the player report independently corroborates the port defect.
    where the port's fused `id24` held the caster and skipped. `(10,78)` is now in
    the `probe_self_id` unfuse list beside `(15,_)`, `(10,42)` and `(10,57)`.
 
+5. ✅ **RESOLVED (2026-09-09/10) — THE LADDER'S LOW END WAS READ BACKWARDS, and the
+   remc2 BACKPORT found it.** `sub_68940` / `sub_68AC0` share a thirteen-model
+   comparison ladder; the port listed `1 | 2 | 3 …` in both consumers. The shipped
+   EXE's tail (`sub_68940` 0x2499AA, identical bytes in `sub_68AC0` at 0x249B1A) is
+   `test al,al; jne REJECT` — **model 1 leaves, model 0 falls through** — and remc2's
+   `if (v1 < 2u) { if (v1) return; }` (EF:55668-70) agrees. So retail bends and
+   swallows a plain **(9,0) fireball** and never touches the (9,1) possession bolt.
+   The only corpus witness of the swallow is a charged meteor (model 0xC), which is
+   why the fixture never caught it. Now one shared predicate,
+   `mc2::proj::mc2_mine_ladder`; kill switch `MGC_NO_MINE_LADDER_MODEL0`; unit test
+   `the_mine_ladder_swallows_a_fireball_and_refuses_possession` (non-vacuous both
+   halves). Found while backporting the port's mine laws into remc2, whose OWN mine
+   is dead for a different reason: `word_0x36_54` is `uint16_t` there and the two
+   gates test `== -1` (always false) — see the memory note
+   `remc2-backport-magic-mine-2026-09-09`.
+
 **Suggested test.** On an MC2 level, cast Magic Mine at open ground with no enemy
 in front: retail lays a stationary sprite-66 mine ~16 tiles ahead that persists and
 does nothing until a wizard/castle approaches within ~14 tiles, then detonates.
