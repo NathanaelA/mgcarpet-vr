@@ -4688,7 +4688,7 @@ impl App {
             current,
         ) {
             wm.enter_visit(save);
-            wm.anchor_to(save);
+            wm.anchor_to(save, Some(cur));
             wm.set_parked(cur);
         }
         self.frontend_music();
@@ -4734,7 +4734,10 @@ impl App {
         if let Some(run) = &self.campaign {
             if let Some(save) = run.save.mc2() {
                 wm.enter_visit(save);
-                wm.anchor_to(save);
+                // A load: retail's load arm clears the just-played
+                // record (MI:1567), so the camera glides from the last
+                // flag to the pending portal.
+                wm.anchor_to(save, None);
             }
             // On RESUME `current` is the pending level — retail
             // parks the carpet on the last activated flag instead
@@ -4952,7 +4955,7 @@ impl App {
                         ) {
                             wm.session_reset();
                             wm.enter_visit(save);
-                            wm.anchor_to(save);
+                            wm.anchor_to(save, None);
                             wm.set_parked(parked);
                         }
                     }
@@ -4982,7 +4985,7 @@ impl App {
                 ) {
                     wm.session_reset();
                     wm.enter_visit(save);
-                    wm.anchor_to(save);
+                    wm.anchor_to(save, None);
                 }
                 println!("campaign restarted (unsaved until you save)");
             }

@@ -16,7 +16,22 @@
 //!   flies portal-to-portal at ~6 px/frame (3× Bresenham steps of
 //!   2, `sub_80D40`/`MoveAnimObject_7E9D0`), stamping trail dot
 //!   sprite 139 into the map every >8 px (`DrawMapObject_812D0`) —
-//!   the dotted route line. Travel sound 19.
+//!   the dotted route line. Travel sound 19. Its heading family is
+//!   `sub_581E0_maybe_tan2(target, carpet)` — i.e. retail's `tan`
+//!   of (carpet − target): 0 = target BELOW, 512 = left, 1024 =
+//!   above, 1536 = right; the exact cardinals take the 17/9/1/25
+//!   families and every open quadrant its diagonal family
+//!   (MI:3655-3740). The camera does NOT follow the leg: the flight
+//!   runs in the fixed viewport the click was made in (retail state
+//!   3 pointer-scroll is gated on "not flying", MI:3133).
+//! - map entry (`NewGameDraw_7EAE0` case 1, MI:3026-3105): the
+//!   viewport starts on the LAST COMPLETED portal's anchor and
+//!   glides to the pending portal's (state 2, 4 px/frame) after a
+//!   completion or a load; after a failure or an off-route replay it
+//!   snaps to the played level's anchor (a secret's = its parent's).
+//!   The pending portal is not drawn — so does not pop — until the
+//!   glide lands (MI:2818). The resting carpet faces the pending
+//!   portal (the last flag after a failure/off-route replay).
 //! - ambient decorations: the `x_BYTE_E26C8_str[16]` table
 //!   (MI:199-216) via `DrawAnimSprite_81CA0` (EF:46934): loop rows
 //!   draw always; burst rows are INVISIBLE while waiting, then play
@@ -52,6 +67,13 @@ const ANIM_FPS: f32 = 12.5;
 const CARPET_FPS: f32 = 6.25;
 /// Carpet travel speed: retail moves 3×2 px per ~60 Hz frame.
 const TRAVEL_SPEED: f32 = 360.0;
+/// The retail map-screen frame clock the per-frame laws (edge-scroll
+/// ramp, entry glide) are modeled at.
+const RETAIL_FPS: f32 = 70.0;
+/// The entry glide: the viewport walks a Bresenham line at 4 px per
+/// frame on its major axis (`CreateAnimObject_7E8D0(…, 4, 4)`,
+/// MI:3081; one `MoveAnimObject_7E9D0` step per frame, MI:3138).
+const GLIDE_STEP: f32 = 4.0;
 /// Retail sample ids (MC2 sound bank).
 const SND_PORTAL_OPEN: u8 = 41;
 const SND_TRAVEL: u8 = 19;
@@ -405,6 +427,17 @@ pub struct WorldMap {
     /// The edge-scroll ramp (retail `shift_step`, px/frame at the
     /// 70 Hz retail clock; 0 while no edge is touched).
     edge_step: f32,
+    /// The entry glide's destination — the pending portal's viewport
+    /// anchor — while the camera is still walking there (retail
+    /// state 2); None once parked. Clicks, key/pointer scrolling and
+    /// the pending portal's pop-in all wait for it.
+    glide: Option<(f32, f32)>,
+    /// What the resting carpet faces (map position): the pending
+    /// portal after a completion or a load, the last flag after a
+    /// failure or an off-route replay, a secret's parent portal
+    /// after a secret (`SetAnimationVariables_7DA70` call sites,
+    /// MI:2975-3013).
+    faces: (f32, f32),
 }
 
 impl WorldMap {
@@ -566,6 +599,8 @@ impl WorldMap {
             last_seen_completed: None,
             frontier_drawn: false,
             edge_step: 0.0,
+            glide: None,
+            faces: (0.0, 0.0),
         })
     }
 
@@ -577,6 +612,7 @@ impl WorldMap {
     pub fn session_reset(&mut self) {
         self.pop.clear();
         self.travel = None;
+        self.glide = None;
         self.last_seen_completed = None;
         self.parked = (0.0, 0.0);
         self.dialog = None;
@@ -609,13 +645,86 @@ impl WorldMap {
         (self.atlas_w, self.atlas_h, &self.atlas)
     }
 
-    /// Park the scroll on a portal's authored viewport anchor
-    /// (`viewPortPos`, the retail map-travel camera).
-    pub fn anchor_to(&mut self, save: &Mc2Save) {
-        let next = (save.levels_completed as usize).min(MC2_MAIN_PORTALS.len() - 1);
-        let (vx, vy) = MC2_MAIN_PORTALS[next].viewport;
-        self.scroll = (vx as f32, vy as f32);
+    /// Place the camera for a map entry (`NewGameDraw_7EAE0` case 1,
+    /// MI:3026-3105) and decide what the resting carpet faces.
+    /// `played` = the level just played (None on boot/load, where
+    /// retail's load arm clears the just-played record, MI:1567):
+    ///
+    /// - the level just played IS the newest flag (a completion, a
+    ///   replay of it) or there is none: the viewport starts on the
+    ///   last completed portal's anchor and GLIDES to the pending
+    ///   portal's (state 2). With nothing completed it simply sits
+    ///   on portal 0's anchor (the `jx == 0` snap, MI:3086); with the
+    ///   campaign complete it stays on the finale's.
+    /// - otherwise (a failure of the pending level, an off-route
+    ///   replay, a secret): snap to the played level's own anchor — a
+    ///   secret's is its parent main level's (MI:3040-3062).
+    pub fn anchor_to(&mut self, save: &Mc2Save, played: Option<u32>) {
+        let completed = save.levels_completed as usize;
+        let last = completed.checked_sub(1);
+        let anchor = |i: usize| {
+            let (vx, vy) = MC2_MAIN_PORTALS[i.min(MC2_MAIN_PORTALS.len() - 1)].viewport;
+            (vx as f32, vy as f32)
+        };
+        self.glide = None;
+        match played {
+            Some(l) if last != Some(l as usize) => {
+                let secret = MC2_SECRETS.iter().find(|&&(_, s, _)| s as u32 == l);
+                if let Some(&(parent, _, _)) = secret {
+                    // A secret parks on its own portal facing the
+                    // parent main portal (MI:2996-2999).
+                    self.scroll = anchor(parent as usize);
+                    self.faces = self.portal_center(parent as usize);
+                } else {
+                    // A main level faces the newest flag (retail's
+                    // `index4`; with NO flag retail indexes portal
+                    // -1 — garbage; we face the portal itself, i.e.
+                    // the straight-down family).
+                    self.scroll = anchor(l as usize);
+                    self.faces = self.portal_center(last.unwrap_or(l as usize));
+                }
+            }
+            _ => {
+                let pending = (completed < MC2_MAIN_PORTALS.len()).then_some(completed);
+                match (last, pending) {
+                    (Some(from), Some(to)) => {
+                        self.scroll = anchor(from);
+                        self.glide = Some(anchor(to));
+                    }
+                    (None, _) => self.scroll = anchor(0),
+                    (Some(from), None) => self.scroll = anchor(from),
+                }
+                // Facing the pending portal; with none (or, per the
+                // retail draw law, while the glide is still walking)
+                // the finale's neighbour, portal 23 (MI:3007-3013).
+                self.faces = self.portal_center(pending.unwrap_or(23));
+            }
+        }
         self.clamp();
+    }
+
+    /// The carpet's heading family — retail
+    /// `sub_581E0_maybe_tan2(&target, &carpet)` fed to the family
+    /// ladder shared by the flight (`sub_80D40`, MI:3655-3740) and the
+    /// resting pose (`SetAnimationVariables_7DA70`, MI:2297-2380).
+    /// The tan of (carpet − target) in 2048 units reads 0 = target
+    /// straight below, 512 = left, 1024 = above, 1536 = right; only
+    /// the exact cardinals take a cardinal family, every open
+    /// quadrant takes its diagonal one. Retail works in integer map
+    /// pixels, so the residual is rounded first.
+    fn carpet_family(dx: f32, dy: f32) -> usize {
+        // `sub_72633_maybe_tan(a1, a2)` with a1 = -dx, a2 = -dy.
+        let (a1, a2) = (-(dx.round() as i32), -(dy.round() as i32));
+        match (a1.signum(), a2.signum()) {
+            (0, 0) | (0, -1) => 17, // 0 / 2048: below
+            (1, 0) => 9,            // 512: left
+            (0, 1) => 1,            // 1024: above
+            (-1, 0) => 25,          // 1536: right
+            (1, -1) => 5,           // (0, 512): below-left
+            (1, 1) => 13,           // (512, 1024): above-left
+            (-1, 1) => 21,          // (1024, 1536): above-right
+            _ => 29,                // (1536, 2048): below-right
+        }
     }
 
     /// The center of a main portal (retail anchors travel to the
@@ -680,7 +789,7 @@ impl WorldMap {
         // level's secret portal is non-hidden (retail
         // `PresentLevelDescription_80C30` MI:3583-3601: text 23+lvl,
         // speech row = lvl segment 0, `IsPlayingCDTrack` latch).
-        if !self.narrated && self.travel.is_none() {
+        if !self.narrated && self.travel.is_none() && self.glide.is_none() {
             let next = save.levels_completed;
             if next < 25 {
                 let suppressed = MC2_SECRETS.iter().enumerate().any(|(i, &(parent, _, _))| {
@@ -691,6 +800,22 @@ impl WorldMap {
                     self.pending_narrative = Some(next);
                 }
             }
+        }
+        // The entry glide: the viewport walks the line to the
+        // pending portal's anchor, 4 px/frame on the major axis.
+        if let Some(to) = self.glide {
+            let (dx, dy) = (to.0 - self.scroll.0, to.1 - self.scroll.1);
+            let major = dx.abs().max(dy.abs());
+            let step = GLIDE_STEP * RETAIL_FPS * dt;
+            if major <= step {
+                self.scroll = to;
+                self.glide = None;
+            } else {
+                let f = step / major;
+                self.scroll.0 += dx * f;
+                self.scroll.1 += dy * f;
+            }
+            self.clamp();
         }
         let Some(t) = &mut self.travel else { return };
         let (dx, dy) = (t.target.0 - t.pos.0, t.target.1 - t.pos.1);
@@ -707,16 +832,12 @@ impl WorldMap {
             }
             return;
         }
+        // The camera stays where the click was made: retail's leg
+        // flies in the fixed viewport (no state moves `posx/posy`
+        // while `x_BYTE_17DB8E` is up, MI:3133) — the carpet comes
+        // in from off-screen when it was parked out of view.
         t.pos.0 += dx / dist * step;
         t.pos.1 += dy / dist * step;
-        // Follow the carpet with the viewport when it drifts out.
-        let _ = save;
-        let margin = 60.0;
-        let vx = (t.pos.0 - self.scroll.0).clamp(margin, VIEW_W - margin);
-        let vy = (t.pos.1 - self.scroll.1).clamp(margin, VIEW_H - margin);
-        self.scroll.0 = t.pos.0 - vx;
-        self.scroll.1 = t.pos.1 - vy;
-        self.clamp();
     }
 
     /// A click-travel has landed: the level to launch, once.
@@ -737,8 +858,8 @@ impl WorldMap {
 
     /// Pan the viewport (move keys), retail-viewport units.
     pub fn pan(&mut self, dx: f32, dy: f32) {
-        if self.travel.is_some() {
-            return; // the travel leg owns the camera
+        if self.travel.is_some() || self.glide.is_some() {
+            return; // the travel leg / entry glide owns the camera
         }
         self.scroll.0 += dx;
         self.scroll.1 += dy;
@@ -753,8 +874,11 @@ impl WorldMap {
     /// retail frame clock; suspended while the carpet flies (the leg
     /// owns the camera, MI:3133).
     pub fn edge_scroll(&mut self, dir: (f32, f32), dt: f32) {
-        const RETAIL_FPS: f32 = 70.0;
-        if dir == (0.0, 0.0) || self.travel.is_some() || self.dialog.is_some() {
+        if dir == (0.0, 0.0)
+            || self.travel.is_some()
+            || self.glide.is_some()
+            || self.dialog.is_some()
+        {
             self.edge_step = 0.0;
             return;
         }
@@ -1324,6 +1448,12 @@ impl WorldMap {
             }
         }
         for p in Self::portals(save) {
+            // The pending main portal is not drawn — so does not pop
+            // — until the entry glide lands (`index3` only resolves
+            // in states 3/5, MI:2818).
+            if matches!(p.state, PortalState::Next) && self.glide.is_some() {
+                continue;
+            }
             if let Some(id) = self.portal_sprite(&p)
                 && let Some(q) = self.sprite(id, p.pos, scale)
             {
@@ -1331,19 +1461,23 @@ impl WorldMap {
             }
         }
         // The carpet: travelling along a leg (8 heading families of
-        // 4 frames, sprites 1-32 — heading mapping assumes the
-        // engine's 0-north clockwise convention, VERIFY in playtest),
-        // or PARKED on the just-played level's portal (retail rests
-        // it between legs; default family 13, MI:956-958). Hidden
-        // only before the campaign's first launch.
+        // 4 frames, sprites 1-32, family by `carpet_family` from the
+        // residual to the target, re-read every frame), or PARKED on
+        // the just-played level's portal facing `faces` — during the
+        // entry glide retail's draw law resolves no pending portal
+        // and the rest pose faces portal 23 instead (MI:3007-3013).
+        // Hidden only before the campaign's first launch.
         let carpet = if let Some(t) = &self.travel {
             let (dx, dy) = (t.target.0 - t.pos.0, t.target.1 - t.pos.1);
-            let units =
-                (dx.atan2(-dy).rem_euclid(std::f32::consts::TAU)) / std::f32::consts::TAU * 2048.0;
-            const FAMILY: [usize; 8] = [17, 5, 9, 13, 1, 21, 25, 29];
-            Some((FAMILY[(((units + 128.0) / 256.0) as usize) % 8], t.pos))
+            Some((Self::carpet_family(dx, dy), t.pos))
         } else if save.levels_completed > 0 || self.parked != (0.0, 0.0) {
-            Some((13, self.parked))
+            let faces = if self.glide.is_some() {
+                self.portal_center(23)
+            } else {
+                self.faces
+            };
+            let (dx, dy) = (faces.0 - self.parked.0, faces.1 - self.parked.1);
+            Some((Self::carpet_family(dx, dy), self.parked))
         } else {
             None
         };
@@ -1422,8 +1556,10 @@ impl WorldMap {
             self.pending_button = Some(btn);
             return true;
         }
-        if self.travel.is_some() {
-            return false; // one leg at a time
+        if self.travel.is_some() || self.glide.is_some() {
+            // One leg at a time; and no portal clicks until the entry
+            // glide lands (retail state 2 handles none, MI:3330-31).
+            return false;
         }
         let mx = sx + self.scroll.0;
         let my = sy + self.scroll.1;
@@ -1511,6 +1647,8 @@ mod tests {
             last_seen_completed: None,
             frontier_drawn: false,
             edge_step: 0.0,
+            glide: None,
+            faces: (0.0, 0.0),
         }
     }
 
@@ -1690,6 +1828,107 @@ mod tests {
             wm2.tick(1.0 / 60.0, &save);
         }
         assert!(!wm2.frontier_drawn, "off-route flight draws nothing");
+    }
+
+    /// The heading ladder in retail's own units: the flight sprite
+    /// faces the portal it flies to, not away from it.
+    #[test]
+    fn carpet_faces_its_target() {
+        // (dx, dy) = target − carpet, y down.
+        assert_eq!(WorldMap::carpet_family(0.0, 40.0), 17, "below");
+        assert_eq!(WorldMap::carpet_family(-40.0, 0.0), 9, "left");
+        assert_eq!(WorldMap::carpet_family(0.0, -40.0), 1, "above");
+        assert_eq!(WorldMap::carpet_family(40.0, 0.0), 25, "right");
+        assert_eq!(WorldMap::carpet_family(-30.0, 30.0), 5, "below-left");
+        assert_eq!(WorldMap::carpet_family(-30.0, -30.0), 13, "above-left");
+        assert_eq!(WorldMap::carpet_family(30.0, -30.0), 21, "above-right");
+        assert_eq!(WorldMap::carpet_family(30.0, 30.0), 29, "below-right");
+        // Retail's open quadrants: a shallow leg is still diagonal…
+        assert_eq!(WorldMap::carpet_family(246.0, -15.0), 21);
+        // …until its minor residual rounds away.
+        assert_eq!(WorldMap::carpet_family(8.0, -0.4), 25);
+        assert_eq!(WorldMap::carpet_family(0.0, 0.0), 17);
+    }
+
+    /// A completion glides the camera from the last flag's anchor to
+    /// the pending portal's; the pending portal waits (no pop) and
+    /// clicks are refused until it lands; the carpet then faces it.
+    #[test]
+    fn completion_glides_the_camera_to_the_pending_portal() {
+        let mut wm = bare();
+        let save = save_with(3); // levels 0-2 done, 3 pending
+        wm.set_parked(2);
+        wm.anchor_to(&save, Some(2));
+        assert_eq!(wm.scroll, (576.0, 478.0), "starts on portal 2's anchor");
+        assert_eq!(wm.glide, Some((260.0, 402.0)), "walks to portal 3's");
+        // Nothing pops and no leg starts while walking.
+        let size = (640.0, 480.0);
+        let _ = wm.quads(&save, size, (0.0, 0.0));
+        assert!(!wm.pop.contains_key(&3), "pending portal hidden mid-glide");
+        let screen = (549.0 + 10.0 - wm.scroll.0, 626.0 + 10.0 - wm.scroll.1);
+        assert!(!wm.click(&save, size, screen), "clicks wait for the glide");
+        let before = wm.scroll;
+        wm.tick(1.0 / 70.0, &save);
+        // One frame = 4 px on the major axis (x: 576 → 260).
+        assert!((wm.scroll.0 - (before.0 - 4.0)).abs() < 1e-3);
+        assert!(wm.scroll.1 < before.1 && wm.scroll.1 > before.1 - 4.0);
+        for _ in 0..200 {
+            wm.tick(1.0 / 70.0, &save);
+        }
+        assert_eq!(wm.scroll, (260.0, 402.0));
+        assert!(wm.glide.is_none());
+        assert_eq!(
+            wm.faces,
+            wm.portal_center(3),
+            "rests facing the pending portal"
+        );
+        // Landed: the portal pops and is clickable.
+        let _ = wm.quads(&save, size, (0.0, 0.0));
+        assert!(wm.pop.contains_key(&3));
+        let screen = (549.0 + 10.0 - wm.scroll.0, 626.0 + 10.0 - wm.scroll.1);
+        assert!(wm.click(&save, size, screen));
+    }
+
+    /// A failure (or an off-route replay) snaps to the played level's
+    /// anchor with no glide; the carpet faces the newest flag. A
+    /// secret snaps to its parent's anchor facing the parent.
+    #[test]
+    fn failure_snaps_to_the_played_level() {
+        let mut wm = bare();
+        let save = save_with(3);
+        wm.anchor_to(&save, Some(3)); // failed the pending level 3
+        assert_eq!(wm.scroll, (260.0, 402.0));
+        assert!(wm.glide.is_none());
+        assert_eq!(wm.faces, wm.portal_center(2));
+        wm.anchor_to(&save, Some(0)); // replayed level 0
+        assert_eq!(wm.scroll, (116.0, 478.0));
+        assert!(wm.glide.is_none());
+        wm.anchor_to(&save, Some(30)); // secret 30 (parent 4)
+        assert_eq!(wm.scroll, (260.0, 402.0));
+        assert_eq!(wm.faces, wm.portal_center(4));
+        // Boot/load with nothing completed: portal 0's anchor, no glide.
+        wm.anchor_to(&save_with(0), None);
+        assert_eq!(wm.scroll, (116.0, 478.0));
+        assert!(wm.glide.is_none());
+        // A load with progress glides like a completion.
+        wm.anchor_to(&save, None);
+        assert_eq!(wm.scroll, (576.0, 478.0));
+        assert_eq!(wm.glide, Some((260.0, 402.0)));
+    }
+
+    /// The camera stays put while the carpet flies — the flight
+    /// happens in the viewport the click was made in.
+    #[test]
+    fn flight_does_not_move_the_camera() {
+        let mut wm = bare();
+        let save = save_with(0);
+        wm.scroll = (400.0, 800.0);
+        wm.set_parked(3); // far off-screen from portal 0's view
+        assert!(wm.click(&save, (1280.0, 960.0), (50.0, 50.0)));
+        for _ in 0..30 {
+            wm.tick(1.0 / 60.0, &save);
+            assert_eq!(wm.scroll, (400.0, 800.0));
+        }
     }
 
     #[test]
