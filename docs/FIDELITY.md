@@ -547,7 +547,11 @@ and CUT6 — its ending — after 24.
 per-movie skip, boundary fades, holds, the audio cue stream and the
 subtitle strip), `mgc-audio`'s movie-sample lane, and the seams in
 `mgc-app main.rs` (`Screen::Movie`, `intro_movies`, `mc2_cutscene`,
-`mc1_win_movie`, the `NextStep::Outro` arm). Option:
+`mc1_win_movie`, the `NextStep::Outro` arm — MC1/HW only: MC2's CUT6
+is a `mc2_cutscene` row like CUT1-5, and the campaign never ends —
+retail's finale exit is the ordinary checkpoint `break`
+(EventsFunctions.cpp:31525-31531), so the map stays open past it with
+every portal conquered, replayable and saveable). Option:
 `render.preference.movies` (Preference, default ON = faithful).
 
 **Verified.** All 24 retail streams decode to their exact header frame

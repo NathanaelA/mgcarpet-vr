@@ -1083,8 +1083,11 @@ by offset, never by our field name.
 - MC1 menu click samples (snds13 bake member + per-mode SFX bank switch).
 - Inert menu screens: Multiplayer / SetKeys / Language / Joystick (both
   games' equivalents).
-- Post-finale MC2 map refuses resume without `--new-game`; trail-stamp
-  gate + editor (14,3)→(11,12) marker remap untraced.
+- ~~Post-finale MC2 map refuses resume without `--new-game`~~ DONE
+  2026-09-11: the finale routes to the map like every checkpoint exit
+  (EF:31525-31531), CUT6 plays from the cutscene table, a completed
+  slot loads — free play, as retail. Trail-stamp gate + editor
+  (14,3)→(11,12) marker remap still untraced.
 - MC2 map 4-button edge overlay (save/load/next/exit); retail right-click
   replay nuance.
 - WATCH: temple hover sprite polarity may be inverted; langindexbuffer[2]

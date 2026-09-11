@@ -372,7 +372,9 @@ pub enum NextStep {
     Level(u32),
     /// MC2: return to the world map (the between-levels hub).
     MapScreen,
-    /// The campaign is complete — the outro slot.
+    /// The campaign is complete — the outro slot. MC1/HW only: MC2's
+    /// ending (CUT6) rides the ordinary cutscene table on the way back
+    /// to the map, which then stays open for free play.
     Outro,
 }
 
@@ -522,17 +524,20 @@ pub fn mc2_is_secret(level: u32) -> bool {
 /// the checkpoint exit routes there only when the secret portal was
 /// already revealed but not completed (`setting_38545 & 0x10`) —
 /// otherwise back to the map for the linear advance. Completing the
-/// finale (24) or a secret level returns to the map (the finale's
-/// ending runs first; a secret level has no onward jump of its own).
+/// finale (24) or a secret level returns to the map: a secret level
+/// has no onward jump of its own, and the finale's exit takes the
+/// SAME `break` out of the level loop as every checkpoint X
+/// (EF:31525-31531 — the `actLevel >= 0x18` arm only skips the
+/// secret lookup). Retail never ends the campaign: CUT6 plays on the
+/// way to the map like CUT1-5 (`cutScene_E16E0` row 6, level 24 + 1),
+/// and the map then shows every portal conquered, replayable and
+/// saveable — free play. `NextStep::Outro` is MC1/HW's.
 pub fn mc2_next_step(level: u32, exit_model: u8, secret_pending: bool) -> NextStep {
     if level < 24 && !mc2_is_secret(level) {
         let into_secret = exit_model == 4 || secret_pending;
         if into_secret && let Some(s) = mc2_secret_for(level) {
             return NextStep::Level(s);
         }
-    }
-    if level == 24 {
-        return NextStep::Outro;
     }
     NextStep::MapScreen
 }
@@ -682,9 +687,12 @@ mod tests {
         assert_eq!(mc2_next_step(4, 3, true), NextStep::Level(30));
         // A level with no attached secret never jumps.
         assert_eq!(mc2_next_step(5, 4, false), NextStep::MapScreen);
-        // Secret levels and the finale return to map / outro.
+        // Secret levels and the finale both return to the map — MC2
+        // never ends the campaign (free play after the finale; its
+        // ending CUT6 is the cutscene slot for level 24).
         assert_eq!(mc2_next_step(30, 3, false), NextStep::MapScreen);
-        assert_eq!(mc2_next_step(24, 3, false), NextStep::Outro);
+        assert_eq!(mc2_next_step(24, 3, false), NextStep::MapScreen);
+        assert_eq!(mc2_next_step(24, 4, false), NextStep::MapScreen);
     }
 
     #[test]

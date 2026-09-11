@@ -278,7 +278,9 @@ fn campaign_record(
 /// The MC2 level a save is waiting on: a revealed-but-uncompleted
 /// secret takes precedence (the player is mid-branch), otherwise the
 /// linear frontier. `levels_completed` counts opened portals, so it
-/// indexes the first unopened one.
+/// indexes the first unopened one — 25 once the finale is won, which
+/// names no level: the campaign is complete and the map is a free-play
+/// hub (every launch from it is a portal click, never this value).
 ///
 /// One rule, applied both when a slot is opened and whenever the run
 /// returns to the map — a slot saved from the map must name the same
@@ -387,12 +389,11 @@ impl CampaignRun {
                         ..Default::default()
                     }
                 };
+                // A completed campaign (25 portals opened) loads like
+                // any other — retail's load arm has no such check, and
+                // the map is the free-play hub past the finale.
                 if save.levels_completed >= 25 {
-                    return Err(
-                        "campaign mc2: slot holds a completed campaign — relaunch with \
-                         --new-game to start over"
-                            .into(),
-                    );
+                    println!("campaign mc2: the campaign is complete — free play");
                 }
                 let current = mc2_pending_level(&save);
                 Ok(Self {
@@ -1959,7 +1960,7 @@ struct App {
     boot_intro: bool,
     /// Which MC2 cutscenes have played this run (retail's
     /// `overplayed_5`, which is per-process and never persisted).
-    cutscenes_played: [bool; 5],
+    cutscenes_played: [bool; 6],
     /// What to do once the chain finishes or the player skips it.
     movie_then: AfterMovie,
     /// Which surface owns the frame (see [`Screen`]). Frontend
@@ -2198,7 +2199,7 @@ impl App {
             // direct `--level` launch does not, matching retail's own
             // level shortcut.
             boot_intro: has_campaign,
-            cutscenes_played: [false; 5],
+            cutscenes_played: [false; 6],
             movie_then: AfterMovie::Menu,
             ui_atlas: UiAtlas::None,
             frontend_audio_accum: 0.0,
@@ -5151,9 +5152,11 @@ impl App {
     ///
     /// The table is `cutScene_E16E0` (MenusAndIntros.cpp:189), which
     /// stores `levelIndex + 1` and so fires CUT1-5 after level indices
-    /// 4, 8, 12, 16 and 23. CUT6 belongs to level 24 and is the
-    /// campaign ending — it is played from the outro seam instead, so
-    /// it is not in this table.
+    /// 4, 8, 12, 16 and 23, and CUT6 — the ending — after the finale,
+    /// 24. The ending is NOT a terminal seam: retail plays it from the
+    /// same table on the way back to the map (`PlayInGameFmv_82670`,
+    /// MI:4082-4100), and the map then stays open with every portal
+    /// conquered — free play, replays and saves included.
     ///
     /// Retail marks each entry `overplayed_5` when it plays and never
     /// resets or persists the flag, so a cutscene shows once per
@@ -5162,14 +5165,14 @@ impl App {
         if !self.is_mc2() {
             return None;
         }
-        let slot = [4u32, 8, 12, 16, 23].iter().position(|&l| l == level)?;
+        let slot = [4u32, 8, 12, 16, 23, 24].iter().position(|&l| l == level)?;
         if std::mem::replace(&mut self.cutscenes_played[slot], true) {
             return None;
         }
         // Retail plays the cutscenes unskippable
         // (`PlayInfoFmv(0, ..)`, MenusAndIntros.cpp:4142).
         Some(movie::Cue::unskippable(
-            ["cut1", "cut2", "cut3", "cut4", "cut5"][slot],
+            ["cut1", "cut2", "cut3", "cut4", "cut5", "cut6"][slot],
         ))
     }
 
@@ -6989,17 +6992,17 @@ impl App {
                         }
                     }
                     Some(campaign::NextStep::Outro) => {
-                        // The campaign's ending movie, then
-                        // out. MC1/HW have a dedicated
-                        // OUTRO.DAT; MC2's ending is the last
-                        // of its six cutscenes.
+                        // MC1/HW's ending movie (OUTRO.DAT),
+                        // then out. MC2 never lands here: its
+                        // ending CUT6 is a map-bound cutscene
+                        // (`mc2_cutscene`) and the campaign
+                        // continues as free play.
                         println!("campaign complete!");
                         self.quit_fade = None;
-                        // Both endings are unskippable in
-                        // retail (`PlayInfoFmv(0, ..)`).
-                        let outro = if self.is_mc2() { "cut6" } else { "outro" };
+                        // Unskippable in retail
+                        // (`PlayInfoFmv(0, ..)`).
                         self.play_movies(
-                            &[movie::Cue::unskippable(outro)],
+                            &[movie::Cue::unskippable("outro")],
                             AfterMovie::Quit,
                             event_loop,
                         );
@@ -9506,8 +9509,15 @@ fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::wor
             } else {
                 // The plain checkpoint X: open the linear prefix
                 // through L (numLevelsCompleted counts opened
-                // portals; replays never regress it).
+                // portals; replays never regress it). The finale
+                // opens nothing further — 25 = every portal
+                // conquered, and the map stays up for free play.
                 save.levels_completed = save.levels_completed.max(level + 1);
+                if level == 24 {
+                    println!(
+                        "campaign mc2: the finale is won — free play (every portal stays open)"
+                    );
+                }
             }
             let secret_pending = save
                 .secrets
@@ -10068,7 +10078,17 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         }
         match CampaignRun::start(id, args.slot, args.new_game) {
             Ok(run) => {
-                level_path = run.level_path(run.current);
+                // A completed MC2 campaign is waiting on no level
+                // (`current` = 25, past the finale): probe the bake
+                // with the finale's file instead. Campaign boots load
+                // no level anyway — this path only feeds the
+                // staleness check.
+                let probe = if run.id == campaign::CampaignId::Mc2 {
+                    run.current.min(24)
+                } else {
+                    run.current
+                };
+                level_path = run.level_path(probe);
                 campaign_run = Some(run);
             }
             Err(e) => {

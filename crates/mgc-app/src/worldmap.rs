@@ -1666,6 +1666,22 @@ mod tests {
         assert!(matches!(portals[4].state, PortalState::SecretRevealed));
     }
 
+    /// Past the finale (25 portals opened) the map is the free-play
+    /// hub: every main portal is a conquered flag, none is "next", and
+    /// each stays clickable for a replay — retail never ends the MC2
+    /// campaign (the finale's exit is the ordinary checkpoint `break`,
+    /// EF:31525-31531).
+    #[test]
+    fn finished_campaign_keeps_every_portal_as_a_flag() {
+        let save = save_with(25);
+        let portals = WorldMap::portals(&save);
+        assert_eq!(portals.len(), 25);
+        for (i, p) in portals.iter().enumerate() {
+            assert_eq!(p.level, i as u32);
+            assert!(matches!(p.state, PortalState::Flag), "portal {i} is a flag");
+        }
+    }
+
     #[test]
     fn click_starts_travel_then_launches_on_arrival() {
         let mut wm = bare();
