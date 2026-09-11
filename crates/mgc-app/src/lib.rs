@@ -180,8 +180,9 @@ impl CampaignSave {
 
 /// A running campaign (`--campaign <mc1|mc1hw|mc2>`): the level-order
 /// law + the slot's durable retail-format record + the cross-level
-/// carry. The record IS the state — completing a level updates it and
-/// writes the slot file, so quitting anywhere resumes correctly.
+/// carry. The record IS the state — completing a level updates it in
+/// memory; nothing reaches disk until the player saves (player ruling
+/// 2026-09-11: no autosave at the won edge, either game).
 struct CampaignRun {
     id: campaign::CampaignId,
     /// 0-based save slot; `None` = the virtual slot 0 (`--slot`
@@ -472,9 +473,12 @@ impl CampaignRun {
     /// plus the retail `.gam` export beside it. IO failure is
     /// reported, never fatal — losing a save must not kill the run.
     ///
-    /// This is the BETWEEN-LEVELS write, so it clears any world
-    /// payload the slot was carrying: completing a level must not
-    /// leave a resume pointing back into it (design "Lifecycle").
+    /// This is the HUB write (menu / world-map Save): campaign state
+    /// only, so it clears any world payload the slot was carrying.
+    /// It is never called on the player's behalf — completing a level
+    /// does NOT write the slot (player ruling 2026-09-11); a mid-level
+    /// save of the level just won stays exactly as taken until the
+    /// player overwrites it.
     fn persist(&self) {
         // The virtual slot 0 run keeps its progress in memory only —
         // retail's boot shape. Nothing lands on disk until the player
@@ -6845,8 +6849,9 @@ impl App {
             if w.won() && !self.won_handled {
                 // The victory breadcrumb — and the campaign-
                 // stitching hook consuming the same signal:
-                // record the completion, pick the next step,
-                // persist the slot. Single-level mode still
+                // record the completion, pick the next step.
+                // Nothing is written to disk — saving is the
+                // player's act. Single-level mode still
                 // just fades out. Latched — the fade being
                 // consumed (the map screen) must not refire
                 // it.
@@ -8207,7 +8212,7 @@ struct Args {
     /// boot shape — nothing persists until the player saves in-game.
     slot: Option<usize>,
     /// `--new-game`: start the campaign fresh even if the slot holds
-    /// a save (the slot is only overwritten at the first completion).
+    /// a save (the slot is only overwritten when the player saves).
     new_game: bool,
     screenshot: Option<PathBuf>,
     /// Camera override for screenshots: x, y, z, yaw°, pitch°.
@@ -9416,11 +9421,6 @@ fn apply_campaign_book(
     }
 }
 
-/// The won-edge bookkeeping: fold the finished level into the
-/// campaign record, decide what follows (`CampaignRun::next`), and
-/// persist the slot file. A free function because it runs inside the
-/// redraw's `&mut sim.world` borrow (field-disjoint from
-/// `self.campaign`).
 /// MC1's world-won congratulation movie. Retail keeps TWO of them and
 /// picks by the parity of the free-running 120 Hz timer
 /// (`dword_AC5D4_AC5C4 & 1`, remc1:59905) — a coin flip with no level
@@ -9438,6 +9438,14 @@ fn mc1_win_movie() -> movie::Cue {
     movie::Cue::new(if flip == 0 { "levelw1" } else { "levelw2" })
 }
 
+/// The won-edge bookkeeping: fold the finished level into the
+/// campaign record and decide what follows (`CampaignRun::next`).
+/// Deliberately does NOT write the slot file: retail-style silent
+/// autosave on completion was removed (player ruling 2026-09-11) —
+/// the record lives in memory until the player saves from the hub
+/// or the mini-menu. A free function because it runs inside the
+/// redraw's `&mut sim.world` borrow (field-disjoint from
+/// `self.campaign`).
 fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::world::World) {
     use campaign::{CampaignId, NextStep};
     match run.id {
@@ -9510,7 +9518,6 @@ fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::wor
                 exit.unwrap_or(3),
                 secret_pending,
             ));
-            run.persist();
         }
         CampaignId::Mc1 | CampaignId::Mc1Hw => {
             let hw = run.id == CampaignId::Mc1Hw;
@@ -9542,7 +9549,6 @@ fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::wor
                 }
             };
             run.next = Some(next);
-            run.persist();
         }
     }
 }

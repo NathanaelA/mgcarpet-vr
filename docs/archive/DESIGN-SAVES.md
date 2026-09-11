@@ -93,9 +93,13 @@ loading such a slot resolves the level, loads it, then applies the payload.
 A slot therefore knows on its own whether it resumes at the hub or drops
 straight into play.
 
-Lifecycle: mid-level save writes campaign + payload; completing the level
-rewrites the slot with campaign state only. No stale payload survives its
-level.
+Lifecycle: mid-level save writes campaign + payload; a hub save (menu /
+world map) writes campaign state only. Completing a level writes NOTHING
+(player ruling 2026-09-11 — the original design autosaved the slot at the
+won edge, in both games; removed). A mid-level payload therefore outlives
+its level until the player saves again: loading it resumes into that
+level at the saved position, which is the honest reading of "I never
+saved after that".
 
 ### Where a load lands
 
