@@ -498,7 +498,9 @@ pub struct RenderEnhancement {
     /// the dolmen/shrine/statue statics. The expose-jar-spells debug
     /// option outranks this for jars (its spell icon + red dot draw
     /// instead, never both). Families with no icon built keep their
-    /// dots.
+    /// dots. Pickups (jars/tokens) composite ON TOP of every other
+    /// stamp, so a jar ringed by dolmens stays visible (player ask
+    /// 2026-09-11).
     pub map_marker_icons: bool,
     /// The self-contrasting marker halo (deliberate deviation, player
     /// design 2026-09-09): every hunted map marker — creature, mana

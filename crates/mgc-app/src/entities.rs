@@ -890,6 +890,15 @@ pub fn map_dots_from_poses(
 /// retail draws their NAME there in team color (:57413-48); until
 /// the DrawText path lands, a 2x2 team-color marker dot stands in
 /// (banked with the font track).
+///
+/// Compositing order (player ask 2026-09-11): the stamps draw in
+/// list order, so a later stamp covers an earlier one. Retail's dots
+/// are one texel and never occlude; the icon-swap miniatures DO, and
+/// a spell jar inside a dolmen circle vanished under the statics
+/// walked after it. So the pickups — the jar/token family, spell
+/// icon or miniature — are hoisted to the END (the top), stably;
+/// everything else keeps the entity-walk order, which the player
+/// ruled is not nearly as critical.
 pub fn map_stamps_from_poses(
     game: GameId,
     poses: &[LivePose],
@@ -936,10 +945,13 @@ pub fn map_stamps_from_poses(
             let mut s = *i;
             s.x = p.x;
             s.z = p.z;
-            out.push(s);
+            let on_top = matches!(p.class, 12 | 15);
+            out.push((on_top, s));
         }
     }
-    out
+    // Pickups last = on top (stable: ties keep the walk order).
+    out.sort_by_key(|&(on_top, _)| on_top);
+    out.into_iter().map(|(_, s)| s).collect()
 }
 
 /// The advertised-trigger map markers from the sim's trigger census
@@ -2909,6 +2921,45 @@ mod tests {
             Some(SwapFamily::Grave)
         ));
         assert!(icon_swap_family(GameId::Mc2, 10, 39).is_none());
+    }
+
+    /// Stamp compositing (player ask 2026-09-11): a spell jar walked
+    /// BEFORE the dolmens ringing it must still draw over them — the
+    /// pickups are hoisted to the top of the stamp list, the rest
+    /// keep their walk order.
+    #[test]
+    fn jar_stamps_composite_over_the_statics() {
+        let mini =
+            mgc_render::MapStamp::new(0.0, 0.0, 12, 12, [0.0, 400.0, 24.0, 24.0], [0.5, 1.0]);
+        let spell_icon =
+            mgc_render::MapStamp::new(0.0, 0.0, 8, 8, [64.0, 0.0, 8.0, 8.0], [0.5, 1.0]);
+        let mut icons = MapIcons::default();
+        icons.jar_icons.insert(42, mini);
+        icons.static_icons.insert(7, mini);
+        icons.grave_icons.insert(65, mini);
+        icons.spell = vec![Some(spell_icon); 26];
+        // Walk order: jar, dolmen, grave, dolmen, token.
+        let mut jar = pose(12, 3, false, 42);
+        jar.x = 1.0;
+        let mut d1 = pose(2, 1, false, 7);
+        d1.x = 2.0;
+        let mut grave = pose(10, 40, false, 65);
+        grave.x = 3.0;
+        let mut d2 = pose(2, 1, false, 7);
+        d2.x = 4.0;
+        let mut token = pose(15, 3, false, 42);
+        token.x = 5.0;
+        let walk = [jar, d1, grave, d2, token];
+        let xs = |expose: bool| -> Vec<f32> {
+            map_stamps_from_poses(GameId::Mc1, &walk, &icons, false, expose, true)
+                .iter()
+                .map(|s| s.x)
+                .collect()
+        };
+        // Miniatures: statics + grave keep their order, pickups last.
+        assert_eq!(xs(false), vec![2.0, 3.0, 4.0, 1.0, 5.0]);
+        // The debug spell icons are pickups too.
+        assert_eq!(xs(true), vec![2.0, 3.0, 4.0, 1.0, 5.0]);
     }
 
     /// The MC2 billboard size law (remc2 GameRenderOriginal.cpp
