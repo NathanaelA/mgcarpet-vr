@@ -523,6 +523,15 @@ impl Gen {
         *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M0_PHASE7_CONTROLLED").is_none())
     }
 
+    /// A/B toggle for the m0 DODGE HUMAN-HOOK law:
+    /// `MGC_NO_MC2_M0_DODGE_HUMAN_HOOK=1` restores the pre-fix body —
+    /// a `word_0x24_36` naming the out-of-pool human reads as "gone"
+    /// and releases the hook instead of strafing off his yaw.
+    fn m0_dodge_human_hook_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M0_DODGE_HUMAN_HOOK").is_none())
+    }
+
     /// `sub_1F300` (EF:11352) — the m0 STATE-0x07 WRAPPER's tail, i.e.
     /// everything after the shared `sub_1D5D0(a2x, 0)` leg. Shipped
     /// `NETHERW.EXE` file **0x43B00** (LE VA 0x1F300, dispatch-table
@@ -562,21 +571,21 @@ impl Gen {
     /// The selector is read AFTER the legs, exactly as retail does
     /// (`sub_1E320` flips 0x11 → 0x10 on its last tick, and the
     /// wrapper then runs the 0x10 arm — dodge included).
-    pub(crate) fn m0_phase7_physics(&mut self, i: usize) {
+    pub(crate) fn m0_phase7_physics(&mut self, i: usize, ctx: &MobCtx) {
         if self.ent[i].model65 != 0 {
             return;
         }
         if !Self::m0_phase7_table_law() {
             // Pre-124 body: the held seam's 1..=10 arm only.
             if matches!(self.ent[i].site_z, 1..=10) {
-                self.m0_dodge(i);
+                self.m0_dodge(i, ctx);
                 self.m0_bob(i);
             }
             return;
         }
         match self.ent[i].site_z {
             1..=10 | 13 | 14 | 16 => {
-                self.m0_dodge(i);
+                self.m0_dodge(i, ctx);
                 self.m0_bob(i);
             }
             17 => self.m0_bob(i),
@@ -622,7 +631,7 @@ impl Gen {
     /// (EF:11286-89/11304-06). If the window closes mid-dodge the
     /// hook freezes in place until a fresh arm — retail's own
     /// residue law.
-    pub(crate) fn m0_dodge(&mut self, i: usize) {
+    pub(crate) fn m0_dodge(&mut self, i: usize, ctx: &MobCtx) {
         let gate = self.ent[i].f46;
         if gate == 0 {
             return;
@@ -634,29 +643,65 @@ impl Gen {
                 self.ent[i].f38 = 0;
                 return;
             }
-            // Validity = retail's `v7x <= Entities[0]` gone-check
-            // (EF:11286-89) PLUS an out-of-pool guard: the hook word
-            // word_0x24_36 doubles as the kill-credit latch
-            // (`mc2_state_head` death write, :350 — retail's own
-            // field reuse), and a death tick still reaches this
-            // branch. Retail then reads the KILLER's pool entity
-            // (benign — its player is in-pool); our out-of-pool
-            // human is the PLAYER_TARGET sentinel, which must read
-            // as "gone" → release, not an index.
-            let p = self.ent[i].f38 as usize;
-            if p == 0
-                || p >= self.ent.len()
-                || self.ent[p].act_life < 0
-                || self.ent[p].flags & 0x400 != 0
-            {
+            // Validity = retail's `v7x <= Entities[0] ||
+            // v7x->life_0x8 < 0 || v7x->byte[1] & 4` gone-check
+            // (EF:11286-89) — all three terms are retail's own.
+            //
+            // ⭐⭐⭐ THE HOOK WORD IS THE KILL-CREDIT LATCH, AND ON A
+            // DEATH TICK IT NAMES THE KILLER. `word_0x24_36` doubles
+            // as the killer latch (`mc2_state_head` death write
+            // `a1x->word_0x24_36 = a1x->word_0x26_38`, EF:9285), so a
+            // head that dies with its alert window still running
+            // reaches this branch with the ATTACKER in the hook word.
+            // Retail's human carpet is an ORDINARY POOL RECORD, so
+            // that resolves LIVE and the head strafes off the HUMAN's
+            // yaw — shipped `NETHERW.EXE` 0x1F1F7 `mov ax,[ebx+0x24]`
+            // then a PLAIN `mov esi,[eax*4+0x1a3e4]` with no bounds
+            // test. Ours is the out-of-pool PLAYER_TARGET sentinel;
+            // reading it as "gone" froze the whole follow chain for a
+            // tick (mc2l30-new t=2368 slot 100: retail strafes
+            // x 51584 -> 51567, y 9877 -> 10021 at human-yaw
+            // 549 + 512 = 1061, step 48*3 = 144; the port released the
+            // hook and never moved, and children 101/102 then
+            // mis-followed — which is the whole "middle segment's
+            // heading is wildly wrong" signature).
+            let p = self.ent[i].f38;
+            let hook_yaw = if p == PLAYER_TARGET && Self::m0_dodge_human_hook_law() {
+                // `ctx.pdead` IS retail's `life_0x8 < 0` on the carpet
+                // record; there is no reap bit for the out-of-pool
+                // human.
+                if ctx.pdead { None } else { Some(ctx.pyaw) }
+            } else {
+                let j = p as usize;
+                if j == 0
+                    || j >= self.ent.len()
+                    || self.ent[j].act_life < 0
+                    || self.ent[j].flags & 0x400 != 0
+                {
+                    None
+                } else {
+                    Some(self.ent[j].f30)
+                }
+            };
+            let Some(hook_yaw) = hook_yaw else {
                 self.ent[i].f71 = 0;
                 self.ent[i].f38 = 0;
                 return;
-            }
-            let yaw = if self.ent[i].f38 & 1 != 0 {
-                self.ent[p].f30.wrapping_add(512)
+            };
+            // The strafe SIDE is the parity of the RAW latch (0x1F21C
+            // tests `[ebx+0x24]`, not the resolved record) — for the
+            // human that is his real pool index in retail, which the
+            // import pins; native play has no such index and keeps the
+            // sentinel (0xFFFF, odd).
+            let side = if p == PLAYER_TARGET && self.mc2_pinned.0 != 0 {
+                self.mc2_pinned.0
             } else {
-                self.ent[p].f30.wrapping_sub(512)
+                p
+            };
+            let yaw = if side & 1 != 0 {
+                hook_yaw.wrapping_add(512)
+            } else {
+                hook_yaw.wrapping_sub(512)
             } & 0x7FF;
             let mut pos = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
             Self::polar_step(&mut pos, yaw, 0, (48 * self.ent[i].f44) as i16);
@@ -694,19 +739,19 @@ impl Gen {
             0 => self.mc2_patrol(i, M0_BASE),
             1 => {
                 self.mc2_idle(i, M0_BASE, ctx);
-                self.m0_dodge(i);
+                self.m0_dodge(i, ctx);
                 self.m0_bob(i);
             }
             2 => {
                 if self.mc2_chase_attack(i, M0_BASE, ctx, Self::mc2_atk_bolt) {
                     self.snd(8, i);
                 }
-                self.m0_dodge(i);
+                self.m0_dodge(i, ctx);
                 self.m0_bob(i);
             }
             3 => {
                 self.mc2_pack(i, M0_BASE);
-                self.m0_dodge(i);
+                self.m0_dodge(i, ctx);
                 self.m0_bob(i);
             }
             4 => self.mc2_prekill(i, M0_BASE),

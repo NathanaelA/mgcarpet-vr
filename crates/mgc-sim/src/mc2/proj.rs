@@ -2560,13 +2560,21 @@ impl Gen {
         let upgrade_flight = tgt != 0 && tgt != PLAYER_TARGET as usize && tgt < self.ent.len();
         if !upgrade_flight && self.ent[i].flags & 2 == 0 {
             // sub_66D00's head: latch the arm bit, site-test the
-            // launch pose, and do NOT move. A refusal despawns (the
-            // sub_88D00 "can't build here" flash is app-side; the
-            // cast lock is derived — `mc2_castle_lock_active`).
+            // launch pose, and do NOT move. A refusal RELEASES the
+            // caster's create-castle lock (`sub_5F890(a1x, 0)`
+            // EF:58923 — `a1x` is the BALL, whose `id_0x1A_26` is the
+            // owner, so it lands on the owner's spell-2 manifestation)
+            // and despawns; the sub_88D00 "can't build here" flash is
+            // app-side. The release rides `mc2_castle_lock_mail` to
+            // the World-side book and is drained at THIS slot (round
+            // 135; the mc2l1-new t=3604 witness on
+            // `World::mc2_drain_castle_lock_mail`).
             self.ent[i].flags |= 2;
             let (x, y) = (self.ent[i].x, self.ent[i].y);
             if !self.mc2_castle_cast_site_ok(x, y) {
                 self.ent[i].flags |= 0x400;
+                let own = self.ent[i].id24;
+                self.mc2_castle_lock_mail.0.push((own, false));
             }
             return;
         }
@@ -2689,8 +2697,11 @@ impl Gen {
             return;
         }
         // `_4A190(&pos, byte67, byte68)` — the build. A pool-refused
-        // spawn leaves the ball ALIVE to retry next tick (EF:58540-42
-        // releases the caster's lock instead; ours is derived).
+        // spawn leaves the ball ALIVE to retry next tick and RELEASES
+        // the caster's create-castle lock (`sub_5F890(Entities[id], 0)`
+        // EF:58877 — the owner carpet, whose own `id_0x1A_26` names
+        // itself, so again the owner's spell-2 manifestation). Mailed
+        // to the World-side book, drained at this slot.
         let spawned = match (fc, fm) {
             (3, 2) => self.spawn_castle(pos.0, pos.1),
             (10, 43) => self.spawn_creator(43, pos.0, pos.1, pos.2),
@@ -2699,6 +2710,12 @@ impl Gen {
         if let Some(c) = spawned {
             self.ent[c].id24 = own;
             self.ent[i].flags |= 0x400;
+        } else if matches!((fc, fm), (3, 2) | (10, 43)) {
+            // `tail`: this seat's `sub_5F890` argument is the OWNER
+            // record, so its `sub_6D880(a1x)` tail runs on the WIZARD
+            // (the site-refusal seat hands it the ball, where the tail
+            // is inert). See `World::mc2_drain_castle_lock_mail`.
+            self.mc2_castle_lock_mail.0.push((own, true));
         }
     }
 

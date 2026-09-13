@@ -2968,7 +2968,15 @@ impl Gen {
                     e.id24 = own;
                     e.f68 = arm.impact.0;
                     e.f69 = arm.impact.1;
-                    e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+                    // ⭐ THE TURRET POST-WRITES NO `@0x2A` (EF:30292-93 is
+                    // `id_0x1A_26` + `word_0x96_150` and nothing else), and
+                    // `sub_6DCA0`'s `a3 == 0` arm writes none either — so a
+                    // turret FIREBALL ships `NewEvent_4A050`'s ctor 100, not
+                    // the tier's 160/180. Lightning/meteor DO get the table
+                    // value from their own arm.
+                    if crate::mc2::cast::mc2_band_arm_writes_2a(spell) {
+                        e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+                    }
                     if arm.charge {
                         e.f71 = sub.life.max(0) as u8;
                     }
@@ -3405,7 +3413,13 @@ mod tests {
         assert_eq!(e.model65, 0, "fire tower common mode = fireball tier 1");
         assert_eq!(e.id24, 9, "kills attribute to the castle's wizard");
         assert_eq!(e.f146, h as u16, "homing the scanned hostile");
-        assert_eq!(e.f44, 555, "the tier payload rides f44");
+        // ⭐ NOT the tier payload. `sub_6DCA0`'s `a3 == 0` arm stamps
+        // no `subSpellIndex_0x2A_42` (EF:44417-30; NETHERW.EXE VA
+        // 0x6DD40-79 holds no `mov %ax,0x2a(%ebx)`) and the turret
+        // post-writes only `id_0x1A_26` + `word_0x96_150`
+        // (EF:30292-93), so a turret FIREBALL carries
+        // `NewEvent_4A050`'s ctor 100 — never the row's 555.
+        assert_eq!(e.f44, 100, "the a3==0 fireball arm stamps no @0x2A");
         assert_eq!(e.f40, 0, "no XP back-ref on turret shots");
         assert_eq!(g.ent[p].f71, 8, "burst continues (6-shot common mode)");
     }
@@ -3455,6 +3469,12 @@ mod tests {
             "a lightning-tower arm, got subtype {}",
             g.ent[s].model65
         );
+        // THE CONTRAST that keeps the fireball's `@0x2A` absence from
+        // being vacuous: the `a3 == 7` arm DOES stamp
+        // `a4x->subSpellIndex_2` on the bolt it spawns (EF:44441).
+        if g.ent[s].model65 == 9 {
+            assert_eq!(g.ent[s].f44, 777, "the a3==7 arm stamps the tier payload");
+        }
     }
 
     /// The unstamp finalizer is the gated 3×3 floor smoother

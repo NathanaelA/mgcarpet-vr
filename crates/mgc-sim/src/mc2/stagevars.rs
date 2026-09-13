@@ -25,9 +25,12 @@
 //! creatures are KILLABLE — a lethal hit routes to the model's prekill,
 //! `actionIndex = 8m+4`), a hit from a foreign class/model breaks the
 //! hold into aggro (`StageVar2 = 10` + `sub_1E040`'s `8m+2`/`8m+6` FLEE
-//! split), and the kind-3 guardian arm aggros on the watched entity
-//! when it nears `v_28` (the ambush law; kind 4's "join the watched
-//! entity's fight" arm is retail-inert — see `mc2_held_watch`).
+//! split), and the kind-3/4 guardian arm aggros on the watched entity
+//! (kind 4: on its quarry) when it nears `v_28` — the ambush law, which
+//! runs AFTER the head on every verdict: a guardian killed or hit on
+//! its cadence tick still takes the ambush and reaches prekill one
+//! tick late (`sub_1D7C0`/`sub_1D700` wrap `sub_1D8C0`; see the seam in
+//! `mc2_held_tick`, mc2l4-new t=454).
 //! The m27 kraken body instead runs its full 0xDF stage-command state
 //! ([`World::mc2_m27_held_tick`] = `sub_29930`). `site_z` carries the
 //! KIND (retail's `StageVar2_0x49_73`), the same field metamorph/summon
@@ -110,6 +113,26 @@ fn no_mc2_m9_held_engage() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M9_HELD_ENGAGE").is_some())
 }
 
+/// A/B toggle for the KIND-2 LEASH SEAM law (dig W6): set
+/// `MGC_NO_MC2_LEASH_SEAM` to restore the pre-dig 16-bit WRAPPING
+/// difference in `sub_1DBF0`'s 3072-unit box, under which a hold whose
+/// authored point straddles the 0x8000 axis seam from the creature
+/// wrongly reads "inside the leash" and grazes.
+fn no_mc2_leash_seam() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_LEASH_SEAM").is_some())
+}
+
+/// A/B toggle for the KIND-1 ARRIVAL-BOX SEAM law (dig W9): set
+/// `MGC_NO_MC2_KIND1_SEAM` to restore the pre-dig 16-bit WRAPPING
+/// difference in `sub_12500`'s 2048-unit arrival box, under which a
+/// kind-1 hold whose authored fly-point straddles the 0x8000 axis seam
+/// from the creature wrongly reads "arrived" and releases early.
+fn no_mc2_kind1_seam() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_KIND1_SEAM").is_some())
+}
+
 /// A/B toggle for the KIND-4 GUARDIAN ARM (`sub_1D700`, EF:10037-58 —
 /// see the write-up at [`World::mc2_held_watch`]): set
 /// `MGC_NO_MC2_HELD_KIND4_GUARD` to restore the pre-dig `kind == 3`
@@ -117,6 +140,18 @@ fn no_mc2_m9_held_engage() -> bool {
 fn no_mc2_held_kind4_guard() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HELD_KIND4_GUARD").is_some())
+}
+
+/// A/B toggle for the GUARDIAN-AFTER-HEAD law (`sub_1D7C0`/`sub_1D700`
+/// run their cadence-gated reach test AFTER `sub_1D8C0` returns, with
+/// no life test — see the write-up at [`World::mc2_held_tick`]): set
+/// `MGC_NO_MC2_HELD_GUARD_AFTER_HEAD` to restore the pre-dig seam,
+/// under which a stage-held kind-3/4 guardian that died or was hit on
+/// its cadence tick went straight to prekill/retaliation and never
+/// took the ambush retail gives it (mc2l4-new t=454).
+fn no_mc2_held_guard_after_head() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HELD_GUARD_AFTER_HEAD").is_some())
 }
 
 /// A/B toggle for m18's HELD AIM TAIL (`sub_25550`'s
@@ -129,6 +164,18 @@ fn no_mc2_held_kind4_guard() -> bool {
 fn no_mc2_m18_held_aim() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M18_HELD_AIM").is_some())
+}
+
+/// A/B toggle for m18's PHASE-7 GROUND SNAP (`sub_25550`'s MIDDLE
+/// line, `a1x->position_0x4C_76.z = getTerrainAlt_10C40(&a1x->
+/// position_0x4C_76)`, EF:16251 — see the write-up at the held call
+/// site): set `MGC_NO_MC2_M18_GROUND_SNAP` to restore the pre-dig
+/// behaviour, where a (5,18) tank reached by the stage-HELD or the
+/// CONTROLLED seam kept the altitude it was standing at when the seam
+/// took it over, and never re-read the terrain under it again.
+pub(crate) fn no_mc2_m18_ground_snap() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M18_GROUND_SNAP").is_some())
 }
 
 /// One live StageVar slot (`D41A0_0.StageVars2_0x365F4[slot]`, LS:249).
@@ -657,7 +704,47 @@ impl World {
             }
             let (ex, ey) = (self.g.ent[ent].x, self.g.ent[ent].y);
             let release = match v.kind {
-                1 => abs16(v.point.0, ex) <= 2048 && abs16(v.point.1, ey) <= 2048,
+                // ⭐⭐⭐ **THE KIND-1 ARRIVAL BOX SIGN-EXTENDS EACH
+                // OPERAND AND SUBTRACTS IN 32 BITS** — the exact
+                // sibling of the kind-2 leash box above, on the OTHER
+                // call path (⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT
+                // LANDED). EF:5072-74 writes it through
+                // `Maths::Abs16(int16_t)`, which truncates — but the
+                // shipped NETHERW.EXE inlines an `abs()` over a
+                // 32-bit difference of two `movswl`s, and the
+                // truncation never happens. `sub_12500`, VA 0x125DE
+                // (file 0x36DDE):
+                //     125de  0f bf 51 04     movswl 0x4(%ecx),%edx   ; point.x
+                //     125e2  0f bf 43 4c     movswl 0x4c(%ebx),%eax  ; pos.x
+                //     125e6  29 c2           sub    %eax,%edx        ; 32-BIT
+                //     125e8  89 d0 / 99 / 31 d0 / 29 d0              ; abs()
+                //     125ef  3d 00 08 00 00  cmp    $0x800,%eax      ; 2048
+                //     125f4  0f 8f ..        jg  -> no release
+                //     125fa..12610  the y test, byte-identical
+                //     12616  e9 ..           jmp -> sub_12410 (RELEASE)
+                //
+                // WITNESS mc2l8 slot 67, a (5,17) dive-bomber on the
+                // level's kind-1 StageVar 2, point (33024, 13568).
+                // 33024 >= 0x8000, so sign-extended the point's x is
+                // −32512 while the creature flies in from x 31185 —
+                // |−32512 − 31215| = 63727, never inside 2048. Retail
+                // holds it until t=610, the tick its own x FIRST
+                // crosses 0x8000 (32759 → 32808): then |−32512 −
+                // (−32728)| = 216 and the release fires, action 143 →
+                // 137 at t=611. The port's wrapping subtract read
+                // 33024 − 31215 = 1809 at t=574 and released 36 ticks
+                // early — and mc2l8 authors TEN (5,17)s on this one
+                // StageVar, every one of which crosses the same seam,
+                // so the one defect re-heads 302 segments.
+                1 => {
+                    let d = |a: u16, b: u16| ((a as i16 as i32) - (b as i16 as i32)).abs();
+                    let (dx, dy) = if no_mc2_kind1_seam() {
+                        (abs16(v.point.0, ex), abs16(v.point.1, ey))
+                    } else {
+                        (d(v.point.0, ex), d(v.point.1, ey))
+                    };
+                    dx <= 2048 && dy <= 2048
+                }
                 // Kind 3 (EF:5077-90): the fired bit clears the
                 // word74 watch cache UNCONDITIONALLY, but releases
                 // only outside phases 2/6 — the two aggro-break
@@ -794,24 +881,72 @@ impl World {
             // Case 0xA: an aggro-broken creature that re-entered its
             // phase-7 wait re-raises straight back out (`sub_1E040`).
             10 => self.mc2_aggro_raise(i, base),
-            _ => match self.g.mc2_state_head(i) {
-                // Lethal: route to the model's prekill (`a2 + 4`) —
-                // held creatures are killable (EF:10242-45).
-                2 => self.g.ent[i].tick70 = base.wrapping_add(4),
-                1 => self.mc2_held_hit(i, base),
-                _ => {
-                    // The per-kind MOVEMENT leg: stage-held creatures
-                    // are ACTIVE in retail — sub_1D5D0's cases
-                    // walk/graze every tick, they never freeze. Then
-                    // the kind-3/4 guardian arm and the kind-2 wizard
-                    // watch.
-                    self.mc2_held_move(i, kind, ctx);
-                    self.mc2_held_watch(i, base, ctx);
-                    if self.g.ent[i].tick70 & 7 == 7 && self.g.ent[i].site_z == 2 {
-                        self.mc2_held_wizard_scan(i, base, ctx);
+            _ => {
+                let head = self.g.mc2_state_head(i);
+                match head {
+                    // Lethal: route to the model's prekill (`a2 + 4`) —
+                    // held creatures are killable (EF:10242-45).
+                    2 => self.g.ent[i].tick70 = base.wrapping_add(4),
+                    1 => self.mc2_held_hit(i, base),
+                    _ => {
+                        // The per-kind MOVEMENT leg: stage-held creatures
+                        // are ACTIVE in retail — sub_1D5D0's cases
+                        // walk/graze every tick, they never freeze. Then
+                        // the kind-3/4 guardian arm and the kind-2 wizard
+                        // watch.
+                        self.mc2_held_move(i, kind, ctx);
+                        self.mc2_held_watch(i, base, ctx, kind, true);
+                        if self.g.ent[i].tick70 & 7 == 7 && self.g.ent[i].site_z == 2 {
+                            self.mc2_held_wizard_scan(i, base, ctx);
+                        }
                     }
                 }
-            },
+                // ⭐⭐⭐ **THE GUARDIAN ARM RUNS AFTER THE HEAD, WHATEVER
+                // THE HEAD DID — THERE IS NO LIFE TEST IN FRONT OF THE
+                // AMBUSH.** The kind-3 and kind-4 legs are FUNCTIONS
+                // around the shared head, not arms of it: `sub_1D7C0`
+                // (EF:10069-95) is `sub_1D8C0(a1x, a2); if (!(byte_0x3E_62
+                // & 7)) { …reach test → StageVar2 = 10; sub_1E040 }` and
+                // `sub_1D700` (EF:10022-66) is the same shape with the
+                // watch's own quarry. `sub_1D8C0`'s tail (EF:10227-45)
+                // is the WHOLE lethal → prekill routing for a held class
+                // 5 — `else if (v2 == 2) actionIndex = a2 + 4` — and it
+                // RETURNS into the caller, which then runs its cadence
+                // gate and, if the watch is inside `v_28`, OVERWRITES
+                // that prekill with the ENGAGE raise. The port's seam
+                // `return`ed on both non-quiet verdicts, so a dead or
+                // hit guardian could never take its ambush.
+                //
+                // WITNESS mc2l4-new t=454 (the take's ONLY head; 32,492
+                // bit-exact boundaries after it). The human's castle
+                // painter at slot 167 purges twenty (5,4)s in one tick
+                // (`life 1000 → -1`). Two of the kind-3 holds are on
+                // cadence at 454 (`phase3e` 232 and 224, `& 7 == 0`):
+                // slot 238 is 5115 units from its watch (slot 168, the
+                // (5,9) it guards) and slot 230 is 5438; the archer
+                // row's `v_28` is 5120. Retail: 230 stays at prekill
+                // (36); 238 goes 39 → **34**, `sv2 3 → 10`, `target96 →
+                // 168`, and the model-4 wrapper tail (`if (actionIndex
+                // == 34) sub_20060`) then spends the ONE entity draw
+                // (`rand 42156 → 58635`), `speed 30 → 0`, `f5a 0 → 1`
+                // — every lane of the head. At 455 the ENGAGE handler's
+                // own head routes it 34 → 36 → 37, one tick behind its
+                // pack. The port sent all twenty to 36 at 454.
+                //
+                // On this path the watch handle is read RAW (`sub_1D7C0`
+                // EF:10075-79 derefs `word_0x4A_74`; `sub_1E3E0` has one
+                // call site and it is `sub_1D8C0`'s QUIET arm, which
+                // did not run) — a hold whose handle is still 0 does
+                // not resolve it here. Kind 2 is NOT a sibling: its
+                // wizard scan is gated on `actionIndex == a2 + 7 &&
+                // StageVar2 == 2` (EF:10272), which a dead or
+                // retaliating creature already fails.
+                // `MGC_NO_MC2_HELD_GUARD_AFTER_HEAD=1` restores the
+                // early return.
+                if head != 0 && !no_mc2_held_guard_after_head() {
+                    self.mc2_held_watch(i, base, ctx, kind, false);
+                }
+            }
         }
         // ⭐⭐⭐ **AND m2's WRAPPER ENDS IN A TWO-DRAW WANDER JIGGLE.**
         // `sub_1F8A0` (EF:11563-77, NETHERW.EXE 0x440A0) is
@@ -875,7 +1010,7 @@ impl World {
         // CONTROLLED seam ([`Gen::m0_phase7_physics`]) — the held legs
         // can leave StageVar2 on 0xD/0xE/0x10/0x11 too, and retail
         // reads the selector after them.
-        self.g.m0_phase7_physics(i);
+        self.g.m0_phase7_physics(i, ctx);
         // ⭐⭐⭐ **AND m21's WRAPPER ENDS IN A MODE RE-APPLY.**
         // `sub_26470` (EF:16963-65) closes with `if (actionIndex !=
         // 175) sub_268F0(a1x, actionIndex + 88)` — an IDENTITY on the
@@ -943,6 +1078,56 @@ impl World {
         // landed here: it was a no-op on this witness (the tank was
         // already grounded) so it has no evidence of its own and wants
         // its own A/B. Same standing as m4's `dword_0x10_16 = 0` opener.
+        // ⭐⭐⭐ **AND m18's WRAPPER RE-READS THE GROUND EVERY TICK —
+        // THE MIDDLE LINE, NO LONGER OWED.** `sub_25550` (EF:16247-56,
+        // NETHERW.EXE file **0x49D50-0x49D8C**) is, byte for byte,
+        // `push $0x90; call 0x41dd0` (= `sub_1D5D0(a1x, 144)`, VA
+        // 0x1D5D0), then `lea 0x4c(%ebx); call 0x35440` (=
+        // `getTerrainAlt_10C40`, VA 0x10C40) and `mov %ax,0x50(%ebx)`
+        // — the UNCONDITIONAL write of the terrain altitude into
+        // `position_0x4C_76.z` — and only then `cmp $0x92,%ah` (146)
+        // guarding `call 0x49bb0` (`sub_253B0(a1x, 2u, 0)`, the aim
+        // tail above). There is NO kind test and NO action test on the
+        // snap: it is the tank's whole ambient physics, the same
+        // standing as m21's jump and m0's bob.
+        //
+        // The port owned it only on `m18_tick`'s own `_ =>` (phase-7)
+        // arm (roster.rs) — and this seam PRE-EMPTS the normal
+        // dispatch, so a stage-held tank froze at whatever altitude it
+        // held when the hold took it and never settled again. Invisible
+        // while the ground under it is static, which is why the law was
+        // booked 🏦 OWED at the aim tail below: it wanted a take where
+        // the TERRAIN MOVES under a held tank.
+        //
+        // WITNESS — mc2l5 (the castle-through-rock take), slot 110, a
+        // stage-held (5,18) parked at `x=50304 y=384` (the exact centre
+        // of tile (196,1)) on action 151. The human's castle
+        // (slots 216/253) is demolished at t=3974 and the ground under
+        // the tank is re-cut: `height[(196,2)] 15 → 25`. Pair
+        // 3974→3975: retail settles `z 749 → 911`
+        // (`interp_plane` at fx=fy=128 on the odd-parity upper
+        // triangle: `p1=h(196,2)=25`, `p2=h(197,2)=24`,
+        // `comp = 127*(32-24) + 128*(24-25) = 888`, `(888>>3) + 32*25
+        // = 911`) where the port held 749 — the take's HORIZON, 3,974
+        // bit-exact boundaries behind it. Eleven ticks later the crater
+        // keeps sinking (`height[(197,1)] 32 → 31` at t=3985) and pair
+        // 3985→3986 repeats it: retail `z 911 → 895`
+        // (`127*(31-24) + 128*(24-25) = 761`, `(761>>3) + 800 = 895`),
+        // port 911. TWO of this take's five LOCAL heads, one law.
+        // ⚠ the snap runs on the DEATH tick too — at 3986 the legs
+        // route the tank to prekill (`action45 151 → 148`, `life -1`)
+        // and retail still writes the settled z.
+        //
+        // A LAW ON ONE CALL PATH IS NOT LANDED: the same middle line is
+        // owed to the CONTROLLED seam (`Gen::mc2_class5_tick`,
+        // mobs.rs), where it is landed under this same switch but is
+        // UNWITNESSED on this corpus — a metamorph/summon/alliance/
+        // pyramid-driven tank that walks onto moving ground has no take
+        // here yet. `MGC_NO_MC2_M18_GROUND_SNAP=1` reverts both.
+        if !no_mc2_m18_ground_snap() && self.g.ent[i].model65 == 18 {
+            let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
+            self.g.ent[i].z = self.g.ground_z(x, y) as i16;
+        }
         if !no_mc2_m18_held_aim()
             && self.g.ent[i].model65 == 18
             && self.g.ent[i].tick70 == base.wrapping_add(2)
@@ -1068,10 +1253,51 @@ impl World {
             1 => self.mc2_sv_walk(i, Some(v.point), None),
             2 => {
                 let e = &self.g.ent[i];
-                // Retail's leash test is the wrapped 16-bit box
-                // (EF:10248-50).
-                let out = ((v.point.0.wrapping_sub(e.x)) as i16 as i32).abs() > 3072
-                    || ((v.point.1.wrapping_sub(e.y)) as i16 as i32).abs() > 3072;
+                // ⭐⭐⭐ **THE LEASH BOX SIGN-EXTENDS EACH OPERAND AND
+                // SUBTRACTS IN 32 BITS — IT DOES NOT WRAP.** The port
+                // computed `(point - pos) as i16`, a 16-bit subtract
+                // whose result re-wraps, which is a DIFFERENT function
+                // whenever the point and the creature straddle the
+                // 0x8000 axis seam. EF:10265-66 already writes it as
+                // `abs((int16_t)point.x - (int16_t)pos.x)` — two
+                // separate casts — and the shipped NETHERW.EXE settles
+                // it. `sub_1DBF0`, VA 0x1DC14:
+                //     1dc14  0f bf 56 04     movswl 0x4(%esi),%edx   ; point.x
+                //     1dc18  0f bf 43 4c     movswl 0x4c(%ebx),%eax  ; pos.x
+                //     1dc1c  29 c2           sub    %eax,%edx        ; 32-BIT
+                //     1dc1e  99/31 d0/29 d0                          ; abs()
+                //     1dc25  3d 00 0c 00 00  cmp $0xc00,%eax         ; 3072
+                //     1dc2a  7f 25           jg -> sub_1DDA0 (WALK)
+                //     1dc2c..1dc40  the y test, byte-identical
+                //     1dc4a  e8 ...          call -> sub_1E1C0 (GRAZE)
+                // Two `movswl`s and a 32-bit `sub`: nothing truncates
+                // the difference. `mc2_avoid_packmate_at` already
+                // carries this exact shape as its `cast16` arm — the
+                // leash was the call path that never got it
+                // (⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT LANDED).
+                //
+                // WITNESS mc2l9 slot 546, a (5,25) on a kind-2 hold at
+                // StageVar1 = 1, point (34304, 20736). 34304 >= 0x8000,
+                // so sign-extended it is −31232 while the creature sits
+                // at x 31384: |−31232 − 31384| = 62616, ALWAYS outside,
+                // and retail walks the whole take. The port's wrapping
+                // subtract reads 2920, flips to the GRAZE arm, and
+                // spends the graze's one `9377x+9439` draw retail never
+                // spends: `rand` 23994 → 16089 (exactly one LCG step)
+                // and `roll` 706 → 891 instead of retail's point-aim
+                // 715. The walk leg writes `roll` as an ABSOLUTE
+                // point-aim with NO draw; the graze leg writes a
+                // RELATIVE +(142..254) with one. So the wrong leg
+                // yields a `rand` row AND, once the heading servo has
+                // chased the wrong `roll`, a `heading` row — one
+                // defect, two lanes.
+                let out = if no_mc2_leash_seam() {
+                    ((v.point.0.wrapping_sub(e.x)) as i16 as i32).abs() > 3072
+                        || ((v.point.1.wrapping_sub(e.y)) as i16 as i32).abs() > 3072
+                } else {
+                    ((v.point.0 as i16 as i32) - (e.x as i16 as i32)).abs() > 3072
+                        || ((v.point.1 as i16 as i32) - (e.y as i16 as i32)).abs() > 3072
+                };
                 if out {
                     self.mc2_sv_walk(i, Some(v.point), None);
                 } else {
@@ -1185,6 +1411,18 @@ impl World {
     /// set `MGC_NO_SV_BACKOFF` to restore the pre-2026-09-03 shape,
     /// where the kind-3/4/5 shadow walk had only `sub_1DDA0`'s three
     /// steps and never peeled away from the entity it escorts.
+    /// A/B toggle for the SHADOW NO-WATCH GRAZE (`sub_1D8C0`'s `else`
+    /// arm, EF:10224-31 / `NETHERW.EXE` 0x423a4 — see the write-up in
+    /// [`World::mc2_sv_walk_after_move`]): set `MGC_NO_SV_SHADOW_GRAZE`
+    /// to restore the flattened tail, under which a kind-3/4/5
+    /// creature whose watch does not resolve took no draw, kept its
+    /// heading, and still ran the packmate override and back-off that
+    /// retail only reaches with a resolved watch.
+    fn no_sv_shadow_graze() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_SV_SHADOW_GRAZE").is_some())
+    }
+
     fn sv_backoff_law() -> bool {
         static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *V.get_or_init(|| std::env::var_os("MGC_NO_SV_BACKOFF").is_none())
@@ -1212,6 +1450,57 @@ impl World {
         watched: Option<usize>,
     ) {
         if self.g.ent[i].f63 & 7 != 0 {
+            return;
+        }
+        // ⭐⭐⭐ **`sub_1D8C0`'s CADENCE BODY IS AN `if (v12x) … else …`,
+        // AND THE PORT HAD FLATTENED IT.** Everything the shadow leg
+        // does after the 8-tick gate hangs off
+        // `if (v12x && v12x > Entities_EA3E4[0])` (EF:10184-10218) —
+        // the toward-aim, the 64-tick wander jitter, the packmate
+        // override and the personal-space back-off. The port ran the
+        // aim under `target` but the packmate/back-off tail
+        // UNCONDITIONALLY, and had NOTHING AT ALL for retail's `else`:
+        // when the watch does not resolve, a kind-3/4/5 creature
+        // GRAZES — `sub_1E1C0`'s exact idiom, one draw and a RELATIVE
+        // +(142..254) turn, on the SIXTEEN-tick gate. `NETHERW.EXE`
+        // file 0x423a4 (`sub_1D8C0` VA 0x1D8C0 = file 0x420C0):
+        //     423a4  f6 43 3e 0f     testb $0xf,0x3e(%ebx)   ; f63 & 0xF
+        //     423a8  75 3b           jne   0x423e5           ; off-16: nothing
+        //     423aa  f6 43 0e 04     testb $0x4,0xe(%ebx)    ; byte[2] & 4
+        //     423ae  75 35           jne   0x423e5
+        //     423b0  66 69 43 14 a1 24  imul $0x24a1,0x14(%ebx),%ax
+        //     423b6  05 df 24 00 00     add  $0x24df,%eax    ; 9377x+9439
+        //     423bb  b9 71 00 00 00     mov  $0x71,%ecx      ; 113
+        //     423c0  66 89 43 14        mov  %ax,0x14(%ebx)
+        //     423cc  f7 f1              div  %ecx            ; edx = rand%113
+        //     423d2  05 8e 00 00 00     add  $0x8e,%eax      ; +142
+        //     423d7  66 8b 53 20        mov  0x20(%ebx),%dx  ; roll
+        //     423dd  66 89 53 20        mov  %dx,0x20(%ebx)
+        //     423e1  80 63 21 07        andb $0x7,0x21(%ebx) ; &= 0x7FF
+        // The kind-1 point-walk `sub_1DDA0` has no such arm and cannot
+        // (EF:10386-10417 — it walks to a POINT, which always
+        // resolves), so this belongs to the shadow leg alone: the only
+        // caller that can hand `target = None` is the kind-3/4/5 arm.
+        //
+        // WITNESS mc2l6 t=15670, slot 408 — a (5,20) born THIS tick
+        // onto StageVar 1 (kind 3) with the level's spawn ordinal 16,
+        // the only one of the four (5,20) newborns whose `byte_0x3E_62`
+        // clears BOTH gates (409/410/411 carry 17/18/19). Its watch
+        // does not resolve, so retail takes the `else`: `rand`
+        // 13951 → 18110 (exactly one `9377x+9439` step, the pair's ONLY
+        // graded row) and `roll` 1662 → 1834 = 1662 + 18110 % 113 + 142.
+        // The port drew nothing and left `roll` at the ctor facing —
+        // invisible on its own because @0x20 is UNGRADED, which is why
+        // this surfaced as a bare `rand` row on a birth tick.
+        // `MGC_NO_SV_SHADOW_GRAZE` restores the flattened tail.
+        if target.is_none() && !Self::no_sv_shadow_graze() {
+            if self.g.ent[i].f63 & 0xF == 0
+                && self.g.ent[i].flags & super::mobs::F_BLOCKED == 0
+            {
+                let r = self.g.mc2_rand(i);
+                self.g.ent[i].f34 =
+                    (self.g.ent[i].f34 as u32).wrapping_add(r % 0x71 + 142) as u16 & 0x7FF;
+            }
             return;
         }
         if let Some((tx, ty)) = target
@@ -1401,7 +1690,13 @@ impl World {
     /// made our worms attack the archers, who then killed them and
     /// died in the death-novas. Kind 4 keeps the shadow walk, the
     /// held-hit retaliation and the fired-bit release.
-    fn mc2_held_watch(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+    ///
+    /// `kind` is the ENTRY kind (the `sub_1D5D0` case that chose the
+    /// function — the head may have moved `StageVar2` to 10 since);
+    /// `resolve` = the quiet path, where `sub_1D8C0`'s idle arm has
+    /// already resolved a `&2` slot's handle; the lethal/hit path reads
+    /// it raw (see the seam in [`World::mc2_held_tick`]).
+    fn mc2_held_watch(&mut self, i: usize, base: u8, ctx: &MobCtx, kind: i16, resolve: bool) {
         if self.g.ent[i].f63 & 7 != 0 {
             return;
         }
@@ -1442,7 +1737,6 @@ impl World {
         // every one of them at the phase-7 wait.
         //
         // `MGC_NO_MC2_HELD_KIND4_GUARD=1` restores the `kind == 3` gate.
-        let kind = self.g.ent[i].site_z;
         let wanted = if no_mc2_held_kind4_guard() {
             kind == 3
         } else {
@@ -1461,7 +1755,11 @@ impl World {
         // Resolve the watch: `&2` slots cache the handle in word74
         // (`sub_1E3E0`, resolved on first need — retail resolves it in
         // `sub_1D8C0`'s idle arm); else the bound entity.
-        let watch = self.mc2_watch_handle(i, hpos, &v);
+        let watch = if resolve {
+            self.mc2_watch_handle(i, hpos, &v)
+        } else {
+            self.mc2_watch_handle_raw(hpos, &v)
+        };
         if watch == 0 {
             return;
         }
@@ -1495,6 +1793,23 @@ impl World {
             self.g.ent[i].site_z = 10;
             self.mc2_aggro_raise(i, base);
         }
+    }
+
+    /// The watch handle as `sub_1D7C0`/`sub_1D700` read it (EF:10075-79
+    /// / :10032-35): the cached word74 on a `&2` slot, else the bound
+    /// entity — NO resolve. 0 = none. The lethal/hit path of the
+    /// guardian arm, where `sub_1D8C0`'s idle arm (the only
+    /// `sub_1E3E0` caller) did not run.
+    fn mc2_watch_handle_raw(&self, hpos: usize, v: &Mc2StageVar) -> usize {
+        let watch = if v.flags & 0x02 != 0 {
+            self.mc2_sv_held[hpos].timer as u16
+        } else {
+            v.watch_ent
+        } as usize;
+        if watch == 0 || watch >= self.g.ent.len() {
+            return 0;
+        }
+        watch
     }
 
     /// Resolve a held creature's WATCHED entity: `&2` (watch-model)
@@ -1708,8 +2023,15 @@ impl World {
                     if physics {
                         self.g.m27_move(i, true);
                     }
-                    self.mc2_held_watch(i, 216, ctx);
+                    self.mc2_held_watch(i, 216, ctx, kind, true);
                 }
+            }
+            // Same `sub_1D7C0`/`sub_1D700` through `sub_1D5D0(a1x, 216)`
+            // (EF:19702): the guardian arm runs after the head's
+            // lethal/hit verdict here too (see [`World::mc2_held_tick`];
+            // UNWITNESSED on this seam, same switch).
+            if v != 0 && !no_mc2_held_guard_after_head() {
+                self.mc2_held_watch(i, 216, ctx, kind, false);
             }
         } else if kind == 10 {
             self.mc2_aggro_raise(i, 216);

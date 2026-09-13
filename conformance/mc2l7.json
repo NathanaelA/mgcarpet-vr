@@ -1,0 +1,18 @@
+{
+ "dir": "fixtures/mc2l7",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 23807,
+   "file": "the-devils-reach-test-is-three-dimensional.mgcr",
+   "source": "mc2l7",
+   "note": "THE (5,21) DEVIL'S REACH TEST IS THREE-DIMENSIONAL: retail's m21 phase-2 arm measures `sub_583F0_distance_3d(&devil->position, &target->position)` (EF:16889-90; NETHERW.EXE file 0x4AB5A-0x4AB76: two `lea 0x4c(%reg)` pushes of FULL axis_3d records into the distance routine, then an UNSIGNED `cmp %edi,%eax / jae` against the row's v_28) and fires only when it is strictly under reach. The port bound the resolved target as `(tx, ty, _)` and fed `mc2_dist3` the devil's OWN z for both ends, collapsing the test to a planar one that can only UNDERSTATE the distance - so the port fired bolts retail refused. WITNESS mc2l7 t=23807->23808, slot 236 aiming at slot 209: planar 4549 vs true 4648 against v_28 = 4608 - the head turns on 59 units; the port spawned a (9,0) bolt (extra slot 104) and held ENGAGE (170) where retail de-promoted to idle (169, sub_268F0(a1x, 1)). The brief's 'early ENGAGE promotion' reading was REFUTED by `explain` (retail goes 170 -> 169). Same signature closes mc2l8 t=1071 and t=1076 (horizon 1070 -> 7534). Kill switch MGC_NO_MC2_M21_RANGE_3D=1. Round 134 / D3."
+  },
+  {
+   "t": 25587,
+   "file": "the-castle-tier-lands-one-tick-after-the-release.mgcr",
+   "source": "mc2l7",
+   "note": "THE CASTLE SPELL'S PENDING TIER LANDS ONE TICK AFTER THE LOCK RELEASE, BECAUSE RETAIL'S RELEASE APPLIES IT TO THE WRONG RECORD: `sub_5F890`'s a2 == 0 arm (EF:61381-84) zeroes the (15,2) MANIFESTATION's `word_0x2E_46` and then calls `sub_6D880` on `a1x` - the CASTLE it was invoked on, not the manifestation (NETHERW.EXE file 0x84094 `mov 0xc(%ebp),%edx` = the a1x argument; 0x840C6 `push %edx` / 0x840C7 `mov %cx,0x2e(%eax)` / 0x840CB `call sub_6D880`). So the manifestation's pending tier survives the release and is applied on ITS OWN next tick by `sub_69AB0`'s spent-timer entry arm `if (word_0x2E_46 <= 0) sub_6D880(a1x)` (EF:56436-39). The port applied the tier inside the release itself, one tick early. WITNESS mc2l7 slot 38, the human's (15,2) castle manifestation with word_0x2C_44 = 2 pending: t=25588 retail releases (castle 59 action 5 -> 4, slot 38 word_0x2E_46 100 -> 0) and NOTHING else moves; t=25589 retail stamps word_0x2C_44 2 -> 0, byte_0x46_70 0 -> 1, maxMana 10000 -> 12500, mana 99 -> 123. The port did the whole stamp at 25588, giving the take's two-tick reset cluster 25588/25589 whose second row is the exact inverse of the first. The early `return` out of `mc2_castle_spell_tick` is retail's `else` and is unconditional under the latch (the default since round 135); only the pre-135 re-derive arm (MGC_NO_MC2_CASTLE_CAST_LATCH=1) must fall through, because its live scan in the tail is what raises the lock and a bare return there decertified mc2l4-new (END -> 552) and mc2l1-new (END -> 3200) with duplicate (9,10) castle balls. Kill switch MGC_NO_MC2_CASTLE_TIER_DEFER_LAG=1. Round 134 / D3."
+  }
+ ]
+}

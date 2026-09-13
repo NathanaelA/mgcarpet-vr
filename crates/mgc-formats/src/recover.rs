@@ -1042,6 +1042,30 @@ pub fn recover_pair_mc2_k(
     // the parked castle from re-firing for the ~45 ticks it sits dead
     // at action 5 with the key still down; the write itself is
     // idempotent, but the +3000 surcharge latch below is not.
+    // ⭐⭐⭐ RETAIL'S OWN LATCH BYTE IS A STRONGER WITNESS THAN THE
+    // KEYBOARD. `byte_0x1BE_446` (the `recast_surcharge` player lane)
+    // is written in exactly ONE place — the demolish handler's level-1
+    // arm, EF:37993-95, three lines above the `life = -1` — and is
+    // consumed by the next Create-Castle cast. A 0 -> nonzero edge
+    // across the pair is therefore a LEVEL-1 DEMOLISH, recorded in
+    // retail's own bytes, with no sampling hazard at all.
+    //
+    // The scancode corroboration CANNOT stand alone: `keys_down` is a
+    // once-per-record sample of the keyboard, so a press whose L key is
+    // released inside the sampling window records the SHIFT only.
+    // mc2l5 t=20262 and t=20329 are that case — `keys_down = [54]` with
+    // the castle going 20000 -> -1 and `recast_surcharge` 0 -> 1 on the
+    // same boundary — and the dropped press left the port standing a
+    // castle retail had already demolished. mc2l5 is a 96k-tick take in
+    // which the player demolishes and re-casts every ~40 ticks to chew
+    // through cave rock, so the hazard is hit over and over.
+    //
+    // The keys stay as the LEVEL-2+ path: a demolish at a higher rung
+    // never latches the surcharge (retail tests `level == 1` exactly),
+    // so its only witness is still the kill edge + Shift+L.
+    let surcharge_latched = pp.recast_surcharge == 0
+        && cp.recast_surcharge != 0
+        && std::env::var_os("MGC_NO_MC2_DEMOLISH_SURCHARGE_WITNESS").is_none();
     let demolish = {
         let castle = cp.castle_ent as usize;
         let alive_before = pst
@@ -1054,8 +1078,9 @@ pub fn recover_pair_mc2_k(
                 .ents
                 .get(castle)
                 .is_some_and(|c| c.class3f == 3 && c.life == -1)
-            && key_held(input_end, 38)
-            && (key_held(input_end, 42) || key_held(input_end, 54))
+            && (surcharge_latched
+                || (key_held(input_end, 38)
+                    && (key_held(input_end, 42) || key_held(input_end, 54))))
     };
     // The modal park (big map / spell book): the game keeps running
     // but the carpet stops dead. Witness = the consumed command at 0
@@ -1194,9 +1219,60 @@ pub fn recover_pair_mc2_k(
             cur_speed,
         )),
         mc2_park,
+        // ⭐⭐⭐ **MC2 HAD NO SUICIDE LANE AT ALL.** Shift+K
+        // (`PlayerInput.cpp:239-41`, the twin of MC1 :20492-93) is a
+        // BARE `life = -1` write on the local carpet from the key pass,
+        // ahead of the entity walk: no damage head, no killer latch, no
+        // knock impulse, and it bypasses invincibility. `World::tick`
+        // has owned the MC2 arm for a long time
+        // (`GameId::Mc2 && alive && cmd.suicide`, world.rs) — but
+        // NOTHING EVER SET THE INPUT on an MC2 take. The field doc on
+        // [`crate::mgcr::PortInput::suicide`] said so in as many words
+        // ("MC1 pairs recover it from the state witness"), and MC1's
+        // witness sat eight lines below `recover_pair_mc1`'s twin while
+        // this constructor simply had no `suicide:` row, so every
+        // recovered MC2 pair carried `false` and the port's human
+        // walked away from the player's own self-kill at full life.
+        //
+        // The witness is MC1's, on MC2's records: the local carpet goes
+        // from `life > 0` to EXACTLY −1 across the pair with no fresh
+        // knock impulse (a decay step is fine; a hit's re-arm is not).
+        // MC2 corroborates it twice over — the bare write leaves BOTH
+        // `word_0x24_36` (killer) and `word_0x26_38` (hit source) at 0,
+        // where every damage-head death latches its attacker — so the
+        // no-killer clause is carried too.
+        //
+        // WITNESS — mc2l5 (96,213 ticks, 13 recorded respawns), the
+        // human at slot 77, THREE of the take's five LOCAL heads and
+        // nothing else: pairs 17379→17380, 42302→42303 and
+        // 51087→51088, each `slot 77 life: retail -1 port 10000` with
+        // `player.life` the same row. At every one of the three the
+        // carpet is idle on flat ground (`z = 256` = ground+clearance,
+        // `height = 0`), full life 10000, an empty mailbox, `f24`/`f26`
+        // both 0 and `action45 0 → 2` on the same tick (EF:60035-41's
+        // tail flip). The take's other ten deaths are ordinary damage
+        // and the port already reproduced every one of them — this lane
+        // recovers only the player's own key.
+        // `MGC_NO_MC2_SUICIDE_WITNESS=1` restores the empty lane.
+        suicide: {
+            let s = cp.play_index as usize;
+            !mc2_suicide_witness_off()
+                && matches!((pst.ents.get(s), st.ents.get(s)), (Some(a), Some(b))
+                    if a.life > 0 && b.life == -1 && b.f24 == 0 && b.f26 == 0)
+                && cp.knock_mag <= pp.knock_mag
+        },
         cheat: cheat_fired_mc2(&pp.notify, &cp.notify),
         ..RecoveredPair::default()
     }
+}
+
+/// A/B toggle for the MC2 Shift+K state witness just above: set
+/// `MGC_NO_MC2_SUICIDE_WITNESS` to restore the pre-dig behaviour, where
+/// `recover_pair_mc2` had no `suicide:` row and every MC2 take dropped
+/// the player's own self-kill.
+fn mc2_suicide_witness_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SUICIDE_WITNESS").is_some())
 }
 
 // ------------------------------------------------- capture-grade laws

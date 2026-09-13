@@ -262,6 +262,170 @@ pub(crate) fn no_launch_2a_absence() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_LAUNCH_2A_ABSENCE").is_some())
 }
 
+/// ⭐⭐⭐ THE CREATE-CASTLE CAST LOCK IS A **LATCH** (`sub_69AB0`,
+/// `sub_5F890`; round 135, W4 — the last head on mc2l3-new and all
+/// eight on mc2l5). `MGC_NO_MC2_CASTLE_CAST_LATCH=1` restores the
+/// pre-135 arm, which RE-DERIVED the lock every tick from a live scan
+/// (a flying human (9,10) or a non-idle human castle) and dropped it
+/// the moment the scan went quiet.
+///
+/// Retail's `word_0x2E_46` on the (15,2) manifestation has exactly
+/// these writers, and NOTHING counts it down:
+///
+/// ```text
+///   ARM      sub_5F7B0 (the cast gate)      word = word_0x30_48        (101)
+///   PIN      sub_69AB0 VA 0x69BAE           word = word_0x30_48 - 1    (100), gated on
+///            the (9,10) spawn returning a slot — `test %eax,%eax / je`
+///   RELEASE  sub_69AB0 VA 0x69D42           word = 0, when sub_68D50 is false
+///            (the unaffordable fresh cast, a dead/broke caster)
+///   PIN/REL  sub_5F890(castle, 1/0)         from the CASTLE's own handlers: pin through
+///            the transform (action 5 cases 3/5, action 4 blast-shake, action 6 per
+///            level), RELEASE on the settle to standing (action 5 case 2) and the
+///            human castle's death (level 0)
+///   RELEASE  sub_5F890(ball/carpet, 0)      from the (9,10) BALL's own dispatch (first-
+///            tick site refusal EF:58923, payload-spawn failure EF:58877) and the
+///            (10,43) delivery that missed the castle (EF:28249)
+/// ```
+///
+/// Once pinned the word HOLDS until one of those releases — in
+/// particular across the whole window between the ball's arrival
+/// and the castle's settle. That window is where the re-derive was
+/// wrong, and `MGC_WRITE_TRACE=<slot>:f26` named it in one run on
+/// each take:
+///
+/// ```text
+///   mc2l3-new (token 125 < carpet 167 < castle 176)
+///     t=5614  0 -> 101  carpet_dispatch      the cast (button held from here)
+///     t=5615  101 -> 100 slot 125 (15,2)     the fire + pin
+///     t=5619  100 -> 0   slot 125 (15,2)     ⚠ the RE-DERIVE: ball gone, castle still
+///                                            action 4 at the token's slot — retail 100
+///     t=5619  0 -> 101   carpet_dispatch     the held button re-arms
+///     t=5620  101 -> 100 slot 125 (15,2)     a SECOND (9,10) at slot 197 — the head;
+///                                            retail: castle case 0 REFUSES the upgrade
+///                                            (sub_11A10), word still 100, no cast
+///     t=5621  100 -> 0   slot 176 (3,2)      castle case 2 — retail's release too
+///   mc2l5 (carpet 77 < token 80 < castle 174): the same shape one slot-order over —
+///     the re-derive releases at 47554, the button re-arms and fires at 47556 (slot
+///     195), retail holds 100 through 47556 and releases at 47557 (castle case 2).
+/// ```
+///
+/// Retail's boundary bytes for the whole of both windows read a flat
+/// 100 (`dump-state` slots 125 / 80). The eight mc2l5 heads are the
+/// same window eight times (a castle whose upgrade keeps being refused
+/// under a held button — the castle-through-rock take).
+///
+/// ⭐⭐⭐ WHY ROUND 132 COULD NOT LAND THIS. Its latch arm lost
+/// mc2l1-new at t=3644 (`missing slot 296 (9,10)`), and the table it
+/// measured showed retail's word at **0** across the t=3604 cast with
+/// a ball "aloft" — read as "retail does not pin on an ordinary cast".
+/// The recording's free stack says what actually happened: the ball at
+/// slot 296 is allocated at 3604 and FREED by 3605, the human has NO
+/// castle, and the ball's own first dispatch (slot 296 > 114, the same
+/// tick) fails `sub_11CB0`'s site test and runs the ball-side
+/// `sub_5F890(a1x, 0)` release. Arm 101 → pin 100 → release 0, all
+/// inside one tick, invisible at the boundary. The pin is real and
+/// reached; what the port lacked was the BALL-SIDE release seats —
+/// exactly the theory 132 withdrew. They now ride
+/// [`crate::engine::features::Gen::mc2_castle_lock_mail`] and land at
+/// the ball's own slot (`World::mc2_drain_castle_lock_mail`).
+///
+/// ⚠ UNIT, NOT PAIR: class-15 `word_0x2E_46` is an ungraded lane, and
+/// at every head the pair (importing retail's held 100) buzzes in BOTH
+/// arms — the divergence is born a tick or two upstream in the
+/// ungraded word. The replay lane certifies it; the unit tests below
+/// pin each seat.
+pub(crate) fn no_mc2_castle_cast_latch() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_CAST_LATCH").is_some())
+}
+
+/// A/B toggle for the payload-spawn-failure seat's OWNER-RECORD tail
+/// (`sub_6D880(wizard)`, round 135): set
+/// `MGC_NO_MC2_CASTLE_BALL_OWNER_TIER_DRAIN=1` to keep that seat a bare
+/// release. See `World::mc2_castle_ball_owner_tier_drain`.
+pub(crate) fn no_mc2_castle_ball_owner_tier_drain() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_BALL_OWNER_TIER_DRAIN").is_some())
+}
+
+/// A/B toggle for the MARKER-INDEX castle-lock pin (round 135, mc2l8
+/// t=11585): set `MGC_NO_MC2_MARKER_INDEX_PIN=1` to restore the
+/// (15,2)-only gate on [`World::mc2_owner_castle_token`], under which a
+/// dead wizard's book marker `1` never reaches the class-15 record at
+/// pool slot 1.
+pub(crate) fn no_mc2_marker_index_pin() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MARKER_INDEX_PIN").is_some())
+}
+
+/// A/B toggle for the CASTLE-SPELL PENDING-TIER ONE-TICK LAG
+/// (`sub_5F890`'s release arm + `sub_69AB0`'s entry arm — see
+/// [`World::mc2_castle_spell_tick`]): set
+/// `MGC_NO_MC2_CASTLE_TIER_DEFER_LAG` to restore the pre-dig
+/// behaviour, where the lock RELEASE applied the manifestation's
+/// deferred tier in its own tick and the manifestation's handler had
+/// no spent-timer entry arm at all — so the tier stamp landed one tick
+/// ahead of retail and, on an import that starts between the two, not
+/// at all.
+pub(crate) fn no_mc2_castle_tier_defer_lag() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_TIER_DEFER_LAG").is_some())
+}
+
+/// ⭐⭐⭐ A/B toggle for **A STOLEN SPELL JAR KEEPS ITS CAST STATE**
+/// (`sub_69300` EF:56136 + `sub_59DC0` EF:41199 + `sub_68FF0`
+/// EF:56011): set `MGC_NO_MC2_STOLEN_ARC_KEEPS_CAST_STATE` to restore
+/// the pre-dig behaviour, where the m26 wraith's steal, the detach
+/// arc and the re-collect each clobbered the manifestation's ARMED
+/// CAST TIMER (`word_0x2E_46`, port `f26`) because the port aliased
+/// the arc counter `dword_0x10_16` onto the SAME field — so a spell
+/// stolen mid-cast came back with a dead window and never paid out
+/// its remaining burn ticks.
+///
+/// THE ALIAS WAS THE ROOT. `cast.rs`'s module map says
+/// "`word_0x2E_46` armed cast timer → f26" and
+/// [`World::mc2_spell_steal`]'s own doc says "f26 = the arc counter
+/// (`dword_0x10_16`)" — **the port's two comments name two different
+/// retail words for one field, 800 lines apart**, and retail keeps
+/// BOTH live at once. The arc counter now lives in `f50` (dead for
+/// class 15: `import_ent_mc2` already zeroes it there).
+pub(crate) fn no_mc2_stolen_arc_keeps_cast_state() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_STOLEN_ARC_KEEPS_CAST_STATE").is_some())
+}
+
+/// A/B toggle for the `subSpellIndex_0x2A_42` ABSENCE on the
+/// `sub_6DCA0` BAND ARMS THEMSELVES. Every arm of the shared band
+/// launcher stamps `a4x->subSpellIndex_2` onto the flyer it spawns
+/// EXCEPT two: `a3 == 0` (fireball, EF:44417-30) and `a3 == 0xD`
+/// (steal mana, EF:44447-56). BYTE-VERIFIED in the shipped
+/// NETHERW.EXE: the `a3 == 0` arm at VA 0x6DD40-0x6DD79 is
+/// `movb $0xa,0x43(%ebx)` + `movb $0x0/$0x4c,0x44(%ebx)` + `mov
+/// $0x9,%edi` and holds NO `mov %ax,0x2a(%ebx)`, while the `a3 <= 9`
+/// arm three blocks down does write it.
+///
+/// The absence is MASKED on the human/rival cast path, where
+/// `sub_693F0` (EF:56199) post-writes the TOKEN's own `@0x2A` — so a
+/// player's fireball legitimately carries the tier value. It is
+/// UNMASKED on the two launchers that post-write nothing: the CASTLE
+/// TURRET (EF:30292-93 writes only `id_0x1A_26` + `word_0x96_150`)
+/// and the MAGIC MINE (EF:29999-30000, the same two). Their fireballs
+/// carry `NewEvent_4A050`'s ctor default 100, not the row's 160/180.
+///
+/// `MGC_NO_MC2_BAND_2A_ABSENCE=1` restores the old unconditional
+/// table write.
+pub(crate) fn no_band_2a_absence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BAND_2A_ABSENCE").is_some())
+}
+
+/// The `sub_6DCA0` arms that DO write the tier's `subSpellIndex_2`
+/// onto the flyer they spawn. Spell 0 (fireball) and spell 13 (steal
+/// mana) are the two that do not.
+pub(crate) fn mc2_band_arm_writes_2a(spell: usize) -> bool {
+    !matches!(spell, 0 | 13) || no_band_2a_absence()
+}
+
 /// A/B toggle for the ROUND-98 EXTENSION of the launch aim point to
 /// the **whole class-15 fire table** — the band arms (spells 0 and 7,
 /// `sub_693F0`/`sub_6A5C0`) and the two direct arms 98-1 left out
@@ -1714,7 +1878,42 @@ impl World {
             e.tick70 = (spell as u8).wrapping_mul(3);
             e.f54 = 64;
             e.id24 = PLAYER_TARGET;
-            e.f26 = 0;
+            // ⚠ `e.f26 = 0; e.f44 = 0;` WERE INVENTED. `sub_68FF0`'s
+            // collect block (EF:56056-64) writes exactly
+            // `byte[0] |= 1; byte[3] &= 0xFD; parentId_0x28_40 = wiz;
+            //  actionIndex_0x45_69 = a3; word_0x36_54 = 64;
+            //  SpellEnabled[a2] = slot; array_0x403[a2] = 1` and then
+            // the hand hint — it touches NEITHER `word_0x2E_46` NOR
+            // `word_0x2C_44`. On a FRESH jar both are already 0, which
+            // is why the invention was invisible; on a RE-COLLECTED
+            // stolen jar it is the difference between a live cast
+            // window and a dead one. WITNESS mc2l7 t=21683, slot 44
+            // (the (15,9) meteor, re-collected one tick after its arc
+            // lands): retail keeps `word_0x2E_46 = 2` and the
+            // `mc2_set_spell` below then takes its SHORT ARM (`f26 > 0`
+            // ⇒ park the tier in `word_0x2C_44`), which is why retail's
+            // `f2c` goes 0 → 1 on that very tick. The port zeroed the
+            // timer, SetSpell applied immediately, and `f2c` stayed 0 —
+            // both halves of retail's row, from one invented store.
+            if no_mc2_stolen_arc_keeps_cast_state() {
+                e.f26 = 0;
+            }
+            // ⚠ `e.f44 = 0` IS ALSO AN INVENTION and is KEPT anyway.
+            // Retail leaves @0x2C alone here too, but in the port that
+            // word carries SLOT-RECYCLING RESIDUE into a fresh jar:
+            // `MGC_WRITE_TRACE=11:f44` on mc2l7 names the writer as
+            // **slot 25, an (11,36), at t=1257** — while slot 11 was
+            // still its PREVIOUS tenant — and the class-15 ctor never
+            // clears it. Drop this scrub and `sub_6D880` reads the
+            // leftover 100 as "pending tier 99" the tick the (15,5)
+            // heal window expires, stamping tier 2: mc2l7 t=1664,
+            // `mana_max` 500 → 50000, `byte_0x46_70` 0 → 2. Dropping
+            // the store therefore needs the ctor's @0x2C clear found
+            // first; it is a separate lead, not part of this law. Harmless for the
+            // law's own witness: `mc2_set_spell` two lines below
+            // re-stamps `f44 = tier + 1` through its short arm whenever
+            // the cast timer survived, which is exactly retail's
+            // `f2c 0 → 1` at mc2l7 t=21683.
             e.f44 = 0;
         }
         self.mc2_book.ent[spell] = m as u16;
@@ -1897,9 +2096,31 @@ impl World {
         }
         {
             let e = &mut self.g.ent[m];
-            e.f38 = wraith;
+            // ⭐ @0x26, NOT @0x24. `sub_69300`'s first store is
+            // `mov %ax,0x26(%ebx)` (`NETHERW.EXE` 0x8DB32) and
+            // `sub_59DC0`'s homing arm reads the wraith back from
+            // `0x26(%ebx)` (0x7E656). The MC2 field map homes retail
+            // @0x26 in `f40` (`import_ent_mc2`: `f40: tr(r.f26)`;
+            // `port_ent_lanes_mc2`: the "f26" lane publishes `e.f40`)
+            // — `f38` is @0x24, the killer latch. The old `f38` home
+            // meant an IMPORTED mid-arc jar read wraith 0 and finished
+            // on the spot.
+            e.f40 = wraith;
             e.tick70 = 78;
-            e.f26 = 0;
+            // ⭐ RETAIL ZEROES @0x10, NOT @0x2E. `sub_69300`
+            // (EF:56136) is `a1x->dword_0x10_16 = 0`, and the shipped
+            // EXE spells the width out — `NETHERW.EXE` file 0x8DB39-49
+            // (linear 0x69339; MC2 file = VA + 0x24800):
+            //   8db39: c6 43 45 4e          movb $0x4e,0x45(%ebx)  ; action 78
+            //   8db49: c7 43 10 00 00 00 00 movl $0x0,0x10(%ebx)   ; @0x10 = 0
+            // — a 32-bit store to @0x10 and **nothing anywhere in
+            // `sub_69300` touches @0x2E**. The armed cast timer
+            // survives the theft.
+            if no_mc2_stolen_arc_keeps_cast_state() {
+                e.f26 = 0;
+            } else {
+                e.f50 = 0;
+            }
         }
         // Snap the jar onto the player (CopyEntityPosition, EF:55810).
         let (px, py, pz) = self.human_pose;
@@ -2746,13 +2967,101 @@ impl World {
     /// raises it — you get the "split second between transforms" to cast
     /// a rebuild, faithful to both games.
     fn mc2_castle_spell_tick(&mut self, m: usize, p: PlayerPose, ctx: &MobCtx) {
+        // ⭐⭐⭐ `sub_69AB0` OPENS WITH THE SPENT-TIMER ARM, AND IT IS
+        // THE ONLY PLACE THE MANIFESTATION'S DEFERRED TIER IS EVER
+        // APPLIED (EF:56436-39):
+        // ```text
+        //   if (a1x->word_0x2E_46 <= 0) { sub_6D880(a1x); }
+        //   else { …the whole body… }
+        // ```
+        // The release that ZEROES the timer does NOT apply it: retail's
+        // `sub_5F890` `a2 == 0` arm (EF:61381-84) zeroes the
+        // MANIFESTATION's `word_0x2E_46` and then calls `sub_6D880` on
+        // **`a1x`, the CASTLE** — the record `sub_5F890` was invoked on,
+        // not the manifestation it just released. The shipped EXE is
+        // unambiguous (`NETHERW.EXE` file **0x840BC-0x840CB**, linear
+        // 0x5F8BC; MC2 file = VA + 0x24800), with `edx` still holding
+        // the `a1x` argument loaded at 0x84094:
+        // ```text
+        //   840bc: 0f bf c3          movswl %bx,%eax        ; SpellEnabled[2]
+        //   840bf: 8b 04 85 ...      mov 0x1a3e4(,%eax,4),%eax ; the MANIFESTATION
+        //   840c6: 52                push  %edx             ; ← the CASTLE
+        //   840c7: 66 89 48 2e       mov   %cx,0x2e(%eax)   ; manifestation->w2E = 0
+        //   840cb: e8 b0 df 00 00    call  0x92080          ; sub_6D880
+        // ```
+        // So the pending tier survives the release and lands on the
+        // manifestation's NEXT tick, through this entry arm — a clean
+        // ONE-TICK LAG.
+        //
+        // WITNESS — mc2l7, slot 38, the human's (15,2) castle
+        // manifestation, with `word_0x2C_44 = 2` pending (tier 1):
+        //   t=25588 retail: castle slot 59 returns to the standing idle
+        //           (`action` 5 → 4) and the release zeroes slot 38's
+        //           `word_0x2E_46` 100 → 0 — and NOTHING else moves.
+        //   t=25589 retail: `word_0x2C_44` 2 → 0, `byte_0x46_70` 0 → 1,
+        //           `maxMana_0x8C` 10000 → 12500, `mana_0x90` 99 → 123.
+        // The port did the whole stamp at 25588 (the release's own
+        // `mc2_cast_expire`) and then, importing retail's 25588, had no
+        // arm left to run at 25589 — the two-tick reset cluster
+        // 25588/25589 in the take's census, the second row the exact
+        // inverse of the first.
+        //
+        // `MGC_NO_MC2_CASTLE_TIER_DEFER_LAG=1` restores the old shape.
+        //
+        // The `return` is retail's `else` (EF:56436-39): a spent word
+        // runs ONLY `sub_6D880`. It is unconditional under the latch
+        // (round 135). ⚠ In the re-derive arm
+        // (`MGC_NO_MC2_CASTLE_CAST_LATCH`) it must fall through: that
+        // arm's live scan in the tail is the only thing able to RAISE
+        // the lock from 0, and a bare return there decertified
+        // mc2l4-new (END -> 552) and mc2l1-new (END -> 3200) with
+        // duplicate (9,10) balls (round 134-3).
+        if !no_mc2_castle_tier_defer_lag() && self.g.ent[m].f26 <= 0 {
+            self.mc2_cast_expire(2, m);
+            if !no_mc2_castle_cast_latch() {
+                return;
+            }
+            // Fall through to the re-derive tail; the cast arm below
+            // cannot fire from `f26 <= 0` (`dur >= 1`).
+        }
         let dur = self.g.ent[m].f28.max(1) as i16;
-        // A fresh cast arms `f26 = f28` in `mc2_cast_gate`; that sentinel
-        // is the only entry that fires + debits (the transform sets 100,
-        // never `dur`).
+        if !no_mc2_castle_cast_latch() {
+            // ⭐⭐⭐ RETAIL'S `sub_69AB0` BODY, IN ITS OWN ORDER
+            // (EF:56440-56515): `if (sub_68D50(a1x, caster))` wraps
+            // the fresh-cast arm and its ELSE is the ONLY release in
+            // the function — VA 0x69D42 `movw $0x0,0x2e(%eax)`. So a
+            // held word (dur - 1) is released here only when the
+            // caster can no longer carry it (dead / upkeep unmet), and
+            // a fresh word (== dur) when the full cost is not there.
+            if self.g.ent[m].f26 > 0 && !self.mc2_afford(m) {
+                self.g.ent[m].f26 = 0;
+                return;
+            }
+            // A fresh cast arms `f26 = f28` in `mc2_cast_gate`; that
+            // sentinel is the only entry that fires + debits (the
+            // transform pins 100 = dur - 1, never dur).
+            if self.g.ent[m].f26 == dur {
+                self.mc2_spell_fire(2, m, p, ctx); // cast_castle: spawns the ball
+                let cost = self.g.ent[m].max_life;
+                self.mana_debit(cost);
+                // THE PIN — VA 0x69BAE, in the ball spawn's own
+                // straight-line block and gated on the spawn having
+                // returned a slot (`test %eax,%eax / je`). The port
+                // has no spawn handle, so it reads the pool the ball
+                // has just been placed in. A ball whose own first
+                // dispatch (same tick, higher slot) refuses the site
+                // releases it again through the ball-side mail —
+                // mc2l1-new t=3604.
+                if self.mc2_castle_ball_aloft() {
+                    self.g.ent[m].f26 = dur - 1; // word_0x30_48 - 1
+                }
+            }
+            return;
+        }
+        // ---- the pre-135 RE-DERIVE arm (`MGC_NO_MC2_CASTLE_CAST_LATCH`) ----
         if self.g.ent[m].f26 == dur {
             if self.mc2_afford(m) {
-                self.mc2_spell_fire(2, m, p, ctx); // cast_castle: spawns the ball
+                self.mc2_spell_fire(2, m, p, ctx);
                 let cost = self.g.ent[m].max_life;
                 self.mana_debit(cost);
             } else {
@@ -2760,8 +3069,9 @@ impl World {
                 return;
             }
         }
-        // `sub_5F890`: the manifestation active-state tracks the castle
-        // transform (the flying build ball, or the castle mid-transform).
+        // Re-derive `sub_5F890`'s state every tick from a live scan.
+        // Retail does no such thing — the word is a LATCH, released
+        // only by the castle-side and ball-side `sub_5F890` sites.
         let active = self.mc2_castle_lock_active();
         let was = self.g.ent[m].f26 > 0;
         if active {
@@ -2792,7 +3102,13 @@ impl World {
     /// rebuild here — gone 2026-09-07, player-ruled.)
     fn mc2_castle_lock_release(&mut self, m: usize) {
         self.g.ent[m].f26 = 0;
-        self.mc2_cast_expire(2, m);
+        // ⚠ RETAIL'S `sub_6D880` HERE TAKES THE **CASTLE**, NOT `m` —
+        // see the entry arm in [`Self::mc2_castle_spell_tick`] for the
+        // EXE bytes. The manifestation's pending tier is applied one
+        // tick later, by its own handler's spent-timer arm.
+        if no_mc2_castle_tier_defer_lag() {
+            self.mc2_cast_expire(2, m);
+        }
         if self.player_castle().is_some() {
             let tier = self.g.ent[m].f71;
             self.mc2_set_spell(m, tier);
@@ -2857,7 +3173,14 @@ impl World {
         if pin {
             self.g.ent[m].f26 = self.g.ent[m].f28.max(1) as i16 - 1;
         } else if self.g.ent[m].f26 > 0 {
-            if own == PLAYER_TARGET {
+            if self.g.ent[m].model65 != 2 {
+                // A MARKER-1 index resolved to another class-15
+                // record (see `mc2_owner_castle_token`): retail's
+                // `a2 == 0` arm writes that record's `word_0x2E_46 = 0`
+                // and runs `sub_6D880` on the CASTLE — no manifestation
+                // re-price exists for it.
+                self.g.ent[m].f26 = 0;
+            } else if own == PLAYER_TARGET {
                 self.mc2_castle_lock_release(m);
             } else {
                 self.mc2_rival_castle_lock_release(m, own);
@@ -2902,7 +3225,8 @@ impl World {
     /// take's certification wall.
     ///
     /// ⚠ NO CLASS/MODEL GATE HERE, deliberately — unlike
-    /// [`Self::mc2_owner_castle_token`], whose gate stays: that helper
+    /// [`Self::mc2_owner_castle_token`], whose CLASS-15 gate stays
+    /// (round 135 relaxed it from (15,2) to class 15): that helper
     /// feeds `sub_5F890`'s PIN, which writes retail `word_0x2E_46`, a
     /// lane the port's polymorphic `f26` alias spends on `dword_0x10_16`
     /// for class 10 (conformance.rs's `(10, _) => scratch10` arm). Firing
@@ -2910,7 +3234,9 @@ impl World {
     /// OCCUPANCY. Retail's `word_0x2E_46 = word_0x30_48 - 1 = -1` on
     /// slot 1 is real (`explain` t=1198 shows `f2e 0 -> -1`) but lands on
     /// a lane the port does not model for class 10 — pair-blind, and NOT
-    /// landable through `f26`.
+    /// landable through `f26`. When slot 1 is a class-15 record (mc2l8
+    /// t=11584: rival 139's (15,0) fireball token) the same write IS
+    /// `f26` and does land — 135-2.
     pub(crate) fn mc2_castle_death_token_purge(&mut self, c: usize) {
         if no_mc2_castle_death_token_purge() {
             return;
@@ -2982,9 +3308,36 @@ impl World {
     /// human reads the world-side `mc2_book`; every other wizard reads
     /// its own [`Mc2Spellbook`].
     ///
-    /// The class/model gate matters under import — a book slot that
-    /// survived a re-import can name a record that is no longer the
-    /// castle manifestation.
+    /// ⭐⭐⭐ THE GATE IS **CLASS 15**, NOT (15,2) — round 135, mc2l8's
+    /// last head (t=11585). Retail has NO gate: `sub_5F890` derefs
+    /// `Entities[SpellsEnabled[2]]` raw, and a DEAD wizard's book holds
+    /// the boolean **1** marker in every slot it knew (`sub_5E310`
+    /// EF:60146, [`World::mc2_scatter_spells`] / the rival twin). So a
+    /// dead rival's castle taking its last level (`sub_605E0`,
+    /// EF:61643 `sub_5F890(a1x, 1)`) pins POOL SLOT 1 — whatever sits
+    /// there — at ITS `word_0x30_48 - 1`; and the rival-owner arm at
+    /// level 0 never releases it (EF:61645-58 takes the terrain-flag
+    /// branch). mc2l8 t=11584: rival 148 is a corpse (action 3, life
+    /// -578), its castle 257 falls 1 → 0, and slot 1 — rival 139's
+    /// live (15,0) fireball token, `word_0x30_48 = 5` — reads
+    /// `word_0x2E_46` 0 → **4**, then counts 3, 2, 1, 0 over the next
+    /// four ticks while rival 139's regen freezes at 16440 (the
+    /// armed-token `sub_68DE0` regen pin). The port's (15,2)-only gate
+    /// dropped the write; the census could not see it (class-15 `f2e`
+    /// is ungraded) and surfaced it one tick later as `(3,1) slot 139
+    /// mana` +100.
+    ///
+    /// For ANY class-15 record the port's `f26` IS retail's
+    /// `word_0x2E_46`, so the pin is representable and lands. A
+    /// marker that resolves to a NON-class-15 record (mc2l22's (10,45)
+    /// building at slot 1: retail writes -1 there) stays unlanded —
+    /// the port aliases class 10's `f26` to `dword_0x10_16`
+    /// (`scratch10`), a different retail field — and is registered as
+    /// pair-blind on [`Self::mc2_castle_death_token_purge`].
+    ///
+    /// The class gate still matters under import — a book slot that
+    /// survived a re-import can name a record that is no longer a
+    /// manifestation at all.
     pub(crate) fn mc2_owner_castle_token(&self, own: u16) -> Option<usize> {
         let m = if own == PLAYER_TARGET {
             self.mc2_book.ent[2] as usize
@@ -2996,7 +3349,7 @@ impl World {
         (m != 0
             && m < self.g.ent.len()
             && self.g.ent[m].class64 == 15
-            && self.g.ent[m].model65 == 2)
+            && (self.g.ent[m].model65 == 2 || !no_mc2_marker_index_pin()))
             .then_some(m)
     }
 
@@ -3026,11 +3379,19 @@ impl World {
     /// downgrade/settle). Mirrors where retail calls `sub_5F890(*,1)`
     /// (throughout the transform) vs `(*,0)` (return to the standing
     /// action-4 idle).
+    /// Did the cast actually put a (9,10) castle ball in the air?
+    /// Retail asks it as `test %eax,%eax` on `NewEvent`'s return
+    /// (VA 0x69BAE's guard); the port has no spawn handle to test, so
+    /// it reads the pool the ball has just been placed in.
+    fn mc2_castle_ball_aloft(&self) -> bool {
+        self.g.ent.iter().skip(1).any(|e| {
+            e.class64 == 9 && e.model65 == 10 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0
+        })
+    }
+
     fn mc2_castle_lock_active(&self) -> bool {
         // The cast in transit: the (9,10) castle ball still flying.
-        if self.g.ent.iter().skip(1).any(|e| {
-            e.class64 == 9 && e.model65 == 10 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0
-        }) {
+        if self.mc2_castle_ball_aloft() {
             return true;
         }
         // The castle mid-transform: idle = action 4, no settle timer,

@@ -1802,32 +1802,36 @@ mod tests {
     /// Opening an MC2 retail take DERIVES its campaign REPLAY gate, so
     /// the app's driver can stamp the world with it exactly as
     /// `build_world_mc2` stamps the conformance runner's. The app
-    /// hardcoded `false` for four sessions; mc2l0 is the one MC2 take
-    /// whose gate is genuinely clear, which is why it hid there and
-    /// showed on mc2l3 as a mover divergence 900 ticks after the
-    /// scrolls it actually leaked.
+    /// hardcoded `false` for four sessions, and showed on mc2l3 as a
+    /// mover divergence 900 ticks after the scrolls it actually leaked.
     ///
-    /// Skips silently without the player's local captures
-    /// (`recordings/` is gitignored — CI has no takes).
+    /// ⚠ THIS TEST READS CONFORMANCE FIXTURES, NEVER `recordings/`.
+    /// A recording is PROVENANCE, not identity: it can be re-cut or
+    /// overwritten at any time, and on 2026-09-13 the `mc2l0` take was
+    /// replaced by a fresh campaign-replay capture whose gate is SET
+    /// where the old one was clear — reddening the take-identity
+    /// assertion this test used to carry. The two exemplars below are
+    /// committed fixtures cut at scroll-bearing ticks, so the property
+    /// travels with the repo.
     #[test]
-    fn an_mc2_retail_take_carries_its_own_replay_gate() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../recordings");
-        let gate = |name: &str| {
-            let p = root.join(name);
+    fn an_mc2_capture_carries_its_own_replay_gate() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/fixtures");
+        let gate = |lvl: &str, file: &str| {
+            let p = root.join(lvl).join(file);
             p.exists()
-                .then(|| ReplayFile::open(&p).map(|f| f.mc2_replayed))
+                .then(|| mgc_formats::mgcr::mc2_take_replayed(&p))
                 .transpose()
-                .expect("the take opens")
+                .expect("the fixture opens")
         };
-        if let Some(g) = gate("mc2l3.mgcr") {
-            assert!(g, "mc2l3's scrolls are born at 0xD — the gate is SET");
+        // A campaign REPLAY births its (14,5) XP scrolls at 0x0D.
+        if let Some(g) = gate("mc2l3", "the-campaign-replay-gate-is-set-on-this-capture.mgcr") {
+            assert!(g, "mc2l3's scrolls are born at 0x0D — the gate is SET");
         }
-        if let Some(g) = gate("mc2l0.mgcr") {
-            assert!(!g, "mc2l0's scrolls live at 0xC — the gate is clear");
-        }
-        // MC1 takes have no such gate and must never scan for one.
-        if let Some(g) = gate("mc1l0.mgcr") {
-            assert!(!g, "the gate is MC2-only");
+        // A FIRST-RUN capture births them at 0x0C. Both exemplars are
+        // needed: a hardcoded `false` passes this one and fails the
+        // one above, which is exactly how the old bug hid.
+        if let Some(g) = gate("mc2l30", "the-campaign-replay-gate-is-clear-on-this-capture.mgcr") {
+            assert!(!g, "mc2l30 is a first run — the gate is clear");
         }
     }
 
@@ -2019,3 +2023,4 @@ mod tests {
         );
     }
 }
+

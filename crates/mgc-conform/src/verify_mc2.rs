@@ -393,6 +393,12 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                 // this one silently did not, leaving MC2 pair mode
                 // structurally unable to demolish.
                 c.demolish = rec.demolish;
+                // …and the Shift+K witness (134-7) — the same fold
+                // as the suite's (fixtures.rs): the pair recovery
+                // grew a `suicide:` row and this arm has to forward
+                // it, or `verify-deltas` and the suite grade a live
+                // human where retail's own key killed it.
+                c.suicide = rec.suicide;
                 c
             };
             if args.start.is_some_and(|s| pt < s) {
@@ -1046,6 +1052,15 @@ pub(crate) fn exec_pair_mc2(
         .retail_import_mc2(pst)
         .map_err(|e| format!("import: {e}"))?;
     world.set_prev_fire(prev_cmd.fire_left, prev_cmd.fire_right);
+    // The barrel roll's homing-lock break (`sub_55EB0`) — retail's
+    // PLAYER FRAME fires it before `UpdateEntities_57730`, and the
+    // replay lane pins the carpet instead of running the driver, so
+    // the edge has to come off the imported roll phase. See
+    // [`World::mc2_broll_lock_break`].
+    world.mc2_broll_lock_break(
+        pst.players[pst.local_player as usize].broll_phase,
+        st.players[st.local_player as usize].broll_phase,
+    );
     // The POSE PAIR ([`mc2_pose_pair`]): feed the walk BOTH recorded
     // endpoints and let `mc2_carpet_dispatch` swap them at the
     // carpet's own walk slot, retail's `sub_5D530` phase. The

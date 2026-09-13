@@ -249,6 +249,18 @@ pub(crate) fn no_mc2_m21_wrapper_tail() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M21_WRAPPER_TAIL").is_some())
 }
+/// A/B toggle for the m21 ATTACK-ARM REACH TEST (`sub_26220`'s
+/// `sub_583F0_distance_3d`, EF:16890-91 / `NETHERW.EXE` file
+/// 0x4AB5A-0x4AB76 — see the block in [`Gen::m21_tick`]'s `2 =>` arm):
+/// set `MGC_NO_MC2_M21_RANGE_3D` to restore the pre-dig behaviour,
+/// where the port passed the DEVIL's own z as the target's z, turning
+/// retail's 3-D reach test into a planar one that can only understate
+/// the distance — so a devil fired bolts retail never fires and stayed
+/// in ATTACK where retail drops back to IDLE.
+pub(crate) fn no_mc2_m21_range_3d() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M21_RANGE_3D").is_some())
+}
 /// A/B toggle for the m2 PHASE-7 WRAPPER JIGGLE (`sub_1F8A0`'s middle
 /// block, EF:11567-74 — see [`Gen::m2_wrapper_jiggle`]): set
 /// `MGC_NO_MC2_M2_WRAPPER_JIGGLE` to restore the pre-dig behaviour,
@@ -1157,17 +1169,59 @@ impl Gen {
                             };
                             let my_id = self.ent[i].id24;
                             let row = &BEHAVIOR[self.ent[i].row156 as usize];
+                            // ⭐⭐ THE PREY SCAN WALKS THE TICK-TOP
+                            // CLASS-3 ROSTER `dword_38519`, NOT THE
+                            // LIVE POOL, AND IT ASKS NOTHING ABOUT
+                            // LIFE. The shipped EXE settles it at
+                            // `sub_203D0` +0x20502 (file 0x44D02):
+                            //   mov esi,[0x41a4] / mov esi,[esi+0x9677]
+                            //   cmp byte [esi+0x40],2   ; model
+                            //   mov ax,[esi+0x1a] / cmp ax,[ebx+0x1a]
+                            //   ...  / cmp eax,edx / jnc  ; d2 < best
+                            //   mov esi,[esi]           ; ->next_0
+                            // THREE admission tests and no others —
+                            // no `life >= 0`, no reap-flag 0x400. Every
+                            // liveness question was settled when the
+                            // roster was BUILT at the top of the frame,
+                            // exactly as in [`Gen::mc2_avoid_packmate_at`].
+                            //
+                            // The port's live-pool walk saw a castle
+                            // BORN EARLIER IN THE SAME TICK and took the
+                            // absolute face-the-prey `roll` write where
+                            // retail, finding the roster empty, took the
+                            // two-draw wander turn: mc2l5 t=32531,
+                            // skeleton 169 — retail `rand` 25598 → 47772
+                            // (exactly two LCG steps) and `roll` 287 →
+                            // 46 = 287 − ((47772 & 0xFF) + 85); the port
+                            // drew nothing and wrote `roll` = 617, the
+                            // bearing to slot 86, a (3,2) castle born at
+                            // t=32531 and therefore absent from the
+                            // roster retail was walking. ⚠ `roll` (@0x20)
+                            // is UNGRADED, so the report names `rand`.
                             let mut prey: Option<(usize, i32)> = None;
-                            for (j, c) in self.ent.iter().enumerate().skip(1) {
-                                if c.class64 == 3
-                                    && c.model65 == 2
-                                    && c.id24 != my_id
-                                    && c.act_life >= 0
-                                    && c.flags & 0x400 == 0
-                                {
-                                    let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
-                                    if best_d2(&prey, d2) {
-                                        prey = Some((j, d2));
+                            if m9_prey_roster_law() {
+                                for k in 0..self.wiz_chain.visible_len() {
+                                    let j = self.wiz_chain.list[k] as usize;
+                                    let c = &self.ent[j];
+                                    if c.model65 == 2 && c.id24 != my_id {
+                                        let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                                        if best_d2(&prey, d2) {
+                                            prey = Some((j, d2));
+                                        }
+                                    }
+                                }
+                            } else {
+                                for (j, c) in self.ent.iter().enumerate().skip(1) {
+                                    if c.class64 == 3
+                                        && c.model65 == 2
+                                        && c.id24 != my_id
+                                        && c.act_life >= 0
+                                        && c.flags & 0x400 == 0
+                                    {
+                                        let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                                        if best_d2(&prey, d2) {
+                                            prey = Some((j, d2));
+                                        }
                                     }
                                 }
                             }
@@ -4192,7 +4246,7 @@ impl Gen {
                     _ => {}
                 }
                 let slot = self.ent[i].f146;
-                let Some((tx, ty, _)) = self.mc2_target(slot, ctx) else {
+                let Some((tx, ty, tz)) = self.mc2_target(slot, ctx) else {
                     self.mc2_move_core(i);
                     self.m21_jump(i);
                     self.m21_mode(i, 1);
@@ -4222,8 +4276,49 @@ impl Gen {
                 }
                 let mut out_of_range = false;
                 if self.ent[i].f63 & 0x1F == 0 {
+                    // ⭐ THE BOLT'S REACH TEST IS A TRUE 3-D DISTANCE.
+                    // `sub_26220` (EF:16890-91) pushes the TARGET's whole
+                    // `axis_3d` — `sub_583F0_distance_3d(&a2x->position_0x4C_76,
+                    // &v4x->position_0x4C_76)` — and the shipped EXE says the
+                    // same at `NETHERW.EXE` file **0x4AB5A-0x4AB70** (linear
+                    // 0x26B5A; MC2 file = VA + 0x24800), directly under the
+                    // `testb $0x1f,0x3e(%ebx)` cadence gate at 0x4AB54:
+                    //   4ab54: f6 43 3e 1f   testb $0x1f,0x3e(%ebx)   ; f63 & 0x1F
+                    //   4ab58: 75 2e         jne   0x4ab88            ; -> LABEL_22
+                    //   4ab5a: 8d 46 4c      lea   0x4c(%esi),%eax    ; TARGET pos
+                    //   4ab5d: 50            push  %eax
+                    //   4ab5e: 8d 43 4c      lea   0x4c(%ebx),%eax    ; devil pos
+                    //   4ab61: 50            push  %eax
+                    //   4ab6c: e8 7f 20 03 00 call 0x7cbf0            ; sub_583F0
+                    //   4ab74: 39 f8         cmp   %edi,%eax          ; vs v_28
+                    //   4ab76: 73 0c         jae   0x4ab84            ; out -> v8 = 1
+                    // `esi` is `v4x`, the resolved target record, so `0x50` —
+                    // its z — is read like x and y. The port had dropped the
+                    // resolved z on the floor (`let Some((tx, ty, _))`) and fed
+                    // `mc2_dist3` the DEVIL's own z for both ends, which makes
+                    // the term a PLANAR distance and can only ever UNDERSTATE
+                    // the reach — so the port fires bolts retail does not, and
+                    // stays in ATTACK where retail falls back to IDLE.
+                    //
+                    // WITNESS — mc2l7 pair 23807→23808, slot 236, a (5,21)
+                    // devil at (51761, 28536, 4767) whose `word_0x96_150` is
+                    // 209, a (3,3) building that has already moved this tick to
+                    // (52740, 24093, 3820). Row 96's `v_28` is 4608; the planar
+                    // distance is **4549** (in reach) and the true 3-D distance
+                    // is **4648** (out of reach). Retail takes `v8 = 1`:
+                    // `sub_268F0(a1x, 1)` writes `byte_0x43_67` 0 → 64,
+                    // `word_0x96_150` 209 → 0 and `actionIndex` 170 → 169. The
+                    // port fired instead — an extra (9,0) bolt in slot 104 off
+                    // the free stack — and held `actionIndex` at 170.
+                    //
+                    // `MGC_NO_MC2_M21_RANGE_3D=1` restores the planar test.
+                    let tgt_z = if no_mc2_m21_range_3d() {
+                        self.ent[i].z
+                    } else {
+                        tz
+                    };
                     let e = &self.ent[i];
-                    if Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, self.ent[i].z))
+                    if Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tgt_z))
                         < BEHAVIOR[e.row156 as usize].v_28 as u32
                     {
                         self.mc2_atk_bolt(i, slot, ctx);
@@ -5952,4 +6047,13 @@ impl Gen {
 /// Nearest-candidate accumulator test.
 fn best_d2(best: &Option<(usize, i32)>, d2: i32) -> bool {
     best.is_none_or(|(_, bd)| d2 < bd)
+}
+
+/// Set `MGC_NO_M9_PREY_ROSTER=1` to restore the pre-2026-09-13 LIVE-POOL
+/// castle walk in the model-9 (skeleton) prey seek (`sub_203D0`,
+/// EF:12117-48) — the walk that could see a castle born earlier in the
+/// same tick and skipped one that died mid-tick.
+fn m9_prey_roster_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M9_PREY_ROSTER").is_none())
 }

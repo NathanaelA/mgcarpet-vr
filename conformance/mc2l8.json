@@ -1,0 +1,25 @@
+{
+ "dir": "fixtures/mc2l8",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 82,
+   "file": "the-spell-snatch-is-the-wraith-slots-own-write.mgcr",
+   "source": "mc2l8",
+   "note": "THE SPELL SNATCH IS THE WRAITH SLOT'S OWN WRITE: sub_69300 is called from INSIDE the (5,26) wraith's state handler (EF:19359/19372, the %0x3F roll's 4/5 arms), not from a post-walk drain, so by the time the walk reaches the detached jar's pool slot the jar is already in action 78 and its action-78 body (sub_692C0 -> sub_59DC0, shipped NETHERW.EXE 0x8DAC0 / 0x7E5C0) runs ITS FIRST ARC STEP ON THE SAME TICK whenever the jar sits ABOVE the wraith in slot order. The port drained mc2_steal_mail after the whole walk, so every stolen jar started its arc one tick late and spent that tick at the caster's raw position with dword_0x10_16 still 0. mc2l8 t=83: wraith slot 15 snatches the possession jar at slot 106 off the human's right hand; retail already reads scratch10 1, pitch 243 (the caster's END-of-tick facing) and (36328,16355,246) = the caster's post-move position stepped 384 units along it (the `push $0x180` literal at 0x7E61C), where the port sat at the raw (36449,16609,506). ALSO PINS the @0x26 home: the wraith ref is f40 (`mov %ax,0x26(%ebx)` at 0x8DB32, read back at 0x7E656), not f38 (@0x24, the killer latch) - the old home made an IMPORTED mid-arc jar read wraith 0 and finish on the spot. Kill switch MGC_NO_MC2_STEAL_IN_WALK. Head 82 -> 574 on mc2l8; mc2l5 551 -> 3974."
+  }
+,
+  {
+   "t": 12960,
+   "file": "the-kind1-arrival-box-does-not-wrap-in-16-bits.mgcr",
+   "source": "mc2l8",
+   "note": "THE KIND-1 ARRIVAL BOX SIGN-EXTENDS EACH OPERAND AND SUBTRACTS IN 32 BITS - IT DOES NOT WRAP. The twin of the kind-2 leash seam (mc2l9), on the OTHER stagevar call path: sub_12500's 2048-unit arrival test, the stage-hold RELEASE. The decompile HIDES this one - EF:5072-74 routes it through Maths::Abs16(int16_t), which truncates - so only the shipped binary settles it, and at VA 0x125DE it is two movswl plus a 32-bit sub, exactly like 0x1DC14. The port's 16-bit subtract re-wraps and reads ARRIVED whenever the creature and its authored fly-point straddle the 0x8000 axis seam, releasing a hold retail keeps. mc2l8 t=12960, slot 15, a (5,17) on a kind-1 hold: retail holds it at action 143 with StageVars (2,1) and the port drops it to action 137 with (0,0) - the hold state itself, three graded fields, and it stays wrong for every tick after. Kill switch MGC_NO_MC2_KIND1_SEAM. mc2l8 920 -> 618 segments. A LAW ON ONE CALL PATH IS NOT LANDED - the correct separate-cast shape already existed in the tree as mc2_avoid_packmate_at's cast16 arm. Round 132 corpus sweep: the pair lane sees this on mc2l8 alone (505 -> 807 dirty pairs with the law off); it was landed unfixtured in round 131 and never probed."
+  },
+  {
+   "t": 7534,
+   "file": "a-token-fires-from-its-own-parent-word.mgcr",
+   "source": "mc2l8",
+   "note": "A SPELL TOKEN'S CASTER IS ITS OWN parentId_0x28_40, NOT A BOOK LOOKUP: `sub_693F0` (the spell-fire body, EF:56167-78) opens `v1x = Entities_EA3E4[a1x->parentId_0x28_40]` and every sibling token body (`sub_6A480` EF:56496, `sub_6AA00` EF:56721, `sub_6AB00` EF:56784, `sub_6BAB0` EF:57421) opens the same way; the caster's spellbook is never consulted. The port's `mc2_manifestation_pass` resolved a token's rival as THE FIRST RIVAL WHOSE book.ent[spell] EQUALS THIS SLOT - and a book after a death scatter is not a slot table: `mc2_scatter_spells` leaves boolean 1s in it, so every corpse (rival 0, slot 122, life -1168, book [1,1,1,1,1,0,0,1,...]) claimed pool slot 1, and `mc2_rival_afford` (= `sub_68D50`, first test `life < 0`) refused the live rival's cast forever: 100 mana never debited, no (9,0) fireball, no (10,2)/(10,12) effects - 313 mana rows + 157 missing-record rows, 618 -> 161 segments on this law alone. The brief's four brain-side hypotheses were all REFUTED by `dump-state --port` (only `mana` differs on slot 139; the brain is in HuntMana picking spell 0 on both sides; neither engine casts from the brain here - `cooldown[0] 2 -> 1` is a decay). WITNESS mc2l8 t=7534 -> 7535: slot 1 is rival 139's spell-0 token (owner28 = 139 both sides); retail runs its first tick (`f2c 0 -> 1`, `f2e 5 -> 4`), the port took the refused arm (`f2e 5 -> 0`). Kill switch MGC_NO_MC2_TOKEN_PARENT_OWNER=1. Round 134 / D4."
+  }
+ ]
+}

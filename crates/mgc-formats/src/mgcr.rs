@@ -2101,6 +2101,13 @@ pub struct RetailPlayerMc2 {
     pub duel_hold: i32,
     pub duel_target: u16,
     pub duel_tier: u16,
+    /// D1 PROBE: the BARREL-ROLL driver state (`byte_0x846_2BDE`
+    /// phase / `byte_0x847` dir / `word_0x848` angle / `word_0x84A`
+    /// vel) — inside the 2124-byte block, never decoded before.
+    pub broll_phase: u8,
+    pub broll_dir: i8,
+    pub broll_angle: i16,
+    pub broll_vel: i16,
     pub hand_left: i16,  // +2103 (SpellIndexLeft; -1 = empty)
     pub hand_right: i16, // +2105
     /// `MenuState_0x3DF_2BE4_12221` (+0x3DF) — the input dispatcher's
@@ -2426,6 +2433,10 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
         duel_hold: i32_(d, t + 322),
         duel_target: u16_(d, t + 326),
         duel_tier: u16_(d, t + 330),
+        broll_phase: u8_(d, b + 0x846),
+        broll_dir: i8_(d, b + 0x847),
+        broll_angle: i16_(d, b + 0x848),
+        broll_vel: i16_(d, b + 0x84A),
         hand_left: i16_(d, b + m2::PP_HAND_L),
         hand_right: i16_(d, b + m2::PP_HAND_R),
         menu_state: u8_(d, b + 0x3DF),

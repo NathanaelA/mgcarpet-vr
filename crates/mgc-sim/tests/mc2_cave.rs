@@ -816,7 +816,25 @@ fn mc2_cave_behaviors_and_goldens() {
             // retail on all five planes, 65,536/65,536
             // (`terrain-diff --settle`, ROUND 109).
             0xfb6ad33f8d454bf6_u64,
-            0x6dd134b1443f1fd3,
+            // ⭐ CHECKPOINTS B, C AND D RE-PINNED (A HOLDS BYTE-FOR-
+            // BYTE) FOR THE MANA AURA'S PULL STAMP. `sub_38D80`
+            // (EF:28353-83, shipped `NETHERW.EXE` 0x5d5bd-0x5d610)
+            // writes the pulled sphere's `@0x76` speed and `@0x7A`
+            // aura index — the port's `mail[4]` pair — and NOTHING
+            // else; the port had ALSO written the sphere's
+            // `axis_0x9A` VELOCITY there, at the AURA's own walk slot,
+            // which ran the polar step one pass early, off the
+            // sphere's pre-mover position. See
+            // [`mgc_sim::mc2::tail::no_mc2_aura_stamp`]; mc2l1-new
+            // goes 1117 -> END, devs 13 -> 0, and the take is
+            // CERTIFIED.
+            // A/B-ATTRIBUTED: `MGC_NO_MC2_AURA_STAMP=1` reproduces the
+            // previous pin (0x6dd134b1443f1fd3 / 0x03410c90208a9e8c /
+            // 0xe3e7b5f9e3471341) exactly with the kind-1 arrival-box
+            // seam law still in — measured on one binary, both arms.
+            // A caves world mints and magnets spheres from its first
+            // castle on, so every checkpoint that has pulled one moves.
+            0x1278c0cbabdad12b,
             // ⭐⭐⭐ CHECKPOINTS C AND D RE-PINNED 2026-09-06 (ROUND 108),
             // A/B HOLD — TWO SEPARATE, SEPARATELY ATTRIBUTED CAUSES.
             //
@@ -851,7 +869,7 @@ fn mc2_cave_behaviors_and_goldens() {
             // round as a RED failure on purpose rather than papered
             // over, and is re-pinned only now that its cause is named.
             // (C and D carried forward under ROUND 109's two laws above.)
-            0x03410c90208a9e8c,
+            0x57237f7c82d36989,
             // Checkpoint D re-pinned 2026-09-10 (A/B/C hold BYTE-FOR-
             // BYTE) for THE (10,77) FIRE-ORB SATELLITE'S CLONED @0x2C —
             // the SAME CLASS as checkpoint A's 2026-09-02 fire-ctor
@@ -867,7 +885,29 @@ fn mc2_cave_behaviors_and_goldens() {
             // reproduces the previous pin (0xc11ac6c4af76bf67) exactly
             // with wave 125's other laws still in, and the OBSERVABLE
             // projection below holds all four unchanged.
-            0x0a717b6bbb39a15f,
+            // Checkpoint D re-pinned 2026-09-13 (A/B/C hold BYTE-FOR-
+            // BYTE) for THE KIND-1 ARRIVAL-BOX SEAM. `sub_12500`'s
+            // 2048-unit stage-hold release box sign-extends EACH
+            // operand and subtracts in 32 bits — shipped
+            // `NETHERW.EXE` VA 0x125DE is `movswl 0x4(%ecx),%edx` /
+            // `movswl 0x4c(%ebx),%eax` / `sub %eax,%edx` — where the
+            // port had a 16-bit WRAPPING subtract (`abs16`), a
+            // different function whenever the authored fly-point and
+            // the creature straddle the 0x8000 axis seam. It is the
+            // exact sibling of the kind-2 LEASH box law landed earlier
+            // this session at VA 0x1DC14 — the same arithmetic, the
+            // other call path (⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT
+            // LANDED). A caves world runs stage-held creatures, so a
+            // release that fires 36 ticks early reshapes the late
+            // checkpoint. Witness mc2l8 slot 67, a (5,17) on a kind-1
+            // StageVar at point (33024, 13568): retail holds it until
+            // t=610, the tick its own x first crosses 0x8000; the port
+            // released at t=574. mc2l8 920 -> 618 segments.
+            // A/B-ATTRIBUTED: `MGC_NO_MC2_KIND1_SEAM=1` reproduces the
+            // previous pin (0x0a717b6bbb39a15f) exactly with this
+            // session's other seven laws still in — verified in the
+            // main session, not merely reported.
+            0x7387656e3a5ccc62,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -1026,11 +1066,24 @@ fn mc2_cave_behaviors_and_goldens() {
     // A/B: `MGC_NO_MC2_NATIVE_HUMAN_RECORD=1` reproduces the previous
     // pin (0x921f2692901c8c49 / 0x548f26fbb5411d18 / 0xaba02729e2083cca /
     // 0x5b1a79824eb6d514; OBSERVABLE D 0x7c5397293f30a730) exactly.
+    // OBSERVABLE D re-pinned 2026-09-13 (A/B/C hold BYTE-FOR-BYTE)
+    // alongside the state golden's checkpoint D, for THE KIND-1
+    // ARRIVAL-BOX SEAM (`sub_12500`, NETHERW.EXE VA 0x125DE — two
+    // `movswl` and a 32-bit `sub` where the port wrapped in 16 bits;
+    // the sibling of the kind-2 leash box at VA 0x1DC14). A stage-hold
+    // release that fires early changes WHEN a held creature starts
+    // acting, which is a behaviour change and so is expected to move
+    // the observable projection as well as the raw state — this
+    // assertion's own standard.
+    // A/B-ATTRIBUTED IN THE MAIN SESSION: `MGC_NO_MC2_KIND1_SEAM=1`
+    // makes the whole test pass on its previous pins (state D
+    // 0x0a717b6bbb39a15f, OBSERVABLE D 0x9e18c00f22c0123c) with this
+    // session's other seven laws still in.
     const OBSERVABLE: [u64; 4] = [
         0x536144e2ca06878d,
         0x4cfe444e3d74d9d1,
         0x674d00718d9a0d5b,
-        0x9e18c00f22c0123c,
+        0xe733f7c078ba072c,
     ];
     assert_eq!(
         obs, OBSERVABLE,

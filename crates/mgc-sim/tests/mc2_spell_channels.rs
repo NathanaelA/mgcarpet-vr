@@ -844,6 +844,100 @@ fn mc2_speed_window_interrupts_on_brake() {
 }
 
 #[test]
+fn mc2_a_refused_commit_gate_kills_the_speed_window_with_no_restore() {
+    // ⭐⭐⭐ THE COMMIT GATE'S REFUSAL KILLS THE SPEED MANIFESTATION'S
+    // WINDOW OUTRIGHT — AND BECAUSE IT IS NOT THE WINDOW'S OWN EXPIRY,
+    // NO ±80 RESTORE EVER LANDS.
+    //
+    // `moveTest_5D0A0`'s refusal block (EF:59934-40):
+    //
+    // ```text
+    //   if (!result) {
+    //       predictedAxis_EB398ar = a1x->position_0x4C_76;
+    //       a1x->dword_0xA4_164x->speed_0xc_12 = 0;
+    //       if (a1x->…->SpellsEnabled_0x333_819x.SpellEnabled[3])
+    //           Entities_EA3E4[…SpellEnabled[3]]->word_0x2E_46 = 0;
+    //   }
+    // ```
+    //
+    // — a direct store of 0 into the token's window counter (`f26`),
+    // not the `if (!--word_0x2E_46) { speed_0xc_12 = sign * minSpeed;
+    // actSpeed = speed; }` tail of `GetScroll_69DB0` (EF:56598-604).
+    // So the register mail STOPS instead of handing ±80 back: the
+    // command stays on the refusal's 0 and `actSpeed` is left where
+    // the boost pinned it for `sub_5D530`'s ±16 servo to walk down.
+    //
+    // The pose lane cannot see this (`f26` is a pool field the replay
+    // grades only through its effects) — it is the UNIT test the law
+    // takes. Witness in the corpus: mc2l3-new t=3665/3666 — retail
+    // records `cmd_speed 160 -> 0` on the refusal tick and then
+    // `0 -> 16` with `actSpeed 160 -> 144` on the next, where the port
+    // re-slammed 160/160 and stayed wedged in the cave ceiling.
+    // Switch: `MGC_NO_MC2_GATE_KILLS_SPEED=1`.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    w.set_dev_spells(true);
+    let (cx, cy) = open_spot(&w);
+    let pose = PlayerPose {
+        speed: 80,
+        ..pose_at(&w, cx, cy)
+    };
+
+    w.mc2_select_spell(3, 0, 0);
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    assert!(w.mc2_book_view().armed[3], "the Speed window is live");
+    // The arm tick is one factor hotter: 80 * (subSpellIndex_2 + 1).
+    assert_eq!(
+        w.take_speed_base(),
+        Some(240),
+        "the arm tick mails minSpeed * (sub + 1)"
+    );
+    w.tick(pose, PlayerCommand::default());
+    assert_eq!(
+        w.take_speed_base(),
+        Some(160),
+        "a sustained tick mails minSpeed * sub"
+    );
+
+    // The refusal block. `mc2_cancel_accel` IS that block's second
+    // statement, reached from both the faithful dispatch
+    // (`World::step_player_flight_mc2`, on `Mc2Moved::accel_cancel`)
+    // and the enhanced mover's copy in `Simulation`.
+    w.mc2_cancel_accel();
+    assert!(
+        !w.mc2_book_view().armed[3],
+        "a refused commit gate kills the Speed window"
+    );
+    assert!(
+        w.accel_override().is_none(),
+        "…and the alternate movers' boost channel with it"
+    );
+
+    // ⭐ AND NOTHING IS MAILED BACK. A window that ran down to zero
+    // would post `sign * 80` here; this one is simply gone.
+    w.tick(pose, PlayerCommand::default());
+    assert_eq!(
+        w.take_speed_base(),
+        None,
+        "the kill is not an expiry — no minSpeed restore follows it"
+    );
+    w.tick(pose, PlayerCommand::default());
+    assert_eq!(w.take_speed_base(), None, "…and none on the tick after");
+}
+
+#[test]
 fn mc2_speed_direction_follows_current_velocity() {
     // MC2's one Speed spell doubles as MC1's Accelerate AND Accelerate
     // Backwards: the boost direction is the caster's velocity sign at

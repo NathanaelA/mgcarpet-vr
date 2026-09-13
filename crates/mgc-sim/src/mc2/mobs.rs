@@ -2811,7 +2811,73 @@ impl Gen {
     /// The victim's killer/attacker pair (`word_0x24_36` /
     /// `word_0x26_38`) is stamped with the owner, so the kill credits
     /// the builder.
+    /// `MGC_CRUSH_TRACE=<t0>:<t1>` — THE FOOTPRINT-PURGE MICROSCOPE.
+    /// One line per [`Gen::mc2_building_clear_tile`] call in the
+    /// window: the tile, the sparing owner, and every record the TILE
+    /// CHAIN walk visits with its verdict.
+    ///
+    /// ⭐⭐⭐ **THE CRUSH IS A TILE-CHAIN WALK, NOT A BOX TEST.** It
+    /// starts at `map_entity[t]` and follows `next20`, so who dies is
+    /// decided by CHAIN MEMBERSHIP, not by whether a creature's
+    /// position rounds into the painter's footprint rectangle. Round
+    /// 132 lost an afternoon on mc2l4-new t=454 to that assumption —
+    /// slot 232 sits OUTSIDE the 8x8 box and dies, slot 238 sits
+    /// INSIDE it and lives, and both are consistent once you look at
+    /// the chains instead. This trace is what makes the chain
+    /// visible; reach for it before theorising about a footprint.
+    fn crush_trace_window() -> Option<(u64, u64)> {
+        static V: std::sync::OnceLock<Option<(u64, u64)>> = std::sync::OnceLock::new();
+        *V.get_or_init(|| {
+            let v = std::env::var("MGC_CRUSH_TRACE").ok()?;
+            let (a, b) = v.split_once(':')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        })
+    }
+
     pub(crate) fn mc2_building_clear_tile(&mut self, t: usize, owner: u16) {
+        let trace = Self::crush_trace_window().is_some_and(|(t0, t1)| {
+            let now = crate::DEBUG_TICK.load(std::sync::atomic::Ordering::Relaxed);
+            now >= t0 && now <= t1
+        });
+        if trace {
+            let now = crate::DEBUG_TICK.load(std::sync::atomic::Ordering::Relaxed);
+            let mut row = format!(
+                "CRUSH t={now} tile=({},{}) owner={owner} chain=[",
+                t & 0xFF,
+                t >> 8
+            );
+            let mut k = self.map_entity[t] as usize;
+            let mut n = 0;
+            while k != 0 && n < 32 {
+                let e = &self.ent[k];
+                let verdict = if e.id24 == owner {
+                    "spared-owner"
+                } else {
+                    match e.class64 {
+                        2 => "SOFT-KILL",
+                        5 => {
+                            let m = e.model65;
+                            if matches!(m, 6 | 8 | 10 | 16 | 22 | 23 | 27)
+                                || (m == 25 && e.tick70 == 200)
+                            {
+                                "spared-protected"
+                            } else {
+                                "PURGED"
+                            }
+                        }
+                        _ => "ignored",
+                    }
+                };
+                row.push_str(&format!(
+                    "{k}({},{})id{} life{} {verdict}; ",
+                    e.class64, e.model65, e.id24, e.act_life
+                ));
+                k = self.ent[k].next20 as usize;
+                n += 1;
+            }
+            row.push(']');
+            println!("{row}");
+        }
         let mut j = self.map_entity[t] as usize;
         while j != 0 {
             let next = self.ent[j].next20 as usize;
@@ -3889,7 +3955,23 @@ impl Gen {
             // See [`Gen::m0_phase7_physics`] for the EXE bytes and the
             // mc2l24 worm witness. `MGC_NO_MC2_M0_PHASE7_CONTROLLED`
             // reverts.
-            self.m0_phase7_physics(i);
+            self.m0_phase7_physics(i, ctx);
+            // ⭐ …AND m18's WRAPPER IS AN UNCONDITIONAL GROUND SNAP.
+            // `sub_25550` (EF:16247-56, NETHERW.EXE file 0x49D50: the
+            // `lea 0x4c(%ebx); call 0x35440; mov %ax,0x50(%ebx)` right
+            // after the `sub_1D5D0(a1x, 144)` leg call) re-reads
+            // `getTerrainAlt_10C40` into `position.z` every tick with
+            // no kind and no action test. Landed and WITNESSED on the
+            // stage-HELD seam (mc2l5 slot 110, pairs 3974→3975 and
+            // 3985→3986 — the write-up is at the held call site in
+            // stagevars.rs); owed to THIS seam by the same argument
+            // that carried m0's bob and m21's jump here, and
+            // UNWITNESSED on this corpus. Same switch,
+            // `MGC_NO_MC2_M18_GROUND_SNAP`.
+            if !crate::mc2::stagevars::no_mc2_m18_ground_snap() && self.ent[i].model65 == 18 {
+                let (x, y) = (self.ent[i].x, self.ent[i].y);
+                self.ent[i].z = self.ground_z(x, y) as i16;
+            }
             // ⭐⭐ …AND m21's WRAPPER IS THE SAME SHAPE AS m0's.
             // `sub_26470` (EF:16938-65, NETHERW.EXE file 0x4AC70; its
             // `sub_1D5D0(a1x, 168)` leg call is the `e8` at file

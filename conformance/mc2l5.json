@@ -1,0 +1,31 @@
+{
+ "dir": "fixtures/mc2l5",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 20261,
+   "file": "the-demolish-witness-is-retails-own-surcharge-latch.mgcr",
+   "source": "mc2l5",
+   "note": "THE DEMOLISH WITNESS IS RETAIL'S OWN SURCHARGE LATCH, NOT THE KEYBOARD. PlayerAction 0x2A (Shift+L) is three lines (EF:37991-97): if the castle is live, `if (level == 1) byte_0x1BE_446 = 1` and `castle->life_0x8 = -1`. That latch byte - the recast_surcharge player lane - has exactly ONE writer in the whole binary and is consumed by the next Create-Castle cast, so a 0 -> nonzero edge across a pair IS a level-1 demolish, recorded in retail's own bytes with no sampling hazard. The harness's input recovery additionally required scancode 38 (L) plus a shift in `keys_down`, which is a ONCE-PER-RECORD SAMPLE of the keyboard: a press whose L key is released inside the sampling window records the SHIFT only. mc2l5 t=20262 and t=20329 are exactly that - keys_down = [54] with the castle going 20000 -> -1 and recast_surcharge 0 -> 1 on the same boundary - and the dropped press left the port standing a castle retail had already demolished. Corroborated from the retail record: slot 80 at t=20261 has an EMPTY mailbox and f36 (the killer memory word_0x24_36) is never written across the death, so the kill came in via life < 0 before the castle's own dispatch - the input handler, not damage. mc2l5 is a 96,213-tick take in which the player demolishes and re-casts every ~40 ticks to chew through cave rock with the castle, so the hazard is hit repeatedly. The keys stay as the LEVEL-2+ path (a higher-rung demolish never latches the surcharge, since retail tests `level == 1` exactly). Kill switch MGC_NO_MC2_DEMOLISH_SURCHARGE_WITNESS; removes heads [20262, 20329, 46662, 64153]."
+  }
+,
+  {
+   "t": 32530,
+   "file": "model-9s-castle-prey-seek-walks-the-tick-top-roster.mgcr",
+   "source": "mc2l5",
+   "note": "MODEL 9's CASTLE PREY SEEK WALKS THE TICK-TOP CLASS-3 ROSTER, NOT THE LIVE POOL. sub_203D0 (NETHERW.EXE file +0x20502) iterates dword_38519 - the roster the tick-top pass builds - with exactly THREE tests: model==2, id!=self, d2<best. There is NO liveness check, and that is deliberate, not a listing slip: the SIBLING cone scan 350 bytes later DOES carry the reap test. So the seek can pick a castle that has already been reaped this tick, and cannot pick one BORN this tick in a slot the roster predates. mc2l5 t=32530, slot 169, a (5,9) hunting: the port's live-pool walk found a castle minted that very tick and retail's roster walk did not, so the two chose different prey, aimed differently and spent different LCG draws - the pair shows it as the (5,9)'s own per-entity rand, 47772 wanted against 25598 got, one 9377x+9439 step apart. Kill switch MGC_NO_M9_PREY_ROSTER. mc2l5 46 -> 18 segments alone, 15 composed with MGC_NO_MC2_WARP_REFLOOR. Round 132 corpus sweep: this law moves the pair lane on exactly ONE take (mc2l5, 20 -> 48 dirty pairs with the law off) and nowhere else in the 21-take MC2 corpus - it was landed unfixtured in round 131 and never probed."
+  },
+  {
+   "t": 3974,
+   "file": "a-held-tank-snaps-to-the-ground-every-tick.mgcr",
+   "source": "mc2l5",
+   "note": "A STAGE-HELD (5,18) TANK SNAPS TO THE GROUND EVERY TICK: `sub_25550` (EF:16247-56) is the tank's phase-7 wrapper and its MIDDLE line - `position.z = getTerrainAlt_10C40(&position)` (NETHERW.EXE 0x49D65-0x49D6E: `lea 0x4c(%ebx); call 0x35440; mov %ax,0x50(%ebx)`) - is UNCONDITIONAL, with no kind or action test, between the `sub_1D5D0(a1x, 144)` legs and the `if (actionIndex == 146)` aim tail. The port's held seam (`mc2_held_tick`) pre-empts `m18_tick` for a held tank and carried only the aim tail, so a held tank never re-read the ground; the free path already had the snap. This was the line booked OWED in stagevars.rs, waiting for a take where the terrain moves under a held tank. WITNESS mc2l5 slot 110 (kind-3 hold): the human's castle purge at t=3974 re-cuts height[(196,2)] 15 -> 25 under it; retail's z reads 911 at 3975 and 895 at 3986, both reproduced to the unit by `interp_plane` from the port's own (bit-exact, MGC_PLANE_CENSUS) terrain. The brief's terrain-difference hypothesis was REFUTED (height/type/ceiling bit-exact; a probe proved `m18_tick` is never called for the slot). Landed on the held seam (witnessed) and the controlled seam (unwitnessed, same switch). Kill switch MGC_NO_MC2_M18_GROUND_SNAP=1. Round 134 / D5."
+  },
+  {
+   "t": 17379,
+   "file": "shift-k-kills-the-human-and-nothing-else-moves.mgcr",
+   "source": "mc2l5",
+   "note": "SHIFT+K KILLS THE HUMAN WITH ONE BARE STORE AND NOTHING ELSE MOVES THAT TICK: retail's K handler (PlayerInput.cpp:236-41, `case 0x25: if (!(setting_byte1_22 & 0x8010)) event->life_0x8 = -1;`) writes -1 into the wizard record's life and returns - the death chain (`action45 0 -> 2`, then the fourteen scattered jars and the (10,40) burst) runs from the ENTITY handler on the FOLLOWING tick. Two independent port gaps, two switches: (1) `recover_pair_mc2_k` had no `suicide:` witness at all (MC1's sat eight lines above), and `replay.rs`'s MC2 loop built its PlayerCommand without the field, so no graded MC2 lane could ever replay a suicide - MGC_NO_MC2_SUICIDE_WITNESS=1 restores that; (2) the port's MC2 suicide arm stamped `Falling`/`fall_speed`/the sound inline, running the scatter a tick early - MGC_NO_MC2_SUICIDE_BARE_WRITE=1 restores that (the pair then shows an EXTRA (10,40) at 17380). WITNESS mc2l5 t=17379 -> 17380, human slot 77 at full life 10000, empty mailbox, f24 = f26 = 0, `life 10000 -> -1` and `action45 0 -> 2` with no other lane moving; the jars and the burst arrive at 17381. Same at t=42303 and t=51088; a live castle at all three rules out the permadeath reload seam. Round 134 / D5."
+  }
+ ]
+}

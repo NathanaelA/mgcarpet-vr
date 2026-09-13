@@ -394,6 +394,17 @@ fn for_each_pair_mc2(
                     // IDENTICALLY or a fixture's verdict drifts from
                     // the triage run that recorded it (CONFORMANCE.md).
                     c.demolish = rec.demolish;
+                    // …and the Shift+K witness (134-7): the MC2 pair
+                    // recovery grew a `suicide:` row and the segmented
+                    // pair took it, but THIS fold did not — a third
+                    // call path for the same recovered field, found by
+                    // the suite itself: `mc2l5/shift-k-kills-the-human-
+                    // and-nothing-else-moves` failed on `life` with the
+                    // law ON until the suite forwarded what the pair
+                    // had recovered. The witness switch
+                    // (`MGC_NO_MC2_SUICIDE_WITNESS`) still governs it —
+                    // the recovery returns `false` under it.
+                    c.suicide = rec.suicide;
                     c
                 };
                 let (pd, _, _) = crate::verify_mc2::exec_pair_mc2(

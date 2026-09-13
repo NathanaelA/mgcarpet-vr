@@ -1116,6 +1116,22 @@ pub(crate) struct Gen {
     pub(crate) mc2_cast_xp: Mc2XpMail,
     /// See [`Mc2LadderMail`].
     pub(crate) mc2_ladder_sync: Mc2LadderMail,
+    /// The CREATE-CASTLE LOCK's BALL-SIDE RELEASE MAIL — one castle
+    /// OWNER id per entry. Retail's (9,10) castle ball and its (10,43)
+    /// delivery call `sub_5F890(x, 0)` from THEIR OWN dispatch (the
+    /// first-tick site refusal EF:58923, the payload-spawn failure
+    /// EF:58877, the delivery that missed the castle EF:28249), which
+    /// zeroes the owner's spell-2 manifestation `word_0x2E_46`. The
+    /// books are World-side, so the pool pushes the owner here and
+    /// `World::mc2_drain_castle_lock_mail` drains it right after the
+    /// pushing slot's dispatch — same slot, same tick. Transient
+    /// within one dispatch: never live at a boundary, never saved,
+    /// hash-transparent while empty. Entries are `(owner id, tail)`:
+    /// `tail` marks the payload-spawn-failure seat, whose `sub_5F890`
+    /// argument is the OWNER record and whose `sub_6D880` tail
+    /// therefore runs on the wizard (`World::mc2_castle_ball_owner_tier_drain`).
+    /// ⚠ Not a bit on the id — the human's id is 0xFFFF.
+    pub(crate) mc2_castle_lock_mail: Mc2LockMail,
     /// m26 spell-steal requests (`sub_28FF0` EF:19348-71 → the
     /// `sub_69300` effect): the wraith's roll lands pool-side but the
     /// human book is world-side — the world tick drains this the
@@ -1295,6 +1311,19 @@ impl std::hash::Hash for Mc2XpMail {
 pub(crate) struct Mc2LadderMail(pub Vec<u16>);
 
 impl std::hash::Hash for Mc2LadderMail {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if !self.0.is_empty() {
+            self.0.hash(state);
+        }
+    }
+}
+
+/// See [`Gen::mc2_castle_lock_mail`] — hash-transparent while empty,
+/// never snapshotted (drained inside the pushing tick).
+#[derive(Default, Clone)]
+pub(crate) struct Mc2LockMail(pub Vec<(u16, bool)>);
+
+impl std::hash::Hash for Mc2LockMail {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         if !self.0.is_empty() {
             self.0.hash(state);
@@ -2917,6 +2946,7 @@ impl Gen {
             mc2_spell_tokens: Mc2Quiet::default(),
             mc2_cast_xp: Mc2XpMail::default(),
             mc2_ladder_sync: Mc2LadderMail::default(),
+            mc2_castle_lock_mail: Mc2LockMail::default(),
             bolt_fx: BoltFx::default(),
             mc2_beam_defer: BeamDefer::default(),
             mc2_pred_axis: Mc2PredAxis::default(),
@@ -5984,7 +6014,22 @@ impl Gen {
                     crate::DEBUG_TICK.load(std::sync::atomic::Ordering::Relaxed)
                 );
             }
-            self.release_castle_charge_pin(own);
+            if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+                // MC2: `sub_389F0`'s miss arm is `sub_5F890(a1x, 0)`
+                // (EF:28249) — the owner's spell-2 manifestation
+                // `word_0x2E_46 = 0`, through the World-side book
+                // (`mc2_castle_lock_mail`, drained at this slot). Its
+                // sibling arm EF:28238 (`(int16)terrainAlt > 58880`) is
+                // DEAD IN THE SHIPPED EXE, not a transcription slip:
+                // NETHERW.EXE file 0x5d235-0x5d23e is `cwde` (sign-
+                // extend the 16-bit altitude) / `cmp eax,0xe600` /
+                // `jle` (signed), so the release at 0x5d243 needs an
+                // altitude above 32767 from a height byte × 32 that
+                // tops out at 8160. Not ported, by measurement.
+                self.mc2_castle_lock_mail.0.push((own, false));
+            } else {
+                self.release_castle_charge_pin(own);
+            }
         }
         self.ent[i].flags |= 0x400;
     }
@@ -8934,6 +8979,9 @@ impl Gen {
             mc2_spell_tokens,
             mc2_cast_xp,
             mc2_ladder_sync,
+            // Transient within one dispatch — drained right after the
+            // pushing slot, never live at a boundary.
+            mc2_castle_lock_mail: _,
             // Presentation feed, never saved — a load starts clean.
             bolt_fx: _,
             // Transient within one beam tick — never live at a boundary.
@@ -12269,13 +12317,19 @@ mod tests {
         let newborn = sphere(&mut g);
 
         g.mc2_aura_tick(aura);
-        assert_ne!(
-            (g.ent[member].dest_x, g.ent[member].dest_y),
-            (0, 0),
+        // ⚠ THE OBSERVABLE IS THE STAMP, NOT THE VELOCITY. `sub_38D80`
+        // writes `@0x76` (speed) and `@0x7A` (the aura's index) — the
+        // port's `mail[4]` pair — and NOTHING else; the pulled
+        // sphere's `axis_0x9A` is written by the SPHERE, in its own
+        // tick (`Gen::ball_tick`'s ch4 intake). See
+        // [`crate::mc2::tail::no_mc2_aura_stamp`].
+        assert_eq!(
+            g.ent[member].mail[4].1 as usize,
+            aura,
             "the tick-top member takes the pull"
         );
         assert_eq!(
-            (g.ent[newborn].dest_x, g.ent[newborn].dest_y),
+            g.ent[newborn].mail[4],
             (0, 0),
             "the sphere born after the sweep is not pulled on its birth tick"
         );
@@ -12287,9 +12341,9 @@ mod tests {
         // Next frame: the sweep admits it and the pull lands.
         g.rebuild_ball_chain();
         g.mc2_aura_tick(aura);
-        assert_ne!(
-            (g.ent[newborn].dest_x, g.ent[newborn].dest_y),
-            (0, 0),
+        assert_eq!(
+            g.ent[newborn].mail[4].1 as usize,
+            aura,
             "the next frame's chain carries it and the magnet takes it"
         );
     }
@@ -12343,14 +12397,16 @@ mod tests {
         g.ent[doomed].flags |= 0x400;
 
         g.mc2_aura_tick(aura);
-        assert_ne!(
-            (g.ent[live].dest_x, g.ent[live].dest_y),
-            (0, 0),
+        // The stamp (`@0x76`/`@0x7A` = `mail[4]`) is the whole write
+        // `sub_38D80` makes — see [`no_mc2_aura_stamp`].
+        assert_eq!(
+            g.ent[live].mail[4].1 as usize,
+            aura,
             "the live sphere takes the pull"
         );
-        assert_ne!(
-            (g.ent[doomed].dest_x, g.ent[doomed].dest_y),
-            (0, 0),
+        assert_eq!(
+            g.ent[doomed].mail[4].1 as usize,
+            aura,
             "and so does the one already flagged — the loop never asks"
         );
         assert!(

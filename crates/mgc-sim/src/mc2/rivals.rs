@@ -906,6 +906,51 @@ fn rival_fire_at_own_token_slot_off() -> bool {
     *V.get_or_init(|| std::env::var("MGC_NO_RIVAL_FIRE_AT_OWN_TOKEN_SLOT").is_ok_and(|v| v == "1"))
 }
 
+/// ⭐⭐⭐ A MANIFESTATION'S CASTER IS ITS OWN `parentId_0x28_40`, NEVER
+/// A SCAN OF THE ROSTER'S BOOKS. Every class-15 effect body opens on
+/// the SAME two lines — `v1x = Entities_EA3E4[a1x->parentId_0x28_40];
+/// if (v1x > Entities_EA3E4[0])` — and hands that record to
+/// `sub_68D50` as the purse: the fire `sub_693F0` (EF:56176-78),
+/// SHIELD `sub_6A480` (EF:56496-503), REBOUND `sub_6AA00`
+/// (EF:56721-28), METEOR `sub_6AB00` (EF:56784), CRATER `sub_6BAB0`
+/// (EF:57421). The token names its wizard; the wizard's book is never
+/// consulted to answer "whose token is this".
+///
+/// The port resolved the owner as "the FIRST rival whose
+/// `book.ent[spell]` equals this slot", and a rival's book after a
+/// DEATH SCATTER is not a slot table at all — `mc2_scatter_spells`
+/// leaves BOOLEAN 1s in it (the same marker the `tick70 == 3·spell`
+/// gate above already had to disambiguate for a loose jar). So every
+/// corpse in the roster claimed pool slot 1, and a live wizard whose
+/// respawn-minted book really does sit at slot 1 lost its whole
+/// offensive column to the corpse's purse: `mc2_rival_afford` is
+/// `sub_68D50`, whose first test is `life_0x8 < 0` (EF:55553), so the
+/// body took the refused arm — window collapsed to 0, no fire, no
+/// debit — on EVERY tick, forever.
+///
+/// WITNESS mc2l8 t=7535, the head of 617 excess resets. Rival 139
+/// (3,1) holds spell 0's token at pool slot 1 (`owner28` = 139 on
+/// both sides, `f2e`/`f30` = 5/5 — the first tick). Retail fires:
+/// slot 1 `f2c 0 → 1`, `f2e 5 → 4`, wizard 139 `mana 5290 → 5190`,
+/// and the (9,0) is born at slot 289 — the FIRST pop of the tick, the
+/// slot the tick-top reap had just pushed. The port matched rival
+/// index 0 instead (ent **122**, `life -1168`, book
+/// `[1,1,1,1,1,0,0,1,…]`), refused, collapsed `f2e` 5 → 0, spawned
+/// nothing, and spent slot 289 on the human's (10,2) puff — the
+/// `slot 139 mana: retail N port N+100` + `missing in port: slot N
+/// (9,0)/(10,2)/(10,12)` census family, 313 + 157 of the take's 617
+/// first-divergence rows.
+///
+/// The parent match is tried FIRST; a token whose parent names no
+/// rival falls back to the old book scan, which is the only shape
+/// the pre-law code could ever have resolved.
+///
+/// `MGC_NO_MC2_TOKEN_PARENT_OWNER=1` restores the bare book scan.
+pub(crate) fn no_mc2_token_parent_owner() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("MGC_NO_MC2_TOKEN_PARENT_OWNER").is_ok_and(|v| v == "1"))
+}
+
 /// ⭐⭐⭐ A LAW LANDED ON ONE CALL PATH IS NOT LANDED — the NATIVE
 /// stand-in for the SPEED manifestation body.
 ///
@@ -8335,6 +8380,36 @@ impl World {
             .rival_castle(r.ent)
             .map(|c| (self.g.ent[c].f140, self.g.ent[c].f136));
         Some((book, bank))
+    }
+
+    /// Test hook for the AUTHORED SEED lane: everything the `.mgcl`
+    /// wizard block feeds into a rival before a single tick of play —
+    /// `(life_scale, ent.max_life, ent.life, world mirror, agg, per,
+    /// refl)`.
+    ///
+    /// ⚠⚠ NOTHING IN THE GRADED CORPUS CAN SEE THESE. Replay
+    /// re-imports the rival-AI channel (`life_scale`, personality) and
+    /// the entity's `max_life`/`life` at every anchor, so a port that
+    /// dropped the authored handicap entirely — every rival starting
+    /// at full strength in real play — would give ZERO divergences
+    /// corpus-wide. Round 131 W8: the handicap is also PERMANENTLY
+    /// DISCARDED on a rival's first death (`sub_5C950` resets
+    /// `word_0x24A_586 = 256` / `maxLife = 10000`, and the authored
+    /// `Life_0x3612F` read sits inside the NEW-ENTITY arm), so the
+    /// seed is only ever observable at t=0.
+    #[doc(hidden)]
+    pub fn debug_mc2_rival_life_seed(&self, slot: u8) -> Option<(u16, u32, i32, u16, u16, u16, u16)> {
+        let r = self.mc2_rivals.iter().find(|r| r.slot == slot)?;
+        let e = &self.g.ent[r.ent as usize];
+        Some((
+            r.life_scale,
+            e.max_life,
+            e.act_life,
+            self.g.mc2_life_scale.0[slot as usize],
+            r.agg,
+            r.per,
+            r.refl,
+        ))
     }
 
     /// Test hook: relocate a rival's wizard record to a tile position

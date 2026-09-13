@@ -1022,7 +1022,12 @@ impl Gen {
                     let e = &mut self.ent[p];
                     e.f68 = arm.impact.0;
                     e.f69 = arm.impact.1;
-                    e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+                    // The mine's post-launch writes are `id_0x1A_26` +
+                    // `word_0x96_150` only (EF:29999-30000) — the same
+                    // `@0x2A` absence the castle turret has.
+                    if crate::mc2::cast::mc2_band_arm_writes_2a(spell) {
+                        e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+                    }
                     if arm.charge {
                         e.f71 = sub.life.max(0) as u8;
                     }

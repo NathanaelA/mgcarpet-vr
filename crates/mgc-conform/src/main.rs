@@ -644,12 +644,21 @@ fn dump_state(args: &Args) -> i32 {
                     .map(|(s, &c)| (s, c))
                     .collect();
                 println!(
-                    "t={t} player {pi} carpet={} castle={} breg={:?} ai_state={} \
+                    "t={t} player {pi} carpet={} castle={} breg={:?} \
+                     life_scale={} agg/per/refl={}/{}/{} ai_state={} \
                      burst={} charge={} pov={} invuln={} cmd_speed={} strafe={} \
                      brake={} weave={}/{} avoid={}/{} cd={cds:?}",
                     p.play_index,
                     p.castle_ent,
                     p.balloons,
+                    // `word_0x24A_586` — the AUTHORED life handicap,
+                    // permanently discarded to 256 on the rival's
+                    // first death (round 131 W8). The only place a
+                    // take shows what the `.mgcl` seeded.
+                    p.life_scale,
+                    p.aggression,
+                    p.perception,
+                    p.reflexes,
                     p.ai_state,
                     p.burst,
                     p.charge,

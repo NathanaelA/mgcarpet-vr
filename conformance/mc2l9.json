@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc2l9",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 5854,
+   "file": "the-kind2-leash-box-does-not-wrap-in-16-bits.mgcr",
+   "source": "mc2l9",
+   "note": "THE KIND-2 LEASH BOX SIGN-EXTENDS EACH OPERAND AND SUBTRACTS IN 32 BITS - IT DOES NOT WRAP. sub_1DBF0 picks the stage-hold WALK leg (sub_1DDA0: aim at the authored point, NO rng draw) over the GRAZE leg (sub_1E1C0: relative +(142..254), ONE draw) on a 3072-unit box. EF:10265-66 writes it as abs((int16_t)point.x - (int16_t)pos.x) - two SEPARATE casts - and the shipped NETHERW.EXE settles it at VA 0x1DC14: `movswl 0x4(%esi),%edx` / `movswl 0x4c(%ebx),%eax` / `sub %eax,%edx` (32-bit), abs via cltd/xor/sub, `cmp $0xc00`. Nothing truncates the difference. The port computed (point - pos) as i16, a 16-bit subtract whose result re-wraps - a DIFFERENT function whenever point and creature straddle the 0x8000 axis seam. mc2l9 slot 546, a (5,25) on a kind-2 hold at StageVar1=1, point (34304,20736): 34304 >= 0x8000 so sign-extended it is -31232 against a creature at x 31384, |-31232-31384| = 62616, ALWAYS outside, and retail walks the whole take; the port's wrapping subtract read 2920, flipped to GRAZE and spent the graze's one 9377x+9439 draw retail never spends (rand 23994 -> 16089, exactly one LCG step; roll 706 -> 891 instead of retail's point-aim 715). roll (@0x20, the DESIRED heading) is UNGRADED, which is why this surfaced as `rand` AND `heading` rows - one defect, two lanes. mc2_avoid_packmate_at already carried the correct separate-cast shape: A LAW ON ONE CALL PATH IS NOT LANDED. Kill switch MGC_NO_MC2_LEASH_SEAM. mc2l9 305 -> 1 segment (CERTIFIED); mc2l5 186 -> 87; mc2l7 142 -> 83."
+  }
+ ]
+}

@@ -39,6 +39,65 @@ use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 // it to the MC1 handler with an MC2 behavior row.
 pub(crate) const F_GRABBED: u32 = 1 << 22;
 
+/// A/B toggle for the mana aura's PULL STAMP: set
+/// `MGC_NO_MC2_AURA_STAMP` to restore the pre-dig behaviour, where
+/// `sub_38D80` wrote the pulled sphere's VELOCITY (`axis_0x9A_154x`)
+/// itself, at the AURA's own pool slot.
+///
+/// ⭐⭐⭐ THE AURA STAMPS A SPEED AND ITS OWN INDEX, AND NOTHING ELSE.
+/// `sub_38D80` (EF:28353-83) is four statements inside the range
+/// test, and the shipped `NETHERW.EXE` 0x5d5bd-0x5d610 is the whole
+/// body of it:
+///
+/// ```text
+///   5d5bd: cmpw $0x0,0x7a(%ebx)     ; if (sphere->@0x7A) skip
+///   5d5cc: call 0x7ccd0             ; EuclideanDistXY_584D0
+///   5d5d7: cmp  %edx,%eax           ; vs aura->@0x10 (range squared)
+///   5d5dc: call 0x96f7a             ; radix_3d  (isqrt)
+///   5d5e6: cmp  $0x2a,%eax ; 5d5eb: mov $0x2a,%ecx     ; cap 42
+///   5d60a: mov  %ecx,0x76(%ebx)     ; sphere->@0x76 = speed (dword)
+///   5d60d: mov  %ax,0x7a(%ebx)      ; sphere->@0x7A = aura index
+/// ```
+///
+/// There is NO write to `0x9a` anywhere in the function. The velocity
+/// is derived by the SPHERE, in the sphere's OWN tick, at the head of
+/// `TransformArcherToMana_35940` (EF:26097-26110):
+///
+/// ```c
+///   if (a1x->str_0x5E_94.word_0x7A_122) {
+///       v35 = 1;
+///       a1x->yaw_0x1C_28 = sub_581E0_maybe_tan2(&a1x->position, &Entities[w7A]->position);
+///       predictedAxis = {0,0,0};
+///       MoveEntity_57FA0(&predictedAxis, a1x->yaw_0x1C_28, 0, a1x->str_0x5E_94.word_0x76_118);
+///       a1x->axis_0x9A_154x.x = predictedAxis.x;
+///       a1x->axis_0x9A_154x.y = predictedAxis.y;
+///       a1x->str_0x5E_94.word_0x7A_122 = 0;
+///   }
+/// ```
+///
+/// — and `word_0x76_118`/`word_0x7A_122` are exactly the port's
+/// `mail[4]` amount/source pair, which [`Gen::ball_tick`]'s ch4 intake
+/// already services verbatim for the IMPORTED half of the same cell.
+/// So the whole fix is: stamp the pair, let the sphere do the polar
+/// step.
+///
+/// ⭐⭐⭐ WHY IT IS A ONE-RAW-UNIT FAMILY AND NOT A GROSS ONE. The
+/// aura's slot is almost always ABOVE the sphere's, so the port's
+/// write landed AFTER the sphere had already ticked — the sphere then
+/// flew on a bearing measured from where it stood BEFORE the next
+/// tick's movers touched it. On a sphere whose only other writer is
+/// its own dest the two agree; on one ALSO being dragged by another
+/// pass in the same tick they do not. mc2l1 slot 170 is that sphere:
+/// the (10,22) whirlwind at slot 31 swirls it 96 units every tick
+/// (`sub_33340`'s mid ring) before slot 170 runs, so retail's bearing
+/// is taken from the POST-swirl position and the port's from the
+/// pre-swirl one. One raw unit of `y`, thirteen times, and the sign
+/// FLIPS with the swirl — the take's whole divergence set.
+fn no_mc2_aura_stamp() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AURA_STAMP").is_some())
+}
+
 /// A/B toggle for the whirlwind lift pass's billing protocol: set
 /// `MGC_NO_WHIRLWIND_SINGLE_BILL` to restore the pre-dig behaviour,
 /// where `sub_33340`'s `sub_11900` call used the AREA protocol
@@ -2902,6 +2961,20 @@ impl Gen {
             // Pull speed = min(linear distance, 42) — retail's radix_3d
             // cap; it eases to 0 at the eye so the merged ball settles.
             let speed = (Self::isqrt(d2 as u32).min(42)) as i32;
+            if !no_mc2_aura_stamp() {
+                // ⭐⭐⭐ THE STAMP IS THE WHOLE WRITE (see
+                // [`no_mc2_aura_stamp`]): `@0x76 = speed` (a DWORD,
+                // `0x5d60a mov %ecx,0x76(%ebx)`) and `@0x7A = aura
+                // index` (`0x5d60d mov %ax,0x7a(%ebx)`), which are the
+                // port's `mail[4]` amount/source pair. The sphere then
+                // derives `yaw` and `axis_0x9A` from its OWN position
+                // at its OWN slot next tick (EF:26097-26110), which
+                // `ball_tick`'s ch4 intake already does verbatim.
+                // Writing the velocity HERE ran the polar step one
+                // pass early, off the sphere's pre-mover position.
+                self.ent[j].mail[4] = (speed as u32, i as u16);
+                continue;
+            }
             // `angle_of` returns 0..=2048 (2048 = the full-turn wrap);
             // mask to the table's 0..2047 like `advance` does, or a
             // ball at the exact diagonal panics SIN[2048] (len 2048).

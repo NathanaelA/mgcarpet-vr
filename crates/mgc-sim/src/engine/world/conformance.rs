@@ -1915,7 +1915,13 @@ impl World {
                     None
                 } else if c == 15 {
                     if e.tick70 == 78 {
-                        some(e.f26 as i64)
+                        // The detach-arc counter's own home — see
+                        // [`World::no_mc2_stolen_arc_keeps_cast_state`].
+                        some(if crate::mc2::cast::no_mc2_stolen_arc_keeps_cast_state() {
+                            e.f26 as i64
+                        } else {
+                            e.f50 as i64
+                        })
                     } else {
                         None
                     }
@@ -1957,14 +1963,10 @@ impl World {
                 },
             ),
             ("f22", if m27 { some(e.f36 as i16 as i64) } else { None }),
-            (
-                "f24",
-                if c == 15 && e.tick70 == 78 {
-                    None // f38 holds the jar arc's wraith slot instead
-                } else {
-                    some(untr(e.f38))
-                },
-            ),
+            // @0x24 is honestly the killer latch again now that the
+            // jar arc's wraith ref lives in `f40` (@0x26) where retail
+            // puts it — the suppression below was hiding that misfiling.
+            ("f24", some(untr(e.f38))),
             ("f26", some(untr(e.f40))),
             (
                 "owner28",
@@ -2530,6 +2532,7 @@ impl World {
         // freed record (mc2l3's death-downgrade / balloon-pop /
         // un-stamp fixtures all pin that path).
         self.g.mc2_ladder_sync.0.clear();
+        self.g.mc2_castle_lock_mail.0.clear();
         // THE FIRING HAND (`struct_byte_0xc_12_15` & 0x300) — the MC1
         // twin's line verbatim (:377). `sub_5F7B0` stamps it on the
         // CASTER at the arm (EF:60977-78) and `sub_68E50` reads it
@@ -5479,8 +5482,17 @@ pub(crate) fn import_ent_mc2(
         // found no wraith in f38, and dropped the jar in place with
         // action 3M+1 on frame 1 (mc2l24 slot 73 t=15080-95: action
         // 78→1, the arc frozen a tick behind retail).
+        // ⚠ …AND THE ARC COUNTER HAS ITS OWN HOME NOW (`f50`, dead for
+        // class 15 two lines up): retail keeps @0x10 and @0x2E LIVE AT
+        // THE SAME TIME, so seating the counter on `f26` threw the
+        // armed cast timer away on every imported mid-arc jar. See
+        // [`World::no_mc2_stolen_arc_keeps_cast_state`].
         if r.action45 == 78 {
-            e.f26 = r.scratch10 as i16;
+            if crate::mc2::cast::no_mc2_stolen_arc_keeps_cast_state() {
+                e.f26 = r.scratch10 as i16;
+            } else {
+                e.f50 = r.scratch10 as i16;
+            }
             e.f38 = tr(r.f26 as u16);
         }
     }

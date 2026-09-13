@@ -604,6 +604,471 @@ impl CellTrace {
     }
 }
 
+/// `MGC_PLANE_CENSUS=<t0>:<t1>` — the CARVING comparator: all four
+/// terrain planes, whole map, every tick of the window, port beside
+/// the take's measured truth channel.
+///
+/// This is the ONLY instrument that grades terrain over TIME.
+/// `terrain-check`/`terrain-diff` grade **record 0 only** (the
+/// stock-bake validator), and `replay --segmented` INSTALLS the
+/// measured planes at every anchor without ever comparing them — so a
+/// port that carved a cave differently from tick 1 onward scored a
+/// clean sweep. Round 131 (mc2l5, the castle-through-rock take) built
+/// this to close that hole and measured the port's cave carving
+/// BIT-PERFECT over 96,213 ticks on height/type/ceiling, with only
+/// `angle` bits 4-6 — the texture-rotation nibble — drifting.
+///
+/// A line is printed only when the census CHANGES (a steady-state
+/// mismatch prints once), and `anglebits` is the OR of every
+/// `port ^ truth` byte on the angle plane, so the cosmetic nibble
+/// (0x70) is distinguishable at a glance from a load-bearing bit:
+/// bit 3 = SEALED on a cave level, bit 7 = BUILT — the two the
+/// castle-site rule reads (`sub_11CB0`).
+///
+/// ⭐⭐ **`anglebits=0x70` IS THE EXPECTED FLOOR, NOT A DEFECT.** Bits
+/// 4-6 hold `16 * (pseudo % 7)`, the retile pass's texture-rotation
+/// draw (`terrain_paint.rs`, `pseudo = pseudo*9377 + 9439`), and the
+/// retile LCG **has no capture** — the importer forces
+/// `Gen::pseudo = 0` at every anchor (`conformance.rs`), so the port's
+/// stream is re-phased against retail's on each re-seed by
+/// construction. No gameplay predicate reads bits 4-6 (the one site
+/// that touches them, `castle.rs`'s `(angle & 0x70) | 1`, only
+/// PRESERVES them). Round 132 measured the corpus floor: mc2l5 96,213
+/// ticks / mc2l22 65,556 / mc2l24 54,057 / mc2l15 43,187 / mc2l31
+/// 29,465 — **288,478 ticks, height/type/ceiling diff ZERO on every
+/// one, angle drift confined to 0x70 throughout.** Treat any bit
+/// OUTSIDE 0x70, or any height/type/ceiling count at all, as the real
+/// signal.
+///
+/// A SUMMARY line lands when the window closes (or the run ends), so
+/// a sweep can be graded from the tail alone.
+struct PlaneCensus {
+    window: Option<(u64, u64)>,
+    /// The last printed (height, type, ceiling, angle) counts —
+    /// change-gated output.
+    last: Option<[usize; 4]>,
+    /// Worst per-plane count seen, the OR of every angle-diff byte,
+    /// the first dirty tick and the tick count, for the summary.
+    worst: [usize; 4],
+    angle_bits: u8,
+    /// Which of the four planes the take actually DECLARES — an
+    /// absent truth plane is not a zero plane, and a summary that did
+    /// not say so would read "ceiling bit-perfect" on a level that
+    /// has no ceiling.
+    graded: Vec<&'static str>,
+    first_dirty: Option<u64>,
+    ticks: u64,
+    dirty_ticks: u64,
+    done: bool,
+}
+
+impl PlaneCensus {
+    fn from_env() -> Self {
+        Self {
+            window: std::env::var("MGC_PLANE_CENSUS").ok().and_then(|v| {
+                let (a, b) = v.split_once(':')?;
+                Some((a.parse::<u64>().ok()?, b.parse::<u64>().ok()?))
+            }),
+            last: None,
+            worst: [0; 4],
+            angle_bits: 0,
+            graded: Vec::new(),
+            first_dirty: None,
+            ticks: 0,
+            dirty_ticks: 0,
+            done: false,
+        }
+    }
+
+    fn emit(&mut self, world: &World, timg: &Option<mgc_formats::mgcr::TerrainImage>, t: u64) {
+        let Some((t0, t1)) = self.window else { return };
+        if t > t1 {
+            self.summary();
+            return;
+        }
+        if t < t0 {
+            return;
+        }
+        let Some(img) = timg.as_ref() else {
+            if !self.done {
+                self.done = true;
+                println!("PLANECENSUS t={t} NO MEASURED TERRAIN CHANNEL — nothing to grade");
+            }
+            return;
+        };
+        let p = world.planes();
+        // The port keeps `ceiling`/`angle` EMPTY where the level has
+        // none; a plane the take does not declare is not graded (an
+        // absent truth plane is not a zero plane).
+        let port: [&[u8]; 4] = [&p.height, &p.tile_type, &p.ceiling, &p.angle];
+        let mut n = [0usize; 4];
+        let mut bits = 0u8;
+        let mut first: Vec<(usize, usize, u8, u8)> = Vec::new();
+        for (k, name) in ["height", "type", "ceiling", "angle"].iter().enumerate() {
+            let Some(truth) = img.plane(name) else { continue };
+            let pk = port[k];
+            if pk.is_empty() {
+                continue;
+            }
+            if !self.graded.contains(name) {
+                self.graded.push(name);
+            }
+            for i in 0..truth.len().min(pk.len()) {
+                if truth[i] != pk[i] {
+                    n[k] += 1;
+                    if k == 3 {
+                        bits |= truth[i] ^ pk[i];
+                    } else if first.len() < 8 {
+                        first.push((i & 0xFF, i >> 8, pk[i], truth[i]));
+                    }
+                }
+            }
+        }
+        self.ticks += 1;
+        for k in 0..4 {
+            self.worst[k] = self.worst[k].max(n[k]);
+        }
+        self.angle_bits |= bits;
+        if n.iter().any(|&c| c > 0) {
+            self.dirty_ticks += 1;
+            if self.first_dirty.is_none() {
+                self.first_dirty = Some(t);
+            }
+        }
+        if self.last == Some(n) {
+            return;
+        }
+        self.last = Some(n);
+        println!(
+            "PLANECENSUS t={t} height={} type={} ceiling={} angle={} anglebits={:#04x}{}{}",
+            n[0],
+            n[1],
+            n[2],
+            n[3],
+            bits,
+            if first.is_empty() {
+                String::new()
+            } else {
+                format!(" first={first:?}")
+            },
+            // The two angle bits the castle-site rule reads. Bits 4-6
+            // are the texture-rotation nibble (cosmetic).
+            if bits & 0x88 != 0 {
+                "  <-- LOAD-BEARING (bit3 SEALED / bit7 BUILT)"
+            } else {
+                ""
+            }
+        );
+    }
+
+    /// One machine-readable verdict for the whole window.
+    fn summary(&mut self) {
+        if self.done || self.window.is_none() {
+            return;
+        }
+        self.done = true;
+        let (t0, t1) = self.window.unwrap();
+        println!(
+            "PLANECENSUS SUMMARY window={t0}:{t1} ticks={} planes={} dirty={} worst height={} \
+             type={} ceiling={} angle={} anglebits={:#04x} first_dirty={} VERDICT={}",
+            self.ticks,
+            self.graded.join(","),
+            self.dirty_ticks,
+            self.worst[0],
+            self.worst[1],
+            self.worst[2],
+            self.worst[3],
+            self.angle_bits,
+            self.first_dirty
+                .map_or_else(|| "none".to_string(), |t| t.to_string()),
+            if self.worst[..3].iter().all(|&c| c == 0) && self.angle_bits & 0x88 == 0 {
+                if self.worst[3] == 0 {
+                    "BIT-PERFECT"
+                } else {
+                    "COSMETIC-ONLY (angle rotation nibble)"
+                }
+            } else {
+                "DRIFT"
+            }
+        );
+    }
+}
+
+impl Drop for PlaneCensus {
+    fn drop(&mut self) {
+        self.summary();
+    }
+}
+
+/// `MGC_PACE_TRACE=<t0>:<t1>` — **THE DIFFICULTY-PACE TRANSITION-LIST
+/// DIFF**, the instrument round 131's W8 dig named and did not build.
+///
+/// W8 answered the player's *"later in the level they are more
+/// difficult to kill"* out of retail's own recorded bytes: the ramp is
+/// **three interleaved DISCRETE schedules** — each rival's one-time
+/// life ratchet (`sub_5C950` resets `word_0x24A_586` to 256 on its
+/// first death, permanently discarding the authored handicap), rebuild
+/// churn at the ratcheted value, and the authored stage roster
+/// escalating in waves. Every piece of the ARITHMETIC is graded.
+/// **The RATE is not**: `replay` re-imports rival mana, `mana_max`,
+/// castle caps and the live StageVar table at every anchor, so a port
+/// whose rivals banked twice as fast, or whose stage script released
+/// the 60,000-HP wave 10,000 ticks early or never at all, scores
+/// **zero divergences corpus-wide**.
+///
+/// What is graded here is not a value but a **TICK LIST**: the tick at
+/// which each transition first fires, on retail's side out of the
+/// recorded closure and on the port's out of the live world, compared
+/// key by key. Three transition families —
+///
+/// * `rung p<i>=<n>` — player i's ESTABLISHED-castle register naming a
+///   castle at rung n. Round 131's 131-5 proved the register
+///   (`CastleEntityIndex_0x3A_58`) has exactly one writer, the level-up
+///   commit `sub_60480`, so this edge IS the rung commit.
+/// * `ratchet p<i>` — player i's `word_0x24A_586` stepping to 256 off
+///   an authored handicap: the 5.02× HP-and-healing jump, once per
+///   rival per level, and the single biggest term in what the player
+///   feels.
+/// * `model (c,m)` — the first tick a (class, model) is on the roster,
+///   which is how the authored wave schedule shows itself.
+///
+/// ⚠⚠ **RUN IT ON A PLAIN `replay`, NEVER `--segmented`.** A
+/// re-anchor imports retail's own castle register, life scalars and
+/// StageVar table, which is precisely the contamination that made the
+/// rate ungraded in the first place — under `--segmented` this
+/// instrument would grade retail against itself and always read clean.
+/// A plain free run diverges, and that is the point: keys are player
+/// index and (class, model), never slot, so the lists stay comparable
+/// past the horizon.
+///
+/// A `d=` of zero on every key over a long take is the strong result;
+/// a systematically SIGNED drift on the `ratchet` or `rung` families
+/// is a pace defect, and a key present on one side only is a schedule
+/// the port never runs (or invents).
+///
+/// ⭐⭐⭐ **WHAT ROUND 132 MEASURED, AND WHAT IT MEANS FOR W8's
+/// "THE RATE IS UNGRADED".** Six MC2 takes, **490 graded pace keys,
+/// every single one exact** — mc2l6-rsg 120/120 to a horizon of
+/// 34,604, mc2l24 104/104 to 35,669, mc2l31 56/56 to END, plus mc2l6
+/// 79/79, mc2l22 85/85 and mc2l5 46/46. Not one rung commit, rival
+/// ratchet or creature first-appearance is off by a tick.
+///
+/// The honest reading is narrower than that sounds, and it is the
+/// point: inside a bit-exact horizon the port's world IS retail's, so
+/// agreement there is implied by the horizon rather than discovered by
+/// this instrument. What round 132 actually established is that **W8's
+/// worry was scoped to the SEGMENTED lane.** `--segmented` re-imports
+/// rival mana, `mana_max`, castle caps and the StageVar table at every
+/// anchor, and it is that lane which cannot see a pace defect. A PLAIN
+/// free run re-imports nothing, so it grades the rate for free — as far
+/// as its horizon reaches, which on the two longest MC2 free runs is
+/// the whole difficulty schedule of the level. This instrument's job is
+/// to make that legible without reading 35,000 boundaries, and to say
+/// exactly where the grading stops.
+///
+/// ⏭ What is still ungraded: pace BEYOND each take's horizon — mc2l22
+/// past 4,662 and mc2l5 past 3,975, where the authored 36,000/60,000
+/// and 36,000/300,000 HP waves actually land. Those need the horizons
+/// moved, not a better instrument.
+struct PaceTrace {
+    window: Option<(u64, u64)>,
+    /// key → (retail first tick, port first tick).
+    seen: std::collections::BTreeMap<String, (Option<u64>, Option<u64>)>,
+    prev_scale: Option<([u16; 8], [u16; 8])>,
+    /// The run's first divergent boundary. Past it the port's world is
+    /// its OWN, not a measurement of retail's schedule, so keys first
+    /// seen beyond it are reported and NOT scored.
+    horizon: Option<u64>,
+    done: bool,
+}
+
+impl PaceTrace {
+    fn from_env() -> Self {
+        Self {
+            window: std::env::var("MGC_PACE_TRACE").ok().and_then(|v| {
+                let (a, b) = v.split_once(':')?;
+                Some((a.parse::<u64>().ok()?, b.parse::<u64>().ok()?))
+            }),
+            seen: std::collections::BTreeMap::new(),
+            prev_scale: None,
+            horizon: None,
+            done: false,
+        }
+    }
+
+    /// `side` 0 = retail, 1 = port.
+    fn mark(&mut self, key: String, side: usize, t: u64) {
+        let e = self.seen.entry(key).or_insert((None, None));
+        let slot = if side == 0 { &mut e.0 } else { &mut e.1 };
+        if slot.is_none() {
+            *slot = Some(t);
+        }
+    }
+
+    fn emit(&mut self, world: &World, st: &mgc_formats::mgcr::RetailMc2, t: u64) {
+        let Some((t0, t1)) = self.window else { return };
+        if t > t1 {
+            self.summary();
+            return;
+        }
+        if t < t0 {
+            return;
+        }
+        // ---- retail, straight out of the recorded closure
+        let mut r_rungs = [0i16; 8];
+        let mut r_scale = [0u16; 8];
+        for (i, p) in st.players.iter().enumerate().take(8) {
+            r_scale[i] = p.life_scale as u16;
+            let c = p.castle_ent as usize;
+            if p.castle_ent > 0
+                && c < st.ents.len()
+                && st.ents[c].class3f == 3
+                && st.ents[c].model40 == 2
+                && st.ents[c].flags & 0x400 == 0
+            {
+                // ⚠ A CASTLE'S LEVEL IS `dword_0x10_16`, NOT `+0x26`.
+                // Retail's `+0x26` on a (3,2) is the generic hit
+                // source and reads 0 forever; the rung the level-up
+                // commit increments (`sub_60480`, VA 0x6047F
+                // `dword_0x10_16++`, in the same straight-line block
+                // as the register stamp at VA 0x60534) is @0x10 —
+                // which is exactly what the importer's catch-all
+                // `_ => r.scratch10 as i16` puts in the port's `f26`.
+                // Reading the same-named field on both sides was
+                // wrong on the retail side, and it read "the port
+                // INVENTS every rung".
+                r_rungs[i] = (st.ents[c].scratch10.clamp(0, 7)) as i16;
+            }
+        }
+        for e in st.ents.iter().skip(1) {
+            if e.class3f == 0 || e.flags & 0x400 != 0 {
+                continue;
+            }
+            self.mark(format!("model ({:2},{:2})", e.class3f, e.model40), 0, t);
+        }
+        // ---- port
+        let (p_rungs, p_scale, p_models) = world.debug_mc2_pace_census();
+        for (c, m) in p_models {
+            self.mark(format!("model ({c:2},{m:2})"), 1, t);
+        }
+        for i in 0..8 {
+            if r_rungs[i] > 0 {
+                self.mark(format!("rung  p{i}={}", r_rungs[i]), 0, t);
+            }
+            if p_rungs[i] > 0 {
+                self.mark(format!("rung  p{i}={}", p_rungs[i]), 1, t);
+            }
+        }
+        // The ratchet is an EDGE, not a level: 256 is also the
+        // un-handicapped default, so only a step UP off an authored
+        // value below it counts.
+        if let Some((pr, pp)) = self.prev_scale {
+            for i in 0..8 {
+                if r_scale[i] == 256 && pr[i] != 0 && pr[i] < 256 {
+                    self.mark(format!("ratchet p{i} ({}->256)", pr[i]), 0, t);
+                }
+                if p_scale[i] == 256 && pp[i] != 0 && pp[i] < 256 {
+                    self.mark(format!("ratchet p{i} ({}->256)", pp[i]), 1, t);
+                }
+            }
+        }
+        self.prev_scale = Some((r_scale, p_scale));
+    }
+
+    /// Called once the run is over, with the horizon it reached.
+    fn finish(&mut self, horizon: Option<u64>) {
+        self.horizon = horizon;
+        self.summary();
+    }
+
+    fn summary(&mut self) {
+        if self.done || self.window.is_none() {
+            return;
+        }
+        self.done = true;
+        // ⚠⚠ **A PACE KEY IS ONLY GRADED INSIDE THE HORIZON.** A plain
+        // free run keeps going past its first divergence, and from
+        // there on the port is simulating its OWN world — a rung it
+        // never reaches, or reaches 7,000 ticks late, is the
+        // divergence talking, not the schedule. Round 132 built this
+        // instrument without the split and it read "SCHEDULE MISMATCH"
+        // on mc2l5 and mc2l22, whose free-run horizons are 551 and
+        // 4,661: every one of those rows was post-horizon noise. The
+        // takes that answer the pace question are the ones that
+        // free-run FAR — mc2l6-rsg (34,603 bit-exact boundaries) is
+        // this instrument's real subject.
+        let hz = self.horizon.unwrap_or(u64::MAX);
+        let (mut both, mut only_r, mut only_p, mut drift) = (0usize, 0usize, 0usize, 0i64);
+        let mut ungraded = 0usize;
+        let mut worst = (0i64, String::new());
+        for (k, &(r, p)) in &self.seen {
+            // (3,0) is the HUMAN'S CARPET. Retail keeps it as an
+            // ordinary pool record; the port's replay seat drives the
+            // human out-of-pool behind the `PLAYER_TARGET` sentinel,
+            // so this key is retail-only on every MC2 take by
+            // construction. A known structural difference, not a
+            // schedule the port fails to run — reported, never scored.
+            if k == "model ( 3, 0)" {
+                println!("PACE {k}  retail_t={r:?} port_t={p:?}  [structural: out-of-pool human]");
+                continue;
+            }
+            // A key whose EARLIEST sighting on either side already
+            // lies past the horizon was never graded by anything.
+            let earliest = r.into_iter().chain(p).min().unwrap_or(u64::MAX);
+            if earliest > hz {
+                ungraded += 1;
+                println!("PACE {k}  retail_t={r:?} port_t={p:?}  [past horizon {hz} — UNGRADED]");
+                continue;
+            }
+            match (r, p) {
+                (Some(a), Some(b)) => {
+                    both += 1;
+                    let d = b as i64 - a as i64;
+                    if d != 0 {
+                        drift += 1;
+                        if d.abs() > worst.0.abs() {
+                            worst = (d, k.clone());
+                        }
+                    }
+                    println!("PACE {k}  retail_t={a} port_t={b} d={d:+}");
+                }
+                (Some(a), None) => {
+                    only_r += 1;
+                    println!("PACE {k}  retail_t={a} port_t=NEVER  <-- the port never runs this");
+                }
+                (None, Some(b)) => {
+                    only_p += 1;
+                    println!("PACE {k}  retail_t=NEVER port_t={b}  <-- the port INVENTS this");
+                }
+                (None, None) => {}
+            }
+        }
+        println!(
+            "PACE SUMMARY horizon={} keys={} graded={} ungraded={ungraded} matched={both} \
+             drifted={drift} retail_only={only_r} port_only={only_p} worst={:+} ({}) VERDICT={}",
+            self.horizon
+                .map_or_else(|| "END".to_string(), |h| h.to_string()),
+            self.seen.len() - usize::from(self.seen.contains_key("model ( 3, 0)")),
+            both + only_r + only_p,
+            worst.0,
+            if worst.1.is_empty() { "-" } else { &worst.1 },
+            if only_r + only_p > 0 {
+                "SCHEDULE MISMATCH"
+            } else if drift > 0 {
+                "PACE DRIFT"
+            } else {
+                "IN STEP"
+            }
+        );
+    }
+}
+
+impl Drop for PaceTrace {
+    fn drop(&mut self) {
+        self.summary();
+    }
+}
+
 /// `MGC_KNOCK_TRACE=<t0>:<t1>` — the knock PHASE probe. Prints what
 /// the mover consumed this tick vs what the world tick armed for the
 /// next, beside retail's own recorded `+22`/`+24` pair. The whole
@@ -1196,6 +1661,13 @@ impl RStats {
         out
     }
 
+    /// The earliest divergent boundary of the whole run, or `None`
+    /// while every segment is still bit-exact. `MGC_PACE_TRACE` reads
+    /// it to say which of its keys are actually GRADED.
+    fn first_horizon(&self) -> Option<u64> {
+        self.segs.iter().filter_map(|s| s.horizon).min()
+    }
+
     /// Was segment `i`'s horizon a ROSTER-EXCUSED boundary the run
     /// then RE-ANCHORED on? Both halves matter: excusing a row is a
     /// statement about blame, and re-anchoring is what makes the
@@ -1487,6 +1959,7 @@ fn run_mc1(
         ))
     });
     let mut celltrace = CellTrace::from_env();
+    let mut pcensus = PlaneCensus::from_env();
     let mut ktrace = KnockTrace::from_env();
     // `--segmented`: the boundary grade sets this, and the re-anchor
     // runs after the tick body so the break's own diagnostics (traces,
@@ -1752,6 +2225,7 @@ fn run_mc1(
                 }
             }
             celltrace.emit(&world, &timg, tick.t);
+            pcensus.emit(&world, &timg, tick.t);
             if let Some((t0, t1)) = ctrace
                 && tick.t >= t0
                 && tick.t <= t1
@@ -2385,6 +2859,8 @@ fn run_mc2(
 
     let mut stats = RStats::default();
     let mut celltrace = CellTrace::from_env();
+    let mut pcensus = PlaneCensus::from_env();
+    let mut pace = PaceTrace::from_env();
     let mut ktrace = KnockTrace::from_env();
     // MGC_ALLOC_TRACE — the pool-allocator microscope (dig 98-Q13).
     let alloctrace = crate::alloc_trace::AllocTrace::from_env();
@@ -2563,12 +3039,23 @@ fn run_mc2(
         if rec.respawn {
             stats.respawns += 1;
         }
+        // ⭐⭐ **SHIFT+K WAS MISSING FROM THE MC2 LOOP'S COMMAND.** The
+        // MC1 arm above counts and forwards `rec.suicide`; this one
+        // built its `PlayerCommand` without the field, so even a
+        // recovered MC2 self-kill could not have reached
+        // `World::tick`'s MC2 suicide arm. Both halves of the lane —
+        // the state witness in `recover_pair_mc2_k` and this
+        // forwarding — are new; see the witness for the mc2l5 evidence.
+        if rec.suicide {
+            stats.suicides += 1;
+        }
         let cmd = PlayerCommand {
             fire_left: rec.fire_left,
             fire_right: rec.fire_right,
             mc2_select: rec.mc2_select,
             mc2_ring_cast: rec.mc2_ring_cast,
             respawn: rec.respawn,
+            suicide: rec.suicide,
             demolish: rec.demolish,
             cheat: rec.cheat,
             ..PlayerCommand::default()
@@ -2649,6 +3136,15 @@ fn run_mc2(
             // (EF:39947) and gates the body below, measured on
             // `mc2l0-test`'s three deliberate pause cycles: one LCG
             // step, zero pool changes.
+            // The barrel roll's homing-lock break (`sub_55EB0`),
+            // retail's PLAYER FRAME, before `UpdateEntities_57730` —
+            // see [`World::mc2_broll_lock_break`]. The free-run lane
+            // pins the carpet and never runs `sub_55C60`, so the edge
+            // comes off the imported `byte_0x846_2BDE` phase.
+            world.mc2_broll_lock_break(
+                pst.players[pst.local_player as usize].broll_phase,
+                st.players[st.local_player as usize].broll_phase,
+            );
             if recover::paused_turn_mc2(&pst, &st) {
                 world.tick_paused();
                 stats.paused += 1;
@@ -2695,6 +3191,8 @@ fn run_mc2(
                 }
             }
             celltrace.emit(&world, &timg, tick.t);
+            pcensus.emit(&world, &timg, tick.t);
+            pace.emit(&world, &st, tick.t);
             // `MGC_MOB_TRACE` — the MC1 arm has carried the creature-
             // machine microscope since 19c, and on MC2 it silently
             // no-opped, which reads as "this take has no state drift"
@@ -2964,6 +3462,8 @@ fn run_mc2(
     } else {
         mode.to_string()
     };
+    // The horizon is only final once the run is over.
+    pace.finish(stats.first_horizon());
     let mode = mode.as_str();
     if args.brief {
         let terrain = if measured_planes(&timg).is_some() {

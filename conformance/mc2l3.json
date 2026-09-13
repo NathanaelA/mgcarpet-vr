@@ -271,6 +271,12 @@
    "file": "the-third-puff-m87-rides-m13-s-67-74-sprite-band.mgcr",
    "source": "mc2l3",
    "note": "THE THIRD PUFF (10,87) RIDES m13's 67..74 SPRITE BAND: action 0x5E shares sub_32160 (EF:1696 routes both; docs/traces/mc2-class10-m29-m5-m13.md SS2.2), so the m87 puff grows 67->74 on even drift ticks and floors at 67 exactly like m13. The port's model-13-only band test dropped it into m14's 9..16 band \u2014 no grow, wrong shrink floor \u2014 every m87 row read one low (mc2l3: 4,123 f5a rows across 133 slots). Graded via the session-68 sprite lane (append_sprite_diffs_mc2)."
+  },
+  {
+   "t": 6444,
+   "file": "the-campaign-replay-gate-is-set-on-this-capture.mgcr",
+   "source": "mc2l3",
+   "note": "THE CAMPAIGN REPLAY GATE IS A PROPERTY OF THE CAPTURE, NOT OF THE HEADER: mgcr::mc2_take_replayed scans the entity pool for the first (14,5) XP SCROLL and returns bit 0 of its flags @0x0C. A take played as a campaign REPLAY births its scrolls at 0x0D (gate SET); a first-run take births them at 0x0C (gate clear). The value was hardcoded `false` for four sessions and nothing printed it, so it was invisible - it changes which entities live. This pair is cut at the first scroll-bearing tick of mc2l3 (t=6444 carries 10 live (14,5) records) so the gate is READABLE FROM THE FIXTURE: it is the SET exemplar. Its twin is fixtures/mc2l30/the-campaign-replay-gate-is-clear-on-this-capture.mgcr. \u26a0 NO TEST MAY READ recordings/ DIRECTLY - a recording is provenance and can be overwritten (the mc2l0 take was replaced mid-campaign 2026-09-13 and its gate flipped clear -> SET, reddening the old take-identity assertion)."
   }
  ]
 }
