@@ -13560,6 +13560,20 @@ impl World {
         // out of play (flag 0x20), so the fresh scatter can't be
         // re-vacuumed while lying on it.
         if self.player.state == LifeState::Alive && self.g.player_overlap(i, ctx) {
+            // Retail arms every AI wizard's 200-tick learn timer on
+            // the HIT itself (:64806-15), whether or not the grant
+            // follows — the strict-retail poll above does exactly
+            // that, and this is the native path's twin. Without it
+            // the rivals never learned a spell the human picked up in
+            // play (player report 2026-09-13: mc1l37, where every
+            // rival starts castleless and retail's take has all of
+            // them arm at the Create Castle pickup, t=2287, and go to
+            // Build 200 ticks later). A law landed on one call path
+            // is not landed.
+            let spell = self.g.ent[i].model65 as usize;
+            if spell < SPELL_COUNT {
+                self.rival_learn_arm(spell);
+            }
             self.try_pickup(i);
         }
     }
@@ -18586,37 +18600,64 @@ impl World {
     }
 
     /// Drain this tick's sound requests plus the ambient-loop inputs
-    /// the original's player tick derives (:55254-82): waves XOR wind
-    /// from the terrain under the carpet, fire and market loops from
-    /// emitter proximity. The original refreshes per-player countdown
-    /// fields from the emitters' own handlers; the INTERIM probe here
-    /// is a direct radius scan (8 tiles) over live BIG fires (class
-    /// 10 m6 — the only model whose handler latches the retail fire
-    /// countdown) and village houses (m45) — same audible result,
-    /// exact hysteresis owed with the emitter trace.
+    /// the original's player tick derives (remc1 :55254-82; remc2
+    /// EF:60141-60170): waves XOR wind from the terrain under the
+    /// carpet, fire and market loops from emitter proximity.
+    ///
+    /// The fire/market law: each player record carries two
+    /// nearest-emitter counters (MC1 `u32_396`/`u32_400`, MC2
+    /// `dword_0x19A_410`/`maxDistance_0x19E_414`). The wizard tick
+    /// reads each one — `>= 1536` ends the loop, otherwise it requests
+    /// it — and resets it to 2048; the EMITTERS' own handlers then
+    /// lower it to their 3-D distance from the local wizard (`min`,
+    /// `sub_583F0_distance_3d` / `sub_42340_42680`): the (10,6)
+    /// standing-fire tick (MC2 `sub_31760` → `sub_5C870`, EF:23114;
+    /// MC1 `sub_252D0` → `sub_44C10`, :28215 — the SOLE caller in
+    /// each game; the (10,0) small fire never latches, so a meteor's
+    /// spark trail stays silent), and the parked (10,45) dwelling's
+    /// tick (MC1 `sub_28DC0` → `sub_44C90`, :30831, unconditional;
+    /// MC2 `AddHouse0A_2D_38330` → `SetMaxDistance_5C8D0`, gated on
+    /// `bldgprm[type].byte_2 & 1`). So a loop runs iff one such
+    /// emitter stood within 1536 units (6 tiles) of the wizard on the
+    /// last tick. Scanned here at drain time — the same predicate,
+    /// one walk-order lag folded away (presentation, never hashed).
+    ///
+    /// ⚠ The old scan gated on `flags & 1`, which the port's spawns
+    /// never set (a fresh (10,6) is 0x20004): NEITHER loop could ever
+    /// arm — the burning-tree / volcano crackle the player reported
+    /// missing 2026-09-12. Liveness is the handler's own: a class-10
+    /// record in state 6 / 52 that is not reap-marked (0x400).
     pub fn take_audio(&mut self, player: PlayerPose) -> AudioFrame {
         let over_water = self.g.on_water_pub(player.x, player.y);
-        const AMBIENT_RANGE: i32 = 8 * 256;
+        const NEAR: i64 = 1536;
         let (mut fire_near, mut market_near) = (false, false);
         for e in &self.g.ent {
-            if e.flags & 1 == 0 || e.flags & 0x400 != 0 || e.class64 != 10 {
+            if e.class64 != 10 || e.flags & 0x400 != 0 {
                 continue;
             }
-            // Fire-ambient loop: retail latches the per-player fire
-            // countdown ONLY from the persistent (10,6) big fire
-            // (MC2 `sub_31760`/`sub_5C870` EF:43602-14; MC1
-            // `sub_252D0` remc1:28215). The (10,0) SMALL fire never
-            // latches it — admitting model 0 here would drag the
-            // fire-crackle loop along a meteor's per-tick spark trail
-            // for the whole flight.
-            let is_fire = e.model65 == 6;
-            let is_house = e.model65 == 45 && e.act_life >= 0;
-            if !is_fire && !is_house {
+            let is_fire = e.tick70 == 6;
+            let is_market = e.model65 == 45
+                && e.tick70 == 52
+                && match self.game {
+                    GameId::Mc2 => self
+                        .g
+                        .assets
+                        .bldgprm
+                        .get(e.f71 as usize)
+                        .is_some_and(|b| b.flags & 1 != 0),
+                    _ => true,
+                };
+            if !is_fire && !is_market {
                 continue;
             }
-            let dx = i32::from(e.x.wrapping_sub(player.x) as i16).abs();
-            let dy = i32::from(e.y.wrapping_sub(player.y) as i16).abs();
-            if dx.max(dy) > AMBIENT_RANGE {
+            // Retail squares int16 deltas (the torus-shortest arm) and
+            // takes the radix root; comparing the squares against the
+            // 1536 threshold is the same test to within the root's
+            // rounding.
+            let dx = i64::from(e.x.wrapping_sub(player.x) as i16);
+            let dy = i64::from(e.y.wrapping_sub(player.y) as i16);
+            let dz = i64::from(e.z.wrapping_sub(player.z));
+            if dx * dx + dy * dy + dz * dz >= NEAR * NEAR {
                 continue;
             }
             if is_fire {
@@ -33047,6 +33088,73 @@ mod tests {
         assert_eq!(w.g.ent[rid].x >> 8, w.g.ent[c].x >> 8);
     }
 
+    /// Spell learning on the NATIVE pickup path (player report
+    /// 2026-09-13, mc1l37: "I pick up the castle spell and no one
+    /// else has it afterwards"). Retail arms every allowed, unowned,
+    /// not-yet-learning AI wizard's 200-tick timer on the human's
+    /// AABB hit (:64806-15), whichever way the grant itself goes; the
+    /// expiry mints the rival's own token and the castleless rival
+    /// then builds. mc1l37's take witnesses it on the graded path
+    /// (arm t=2287, mint t=2486, Build t=2487).
+    #[test]
+    fn native_jar_pickup_arms_rival_learning() {
+        // mc1l37's shape: the rival's book lacks spell 16, its
+        // allowed mask (+796) permits it.
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut w = World::new(planes, &rival_marker_things(), 1, assets());
+        let mut cfgs: [Option<crate::mc1::rivals::RivalConfig>; 8] = Default::default();
+        let mut cfg = rival_cfg(false, 0);
+        cfg.allowed[16] = true;
+        cfgs[1] = Some(cfg);
+        w.set_wizards(&cfgs, 2);
+        assert_eq!(w.rivals[0].owned[16], 0, "castleless rival");
+        assert!(w.rivals[0].allowed[16], "but allowed to learn it");
+        let (jx, jy) = (100u16 << 8 | 128, 100u16 << 8 | 128);
+        let jz = w.g.ground_z(jx, jy) as i16;
+        let jar = w.spawn_spell_jar(16, 0, jx, jy, jz).expect("jar");
+        let alt = w.ground_height_tiles(100.5, 100.5) + 0.5;
+        let on_jar = PlayerPose::from_tiles(100.5, alt, 100.5, 0.0, 0.0, 0.0);
+        let mut armed_at = None;
+        for t in 0..20 {
+            w.tick(on_jar, PlayerCommand::default());
+            if w.rivals[0].learn[16] != 0 {
+                armed_at = Some(t);
+                break;
+            }
+        }
+        assert!(
+            w.player.owned[16] != 0 || w.g.ent[jar].tick70 >= MANIFEST_BASE,
+            "the human picked the jar up"
+        );
+        assert!(
+            armed_at.is_some(),
+            "the rival's learn timer armed on the pickup"
+        );
+        assert_eq!(w.rivals[0].learn[16], 200, "the 200-tick countdown");
+        for _ in 0..205 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_ne!(
+            w.rivals[0].owned[16], 0,
+            "the expiry minted the rival's token"
+        );
+        let mut built = false;
+        for _ in 0..6000 {
+            w.tick(away(), PlayerCommand::default());
+            if w.rival_castle(w.rivals[0].ent).is_some() {
+                built = true;
+                break;
+            }
+        }
+        assert!(built, "the rival builds a castle with its new spell");
+    }
+
     #[test]
     fn castleless_rival_scouts_and_plants_a_castle() {
         let mut w = rival_world(true, 0);
@@ -44188,6 +44296,126 @@ mod tests {
         w.g.t.tile_type[tile(120, 120)] = 0;
         w.tick(player, PlayerCommand::default());
         assert!(w.g.ent[f].flags & 0x400 != 0, "extinguished by water");
+    }
+
+    /// The fire-ambient loop's emitter latch (player report
+    /// 2026-09-12: the burning-tree / volcano crackle was absent).
+    /// Retail: the (10,6) standing-fire tick lowers the wizard's
+    /// nearest-fire counter to its 3-D distance (`sub_5C870`), and the
+    /// wizard tick plays the loop while that is under 1536 units. The
+    /// old scan required `flags & 1`, which no spawn sets — a fresh
+    /// (10,6) is 0x20004 — so the loop could never arm.
+    #[test]
+    fn mc2_standing_fire_arms_the_fire_ambient_loop() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(120, 120);
+        let gz = w.g.ground_z(x, y) as i16;
+        let f = w.g.mc2_spawn_fire6(x, y, gz).expect("fire spawns");
+        assert_eq!(w.g.ent[f].flags & 1, 0, "no spawn sets bit 0");
+        let alt = w.ground_height_tiles(120.5, 120.5) + 2.0;
+        let near = PlayerPose::from_tiles(120.5, alt, 120.5, 0.0, 0.0, 0.0);
+        w.tick(near, PlayerCommand::default());
+        assert!(
+            w.take_audio(near).fire_near,
+            "a fire underfoot arms the loop"
+        );
+        // 5 tiles off (1280 units) is inside 1536; 8 tiles (2048,
+        // the old Chebyshev radius) is not.
+        let alt5 = w.ground_height_tiles(125.5, 120.5) + 2.0;
+        let five = PlayerPose::from_tiles(125.5, alt5, 120.5, 0.0, 0.0, 0.0);
+        assert!(w.take_audio(five).fire_near, "1280 units is within 1536");
+        let alt8 = w.ground_height_tiles(128.5, 120.5) + 2.0;
+        let eight = PlayerPose::from_tiles(128.5, alt8, 120.5, 0.0, 0.0, 0.0);
+        assert!(!w.take_audio(eight).fire_near, "2048 units is past 1536");
+        // A reap-marked fire no longer ticks, so it no longer latches.
+        w.g.ent[f].flags |= 0x400;
+        assert!(!w.take_audio(near).fire_near, "a dead fire is silent");
+    }
+
+    /// The market loop's MC2 latch (`AddHouse0A_2D_38330` →
+    /// `SetMaxDistance_5C8D0`, gated on `bldgprm[type].byte_2 & 1`):
+    /// only a parked (state 52) dwelling whose parameter row carries
+    /// bit 0 lowers the counter.
+    #[test]
+    fn mc2_market_loop_needs_a_parked_market_dwelling() {
+        let mut w = mc2_flat_world();
+        w.g.assets.bldgprm = vec![
+            crate::engine::features::BldgParam {
+                rate: 100,
+                flags: 0,
+                chain: 0,
+            },
+            crate::engine::features::BldgParam {
+                rate: 100,
+                flags: 1,
+                chain: 0,
+            },
+        ];
+        let (x, y) = mc2_pos(120, 120);
+        let gz = w.g.ground_z(x, y) as i16;
+        let h = w.g.new_event().expect("house slot");
+        {
+            let e = &mut w.g.ent[h];
+            e.class64 = 10;
+            e.model65 = 45;
+            e.tick70 = 52;
+            e.act_life = 100;
+            e.f71 = 1;
+        }
+        w.g.link(h, x, y, gz);
+        let alt = w.ground_height_tiles(120.5, 120.5) + 2.0;
+        let near = PlayerPose::from_tiles(120.5, alt, 120.5, 0.0, 0.0, 0.0);
+        assert!(
+            w.take_audio(near).market_near,
+            "a parked market dwelling arms it"
+        );
+        w.g.ent[h].f71 = 0;
+        assert!(!w.take_audio(near).market_near, "a non-market row does not");
+        w.g.ent[h].f71 = 1;
+        w.g.ent[h].tick70 = 51;
+        assert!(
+            !w.take_audio(near).market_near,
+            "the build countdown does not"
+        );
+    }
+
+    /// MC1's latches: the (10,6) fire (`sub_252D0` → `sub_44C10`) and
+    /// the parked dwelling (`sub_28DC0` → `sub_44C90`, unconditional —
+    /// MC1 has no building-parameter gate).
+    #[test]
+    fn mc1_fire_and_dwelling_arm_the_ambient_loops() {
+        let mut w = flat_world();
+        let (x, y) = (120u16 << 8 | 128, 120u16 << 8 | 128);
+        let gz = w.g.ground_z(x, y) as i16;
+        let f = w.g.new_event().expect("fire slot");
+        {
+            let e = &mut w.g.ent[f];
+            e.class64 = 10;
+            e.model65 = 6;
+            e.tick70 = 6;
+            e.act_life = 100;
+        }
+        w.g.link(f, x, y, gz);
+        let h = w.g.new_event().expect("house slot");
+        {
+            let e = &mut w.g.ent[h];
+            e.class64 = 10;
+            e.model65 = 45;
+            e.tick70 = 52;
+            e.act_life = 100;
+        }
+        w.g.link(h, x, y, gz);
+        let alt = w.ground_height_tiles(120.5, 120.5) + 2.0;
+        let near = PlayerPose::from_tiles(120.5, alt, 120.5, 0.0, 0.0, 0.0);
+        let fr = w.take_audio(near);
+        assert!(fr.fire_near, "MC1 fire arms the loop");
+        assert!(fr.market_near, "MC1 dwelling arms the market loop");
+        let far = away();
+        let fr = w.take_audio(far);
+        assert!(
+            !fr.fire_near && !fr.market_near,
+            "nothing within 1536 units"
+        );
     }
 
     /// The (10,34) MC2 teleporter pad (sub_35390): a THING-authored

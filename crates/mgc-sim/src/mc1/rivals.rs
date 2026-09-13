@@ -674,10 +674,10 @@ pub(crate) struct Rival {
     /// (:54884-923); the scattered jars decay independently.
     pub known: [bool; SPELL_COUNT],
     /// Learn eligibility (Type_160+796).
-    allowed: [bool; SPELL_COUNT],
+    pub(crate) allowed: [bool; SPELL_COUNT],
     /// Spell-learning countdowns (+628): armed to 200 by a matching
     /// jar existing anywhere; conjures an own copy at expiry.
-    learn: [u16; SPELL_COUNT],
+    pub(crate) learn: [u16; SPELL_COUNT],
     /// AI re-attempt cooldowns (+724, from [`AI_RECAST`]). Slot 16 is
     /// initialized to 4*slot — the per-player castle-build stagger
     /// the decompile shows as "var_756" (:55049).
