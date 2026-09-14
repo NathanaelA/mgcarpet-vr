@@ -287,12 +287,14 @@ class Layout:
     terrain_planes: tuple = ()
     # (width, height) of every declared plane, cells = bytes.
     terrain_dims: tuple = (256, 256)
-    # A plane captured ONLY on cave levels (MC2's second heightmap —
-    # retail never writes it on Day/Night levels, so off-cave it holds
-    # BSS residue): (name, offset), gated by `terrain_cave_byte_off`.
+    # MC2's second heightmap (the cave CEILING, x_BYTE_14B4E0): (name,
+    # offset). Captured on every map type — only the cave generator seeds
+    # it, but the engine maintains it everywhere and off-cave it carries
+    # session history (zeros on a fresh boot, else the previous level's or
+    # the loaded save's plane), which no consumer can derive.
     terrain_cave_plane: Optional[tuple] = None
-    # Struct offset of the MapType byte (0=Day 1=Night 2=Cave); 0 = the
-    # game has no cave concept.
+    # Struct offset of the MapType byte (0=Day 1=Night 2=Cave), used only
+    # for the log line; 0 = the game has no cave concept.
     terrain_cave_byte_off: int = 0
 
 
@@ -531,11 +533,9 @@ LAYOUT_MC2 = Layout(
     pp_hand_right_off=2105,  # SpellIndexRight
     pp_flight_off=998,  # type_str_164 base — cmd_speed at +12 (block+1010)
     terrain_planes=MC_TERRAIN_PLANES,
-    # The cave CEILING (x_BYTE_14B4E0, block +0x40000): captured only
-    # when MapType (struct+0x2FED4: 0=Day 1=Night 2=Cave) says Cave —
-    # retail's generator never writes it off-cave (Terrain.cpp:19-56,
-    # only the cave branch calls the ceiling builder sub_43B40), so on
-    # Day/Night levels the array holds BSS residue, not terrain.
+    # The cave CEILING (x_BYTE_14B4E0, block +0x40000), captured on every
+    # map type (see the Layout field's note); MapType lives at
+    # struct+0x2FED4 (0=Day 1=Night 2=Cave) and only labels the log line.
     terrain_cave_plane=("ceiling", 0x40000),
     terrain_cave_byte_off=0x2FED4,
     # in_struct_mouse_off intentionally UNSET: the field-map's mouse guess
@@ -1589,11 +1589,19 @@ def pin_terrain(mem: GuestMem, loc: Located, layout: Layout) -> None:
     n = _terrain_cells(layout)
     base = loc.static_base + loc.build.terrain_guest
     planes = list(layout.terrain_planes)
-    if layout.terrain_cave_plane is not None and layout.terrain_cave_byte_off:
-        mt = mem.pread(loc.struct_host + layout.terrain_cave_byte_off, 1)
-        if mt is not None and mt[0] == 2:  # MapType Cave
-            planes.append(layout.terrain_cave_plane)
-            print("terrain: cave level — capturing the ceiling plane too",
+    if layout.terrain_cave_plane is not None:
+        # Captured on EVERY map type since 2026-09-14: the engine keeps the
+        # plane alive off-cave (painters raise/lower it, angle bit 8 and the
+        # z sampler read it) and only the cave generator SEEDS it, so a
+        # Day/Night level carries session history there — BSS zeros on a
+        # fresh boot, else the previous level's or the loaded save's plane.
+        # That is not derivable by a consumer; the plane costs nothing when
+        # it is all zeros (the base compresses away, the deltas stay empty).
+        planes.append(layout.terrain_cave_plane)
+        if layout.terrain_cave_byte_off:
+            mt = mem.pread(loc.struct_host + layout.terrain_cave_byte_off, 1)
+            kind = {0: "day", 1: "night", 2: "cave"}.get(mt[0] if mt else -1, "?")
+            print(f"terrain: {kind} level — capturing the ceiling plane too",
                   file=sys.stderr)
     hosts, why = [], {}
     for name, off in planes:
