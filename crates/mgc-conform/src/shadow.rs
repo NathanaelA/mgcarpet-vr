@@ -558,6 +558,46 @@ impl Shadow {
     /// - **CLASS/MODEL AGREEMENT**, read off the port's own table: a
     ///   slot holding a different entity on the two sides is a
     ///   missing/extra story the graded diff owns.
+    /// THE TILE-CHAIN HEAD TABLE (`mapEntityIndex_15B4E0`), compared cell
+    /// by cell. Retail's table is not recorded, but it is exactly
+    /// derivable from the record: every linked entity (`flags & 4`) whose
+    /// `prev18` is 0 heads the chain of its own cell `(x >> 8, y >> 8)` —
+    /// measured on whole takes (mc2l4, mc2l1: one head per cell, no link
+    /// crossing cells, 2026-09-14). The per-entity link rows above cannot
+    /// see a chain hung under the WRONG cell when the entity is alone in
+    /// it (next16 == prev18 == 0 either way), and the tile scans can, so
+    /// this is the one structural lane the link rows leave open.
+    /// Rows land on lane `(class, model, "map_head")` of the retail head
+    /// (or of the port's stray head when retail has none): retail = the
+    /// expected head slot, port = the port's. The human is out-of-pool on
+    /// the port side (its rank is carried by `player_chain`), so a cell either
+    /// side heads with the carpet is skipped; torn slots too.
+    pub(crate) fn compare_map_heads_mc2(
+        &mut self,
+        world: &World,
+        st: &RetailMc2,
+        human_slot: u16,
+        torn: &BTreeSet<u16>,
+        t: u64,
+    ) {
+        let mut expect = vec![0u16; 65536];
+        for (slot, re) in st.ents.iter().enumerate() {
+            if slot == 0 || re.class3f == 0 || re.flags & 4 == 0 || re.prev18 != 0 {
+                continue;
+            }
+            let cell = ((re.y >> 8) as usize) << 8 | (re.x >> 8) as usize;
+            expect[cell] = slot as u16;
+        }
+        for (cell, &w) in expect.iter().enumerate() {
+            let g = world.map_head_cell(cell);
+            if w == g || w == human_slot || g == human_slot || torn.contains(&w) || torn.contains(&g) {
+                continue;
+            }
+            let re = &st.ents[if w != 0 { w } else { g } as usize];
+            self.hit((re.class3f, re.model40, "map_head"), t, if w != 0 { w } else { g }, w as i64, g as i64);
+        }
+    }
+
     pub(crate) fn compare_ents_mc2(
         &mut self,
         world: &World,

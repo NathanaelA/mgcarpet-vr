@@ -3278,6 +3278,7 @@ fn run_mc2(
                 }
                 if let Some(sh) = shadow.as_mut() {
                     sh.compare_ents_mc2(&world, &st, slot, &torn, tick.t);
+                    sh.compare_map_heads_mc2(&world, &st, slot, &torn, tick.t);
                     sh.compare_wiz_mc2(&world, &st, tick.t);
                     sh.compare_free_mc2(&world, &st, slot, tick.t);
                     // THE OBJECTIVE BOARD, free-run half: the port has

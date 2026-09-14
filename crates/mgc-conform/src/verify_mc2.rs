@@ -481,6 +481,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     // and the pose lane below re-installs terrain.
                     if let Some(sh) = shadow.as_mut() {
                         sh.compare_ents_mc2(&world, &st, human_slot, &torn, pt);
+                        sh.compare_map_heads_mc2(&world, &st, human_slot, &torn, pt);
                         sh.compare_wiz_mc2(&world, &st, pt);
                         // THE OBJECTIVE BOARD — recorded since the
                         // capture was written, ungraded until round

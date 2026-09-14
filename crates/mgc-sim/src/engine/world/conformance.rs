@@ -1747,6 +1747,15 @@ impl World {
     /// `from_probe = true` reads the mid-walk snapshot armed by
     /// [`Self::arm_walk_probe`] — the walk loop is game-shared, so
     /// `--at-slot` works on MC2 unchanged.
+    /// The port's tile-chain head for one cell of the 256x256 map
+    /// (`map_entity`), for the shadow census's head-table check — retail's
+    /// table is derivable from a record (every linked entity with
+    /// `prev18 == 0` heads its own cell's chain), so the two tables are
+    /// COMPARED, never imported.
+    pub fn map_head_cell(&self, cell: usize) -> u16 {
+        self.g.map_entity.get(cell).copied().unwrap_or(0)
+    }
+
     pub fn port_ent_lanes_mc2(
         &self,
         slot: u16,
