@@ -922,6 +922,7 @@ impl ReplayDriver {
                 (
                     conformance::pose_all_mc2(
                         &sim.carpet,
+                        &sim.carpet_mc2,
                         e,
                         &st.players[st.local_player as usize],
                     ),

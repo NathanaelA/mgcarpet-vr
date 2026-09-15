@@ -523,13 +523,13 @@ fn pose_window_mc1(t: u64, s: &Mc1State, e: &RetailEntMc1, w: &RetailWizardMc1) 
 }
 
 /// The MC2 twin. `extras` are the death column's two retail-only tells.
-fn pose_window_mc2(t: u64, s: &Mc1State, e: &RetailEntMc2, p: &RetailPlayerMc2) {
+fn pose_window_mc2(t: u64, s: &Mc1State, ext: &Mc2Ext, e: &RetailEntMc2, p: &RetailPlayerMc2) {
     if pose_window().is_none() {
         return;
     }
     emit_pose_window(
         t,
-        &pose_all_mc2(s, e, p),
+        &pose_all_mc2(s, ext, e, p),
         &[("f2c", e.f2c as i64), ("action45", e.action45 as i64)],
     );
 }
@@ -3249,8 +3249,8 @@ fn run_mc2(
                 stats.seg().ungraded += 1;
                 reset_at = Some((tick.t, SegOpen::Restart));
             } else if capture_clean_mc2(&pst, &st) {
-                let pose = pose_lanes_mc2(&ch.s, &st.ents[slot as usize], cp);
-                pose_window_mc2(tick.t, &ch.s, &st.ents[slot as usize], cp);
+                let pose = pose_lanes_mc2(&ch.s, &ch.ext, &st.ents[slot as usize], cp);
+                pose_window_mc2(tick.t, &ch.s, &ch.ext, &st.ents[slot as usize], cp);
                 let mut castles = [0i16; 8];
                 for (i, p) in pst.players.iter().take(8).enumerate() {
                     castles[i] = p.castle;
@@ -3579,8 +3579,8 @@ fn pose_only_pair_mc2(
         &|cur, prop| w.player_mc2_gate(cur, prop),
         &|pos, latched| w.player_mc2_stuck(pos, latched),
     );
-    let pose = pose_lanes_mc2(&ch.s, e1, p1);
-    pose_window_mc2(pt + 1, &ch.s, e1, p1);
+    let pose = pose_lanes_mc2(&ch.s, &ch.ext, e1, p1);
+    pose_window_mc2(pt + 1, &ch.s, &ch.ext, e1, p1);
     stats.fold_pose_only(pt + 1, &pose, csv)
 }
 

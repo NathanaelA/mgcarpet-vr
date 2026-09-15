@@ -6325,34 +6325,34 @@ pub fn pose_all_mc1(
     rows
 }
 
-/// The MC2 lane set. `water_ctr` is deliberately NOT a lane yet: it
-/// gates the water-flight sound loop, not the pose. (Grading it is
-/// what EXPOSED the +610 u16-vs-int8 decode bug — the fixed byte read
-/// makes it a candidate lane once its ++/−− law is verified against a
-/// wet stretch.)
+/// The MC2 lane set. `water_ctr` IS a lane as of 2026-09-15 — the last
+/// item the remc2 round-5 waterCounter finding left owed.
 ///
-/// ⭐ ITS LAW IS NOW VERIFIED, FROM THE OTHER SIDE. The remc2 replay
-/// corpus (2026-09-15) found the same hole in remc2 — retail bumps the
-/// counter on EVERY refused move in a cave, `incb 0x262(%eax)` at
-/// NETHERW.EXE 0x81ccc, not only on the deep-water head branch at
-/// 0x818e3 — and with that instruction restored its two cave takes
-/// (`mc2l7`, `mc2l30`) grade BIT-PERFECT end to end, which is a
-/// positive test of the ++/−− law over 43,000 cave ticks. The port had
-/// the identical hole; `flight.rs` now carries the refusal bump.
-/// Promoting the lane still needs `Mc2Ext` plumbed into this function
-/// (the counter lives there, not in `Mc1State`), which is why it is
-/// still absent — that plumbing is the only thing left owed here.
+/// Its law was verified from the other side first. The remc2 replay
+/// corpus found the same hole in remc2 — retail bumps the counter on
+/// EVERY refused move in a cave, `incb 0x262(%eax)` at NETHERW.EXE
+/// 0x81ccc, not only on the deep-water head branch at 0x818e3 — and
+/// with that instruction restored its two cave takes (`mc2l7`,
+/// `mc2l30`) grade BIT-PERFECT end to end, a positive test of the
+/// ++/−− law over 43,000 cave ticks. The port had the identical hole;
+/// `flight.rs` carries the refusal bump. Grading it here is what the
+/// register meant by "plumb `Mc2Ext` into `pose_all_mc2`": the counter
+/// lives in `Mc2Ext`, not `Mc1State`, so the function had no way to
+/// see it. Retail holds it in one byte (player +610) and the port in a
+/// u16 masked to 0xFF on each bump, so the lane masks to compare.
 pub fn pose_lanes_mc2(
     s: &Mc1State,
+    ext: &Mc2Ext,
     e: &RetailEntMc2,
     p: &RetailPlayerMc2,
 ) -> Vec<(&'static str, i64, i64)> {
-    dirty(pose_all_mc2(s, e, p))
+    dirty(pose_all_mc2(s, ext, e, p))
 }
 
 /// The MC2 lane set with the clean lanes kept — see [`pose_all_mc1`].
 pub fn pose_all_mc2(
     s: &Mc1State,
+    ext: &Mc2Ext,
     e: &RetailEntMc2,
     p: &RetailPlayerMc2,
 ) -> Vec<(&'static str, i64, i64)> {
@@ -6379,6 +6379,15 @@ pub fn pose_all_mc2(
     lane("pose.strafe", p.strafe as i64, s.strafe as i64);
     lane("pose.roll_f", p.roll_acc as i16 as i64, s.roll_f as i64);
     lane("pose.pitch_f", p.pitch_acc as i16 as i64, s.pitch_f as i64);
+    // `water_ctr` — promoted to a lane 2026-09-15, the last thing the
+    // remc2 round-5 waterCounter finding left owed. Retail keeps it in a
+    // single byte at player +610 and the port keeps it in `Mc2Ext` as a
+    // u16 it masks to 0xFF on every bump, so the comparison masks too.
+    lane(
+        "pose.water_ctr",
+        p.water_ctr as i64,
+        (ext.water_ctr & 0xFF) as i64,
+    );
     rows
 }
 
@@ -6418,10 +6427,11 @@ mod tests {
             act_speed: 8, // parts
             ..Default::default()
         };
-        let all = pose_all_mc2(&s, &e, &p);
+        let ext = Mc2Ext::default();
+        let all = pose_all_mc2(&s, &ext, &e, &p);
         let want: Vec<_> = all.iter().copied().filter(|&(_, w, g)| w != g).collect();
-        assert_eq!(all.len(), 11, "the MC2 lane set");
-        assert_eq!(pose_lanes_mc2(&s, &e, &p), want);
+        assert_eq!(all.len(), 12, "the MC2 lane set");
+        assert_eq!(pose_lanes_mc2(&s, &ext, &e, &p), want);
         assert_eq!(
             want.iter().map(|r| r.0).collect::<Vec<_>>(),
             ["pose.y", "pose.act_speed"]
