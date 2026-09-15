@@ -1,0 +1,12 @@
+{
+  "dir": "fixtures/mc2l10",
+  "pin_pose": "n1",
+  "fixtures": [
+    {
+      "t": 12683,
+      "file": "class3-scan-roster-keeps-a-member-that-died-this-tick.mgcr",
+      "source": "mc2l10",
+      "note": "THE DEATH DIRECTION - A CLASS-3 THAT DIES EARLIER IN THE TICK IS STILL A ROSTER MEMBER. THE CLASS-3 SCAN WALKS `dword_38519`, THE TICK-TOP CLASS-3 ROSTER - NOT THE LIVE POOL. All three retail sites (archer Scan A sub_1FAA0 EF:11782, m24 acquire sub_28690 EF:18754, the stage-held kind-2 wizard watch sub_1DBF0 EF:10300) load the chain head and chase next_0, and the per-node body asks exactly TWO things: the squared range and !(byte[0] & 0x20). SHIPPED EXE NETHERW.EXE (file = VA + 0x24800), sub_1DBF0's copy: `1dcc0 8b b6 77 96 00 00` mov esi,[esi+0x9677] (the dword_38519 HEAD) / `1dcf3 3b 45 f4` cmp eax,[ebp-0xc] (d2 vs v_28^2) / `1dcf6 77 51` ja -> next / `1dcf8 f6 46 0c 20` test byte [esi+0xc],0x20 / `1dcfc 75 4b` jnz -> next / `1dd49 8b 36` mov esi,[esi] (esi = esi->next_0) / `1dd77 66 89 83 96 ..` word_0x96_150 = slot / `1dd86 c6 43 49 0a` StageVar2 = 10 / `1dd8a e8 b1 02 00 00` call 0x1E040. THERE IS NO LIFE TEST, NO CLASS TEST AND NO REAP TEST IN THAT LOOP: class, life and the reap flag were all settled when the case-3 arm of the tick-top sweep built the chain (`if (jx->life_0x8 >= 0)`, EF:40224, run AFTER the `byte[1] & 4` reap pass at EF:40202). So re-asking them mid-walk is WRONG IN BOTH DIRECTIONS, and the two takes witness the two directions with the values EXACTLY MIRRORED. The siblings mc2_wizard_scan and m9_cone_scan already read Gen::wiz_chain; mc2_class3_scan was the last class-3 walk still on the pool. Kill switch MGC_NO_MC2_CLASS3_SCAN_ROSTER restores the pool walk. Round 137. WITNESS mc2l10 pair 12683->12684, slot 105, a stage-held kind-2 DEVIL (5,21): slot 45, a (3,3), enters the tick at life 0 (a member) and its own head then eats a 500 mailbox hit (life 0 -> -500) BEFORE slot 105 dispatches. Retail's walk still sees the corpse and engages it - target96 0->45, sv2 2->10, action45 175->170, b43 64->0 (the wrapper tail re-applying mode 2) and speed 60->96 (m21_jump's attack arm). The port's pool walk rejected it on `act_life >= 0` and held all five. THE TAKE'S ONLY DEFECT: the law certifies mc2l10 end to end (20,585 ticks, 0 excess resets)."
+    }
+  ]
+}

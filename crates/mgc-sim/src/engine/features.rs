@@ -6634,10 +6634,19 @@ impl Gen {
         if self.ent[i].f46 > 0 {
             self.ent[i].f46 -= 1;
         }
-        // MC2 keeps the live-census stand-in: its dispatcher twin
-        // (sub_60400 EF:61405) has not been register-verified against
-        // the binary, its corpora measure identical under both forms,
-        // and the cave goldens pin the census timing.
+        // ⛔ THIS MC2 ARM IS UNREACHABLE and the census question it
+        // hedged on is ANSWERED. MC2 castles dispatch to
+        // [`Gen::mc2_castle_tick`] (world.rs, the
+        // `3 if Mc2 && model65 == 2` arm), never to `castle_tick`, so
+        // the live MC2 ladder is [`Gen::mc2_castle_roster`] — and it
+        // walks the REGISTER. Retail agrees: `sub_5FF50` (EF:61647)
+        // reads `Entities_EA3E4[v18x->dword_0xA4_164x
+        // ->array_0x5C_92[v20]]` for v20 = 0..quota, spawns into
+        // `array_0x5C_92.at(v20)` on an empty rung (EF:61800), and
+        // CLEARS the rung + re-latches `word_0x2C_44 = 16` on a stale
+        // one (EF:61813-14). RETAIL INDEXES A REGISTER; IT NEVER SCANS
+        // THE POOL. Measured with a trace on both arms over
+        // mc2l10-secondtake: 4,615 register passes, ZERO entries here.
         if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
             if gq > 0 && self.ent[i].f46 == 0 {
                 let guards = (1..self.ent.len())
@@ -12782,6 +12791,104 @@ mod tests {
             g.mc2_wizard_scan(creature, &ctx, false),
             None,
             "with both class-3s dead the roster is empty"
+        );
+    }
+
+    /// ⭐⭐⭐ **THE CLASS-3 SCAN WALKS THE TICK-TOP ROSTER, SO IT IS
+    /// WRONG IN BOTH DIRECTIONS TO RE-ASK MEMBERSHIP MID-WALK.**
+    ///
+    /// All three retail sites — the archer's Scan A (`sub_1FAA0`,
+    /// EF:11782), m24 acquire (`sub_28690`, EF:18754) and the
+    /// stage-held kind-2 wizard watch (`sub_1DBF0`, EF:10300) — load
+    /// `dword_38519` and chase `next_0`, and the per-node body asks
+    /// exactly two things: the squared range and `!(byte[0] & 0x20)`.
+    /// Shipped `NETHERW.EXE`, `sub_1DBF0`'s copy (file = VA + 0x24800):
+    /// `1dcc0 8b b6 77 96 00 00` loads the chain HEAD, `1dcf3 3b 45 f4`
+    /// is the range test, `1dcf8 f6 46 0c 20` the invisibility test,
+    /// `1dd49 8b 36` the `next_0` step. NO life test, NO class test,
+    /// NO reap test — all three were settled when the case-3 arm of
+    /// the tick-top sweep built the chain (`if (jx->life_0x8 >= 0)`,
+    /// EF:40224, run AFTER the `byte[1] & 4` reap pass at EF:40202).
+    ///
+    /// So a pool walk is wrong BOTH WAYS, and round 137 witnessed both
+    /// on stage-held kind-2 DEVILS (5,21), with the values exactly
+    /// mirrored between two takes:
+    /// * DEATH — mc2l10 pair 12683→12684 slot 105: slot 45, a (3,3),
+    ///   enters the tick a member at `life 0` and is knocked to −500
+    ///   before slot 105 dispatches. Retail engages the corpse
+    ///   (`target96 0→45, sv2 2→10, action 175→170, speed 60→96`); the
+    ///   port's `act_life >= 0` rejected it. Pinned as a fixture.
+    /// * BIRTH — mc2l32 pair 4341→4342 slot 342: the human's castle is
+    ///   born into slot 214 DURING the tick, so retail's roster does
+    ///   not hold it and the devil stays put; the port's live walk
+    ///   found it and fired the whole engage.
+    ///
+    /// ⚠ THE BIRTH ARM IS A UNIT TEST BECAUSE ITS PAIR IS NOT
+    /// FIXABLE WORK: cut at 4341 the fixture fails with the law ON
+    /// too, on `field:3,2:life field:3,2:max_life missing:10,79` —
+    /// `retail_import_mc2` cannot reconstruct a castle mid-birth. The
+    /// free run over that tick IS bit-exact; only the pair lane is
+    /// blind, so the arm is asserted directly here instead.
+    ///
+    /// `MGC_NO_MC2_CLASS3_SCAN_ROSTER=1` restores the pool walk.
+    #[test]
+    fn the_class_3_scan_reads_the_roster_not_the_live_pool() {
+        let mut g = mc2_gen();
+        let creature = g.new_event().unwrap();
+        {
+            let e = &mut g.ent[creature];
+            e.class64 = 5;
+            e.model65 = 20;
+            e.x = 0x4000;
+            e.y = 0x4000;
+            e.f30 = 0; // yaw 0 = −y: candidates dead ahead
+            e.row156 = 89; // the m20 behaviour row
+            e.act_life = 100;
+        }
+        // A class-3 that was a member when the chain was built and
+        // then DIED this tick. Retail's walk still sees it.
+        let dying = g.new_event().unwrap();
+        {
+            let e = &mut g.ent[dying];
+            e.class64 = 3;
+            e.model65 = 0;
+            e.x = 0x4000;
+            e.y = 0x4000 - 40;
+            e.act_life = 0; // a member at chain-build time
+        }
+        g.rebuild_wiz_chain();
+        g.ent[dying].act_life = -500; // …knocked dead mid-tick
+        let ctx = ctx_at(0x4000, 0x4000 - 4000, 0); // human far out of range
+        assert_eq!(
+            g.mc2_class3_scan(creature, &ctx),
+            Some(dying as u16),
+            "a class-3 that died AFTER the roster was built is still a member"
+        );
+
+        // …and a class-3 BORN after the chain was built is not one yet,
+        // however near it stands.
+        let newborn = g.new_event().unwrap();
+        {
+            let e = &mut g.ent[newborn];
+            e.class64 = 3;
+            e.model65 = 2; // a castle, the mc2l32 witness
+            e.x = 0x4000;
+            e.y = 0x4000 - 10; // NEARER than `dying`: a pool walk would take it
+            e.act_life = 100;
+        }
+        assert_eq!(
+            g.mc2_class3_scan(creature, &ctx),
+            Some(dying as u16),
+            "a class-3 born THIS tick is not in the roster, so the corpse still wins"
+        );
+        // Non-vacuity guard: once the roster is rebuilt the newborn is
+        // a member and, being nearer, wins outright — so the assertion
+        // above really is about roster membership and not about range.
+        g.rebuild_wiz_chain();
+        assert_eq!(
+            g.mc2_class3_scan(creature, &ctx),
+            Some(newborn as u16),
+            "after the next tick-top rebuild the newborn is the nearest member"
         );
     }
 

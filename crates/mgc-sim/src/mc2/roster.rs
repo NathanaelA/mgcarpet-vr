@@ -5049,7 +5049,7 @@ impl Gen {
     /// 7,618-tick reset run.
     ///
     /// `MGC_NO_MC2_M24_POSE_PLAIN_SPRITE=1` restores the old behaviour.
-    fn m24_pose(&mut self, i: usize) {
+    pub(crate) fn m24_pose(&mut self, i: usize) {
         if no_mc2_m24_pose_plain_sprite() {
             match self.ent[i].tick70 - M24_BASE {
                 0 => {

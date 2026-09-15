@@ -178,6 +178,18 @@ pub(crate) fn no_mc2_m18_ground_snap() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M18_GROUND_SNAP").is_some())
 }
 
+/// A/B toggle for m24's PHASE-7 WRAPPER POSE (`sub_28660`'s second
+/// statement, `sub_287B0(a1x)`, EF:18730-31 — see the write-up at the
+/// held call site): set `MGC_NO_MC2_M24_WRAPPER_POSE` to restore the
+/// pre-dig behaviour, where a (5,24) troglodyte reached by the
+/// stage-HELD or the CONTROLLED seam never re-derived `actSpeed` from
+/// its action, so a hold that promoted it out of phase 7 left it
+/// walking at whatever speed the previous state had stamped.
+pub(crate) fn no_mc2_m24_wrapper_pose() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M24_WRAPPER_POSE").is_some())
+}
+
 /// One live StageVar slot (`D41A0_0.StageVars2_0x365F4[slot]`, LS:249).
 /// Index-aligned with the level file's 11-slot array; slot 0 is unused.
 #[derive(Debug, Clone, Copy, Default, Hash)]
@@ -1167,6 +1179,52 @@ impl World {
             && self.g.ent[i].tick70 == base.wrapping_add(2)
         {
             self.g.m9_engage_pose(i);
+        }
+        // ⭐⭐⭐ **AND m24's WRAPPER IS THE BAREST OF THE LOT — THE
+        // POSE, UNCONDITIONAL.** `sub_28660` (EF:18728-32) is the
+        // (5,24) troglodyte's phase-7 wrapper and its WHOLE body is
+        // ```text
+        //   sub_1D5D0(a1x, 192);
+        //   sub_287B0(a1x);
+        // ```
+        // SHIPPED EXE (NETHERW.EXE file **0x4CE60-0x4CE80**, VA
+        // 0x28660): `53 55 89 e5` / `8b 5d 0c` (a1x) /
+        // `68 c0 00 00 00` (**192**) `53` `e8 5e 4f ff ff` → file
+        // 0x41DD0 = VA 0x1D5D0, the legs / `83 c4 08` / `53`
+        // `e8 35 01 00 00` → file 0x4CFB0 = VA **0x287B0**, the pose /
+        // `83 c4 04 5d 5b c3`. **There is NO kind test and NO action
+        // test on the pose** — it is the same standing as m21's jump
+        // and m18's ground snap, not the guarded `if (action == 8m+2)`
+        // shape of m4/m9/m18's aim tails.
+        //
+        // And [`Gen::m24_pose`] (`sub_287B0`) is a pure function of
+        // `actionIndex`: `0xC0 → speed 0` / `0xC2 → minSpeed` /
+        // `0xC6 → 2*maxSpeed` / anything else → `maxSpeed`. So the
+        // tick the held legs promote a troglodyte out of phase 7 is
+        // the tick retail re-stamps its speed from the NEW action —
+        // and the port, whose `m24_tick` owns the only copy of the
+        // pose and which this seam PRE-EMPTS, left the speed alone.
+        //
+        // WITNESS — mc2l32 pair 6061→6062, slot 319, a stage-held
+        // kind-2 (5,24) on the graze leash whose `sub_1DBF0` aggro
+        // scan (EF:10272-10310) finds the human: retail
+        // `sv2 2 → 10`, `action45 199 → 194`, `target96 0 → 356` and
+        // **`speed 24 → 80`** (= `minSpeed_0x84_132`, the 0xC2 arm;
+        // this row's `maxSpeed_0x86_134` is 24). The port matched the
+        // action, the stagevar, the target and every other lane of the
+        // record and held `speed 24`. **That single row is 42 of that
+        // take's 43 divergent boundaries**, across 11 slots
+        // (311..=342) and 4,300 ticks — one law, 42 witnesses.
+        // ⚠ like the m4/m9 tests above this is NOT under the
+        // `tick70 & 7 == 7` gate — by this point the action is
+        // `base + 2`, which is the whole point of the pose.
+        // ⚠ the troglodyte's behaviour row (102) has flags `0x7`, so
+        // the generic FLEE speed tail at the bottom of this function
+        // never covered it.
+        //
+        // `MGC_NO_MC2_M24_WRAPPER_POSE=1` restores the old behaviour.
+        if !no_mc2_m24_wrapper_pose() && self.g.ent[i].model65 == 24 {
+            self.g.m24_pose(i);
         }
         // ⭐⭐ **AND FOUR MORE WRAPPERS END IN A SUB-STATE RESET.**
         // `sub_24DF0` (m17, EF:15833-37), `AddFirebug05_13_25D50`

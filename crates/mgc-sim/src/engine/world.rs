@@ -38456,6 +38456,97 @@ mod tests {
         );
     }
 
+    /// ⭐⭐⭐ THE BUILDING RE-PAINT'S LATCH IS `@0x2E`, NOT `@0x2C` —
+    /// AND THE PORT ALREADY HAD IT RIGHT ON THE OTHER CALL PATH.
+    ///
+    /// `sub_5FBD0` (EF:61490-61504) mints the (10,42) painter on a
+    /// class-3 member and ends `a1x->word_0x2E_46 = 4`: the
+    /// WAIT-FOR-PAINTER rung of the castle's action-5 machine
+    /// (`BeginOfCastleCreation_5FA70` case 4, EF:61465-77). Shipped
+    /// `NETHERW.EXE`, inside `sub_5FBD0` (VA 0x5FBD0 = file 0x843D0),
+    /// at file **0x84423**: `66 c7 46 2e 04 00` = `movw $0x4,0x2e(%esi)`.
+    ///
+    /// ⚠ IT HAS A NEAR-IDENTICAL SIBLING AND THIS IS NOT IT.
+    /// `sub_5FC40` (EF:61509-61524, file 0x84440) has the same shape
+    /// but spawns a **(10,41)** and stores **6**
+    /// (`8448D  66 c7 46 2e 06 00`). The binary discriminates them by
+    /// the pushed model — 42/4 against 41/6 — and `sub_377A0`
+    /// (EF:27484-92) calls `sub_5FBD0`, so the completion tail is the
+    /// 42/4 arm.
+    ///
+    /// The castle's OWN case-3 arm reaches the same retail function
+    /// through [`Gen::mc2_spawn_castle_painter`] and stamped `f59`,
+    /// the port's @0x2E home for a (3,2). This path — the completing
+    /// building re-painting every class-3 it overlaps — stamped `f46`,
+    /// which on a (3,2) is retail's `word_0x2C_44`, THE GUARD-RESPAWN
+    /// COOLDOWN. So every building finishing inside a castle's
+    /// footprint bought that castle's 16-pass guard ladder one extra
+    /// pass, and lost the wait-for-painter latch.
+    ///
+    /// WITNESS — mc2l10-secondtake (recorded to stress a castle and a
+    /// devil citadel built into each other), pair 10878→10879
+    /// `missing in port: slot 113 (5,15)`: the mass guard kill at
+    /// t=10847 clears ten rungs and latches 16, the ladder reaches 0 at
+    /// t=10879 and retail mints guard #1, while the (10,45) completing
+    /// over castle slot 351 at t=10874 moved the port's `f46` 3 → 4 and
+    /// pushed the mint to t=10881. Eleven INHERITED heads; horizon
+    /// 10,879 → END (21,175, bit-exact).
+    ///
+    /// ⚠ THIS IS A PIN, NOT A FIXTURE, BECAUSE THE CASTLE'S @0x2C IS
+    /// NOT A GRADED LANE — `port_ent_lanes_mc2` publishes it
+    /// DIAGNOSTIC-ONLY and never feeds `obs_project_mc2`. That is
+    /// exactly why the corruption stayed invisible for five ticks and
+    /// surfaced as a MISSING GUARD instead: a pair at the head
+    /// re-imports retail's own cooldown, so every head classified
+    /// INHERITED and no fixture can reach it.
+    ///
+    /// `MGC_NO_MC2_REPAINT_SUBSTATE=1` restores the pre-dig write.
+    #[test]
+    fn the_building_repaint_latches_0x2e_and_leaves_the_guard_cooldown_alone() {
+        use crate::engine::features::BuildDef;
+        let mut w = mc2_flat_world();
+        w.g.assets.build_tab = vec![BuildDef {
+            offset: 0,
+            w: 1,
+            h: 1,
+        }];
+        w.g.assets.build_dat = vec![0xff, 0xff];
+        let (x, y) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        let b = w.g.mc2_spawn_building(x, y, gz, 0).expect("the building");
+        // The human sits out of the class-3 walk at its own slot.
+        let human = w.g.new_event().expect("human slot");
+        // A castle sharing the building's tile, mid-ladder: the guard
+        // cooldown is ticking and the wait-for-painter rung is clear.
+        let castle = w.g.new_event().expect("castle slot");
+        {
+            let e = &mut w.g.ent[castle];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.f26 = 3; // level 3 — the painter's BUILD00 row
+            e.id24 = 1;
+            e.x = x;
+            e.y = y;
+            e.z = gz;
+            e.f80 = 4;
+            e.f82 = 4;
+            e.act_life = 1;
+            e.f46 = 7; // @0x2C — the guard-respawn cooldown, mid-ladder
+            e.f59 = 0; // @0x2E — no painter outstanding
+            e.flags &= !0x400;
+        }
+        w.g.ent[b].act_life = 1; // next tick is the completion tail
+        assert!(w.g.mc2_building_tick(b, Some(((x, y, gz), human as u16, true, 0)), false));
+        assert_eq!(
+            w.g.ent[castle].f59, 4,
+            "the re-paint latches @0x2E = 4, the wait-for-painter rung"
+        );
+        assert_eq!(
+            w.g.ent[castle].f46, 7,
+            "@0x2C, the guard-respawn cooldown, is NOT what sub_5FBD0 writes"
+        );
+    }
+
     /// ⭐ THE PHANTOM CASTLE AT THE MAP ORIGIN — `sub_377A0`'S CLASS-3
     /// WALK STAMPS EACH MEMBER'S `dword_0x10_16` LOW BYTE VERBATIM, AND
     /// ON A DEAD RIVAL THAT WORD IS THE RESPAWN COUNTDOWN.

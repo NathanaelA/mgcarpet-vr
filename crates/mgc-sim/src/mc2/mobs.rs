@@ -115,6 +115,15 @@ pub(crate) fn no_summon_lease_split() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_SUMMON_LEASE_SPLIT").is_some())
 }
 
+/// A/B toggle for the BUILDING RE-PAINT's `@0x2E` SEAT: set
+/// `MGC_NO_MC2_REPAINT_SUBSTATE` to restore the pre-dig write, which
+/// stamped the overlapped class-3 member's `f46` (MC2's `@0x2C`, the
+/// GUARD-RESPAWN COOLDOWN) where retail stamps `word_0x2E_46`.
+pub(crate) fn no_mc2_repaint_substate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_REPAINT_SUBSTATE").is_some())
+}
+
 /// A/B toggle for the CONTROLLED seam's MODEL-WRAPPER TAIL: set
 /// `MGC_NO_MC2_CONTROLLED_WRAPPER_TAIL` to restore the pre-dig
 /// behaviour, where `mc2_creature_tick`'s StageVar2 12/13/14/16/17 arm
@@ -245,6 +254,17 @@ pub(crate) fn no_mc2_frames89() -> bool {
 pub(crate) fn no_mc2_pyramid_sprite_keeps_rot() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_SPRITE_KEEPS_ROT").is_some())
+}
+
+/// A/B toggle for the CLASS-3 SCAN'S ROSTER WALK (`dword_38519`, the
+/// tick-top class-3 chain — see [`Gen::mc2_class3_scan`]): set
+/// `MGC_NO_MC2_CLASS3_SCAN_ROSTER` to restore the pre-dig LIVE POOL
+/// walk, which re-asked class/life/reap MID-tick and so was wrong in
+/// both directions — it missed a class-3 that died earlier in the
+/// same tick, and it saw one that was born in it.
+pub(crate) fn no_mc2_class3_scan_roster() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CLASS3_SCAN_ROSTER").is_some())
 }
 
 /// A/B toggle for the ARCHER ACQUIRE **Scan B** (`sub_1FAA0` :11811):
@@ -773,12 +793,81 @@ impl Gen {
         }
     }
 
-    /// The full class-3 pool walk shared by the archer's Scan A
-    /// (:11768-95) and m24 acquire (sub_28690 :18744-64): nearest
-    /// class-3 ANYTHING (wizards, castles, balloons) with `d2 <=
-    /// v_28²`, cone `< v_30`, skipping only invisibles (byte[0] &
-    /// 0x20). The human wizard sits in retail's dword_38519 like any
-    /// pool entity, so the out-of-pool pseudo-target joins the walk.
+    /// The full class-3 roster walk shared by the archer's Scan A
+    /// (`sub_1FAA0`), m24 acquire (`sub_28690`) and the STAGE-HELD
+    /// KIND-2 wizard watch (`sub_1DBF0`): nearest class-3 ANYTHING
+    /// (wizards, castles, balloons) with `d2 <= v_28²`, cone `< v_30`,
+    /// skipping only invisibles (byte[0] & 0x20). The human wizard
+    /// sits in retail's dword_38519 like any pool entity, so the
+    /// out-of-pool pseudo-target joins the walk.
+    ///
+    /// ⭐⭐⭐ **AND THE LIST IT WALKS IS `dword_38519`, THE TICK-TOP
+    /// CLASS-3 ROSTER — NOT THE LIVE POOL.** All three retail sites
+    /// load the chain head and chase `next_0` (EF:11782 / EF:18754 /
+    /// EF:10300, current reference tree — the neighbouring comments'
+    /// `:11768-95` / `:18744-64` / `:39972-85` predate ~250 lines of
+    /// upstream growth), and the per-node body asks exactly two
+    /// things: the squared range and `!(byte[0] & 0x20)`. Shipped
+    /// `NETHERW.EXE`, `sub_1DBF0`'s copy — file = VA + 0x24800:
+    /// ```text
+    ///   1dcc0  8b b6 77 96 00 00  mov esi,[esi+0x9677]   ; dword_38519 HEAD
+    ///   1dcce  66 8b 56 4c        mov dx,[esi+0x4c]      ; member x  (LIVE read)
+    ///   1dcf3  3b 45 f4           cmp eax,[ebp-0xc]      ; d2 vs v_28²
+    ///   1dcf6  77 51              ja  0x1dd49            ; -> next_0
+    ///   1dcf8  f6 46 0c 20        test byte [esi+0xc],0x20  ; invisible?
+    ///   1dcfc  75 4b              jnz 0x1dd49            ; -> next_0
+    ///   1dd49  8b 36              mov esi,[esi]          ; esi = esi->next_0
+    ///   1dd4b  3b 35 e4 a3 01 00  cmp esi,[0x1a3e4]      ; > Entities_EA3E4[0]
+    ///   1dd77  66 89 83 96 ..     mov [ebx+0x96],ax      ; word_0x96_150 = slot
+    ///   1dd86  c6 43 49 0a        mov byte [ebx+0x49],0xa   ; StageVar2 = 10
+    ///   1dd8a  e8 b1 02 00 00     call 0x1e040           ; sub_1E040 aggro raise
+    /// ```
+    /// There is NO life test, NO class test and NO reap test in that
+    /// loop: class, LIFE and the reap flag were all settled when the
+    /// case-3 arm of the tick-top sweep built the chain
+    /// (`if (jx->life_0x8 >= 0)`, EF:40224, run AFTER the `byte[1] & 4`
+    /// reap pass at EF:40202), so re-asking them mid-walk is wrong in
+    /// BOTH DIRECTIONS — a class-3 that DIES earlier in the tick stays
+    /// a member, and one BORN in the tick is not one yet. The sibling
+    /// [`Self::mc2_wizard_scan`] and `m9_cone_scan` already read
+    /// [`Gen::wiz_chain`]; this was the last class-3 walk on the pool.
+    ///
+    /// WITNESS — ONE LAW, TWO TAKES, THE VALUES EXACTLY MIRRORED, both
+    /// on a stage-held kind-2 DEVIL (5,21) whose watch is
+    /// `World::mc2_held_wizard_scan`:
+    /// * **mc2l10 pair 12683→12684, slot 105 — the DEATH direction.**
+    ///   Slot 45, a (3,3), enters the tick at `life 0` (a member) and
+    ///   its own head then eats a 500 mailbox hit (`life 0 → -500`)
+    ///   BEFORE slot 105 runs. Retail's walk still sees the corpse:
+    ///   `target96 0 → 45`, `sv2 2 → 10`, `action45 175 → 170`,
+    ///   `b43 64 → 0` (the wrapper tail re-applying mode 2,
+    ///   [`Gen::m21_wrapper_tail`]) and `speed 60 → 96` (`m21_jump`'s
+    ///   attack arm). The port's pool walk rejected it and held all
+    ///   five. THE TAKE'S ONLY DEFECT — the law certifies mc2l10 end
+    ///   to end (20,585 ticks, 0 excess resets).
+    /// * **mc2l32 pair 4341→4342, slot 342 — the BIRTH direction.**
+    ///   The human's castle is born into slot 214 as a (3,2) DURING
+    ///   that tick (`class3f 0 → 3`, `model40 0 → 2`, player
+    ///   `castle_ent 0 → 214`). It is not in the tick-top roster, so
+    ///   retail finds nothing and the devil holds `sv2 2`,
+    ///   `action 175`, `b43 64`, `speed 60`; the port's pool walk
+    ///   found the fresh castle and fired the whole engage —
+    ///   `target96 0 → 214`, `sv2 2 → 10`, `action 175 → 170`,
+    ///   `b43 64 → 0`, `speed 60 → 96`. Horizon 4,341 → 6,061.
+    ///
+    /// ⚠ The `flags & 0x400` (reap-pending) test the pool walk carried
+    /// was an invented guard either way: retail's reap runs BEFORE the
+    /// rebuild, so a record flagged MID-tick keeps its membership for
+    /// the rest of the frame — the same note [`Gen::mc2_roster`]
+    /// carries for the class-5 chains.
+    ///
+    /// 🏦 OWED — the out-of-pool human still enters on the LIVE
+    /// `ctx.pdead` where the roster's own sample is `ctx.pdead_top`.
+    /// Unwitnessed here and shared verbatim with
+    /// [`Self::mc2_wizard_scan`], so it keeps the sibling's behaviour
+    /// and wants its own A/B.
+    ///
+    /// `MGC_NO_MC2_CLASS3_SCAN_ROSTER=1` restores the pool walk.
     pub(crate) fn mc2_class3_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
@@ -806,9 +895,20 @@ impl Gen {
         if !self.player_invisible && !ctx.pdead {
             consider(ctx.px, ctx.py, PLAYER_TARGET);
         }
-        for (j, c) in self.ent.iter().enumerate().skip(1) {
-            if c.class64 == 3 && c.act_life >= 0 && c.flags & 0x400 == 0 && c.flags & 0x20 == 0 {
-                consider(c.x, c.y, j as u16);
+        if no_mc2_class3_scan_roster() {
+            for (j, c) in self.ent.iter().enumerate().skip(1) {
+                if c.class64 == 3 && c.act_life >= 0 && c.flags & 0x400 == 0 && c.flags & 0x20 == 0
+                {
+                    consider(c.x, c.y, j as u16);
+                }
+            }
+        } else {
+            for c in 0..self.wiz_chain.visible_len() {
+                let j = self.wiz_chain.list[c] as usize;
+                let w = &self.ent[j];
+                if w.flags & 0x20 == 0 {
+                    consider(w.x, w.y, j as u16);
+                }
             }
         }
         best.map(|(s, _)| s)
@@ -3255,9 +3355,9 @@ impl Gen {
             // Gated on `human`: the import-side pad reconstruct
             // (pads.rs, the only human:None caller) replays a build
             // retail already finished — its sub_377A0 pass must not
-            // re-mint the (10,42) painters or re-stamp f46 (mc2l30
-            // t=402: a phantom painter off the free stack every
-            // pair, castle f2c 0→4; mc2l0-sg t=7283: seven at once).
+            // re-mint the (10,42) painters or re-stamp the @0x2E latch
+            // (mc2l30 t=402: a phantom painter off the free stack every
+            // pair, castle f2e 0→4; mc2l0-sg t=7283: seven at once).
             if let Some((pose, slot, alive, human_row)) = human {
                 let pw = (self.mc2_params_ext(44).0 / 2) as i32;
                 let slot = slot as usize;
@@ -3322,7 +3422,7 @@ impl Gen {
                     }
                     if wd(e.x, bx) < bw + e.f80 as i32 && wd(e.y, by) < bh + e.f82 as i32 {
                         // ⭐ THE ROW IS THE MEMBER'S `dword_0x10_16` LOW
-                        // BYTE, VERBATIM — `sub_5FBD0` (EF:61522-30)
+                        // BYTE, VERBATIM — `sub_5FBD0` (EF:61490-61504)
                         // does `indexx->byte_0x46_70 = a1x->dword_0x10_16`
                         // with no clamp, for EVERY class-3 member. On a
                         // castle that is its level (0..7). On a RIVAL
@@ -3351,7 +3451,80 @@ impl Gen {
                             .mc2_spawn_wizard_painter(dest, row, own, w as u16)
                             .is_some()
                         {
-                            self.ent[w].f46 = 4;
+                            // ⭐⭐⭐ THE RE-PAINT'S LATCH IS `@0x2E`, NOT
+                            // `@0x2C` — AND THE PORT ALREADY HAD IT RIGHT
+                            // ON THE OTHER CALL PATH. `sub_5FBD0`
+                            // (EF:61490-61504) ends `a1x->word_0x2E_46 = 4`
+                            // on the class-3 member it just minted a
+                            // (10,42) for: the WAIT-FOR-PAINTER rung of the
+                            // castle's action-5 machine
+                            // (`BeginOfCastleCreation_5FA70` case 4,
+                            // EF:61465-77, which polls for a live (10,42)
+                            // and drops back to 3). Shipped `NETHERW.EXE`,
+                            // inside `sub_5FBD0` (VA 0x5FBD0 = file
+                            // 0x843D0), at file **0x84423**:
+                            //   84423  66 c7 46 2e 04 00  movw $0x4,0x2e(%esi)
+                            // a 16-bit store of 4 to **+0x2E** on `a1x`.
+                            //
+                            // ⚠ THERE IS A NEAR-IDENTICAL SIBLING AND IT IS
+                            // NOT THIS ONE. `sub_5FC40` (EF:61509-61524,
+                            // file 0x84440) has the same shape but spawns a
+                            // **(10,41)** and stores **6**
+                            // (`8448D  66 c7 46 2e 06 00`). The binary
+                            // discriminates them by the pushed model: 42/4
+                            // here, 41/6 there. `sub_377A0` (EF:27484-92)
+                            // calls **`sub_5FBD0`**, so this site is the
+                            // 42/4 arm.
+                            //
+                            // The castle's own case-3 arm reaches the
+                            // identical retail function through
+                            // [`Gen::mc2_spawn_castle_painter`], which
+                            // stamps `f59 = 4` — the port's @0x2E home for
+                            // a (3,2) (`import_ent_mc2`'s `f59` arm; the
+                            // `f2e` lane publishes `e.f59` for a castle).
+                            // THIS path — `sub_377A0`, the completing
+                            // (10,45) re-painting every class-3 whose
+                            // extents it overlaps — stamped `f46`, and on a
+                            // (3,2) `f46` is retail's **`word_0x2C_44`, the
+                            // GUARD-RESPAWN COOLDOWN**
+                            // ([`Gen::mc2_castle_roster`]). Every building
+                            // finishing inside a castle's footprint bought
+                            // the guard ladder one extra pass.
+                            //
+                            // WITNESS mc2l10-secondtake (recorded to stress
+                            // a castle and a devil citadel built into each
+                            // other): pair 10878→10879
+                            // `missing in port: slot 113 (5,15)`. The mass
+                            // guard kill at t=10847 clears ten rungs and
+                            // latches 16; the ladder reaches 0 at t=10879
+                            // and retail mints guard #1. At t=10874 the
+                            // (10,45) at slot 24 (action 51) completes over
+                            // castle slot 351 and this write moved `f46`
+                            // 3 → 4 (`MGC_WRITE_TRACE=351:f46`), so the port
+                            // minted at t=10881. ELEVEN INHERITED heads,
+                            // horizon 10,879 → **END (21,175, bit-exact)**.
+                            //
+                            // A class-3 member that is NOT a castle has no
+                            // @0x2E home in the port (`port_ent_lanes_mc2`'s
+                            // `f2e` lane is `None` for `(3, 0|1)`), so the
+                            // write is dropped there rather than re-aimed —
+                            // the old stamp was corrupting a wizard's
+                            // DEATH-FALL VELOCITY, which is what `f46`
+                            // homes on a (3,{0,1}).
+                            //
+                            // ⭐ THE GUARD LADDER ITSELF IS REGISTER-
+                            // VERIFIED: `sub_5FF50` (EF:61647) walks
+                            // `dword_0xA4_164x->array_0x5C_92[v20]`,
+                            // v20 = 0..quota, with `word_0x2C_44` as the
+                            // 16-pass cooldown (EF:61788-61814) — A
+                            // REGISTER, NEVER A CENSUS.
+                            // `MGC_NO_MC2_REPAINT_SUBSTATE` restores the
+                            // pre-dig write.
+                            if no_mc2_repaint_substate() {
+                                self.ent[w].f46 = 4;
+                            } else if self.ent[w].model65 == 2 {
+                                self.ent[w].f59 = 4;
+                            }
                         }
                     }
                 }
@@ -4000,6 +4173,19 @@ impl Gen {
                     _ => {}
                 }
                 self.m21_wrapper_tail(i);
+            }
+            // ⭐ …AND m24's WRAPPER IS AN UNCONDITIONAL POSE.
+            // `sub_28660` (EF:18728-32, NETHERW.EXE file 0x4CE60) is
+            // `sub_1D5D0(a1x, 192); sub_287B0(a1x);` — no kind test,
+            // no action test, the same standing that carried m0's bob,
+            // m21's jump and m18's ground snap to this seam. Landed and
+            // WITNESSED on the stage-HELD seam (mc2l32 slot 319, pair
+            // 6061→6062 and 41 more — the write-up is at the held call
+            // site in stagevars.rs); owed to THIS seam by the same
+            // argument and UNWITNESSED on this corpus. Same switch,
+            // `MGC_NO_MC2_M24_WRAPPER_POSE`.
+            if !crate::mc2::stagevars::no_mc2_m24_wrapper_pose() && self.ent[i].model65 == 24 {
+                self.m24_pose(i);
             }
             return;
         }

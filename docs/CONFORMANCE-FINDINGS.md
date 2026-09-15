@@ -34123,3 +34123,180 @@ regenerated.
 - A marker-1 index that resolves to a NON-class-15 record (mc2l22's (10,45) at slot 1, retail
   `word_0x2E_46 = -1`) stays pair-blind and unlanded: the port's class-10 `f26` aliases
   `dword_0x10_16`.
+
+## 137 — THE FIVE NEW PORT-SIDE TAKES, WORKED: THREE DIGS, THREE LAWS, FOUR CERTIFICATIONS
+
+Player's opener: *"continue the conformance of the new takes… two mc2l10 takes, one mc2l11 and
+mc2l32, essentially 3 levels in the order of the campaign."* And the warning that set dig C:
+mc2l10 has a DEVIL CITADEL that erupts mid-level, and `mc2l10-secondtake` was recorded to build
+the player's CASTLE into it so the two structures INTERSECT, then exercise castle UPGRADES
+against that geometry.
+
+⭐⭐⭐ **RUN `head_census_mc2` BEFORE BRIEFING ANYTHING.** The banked opener described mc2l32 as
+"44 segments" and mc2l10/mc2l32 as sharing one signature. The census turned that wall into three
+sentences and re-ordered the whole session:
+
+```
+ heads rows  species                   take
+    42   43  (5,24) speed×43           mc2l32   ← ONE ROW, 42 WITNESSES, identical values
+     1    3  (5,21) sv2,speed,action   mc2l32 + mc2l10  ← the shared head, EXACTLY MIRRORED
+     3    3  (10,42) applied_pitch     mc2l10   ← the registered painter-OOB deviation
+    10   ~   (5,15) missing/extra      mc2l10-secondtake, ALL INHERITED
+```
+
+⭐⭐⭐ **ALL THREE OF MY BRIEF HYPOTHESES WERE WRONG, AND ALL THREE DIGS SAID SO AND WERE RIGHT.**
+Keep writing briefs as hypotheses. The value was never the guess — it was the WITNESS SHAPE
+handed over (which pair, which slot, which fields, which direction).
+
+### 137-1 ✅ m24's PHASE-7 WRAPPER ENDS IN AN UNCONDITIONAL POSE (`MGC_NO_MC2_M24_WRAPPER_POSE`) — mc2l32 43 → 1 head
+
+My brief said the pose ARM was mis-selected (retail's 80 = the `2 =>` minSpeed arm, the port's
+24 = the `_ =>` maxSpeed arm). Refuted: `m24_pose` is **never called at all** on those ticks.
+
+`sub_28660` (EF:18728-32) is the troglodyte's phase-7 wrapper and its whole body is
+`sub_1D5D0(a1x, 192); sub_287B0(a1x);`. SHIPPED EXE, NETHERW.EXE file **0x4CE60** (VA 0x28660,
+file = VA + 0x24800), read out in the main session:
+
+```
+53 55 89 e5 8b 5d 0c 68 c0 00 00 00 53 e8 5e 4f ff ff 83 c4 08 53 e8 35 01 00 00 83 c4 04 5d 5b c3
+                     push 192        a1x  call → VA 0x1D5D0 (legs)      a1x  call → VA 0x287B0 (POSE)
+```
+
+**NO kind test and NO action test on the pose** — the standing of m21's jump and m18's ground
+snap, not the guarded `if (action == 8m+2)` shape of the m4/m9/m18 aim tails.
+`World::mc2_held_tick` claims any class-5 in phase 7 and PRE-EMPTS the per-model dispatch, and
+`Gen::m24_tick` owned the only call to `m24_pose` — so a stage-held troglodyte promoted out of
+phase 7 by the graze-leash leg (`sub_1DBF0`, gated `actionIndex == a2+7 && StageVar2 == 2`)
+never re-derived `actSpeed`. This is m24's entry from round 108-5's SIX UNMIRRORED WRAPPER TAILS,
+now witnessed. Landed on the held seam (witnessed) and the controlled seam (unwitnessed, same
+argument that carried m0/m21/m18 there).
+
+WITNESS mc2l32 pair 6061→6062 slot 319: retail `sv2 2→10, action45 199→194, target96 0→356,
+speed 24→80`; the port matched every lane but the speed. ⚠ this row's `minSpeed` is 80 and its
+`maxSpeed` 24, so the values read inverted from intuition.
+Fixture `mc2l32/m24-phase-7-wrapper-pose-restamps-actspeed`.
+
+### 137-2 ✅ THE BUILDING RE-PAINT'S LATCH IS `@0x2E`, NOT `@0x2C` (`MGC_NO_MC2_REPAINT_SUBSTATE`) — mc2l10-secondtake CERTIFIED
+
+My brief said census-vs-register. Refuted — and the dig settled that open question on the way
+past (see 137-4). The real defect is **one retail function with two port call paths, and only
+one of them had the field home right.**
+
+`sub_5FBD0` (EF:61490-61504) mints the (10,42) painter on a class-3 member and ends
+`a1x->word_0x2E_46 = 4` — the wait-for-painter rung of `BeginOfCastleCreation_5FA70` case 4.
+The castle's own case-3 arm (`mc2_spawn_castle_painter`) stamped `f59`, which IS the port's
+@0x2E home for a (3,2). The **building re-paint** arm — `sub_377A0` (EF:27484-92), a completing
+(10,45) re-painting every class-3 it overlaps — stamped `f46`, and on a (3,2) `f46` is retail's
+`word_0x2C_44`, **THE GUARD-RESPAWN COOLDOWN**. Every building finishing inside a castle's
+footprint bought that castle's 16-pass guard ladder an extra pass.
+
+⚠⚠ **THERE IS A NEAR-IDENTICAL SIBLING AND THE PORT'S NEIGHBOURING COMMENT CITED IT.** Settled in
+the binary in the main session, which is what fixed the constant:
+
+```
+sub_5FBD0  file 0x84423  66 c7 46 2e 04 00  movw $0x4,0x2e(%esi)   pushes model 42
+sub_5FC40  file 0x8448D  66 c7 46 2e 06 00  movw $0x6,0x2e(%esi)   pushes model 41
+```
+
+`sub_377A0` calls `sub_5FBD0` ⇒ the 42/4 arm. The stale `EF:61522-30` citation on the
+neighbouring painter-row law (it pointed at `sub_5FC40`) is corrected in place.
+
+WITNESS mc2l10-secondtake pair 10878→10879 `missing in port: slot 113 (5,15)`: the mass guard
+kill at t=10847 clears ten rungs and latches 16, the ladder reaches 0 at t=10879 and retail mints
+guard #1; the (10,45) completing over castle slot 351 at t=10874 moved the port's `f46` 3 → 4
+(`MGC_WRITE_TRACE=351:f46`) and pushed the mint to t=10881. **Eleven INHERITED heads, horizon
+10,879 → END (21,175, bit-exact), from one character.** t=11575's pose drift and t=11383's (9,9)
+identity mismatch were all downstream of the same cadence.
+
+⚠ PINNED AS A UNIT TEST, NOT A FIXTURE — the castle's @0x2C is DIAGNOSTIC-ONLY in
+`port_ent_lanes_mc2` and never reaches `obs_project_mc2`. That is exactly WHY the corruption
+stayed invisible for five ticks and surfaced as a missing guard; a pair at any head re-imports
+retail's own cooldown, which is why all ten heads classified INHERITED.
+`the_building_repaint_latches_0x2e_and_leaves_the_guard_cooldown_alone`.
+⭐ A class-3 that is NOT a castle has no @0x2E home in the port, so the write is DROPPED there
+rather than re-aimed — the old stamp was corrupting a wizard's DEATH-FALL VELOCITY.
+
+### 137-3 ✅ THE CLASS-3 SCAN WALKS THE TICK-TOP ROSTER, NOT THE LIVE POOL (`MGC_NO_MC2_CLASS3_SCAN_ROSTER`) — mc2l10 + mc2l32 CERTIFIED
+
+My brief said the StageVar2 machine / `m21_wrapper_tail` / the 60-vs-96 speed. Refuted: all
+correct. `60`/`96` are `m21_jump`'s own tail (`attack ? 96 : 60`), so **speed, action and sv2 are
+three faces of ONE decision, not three lanes** — which is why the signature had exactly three rows.
+
+All three retail sites — archer Scan A (`sub_1FAA0`, EF:11782), m24 acquire (`sub_28690`,
+EF:18754) and the stage-held kind-2 wizard watch (`sub_1DBF0`, EF:10300) — load `dword_38519`
+and chase `next_0`, and the per-node body asks **exactly two things**: the squared range and
+`!(byte[0] & 0x20)`. Verified in the shipped EXE in the main session, every byte and both call
+targets:
+
+```
+1dcc0  8b b6 77 96 00 00  mov esi,[esi+0x9677]      ; dword_38519 HEAD
+1dcf3  3b 45 f4           cmp eax,[ebp-0xc]         ; d2 vs v_28²
+1dcf8  f6 46 0c 20        test byte [esi+0xc],0x20  ; invisible?
+1dd49  8b 36              mov esi,[esi]             ; esi = esi->next_0
+1dd86  c6 43 49 0a        mov byte [ebx+0x49],0xa   ; StageVar2 = 10
+1dd8a  e8 b1 02 00 00     call → VA 0x1E040         ; the aggro raise
+```
+
+**NO life test, NO class test, NO reap test in the loop.** All three were settled when the case-3
+arm of the tick-top sweep built the chain (`if (jx->life_0x8 >= 0)`, EF:40224) — and that rebuild
+runs AFTER the `byte[1] & 4` reap pass (EF:40202), both confirmed in the main session.
+
+⭐⭐⭐ **SO A POOL WALK IS WRONG IN BOTH DIRECTIONS, AND THE TWO TAKES ARE THE TWO DIRECTIONS.**
+That is why the signature MIRRORED — the same two states with the sides swapped:
+* **DEATH — mc2l10 pair 12683→12684 slot 105.** Slot 45, a (3,3), enters the tick a member at
+  `life 0` and eats a 500 mailbox hit (`0 → -500`) before slot 105 dispatches. Retail engages the
+  corpse: `target96 0→45, sv2 2→10, action 175→170, b43 64→0, speed 60→96`. The port's
+  `act_life >= 0` rejected it. **THE TAKE'S ONLY DEFECT.**
+* **BIRTH — mc2l32 pair 4341→4342 slot 342.** The human's castle is born into slot 214 as a (3,2)
+  DURING that tick. Not in the tick-top roster, so retail finds nothing; the port's live walk
+  found the fresh castle and fired the whole engage.
+
+`mc2_wizard_scan` and `m9_cone_scan` already read `Gen::wiz_chain`; **`mc2_class3_scan` was the
+last class-3 walk still on the pool.**
+⚠ The `flags & 0x400` reap-pending test the pool walk carried was an INVENTED GUARD either way —
+retail's reap runs BEFORE the rebuild, so a record flagged mid-tick keeps its membership for the
+rest of the frame (the same note `Gen::mc2_roster` carries for the class-5 chains).
+
+Death arm: fixture `mc2l10/class3-scan-roster-keeps-a-member-that-died-this-tick`.
+⚠⚠ **THE BIRTH ARM IS NOT FIXABLE WORK AND ITS FIXTURE WAS CUT, MEASURED, AND DELETED.** At
+t=4341 it fails with the law ON too — `field:3,2:life field:3,2:max_life missing:10,79` —
+because `retail_import_mc2` cannot reconstruct a castle MID-BIRTH. The free run over that tick is
+bit-exact; only the pair lane is blind. Pinned instead by
+`the_class_3_scan_reads_the_roster_not_the_live_pool`, which asserts BOTH arms directly.
+
+### 137-4 ⭐⭐ THE `sub_60400` CENSUS-VS-REGISTER CAVEAT IS ANSWERED, AND THE ARM THAT CARRIED IT IS DEAD CODE
+
+`features.rs` carried, for rounds: *"MC2 keeps the live-census stand-in: its dispatcher twin
+(sub_60400 EF:61405) **has not been register-verified against the binary**, its corpora measure
+identical under both forms."* Settled by dig C and replaced with the verdict:
+`sub_5FF50` (EF:61647) reads `Entities_EA3E4[…->array_0x5C_92[v20]]` for `v20 = 0..quota`, spawns
+into `array_0x5C_92.at(v20)` on an empty rung (EF:61800) and clears the rung + re-latches
+`word_0x2C_44 = 16` on a stale one (EF:61813-14). **RETAIL INDEXES A REGISTER; IT NEVER SCANS THE
+POOL.** And the MC2 census arm in `features.rs` is UNREACHABLE — MC2 castles dispatch to
+`mc2_castle_tick` (world.rs, the `3 if Mc2 && model65 == 2` arm), never to `castle_tick`. Traced
+over mc2l10-secondtake: **4,615 register passes, ZERO census hits.** Only the comment was stale.
+
+### 137-5 THE TRAP THAT ALMOST SHIPPED TWO VACUOUS FIXTURES
+
+⚠⚠⚠ **THE FIXTURE ANCHOR IS `head − 1`, AND A FIXTURE CUT AT THE HEAD CAN PASS UNDER ITS OWN
+KILL SWITCH.** Both class-3 fixtures were first cut at the head tick (12684 / 4342) and **PASSED
+with `MGC_NO_MC2_CLASS3_SCAN_ROSTER=1`** — perfectly vacuous. `fixtures.rs` keys
+`for_each_pair` on `f.t` as the pair's EARLIER tick, so a head-anchored fixture grades the pair
+AFTER the one that carries the law. Re-anchored to 12683 / 4341 they regress on exactly
+`field:5,21:action field:5,21:speed field:5,21:sv2`. 137-1's was re-anchored 6062 → 6061 too —
+it had been non-vacuous only because the m24 speed error PERSISTS across ticks, so it was pinning
+the second tick of the run rather than its head. **Run every new fixture under its own switch
+before believing it**, and re-read [[fixture-debt-round115]].
+
+### THE SCOREBOARD
+
+| take | at session open | at close |
+|---|---|---|
+| mc2l11 | 1 seg / END (certified in 136) | unchanged |
+| **mc2l10** | 5 seg / horizon 12,683 | **CERTIFIED — 20,585, 0 excess resets** (3 registered deviations) |
+| **mc2l10-secondtake** | 11 seg / horizon 10,878 | **CERTIFIED — 21,175, bit-exact** |
+| **mc2l32** | 44 seg / horizon 4,341 | **CERTIFIED — 23,180, single segment, zero divergence** |
+| mc2l12 | 260 seg / horizon 999 | not worked this round |
+
+**All four of the takes the player named are certified.** Two laws were needed for mc2l32 (137-1
+took 42 of its 43 heads, 137-3 the last).
