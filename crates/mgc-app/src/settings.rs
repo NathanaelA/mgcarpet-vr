@@ -2037,9 +2037,10 @@ pub fn registry() -> Vec<Spec> {
             cli: Some("--dev-spells"),
             cfg_path: "gameplay.cheat.dev_spells",
             read: toggle!(c => gameplay.cheat.dev_spells),
-            desc: "All spells granted + infinite mana — the spell-track \
-                   playtest instrument. The original ships the equivalent \
-                   debug commands.",
+            desc: "Every spell selectable + infinite mana while on — the \
+                   spell-track playtest instrument. An overlay: jars stay \
+                   collectable, and switching it off takes back only what \
+                   the cheat lent (the original's own cheat grants for good).",
             ctl: Ctl::Toggle {
                 set: |c, v| c.gameplay.cheat.dev_spells = v,
                 descs: [

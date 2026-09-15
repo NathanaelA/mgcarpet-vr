@@ -63,6 +63,7 @@ fn mc1_thrust_model_keeps_accelerate_through_forward_hold() {
     let mut sim = Simulation::with_world(flat_world());
     sim.thrust_model = ThrustModel::Mc1;
     sim.world.as_mut().unwrap().set_dev_spells(true);
+    sim.world.as_mut().unwrap().grant_all_spells();
     sim.step(&FlightInput {
         equip_left: Some(SpellId(2)),
         ..Default::default()
@@ -133,6 +134,7 @@ fn enhanced_accelerate_does_not_survive_death_or_respawn() {
     let mut sim = Simulation::with_world(flat_world());
     sim.thrust_model = ThrustModel::Enhanced;
     sim.world.as_mut().unwrap().set_dev_spells(true);
+    sim.world.as_mut().unwrap().grant_all_spells();
     sim.step(&FlightInput {
         equip_left: Some(SpellId(2)),
         ..Default::default()

@@ -1029,7 +1029,20 @@ pub fn mc2_move(
         )
     });
     if out.wet {
-        ext.water_ctr += 1;
+        ext.water_ctr = ext.water_ctr.wrapping_add(1) & 0xFF;
+    }
+    // ⭐ EVERY REFUSED MOVE IN A CAVE BUMPS THE COUNTER, not only the
+    // deep-water head branch above. `moveTest_5D0A0`'s refusal block
+    // opens with `incb 0x262(%eax)` (NETHERW.EXE 0x81ccc), ahead of the
+    // position rollback — and it is cave-only because 0x81a1c returns
+    // before that block off-cave, which is why the lane only ever shows
+    // on the map_type-2 takes. Found from the other side: remc2 lacks
+    // the same instruction (`remc2-fix-watercounter-refused-move.patch`)
+    // and the port had the identical hole, invisible because
+    // `pose_lanes_mc2` does not grade `water_ctr`. The counter is a
+    // BYTE in retail, so both bumps wrap at 256.
+    if out.zero_speed {
+        ext.water_ctr = ext.water_ctr.wrapping_add(1) & 0xFF;
     }
     match out.pass {
         Some((p, dyaw)) => {
@@ -2073,6 +2086,42 @@ mod tests {
         // actSpeed still slews down over the following ticks (the
         // carpet decelerates, it doesn't freeze).
         assert_eq!(st.act_speed, 80);
+        // ⭐ AND THE REFUSAL BUMPS THE WATER COUNTER. `moveTest_5D0A0`'s
+        // refusal block opens with `incb 0x262(%eax)` (NETHERW.EXE
+        // 0x81ccc) ahead of the position rollback — every refused move
+        // in a cave, not only a wet one. The counter is ungraded (it
+        // gates the water-flight sound loop), so this law can only take
+        // a unit test; the positive evidence is remc2's own corpus,
+        // whose two cave takes grade bit-perfect once the same
+        // instruction is restored there.
+        assert_eq!(ext.water_ctr, 1, "a refused cave move bumps waterCounter");
+    }
+
+    #[test]
+    fn mc2_dry_pass_does_not_touch_the_water_counter() {
+        let mut st = Mc1State {
+            z: 256,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        let open = |_: (u16, u16, i16), c: (u16, u16, i16)| Mc2GateOut {
+            pass: Some((c, 0)),
+            wet: false,
+            zero_speed: false,
+        };
+        mc2_move(
+            &mut st,
+            &mut ext,
+            &Mc1Input::default(),
+            None,
+            None,
+            None,
+            &flat_ground,
+            &no_ceiling,
+            &open,
+            &never_stuck,
+        );
+        assert_eq!(ext.water_ctr, 0);
     }
 
     /// ⭐⭐ THE SPEED SPELL'S BRAKE-CANCEL IS `sub_5F380`'s BOUNDS TEST.

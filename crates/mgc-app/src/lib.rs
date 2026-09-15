@@ -4530,10 +4530,14 @@ impl App {
             )
         } else {
             let l = w.loadout();
+            let mut owned = l.owned;
+            if self.cfg.gameplay.cheat.dev_spells {
+                owned.fill(true); // the overlay: the bind mints on demand
+            }
             let cur = if hand == 0 { l.left } else { l.right };
             (
                 l.ring.to_vec(),
-                l.owned.to_vec(),
+                owned.to_vec(),
                 cur.map_or(-1, |s| s as i32),
                 vec![0u8; 24],
             )
@@ -6342,7 +6346,9 @@ impl App {
                         }
                     } else {
                         for s in 0..n {
-                            owned[s] = loadout.owned[s];
+                            // The G overlay offers every spell; the
+                            // sim mints on bind (`equip_hands`).
+                            owned[s] = loadout.owned[s] || self.cfg.gameplay.cheat.dev_spells;
                             castable[s] = loadout.bindable[s];
                             castable_tier[s] = [loadout.bindable[s]; 3];
                             cost[s] = mgc_sim::mc1::spells::SPELLS[s].possess_mana;
@@ -7355,10 +7361,11 @@ impl ApplicationHandler for App {
                             let spell = self.pane.as_ref().map(|p| p.order[slot]);
                             // Selectable = native-book ownership
                             // (MC2) / loadout ownership (MC1), or
-                            // everything under the G instrument in
-                            // MC2 (mirrors the pane view's grant).
+                            // everything under the G instrument
+                            // (mirrors the pane view's overlay; the
+                            // sim mints on select/bind).
                             let mc2 = self.is_mc2();
-                            let owned = (self.cfg.gameplay.cheat.dev_spells && mc2)
+                            let owned = self.cfg.gameplay.cheat.dev_spells
                                 || spell
                                     .map(|c| {
                                         let world = self

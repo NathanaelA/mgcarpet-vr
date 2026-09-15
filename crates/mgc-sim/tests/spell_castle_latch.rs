@@ -100,6 +100,7 @@ fn castle_latch_retail_arm_reproduces_the_recorded_maze_castle() {
     };
     let mut w = build_world(&root);
     w.set_dev_spells(true);
+    w.grant_all_spells();
     let wall_h = w.planes().height[234 * 256 + 16];
     assert_eq!(wall_h, 244, "the target wall stands before the cast");
 
@@ -128,6 +129,7 @@ fn castle_latch_retail_arm_fizzles_the_first_recorded_aim() {
     };
     let mut w = build_world(&root);
     w.set_dev_spells(true);
+    w.grant_all_spells();
     cast_and_run(&mut w, recorded_pose(590), 60);
     assert_eq!(castle_tile(&w), None, "the yaw-590 launch scan refuses");
 }
@@ -147,6 +149,7 @@ fn castle_latch_patched_arm_refuses_the_recorded_cast() {
         ..WorldPatches::RETAIL
     });
     w.set_dev_spells(true);
+    w.grant_all_spells();
     for heading in [530u16, 590] {
         cast_and_run(&mut w, recorded_pose(heading), 60);
         assert_eq!(
@@ -191,6 +194,7 @@ fn castle_latch_patched_arm_keeps_the_carpet_anchored_corridor_build() {
         ..WorldPatches::RETAIL
     });
     w.set_dev_spells(true);
+    w.grant_all_spells();
     cast_and_run(&mut w, park, 110);
     assert_eq!(
         castle_tile(&w),
@@ -200,6 +204,7 @@ fn castle_latch_patched_arm_keeps_the_carpet_anchored_corridor_build() {
 
     let mut w = build_world(&root);
     w.set_dev_spells(true);
+    w.grant_all_spells();
     cast_and_run(&mut w, park, 60);
     assert_eq!(
         castle_tile(&w),

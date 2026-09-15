@@ -73,6 +73,7 @@ fn create_castle_builds_on_clear_ground() {
     };
     let mut w = build_world(&root);
     w.set_dev_spells(true);
+    w.grant_all_spells();
 
     let (cx, cy) = clear_spot(&w);
     // Hover 16 tiles south of the target, facing north (heading 0 =
@@ -209,6 +210,7 @@ fn mc1_castle_spell_lock_tracks_the_build_not_a_fixed_timer() {
     };
     let mut w = build_world(&root);
     w.set_dev_spells(true);
+    w.grant_all_spells();
     let (cx, cy) = clear_spot(&w);
     let px = cx as f32 + 0.5;
     let pz = cy as f32 + 16.5;
@@ -270,6 +272,7 @@ fn final_destruction_flattens_the_tower_to_a_barren_square() {
     };
     let mut w = build_world(&root);
     w.set_dev_spells(true);
+    w.grant_all_spells();
 
     let (cx, cy) = clear_spot(&w);
     let px = cx as f32 + 0.5;

@@ -1106,6 +1106,13 @@ pub struct World {
     completed: bool,
     /// Dev/playtest "all spells + infinite mana" switch (G-class).
     pub(crate) dev_spells: bool,
+    /// The spells the dev cheat has MINTED ON DEMAND — a bit per spell
+    /// index (MC1 class-12 / MC2 class-15 tokens), the set
+    /// `set_dev_spells(false)` takes back. A real pickup of the same
+    /// spell releases the dev token and clears the bit, so the spell
+    /// survives the toggle as an earned one. Hash-quiet while zero;
+    /// saved since v21.
+    pub(crate) dev_minted: u32,
     /// A recorded RETAIL cheat has fired in this world
     /// (`engine::world::cheats`). Stands in for retail's tester flag
     /// `setting_byte2_23 < 0`, which enables the cheat menu AND
@@ -3172,6 +3179,7 @@ impl World {
             win_streak: 0,
             completed: false,
             dev_spells: false,
+            dev_minted: 0,
             cheat_mode: false,
             mc2_free_spells: false,
             strict_retail: false,
@@ -3321,17 +3329,15 @@ impl World {
     /// records, so there is no `flags & 1` for the painter to read on a
     /// free-running world. An IMPORTED retail state carries the real
     /// bit and the `strict_retail` arm above honours it directly.
+    ///
+    /// A spell held only by the dev cheat's on-demand mint does NOT
+    /// hide its jar: the jar stays collectable and collecting it
+    /// converts the dev token into an earned one (`set_dev_spells`).
     fn owned_spell_jar(&self, e: &Ent) -> bool {
+        let s = e.model65 as usize;
         match e.class64 {
-            12 => {
-                let s = e.model65 as usize;
-                s < SPELL_COUNT && self.player.owned[s] != 0
-            }
-            15 => self
-                .mc2_book
-                .ent
-                .get(e.model65 as usize)
-                .is_some_and(|&x| x != 0),
+            12 => s < SPELL_COUNT && self.player.owned[s] != 0 && !self.dev_minted(s),
+            15 => self.mc2_book.ent.get(s).is_some_and(|&x| x != 0) && !self.dev_minted(s),
             _ => false,
         }
     }
@@ -10822,26 +10828,134 @@ impl World {
         }
     }
 
-    /// Dev/playtest toggle (G-class enhancement; the original ships
-    /// equivalent debug commands — the :48836 cheat menu's "access
-    /// all spells" / "more mana"): grants every spell (spawning the
-    /// missing class-12 manifestations, auto-equipping L/R if empty)
-    /// and pins the mana pool full (no gate, no deduction, and
-    /// [`LoadoutView::mana`] reads as full while on). Turning it OFF
-    /// keeps the granted manifestations and any spells acquired
-    /// meanwhile (no un-granting — the slot economy stays honest; if
-    /// the pool cannot fit all 24, what fits is granted).
+    /// Dev/playtest toggle (G-class enhancement). The original ships
+    /// an "access all spells" cheat (:48836 / EF:37789) that GRANTS
+    /// the book for good — the recorded-cheat lane replays that
+    /// verbatim (`engine::world::cheats`). This instrument
+    /// DELIBERATELY DIVERGES (player ruling 2026-09-15): it is an
+    /// OVERLAY, the same on both games. While on, every spell reads
+    /// as owned in the pane, the mana pool is pinned full (no gate,
+    /// no deduction, [`LoadoutView::mana`] reads full) and a spell the
+    /// player actually binds ([`Self::equip_hands`]) or selects
+    /// (`mc2_select_spell`) is minted on demand and remembered in
+    /// [`Self::dev_minted`]. The floor jars stay visible and
+    /// collectable, and collecting one converts the dev token into a
+    /// real acquisition. Turning it OFF releases every still-dev-
+    /// minted token — the slot is freed, the acquisition-list / book
+    /// entry dropped, any hand on it unbound — so the world is back to
+    /// exactly what the player had earned. Tests that want the whole
+    /// book materialised call [`Self::grant_all_spells`] as well.
     pub fn set_dev_spells(&mut self, on: bool) {
         self.dev_spells = on;
-        if on {
-            for s in 0..SPELL_COUNT as u8 {
-                self.grant_spell(SpellId(s));
+        if !on {
+            self.dev_release_all();
+        }
+    }
+
+    /// Materialise EVERY spell as a real acquisition — the eager body
+    /// `set_dev_spells(true)` had before it became an overlay: mint
+    /// the missing class-12 manifestations, append them to the
+    /// acquisition list, then bind L/R canonically (if the pool
+    /// cannot fit all 24, what fits is granted). MC1 only; the MC2
+    /// book is granted through `mc2_grant_plausible` /
+    /// `mc2_grant_start_book`. A fixture helper, not the cheat.
+    pub fn grant_all_spells(&mut self) {
+        if matches!(self.game, GameId::Mc2) {
+            return;
+        }
+        for s in 0..SPELL_COUNT as u8 {
+            self.grant_spell(SpellId(s));
+        }
+        self.rebind_hands_canonical();
+    }
+
+    /// Is spell `s` held only by the dev cheat's on-demand mint?
+    pub(crate) fn dev_minted(&self, s: usize) -> bool {
+        s < 32 && self.dev_minted & (1 << s) != 0
+    }
+
+    /// MC1: mint spell `s` for the dev cheat if it is not owned yet
+    /// (the bind-time arm of [`Self::set_dev_spells`]).
+    fn dev_mint_mc1(&mut self, s: usize) {
+        if matches!(self.game, GameId::Mc2) || s >= SPELL_COUNT || self.player.owned[s] != 0 {
+            return;
+        }
+        if self.grant_spell(SpellId(s as u8)).is_some() {
+            self.dev_minted |= 1 << s;
+        }
+    }
+
+    /// Take back one dev-minted token, either column: free the pool
+    /// record outright (`no_spell_loss` protects EARNED tokens, never
+    /// these), drop it from the MC1 acquisition list / MC2 book and
+    /// clear the mark. Hands are the caller's business — a pickup
+    /// conversion keeps them (same spell, new token), the toggle-off
+    /// unbinds them.
+    fn dev_release(&mut self, s: usize) {
+        if !self.dev_minted(s) {
+            return;
+        }
+        self.dev_minted &= !(1 << s);
+        match self.game {
+            GameId::Mc2 => {
+                let m = self.mc2_book.ent.get(s).copied().unwrap_or(0) as usize;
+                if m == 0 {
+                    return;
+                }
+                self.mc2_book.ent[s] = 0;
+                self.g.mc2_spell_tokens.0 &= !(1 << s);
+                if self.g.ent.get(m).is_some_and(|e| e.class64 == 15) {
+                    self.g.free_entity(m);
+                    self.entities_dirty = true;
+                }
             }
-            // Retail's cheat leaves the hands alone, but this
-            // instrument is usually flipped on a spell-less world
-            // where they are empty; bind them the same way a level
-            // start would so the toggle is usable.
-            self.rebind_hands_canonical();
+            _ => {
+                if s >= SPELL_COUNT {
+                    return;
+                }
+                let m = self.player.owned[s] as usize;
+                self.player.owned[s] = 0;
+                if m == 0 {
+                    return;
+                }
+                for e in self.mc1_acq.iter_mut() {
+                    if *e == m as i32 {
+                        *e = 0;
+                    }
+                }
+                self.token_hand.remove(&(m as u16));
+                if self.g.ent.get(m).is_some_and(|e| e.class64 == 12) {
+                    self.g.free_entity(m);
+                    self.entities_dirty = true;
+                }
+            }
+        }
+    }
+
+    /// The toggle-off sweep: release every dev-minted spell and empty
+    /// any hand that was holding one.
+    fn dev_release_all(&mut self) {
+        for s in 0..32usize {
+            if !self.dev_minted(s) {
+                continue;
+            }
+            self.dev_release(s);
+            if matches!(self.game, GameId::Mc2) {
+                if self.mc2_book.left == s as i8 {
+                    self.mc2_set_hand(false, -1);
+                }
+                if self.mc2_book.right == s as i8 {
+                    self.mc2_set_hand(true, -1);
+                }
+            } else {
+                let id = Some(SpellId(s as u8));
+                if self.player.left == id {
+                    self.player.left = None;
+                }
+                if self.player.right == id {
+                    self.player.right = None;
+                }
+            }
         }
     }
 
@@ -11048,6 +11162,7 @@ impl World {
             win_streak,
             completed,
             dev_spells,
+            dev_minted,
             // Retail cheat replay — hashed only once armed (below), so
             // every ordinary world hashes exactly as it did before the
             // seam existed.
@@ -11088,6 +11203,13 @@ impl World {
             win_pct, win_streak, completed, dev_spells, prev_fire, invincible,
         )
             .hash(&mut h);
+        // The dev cheat's on-demand mints — TAG-ONLY while any exist,
+        // like the latches below, so every pinned golden (none of
+        // which binds an unowned spell under the cheat) is unmoved.
+        if *dev_minted != 0 {
+            h.write_u8(0xE4);
+            dev_minted.hash(&mut h);
+        }
         (game, placeholders).hash(&mut h);
         // The ending latches — hash-transparent until a level ending
         // actually runs (field tags per the aliasing discipline),
@@ -13718,7 +13840,10 @@ impl World {
             // at its NEXT poll, t=25501, after the carpet's rebuild).
             // The GRANT-refusal below is the other read: the live +532
             // acquisition list (:64818-31).
-            let owned_already = self.player.owned[spell] != 0;
+            // A dev-minted hold is not ownership for the jar's sake
+            // (`set_dev_spells`): no hide stamp, and the pickup below
+            // converts it.
+            let owned_already = self.player.owned[spell] != 0 && !self.dev_minted(spell);
             if self.player.state == LifeState::Alive
                 && owned_already
                 && self.g.ent[i].flags & 1 == 0
@@ -13951,8 +14076,17 @@ impl World {
     /// (:64845/:64897); our entity already holds them.
     fn try_pickup(&mut self, i: usize) {
         let spell = self.g.ent[i].model65 as usize;
-        if spell >= SPELL_COUNT || self.player.owned[spell] != 0 {
+        if spell >= SPELL_COUNT {
             return;
+        }
+        if self.player.owned[spell] != 0 {
+            if !self.dev_minted(spell) {
+                return;
+            }
+            // The dev cheat's conversion: the on-demand token goes,
+            // the jar becomes the earned one below (the hands keep
+            // the spell — same id, new token).
+            self.dev_release(spell);
         }
         // The full-list refusal (:64841 `v24 == -1`) is the SAME
         // function on this call path — `sub_55A40_55F70` is the whole
@@ -14398,6 +14532,14 @@ impl World {
     /// paused — binding is UI state, not simulation, and the frozen
     /// HUD must still reflect it.
     pub fn equip_hands(&mut self, left: Option<SpellId>, right: Option<SpellId>) {
+        // The dev cheat's bind-time mint (see `set_dev_spells`): the
+        // pane offered every spell, so an unowned one arriving here is
+        // minted on demand and marked for the toggle-off release.
+        if self.dev_spells {
+            for s in [left, right].into_iter().flatten() {
+                self.dev_mint_mc1(s.0 as usize);
+            }
+        }
         let mut took = false;
         if let Some(s) = left
             && (s.0 as usize) < SPELL_COUNT
@@ -17359,11 +17501,14 @@ impl World {
         // silently stomping a hand. Keying on the book is both the
         // retail semantic and the same predicate the prune arm below
         // already used.
+        // A dev-minted hold (`set_dev_spells`) is not ownership here:
+        // the jar stays collectable and the collect converts it.
         let owned = self
             .mc2_book
             .ent
             .get(model as usize)
-            .is_some_and(|&e| e != 0);
+            .is_some_and(|&e| e != 0)
+            && !self.dev_minted(model as usize);
         // ⚠ THE OWNED-JAR CULL USED TO SIT HERE TOO, with the same
         // layer error — RELOCATED TO THE PAINTER 2026-08-24f. See
         // the MC1 jar tick above and [`World::owned_spell_jar`]: retail
@@ -17424,6 +17569,9 @@ impl World {
             // (state 3M) — the Phase-4.2 slot economy; the old
             // bank-and-despawn interim is closed.
             self.g.snd_player(18);
+            // The dev cheat's conversion (no-op unless dev-minted):
+            // the on-demand token goes, this jar becomes the earned one.
+            self.dev_release(model as usize);
             self.g.mc2_spell_tokens.0 |= 1 << model;
             self.entities_dirty = true;
             if t == model.wrapping_mul(3).wrapping_add(2) {
@@ -20924,6 +21072,7 @@ impl World {
             win_streak,
             completed,
             dev_spells,
+            dev_minted,
             // The retail cheat flags live in retail's CONFIG block
             // (`x_D41A0_BYTEARRAY_4_struct` +24/+23), NOT in the struct
             // its own in-level save writes — so leaving them out of the
@@ -21036,6 +21185,8 @@ impl World {
         // v19 joiners — see the SNAPSHOT_VERSION history.
         w.put(wiz_charge);
         w.put(mc1_acq);
+        // v21 joiner — see the SNAPSHOT_VERSION history.
+        w.put(dev_minted);
     }
 
     /// Overwrite this world's state from the stream, keeping the
@@ -21097,6 +21248,7 @@ impl World {
         self.mc2_recast_surcharge = r.get()?;
         self.wiz_charge = r.get()?;
         self.mc1_acq = r.get()?;
+        self.dev_minted = r.get()?;
         // THE BOUND-CASTLE REGISTER IS RE-DERIVED, NOT STORED. The
         // wire format does not carry `Gen::castle_reg` (see the field
         // doc on `World::Snapshot`), and a bump would invalidate every
@@ -26440,6 +26592,7 @@ mod tests {
     /// tick 0, no death mid-fight); mortality has its own tests.
     fn rapid_fire(w: &mut World) {
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.set_invincible(true);
         w.player.left = Some(crate::mc1::spells::SpellId(23));
     }
@@ -26694,6 +26847,7 @@ mod tests {
     fn spawn_grace_absorbs_then_real_damage_knocks_and_kills() {
         let mut w = bare_creature_world(2);
         w.set_dev_spells(true); // all spells owned → a real jar scatter
+        w.grant_all_spells();
         // Park the creature far away; it stays alive as the damage
         // SOURCE entity (the knockback bearing needs its position).
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
@@ -26823,6 +26977,7 @@ mod tests {
     fn death_with_a_castle_respawns_there_with_fresh_grace() {
         let mut w = bare_creature_world(2);
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let c =
             w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128)
@@ -26875,6 +27030,7 @@ mod tests {
     fn the_death_landing_ends_accelerate_heal_and_beyond_sight() {
         let mut w = bare_creature_world(2);
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let c =
             w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128)
@@ -26960,6 +27116,7 @@ mod tests {
     fn respawn_on_an_exhausted_pool_never_eats_the_inventory() {
         let mut w = bare_creature_world(2);
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let c =
             w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128)
@@ -27787,6 +27944,7 @@ mod tests {
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
         w.set_dev_spells(true); // grants the book, incl. spell 16
+        w.grant_all_spells();
         let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
         w.g.ent[c].id24 = PLAYER_TARGET;
         w.g.ent[c].f144 = PLAYER_TARGET;
@@ -31201,6 +31359,193 @@ mod tests {
         assert!(jars > 0, "level 0 places jars");
     }
 
+    /// The dev cheat is an OVERLAY (player ruling 2026-09-15, see
+    /// [`World::set_dev_spells`]): switching it on mints nothing and
+    /// hides no jar; binding an unowned spell mints its token on demand
+    /// and STILL leaves the jar drawn; switching it off takes back
+    /// exactly the on-demand mints — slot freed, acquisition entry
+    /// gone, hand emptied — and leaves the earned book alone.
+    #[test]
+    fn dev_spells_overlay_mints_on_bind_and_takes_it_back_mc1() {
+        use crate::mc1::spells::SpellId;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 12,
+            model: 7,
+            x: 200,
+            y: 200,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        w.grant_spell(SpellId(3)); // an EARNED spell
+        let drawn = |w: &World| w.live_things().iter().filter(|t| t.class == 12).count();
+        let tokens = |w: &World| {
+            w.g.ent
+                .iter()
+                .filter(|e| e.class64 == 12 && e.tick70 >= MANIFEST_BASE)
+                .count()
+        };
+        let free0 = w.debug_pool().0;
+        assert_eq!(tokens(&w), 1);
+        w.set_dev_spells(true);
+        assert_eq!(tokens(&w), 1, "the toggle mints nothing");
+        assert_eq!(w.debug_pool().0, free0);
+        assert_eq!(drawn(&w), 1, "the jar is still drawn");
+        assert!(!w.loadout().owned[7]);
+        // Bind spell 7 (the jar's) and spell 9 (no jar) under the cheat.
+        w.equip_hands(Some(SpellId(7)), Some(SpellId(9)));
+        let lv = w.loadout();
+        assert!(lv.owned[7] && lv.owned[9], "minted on bind");
+        assert_eq!((lv.left, lv.right), (Some(7), Some(9)));
+        assert_eq!(tokens(&w), 3);
+        assert!(w.dev_minted(7) && w.dev_minted(9) && !w.dev_minted(3));
+        assert_eq!(drawn(&w), 1, "a dev-minted hold does not hide the jar");
+        let away = PlayerPose::level(10 << 8, 10 << 8, 3260, 0);
+        for _ in 0..4 {
+            w.tick(away, PlayerCommand::default());
+        }
+        assert!(w.loadout().owned[7], "the per-tick rebuild keeps the mint (it is listed)");
+        assert_eq!(drawn(&w), 1);
+        w.set_dev_spells(false);
+        let lv = w.loadout();
+        assert!(lv.owned[3], "the earned spell stays");
+        assert!(!lv.owned[7] && !lv.owned[9], "the dev mints are gone");
+        assert_eq!((lv.left, lv.right), (None, None), "their hands are emptied");
+        assert_eq!(tokens(&w), 1, "their records are freed");
+        assert_eq!(w.debug_pool().0, free0, "and back on the free list");
+        assert_eq!(w.dev_minted, 0);
+        for _ in 0..4 {
+            w.tick(away, PlayerCommand::default());
+        }
+        assert!(!w.loadout().owned[7], "the acquisition list no longer names them");
+        assert!(w.loadout().owned[3]);
+        assert_eq!(drawn(&w), 1, "the jar is still there to collect");
+    }
+
+    /// Collecting the jar of a spell the cheat had minted CONVERTS it:
+    /// the dev token goes, the jar becomes the earned manifestation
+    /// (retail's own pickup law), the hand keeps the spell, and the
+    /// toggle-off leaves it alone.
+    #[test]
+    fn dev_spells_jar_pickup_converts_the_dev_mint_mc1() {
+        use crate::mc1::spells::SpellId;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 12,
+            model: 7,
+            x: 112,
+            y: 116,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        let free0 = w.debug_pool().0;
+        w.set_dev_spells(true);
+        w.equip_hands(Some(SpellId(7)), None);
+        let dev_tok = w.player.owned[7] as usize;
+        assert_ne!(dev_tok, 0);
+        assert!(w.dev_minted(7));
+        assert_eq!(w.debug_pool().0, free0 - 1);
+        assert_eq!(
+            w.live_things().iter().filter(|t| t.class == 12).count(),
+            1,
+            "the jar is drawn under the cheat"
+        );
+        let on_jar = PlayerPose::level((112 << 8) + 128, (116 << 8) + 128, 3260, 0);
+        for _ in 0..4 {
+            w.tick(on_jar, PlayerCommand::default());
+        }
+        assert!(!w.dev_minted(7), "converted to an earned acquisition");
+        let tok = w.player.owned[7] as usize;
+        assert_ne!(tok, 0);
+        assert_ne!(tok, dev_tok, "the jar's own record is the token now");
+        assert_eq!(w.g.ent[tok].class64, 12);
+        assert_eq!(w.debug_pool().0, free0, "the dev token's slot was freed");
+        assert_eq!(w.loadout().left, Some(7));
+        assert!(w.mc1_acq.iter().all(|&e| e != dev_tok as i32));
+        w.set_dev_spells(false);
+        assert!(w.loadout().owned[7], "an earned spell survives the toggle");
+        assert_eq!(w.loadout().left, Some(7));
+    }
+
+    /// The MC2 arm of the overlay: the toggle mints nothing, a select
+    /// under it mints on demand, and the toggle-off frees that token,
+    /// clears the book slot and the hand, and leaves the seeded book
+    /// alone.
+    #[test]
+    fn dev_spells_overlay_mints_on_select_and_takes_it_back_mc2() {
+        let mut w = mc2_flat_world();
+        let mut bytes = vec![0u8; 26 * 80];
+        for sp in 0..26 {
+            let b = 80 * sp + 2;
+            bytes[b..b + 4].copy_from_slice(&250i32.to_le_bytes());
+            bytes[b + 4..b + 8].copy_from_slice(&10i32.to_le_bytes());
+            bytes[b + 22] = 5;
+        }
+        bytes[0] = 3;
+        w.g.assets.spells = crate::mc2::spells::parse(&bytes).unwrap();
+        let seeded = w.mc2_book.ent;
+        assert_ne!(seeded[0], 0, "the {{0,1}} seed");
+        let hands = (w.mc2_book.left, w.mc2_book.right);
+        let free0 = w.debug_pool().0;
+        w.set_dev_spells(true);
+        assert_eq!(w.mc2_book.ent, seeded, "the toggle mints nothing");
+        assert_eq!(w.debug_pool().0, free0);
+        w.mc2_select_spell(5, 0, 0); // HEAL onto the LEFT hand
+        let tok = w.mc2_book.ent[5] as usize;
+        assert_ne!(tok, 0, "minted on select");
+        assert!(w.dev_minted(5));
+        assert_eq!(w.mc2_book.left, 5);
+        assert_eq!(w.player.left.map(|s| s.0), Some(5), "the mirror follows");
+        w.set_dev_spells(false);
+        assert_eq!(w.mc2_book.ent[5], 0, "the book slot is cleared");
+        assert!(!w.dev_minted(5));
+        assert_eq!(w.g.ent[tok].class64, 0, "the token is freed");
+        assert_eq!(w.debug_pool().0, free0);
+        assert_eq!(w.mc2_book.left, -1, "the hand is emptied");
+        assert_eq!(w.player.left, None);
+        assert_eq!(w.mc2_book.right, hands.1, "the other hand is untouched");
+        assert_eq!(w.mc2_book.ent[0], seeded[0], "the seeded book is untouched");
+        assert_eq!(w.mc2_book.ent[1], seeded[1]);
+    }
+
+    /// v21: the dev cheat's on-demand mint set rides the snapshot, so a
+    /// resume cannot turn lent spells into earned ones.
+    #[test]
+    fn v21_dev_minted_survives_a_snapshot_round_trip() {
+        let mut a = crate::Simulation::with_world(flat_world());
+        a.world.as_mut().unwrap().dev_minted = 0b1010;
+        let bytes = a.snapshot();
+        let mut b = crate::Simulation::with_world(flat_world());
+        b.restore(&bytes).expect("identical world, same build");
+        assert_eq!(b.world.as_ref().unwrap().dev_minted, 0b1010);
+    }
+
     /// A placed jar whose spell the player already owns is NOT DRAWN —
     /// retail hides it, so the port hides it too, unconditionally
     /// ([`World::owned_spell_jar`]). This was `..._when_enabled`, an
@@ -31287,6 +31632,7 @@ mod tests {
         // Toggle semantics under test, not the economy — the real
         // pool (base 1000) can't fund back-to-back 1000-cost arms.
         w.set_dev_spells(true);
+        w.grant_all_spells();
         let equip = PlayerCommand {
             equip_left: Some(SpellId(2)),
             equip_right: Some(SpellId(21)),
@@ -31510,6 +31856,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(15));
         // Hold = continuous stream (manual), paced by count 2: the
         // one-tick beams resolve immediately into player shots.
@@ -31529,6 +31876,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(6));
         // Fire north from the firing line: the lob impacts a few
         // tiles ahead, then the walker digs onward tile by tile.
@@ -31554,6 +31902,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(7));
         // Aim steeply down so the bolt grounds fast.
         let mut p = firing_line();
@@ -31578,6 +31927,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(8));
         let p = firing_line();
         w.tick(
@@ -31748,6 +32098,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(3));
         let p = firing_line();
         // A loose ball ~6 tiles dead ahead (heading 0 = -y) on the
@@ -32043,6 +32394,7 @@ mod tests {
             ..crate::patches::WorldPatches::RETAIL
         });
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let c =
             w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128)
@@ -32324,6 +32676,7 @@ mod tests {
         }];
         let mut w = World::new(planes, &things, 3, assets());
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(3));
         for _ in 0..40 {
             w.tick(away(), PlayerCommand::default());
@@ -32353,6 +32706,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(18));
         let p = firing_line();
         w.tick(
@@ -32382,6 +32736,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(20));
         let p = firing_line();
         w.tick(
@@ -32418,6 +32773,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(20));
         let p = firing_line();
         w.tick(
@@ -32464,6 +32820,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(18));
         let p = firing_line();
         w.tick(
@@ -32513,6 +32870,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(15));
         let p = firing_line();
         let fire = PlayerCommand {
@@ -32779,6 +33137,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(22));
         let p = firing_line();
         w.tick(
@@ -32869,6 +33228,7 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.player.left = Some(SpellId(17));
         let p = firing_line();
         w.tick(
@@ -32902,10 +33262,14 @@ mod tests {
         assert_eq!(seen, 8, "all eight are still in the pool");
     }
 
+    /// The fixture pairing: `grant_all_spells` materialises the book
+    /// as EARNED spells and the cheat pins the mana — so the toggle-off
+    /// (which only takes back on-demand mints) leaves all 24 in place.
     #[test]
-    fn dev_spells_grants_everything_and_pins_mana() {
+    fn grant_all_spells_with_dev_spells_pins_mana() {
         let mut w = flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         assert!(w.dev_spells());
         let lv = w.loadout();
         assert!(lv.owned.iter().all(|&o| o), "all 24 owned");
@@ -32922,8 +33286,9 @@ mod tests {
         w.tick(firing_line(), PlayerCommand::default()); // token fires
         assert_eq!(count(&w, 9, 0), 1, "no mana gate under dev spells");
         assert_eq!(w.loadout().mana, w.loadout().mana_max);
-        // Off keeps the granted spells (no un-granting).
+        // Off keeps the EARNED book — nothing here was lent by the cheat.
         w.set_dev_spells(false);
+        assert_eq!(w.dev_minted, 0);
         assert!(w.loadout().owned.iter().all(|&o| o));
     }
 
@@ -41185,6 +41550,7 @@ mod tests {
         // — unbind it, or the steal exercises the both-hands edge
         // where the left-hand hint wins).
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.mc2_select_spell(0, 0, 1);
         w.mc2_select_spell(26, 0, 0);
         let jar = w.mc2_book.ent[0] as usize;
@@ -41258,6 +41624,7 @@ mod tests {
     fn mc2_cycle_ring_store_loss_and_carry() {
         let mut w = mc2_flat_world();
         w.set_dev_spells(true);
+        w.grant_all_spells();
         // Order matters: the dev grant inside select(2) runs the
         // PICKUP hand law (left steals when both hands are taken —
         // the seeded book starts left=0/right=1), so bind spell 2
@@ -48802,6 +49169,7 @@ mod tests {
         let run = |patched: bool| -> (Vec<(u8, u16)>, u16, u16) {
             let mut w = flat_world();
             w.set_dev_spells(true);
+            w.grant_all_spells();
             w.patches.dual_wield_muzzle = patched;
             w.tick(
                 pose,
@@ -49253,6 +49621,7 @@ mod tests {
         // 0 XP → earned level 0. Without the dev arm a tier-2 select
         // clamps to 0 (the bug); with it, the top tier wires through.
         w.set_dev_spells(true);
+        w.grant_all_spells();
         w.mc2_select_spell(0, 2, 0);
         let m = w.mc2_book.ent[0] as usize;
         assert_eq!(
@@ -49431,9 +49800,16 @@ mod tests {
         bytes[0] = 3;
         w.g.assets.spells = crate::mc2::spells::parse(&bytes).unwrap();
         // The trigger: the dev toggle (G) — must NOT materialize MC1
-        // manifestations or bind the MC1 hands on the MC2 column.
+        // manifestations or bind the MC1 hands on the MC2 column. The
+        // MC1 hand register is the MC2 book's MIRROR here
+        // (`mc2_set_hand`), so it must still read the book's own
+        // level-start bind, not an MC1 grant — and not None either
+        // (the old eager toggle ran the MC1 canonical rebind on the
+        // MC2 column and wiped the mirror).
+        let before = w.player.left;
+        assert_eq!(before.map(|s| s.0 as i8), Some(w.mc2_book.left));
         w.set_dev_spells(true);
-        assert_eq!(w.player.left, None, "no MC1 hand bind on MC2");
+        assert_eq!(w.player.left, before, "the dev toggle leaves the MC2 hand mirror alone");
         assert!(
             !w.g.ent
                 .iter()

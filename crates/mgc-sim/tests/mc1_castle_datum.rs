@@ -127,6 +127,7 @@ fn castle_datum_reaverages_to_the_grown_corner_mean_each_transform() {
     sculpt_peak(&mut planes, cx, cy);
     let mut w = World::new(planes, &things, seed, assets);
     w.set_dev_spells(true);
+    w.grant_all_spells();
 
     let px = cx as f32 + 0.5;
     let pz = cy as f32 + 16.5;

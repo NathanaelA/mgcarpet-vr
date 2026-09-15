@@ -68,6 +68,7 @@ fn armed_world() -> (World, PlayerPose) {
     };
     let mut w = World::new(planes, &[], 1, synthetic_assets());
     w.set_dev_spells(true);
+    w.grant_all_spells();
     let pose = PlayerPose::from_tiles(16.0, 40.0, 16.0, 0.0, 0.0, 0.0);
     (w, pose)
 }

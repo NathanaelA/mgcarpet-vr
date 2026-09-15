@@ -1695,6 +1695,10 @@ impl World {
         // all-spells toggle self-grants the manifestation.
         if self.mc2_book.ent[s] == 0 && self.dev_spells {
             self.mc2_dev_grant(s);
+            // Marked for the toggle-off release (`set_dev_spells`).
+            if self.mc2_book.ent[s] != 0 {
+                self.dev_minted |= 1 << s;
+            }
         }
         if self.mc2_book.ent[s] == 0 {
             return;

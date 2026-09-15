@@ -6330,6 +6330,18 @@ pub fn pose_all_mc1(
 /// what EXPOSED the +610 u16-vs-int8 decode bug — the fixed byte read
 /// makes it a candidate lane once its ++/−− law is verified against a
 /// wet stretch.)
+///
+/// ⭐ ITS LAW IS NOW VERIFIED, FROM THE OTHER SIDE. The remc2 replay
+/// corpus (2026-09-15) found the same hole in remc2 — retail bumps the
+/// counter on EVERY refused move in a cave, `incb 0x262(%eax)` at
+/// NETHERW.EXE 0x81ccc, not only on the deep-water head branch at
+/// 0x818e3 — and with that instruction restored its two cave takes
+/// (`mc2l7`, `mc2l30`) grade BIT-PERFECT end to end, which is a
+/// positive test of the ++/−− law over 43,000 cave ticks. The port had
+/// the identical hole; `flight.rs` now carries the refusal bump.
+/// Promoting the lane still needs `Mc2Ext` plumbed into this function
+/// (the counter lives there, not in `Mc1State`), which is why it is
+/// still absent — that plumbing is the only thing left owed here.
 pub fn pose_lanes_mc2(
     s: &Mc1State,
     e: &RetailEntMc2,

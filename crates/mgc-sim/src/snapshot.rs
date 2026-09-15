@@ -124,7 +124,11 @@ const MAGIC: u32 = 0x5343_474D;
 ///     one rival human-driven FOR THE REST OF THE LEVEL — so a
 ///     reloaded save that dropped it would freeze a husk retail keeps
 ///     turning. Joins the Rival stream after `rebound`.
-pub const SNAPSHOT_VERSION: u32 = 20;
+/// 21: `World::dev_minted` — the dev cheat's on-demand spell mints
+///     (the set `set_dev_spells(false)` releases). A resume that
+///     dropped it would leave those tokens as earned spells forever.
+///     Joins the World stream after `mc1_acq`.
+pub const SNAPSHOT_VERSION: u32 = 21;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]

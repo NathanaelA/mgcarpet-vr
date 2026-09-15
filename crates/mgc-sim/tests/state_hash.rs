@@ -123,6 +123,7 @@ fn run(root: &std::path::Path) -> (Vec<u64>, Vec<u64>) {
     // D: combat over the ambush — dev spells, fireballs both hands
     // (projectiles, mailboxes, deaths, corpse mana balls).
     w.set_dev_spells(true);
+    w.grant_all_spells();
     let equip = PlayerCommand {
         equip_left: Some(SpellId(0)),
         equip_right: Some(SpellId(23)),
