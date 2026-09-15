@@ -121,6 +121,26 @@ pub struct WorldPatches {
     /// games' retail shows some of it (the outline for countdown bytes
     /// 7..76). Patched: only castles (3,2) are re-painted.
     pub mc2_phantom_castle: bool,
+    /// **DUAL WIELD — EVERY CAST LEAVES THE HAND IT WAS CAST WITH**
+    /// (player-requested 2026-09-15, an unfaithful patch, DEFAULT ON,
+    /// both games). Retail keeps ONE firing-hand register per wizard
+    /// (flags +16 & 0x300: `byte[1] &= 0xFC; dword |= 0x100/0x200`,
+    /// MC1 :55894-95 / MC2 `sub_5F7B0` EF:60973-82 — a clear-then-OR,
+    /// last successful cast wins) and the muzzle placer reads it off
+    /// the CASTER at EMIT time (`sub_55EF0` :64978- / `sub_68E50`
+    /// EF:55595), not at arm. Two hands casting at once therefore
+    /// share one muzzle: with both buttons held the right hand's
+    /// stamp lands last, and everything — the left hand's stream
+    /// included — leaves the right muzzle; a burst can even flip
+    /// mid-way when the other hand casts. Patched: every arm also
+    /// records its hand on the TOKEN it armed (`World::token_hand`,
+    /// a port-only side table keyed by token slot) and the token's
+    /// fires read that instead of the shared register. The register
+    /// itself is still stamped exactly as retail (the conformance
+    /// column and the retail arm read it unchanged). Casting the
+    /// SAME spell from both hands is a different mechanism (one
+    /// token per spell id, not per hand) and is NOT changed here.
+    pub dual_wield_muzzle: bool,
 }
 
 impl WorldPatches {
@@ -137,6 +157,7 @@ impl WorldPatches {
         no_spell_loss: false,
         mc1_fix_dragon_tail: false,
         mc2_phantom_castle: false,
+        dual_wield_muzzle: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -158,5 +179,6 @@ impl WorldPatches {
         no_spell_loss: false,
         mc1_fix_dragon_tail: false,
         mc2_phantom_castle: false,
+        dual_wield_muzzle: false,
     };
 }

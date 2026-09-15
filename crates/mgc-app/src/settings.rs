@@ -1998,6 +1998,35 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "dual_wield_muzzle",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.dual_wield_muzzle",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.dual_wield_muzzle.on(),
+                faithful: false,
+            },
+            desc: "Dual wield: every spell fires from the hand it was cast with \
+                   (both games). Retail keeps one firing-hand register per \
+                   wizard, stamped by the last successful cast and read when \
+                   the projectile is born, so with both hands casting \
+                   everything leaves the RIGHT muzzle and a stream can switch \
+                   sides mid-burst. (Casting the same spell with both hands is \
+                   a separate mechanism and is not changed.)",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.dual_wield_muzzle = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Both hands share one muzzle; the last cast picks it, as retail.",
+                    "Each hand's casts keep their own muzzle (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2219,8 +2248,8 @@ mod tests {
         // detonation column is unconditional too (DEVIATIONS.md).
         // ball_owner_recolor added 2026-09-06 (presentation-only),
         // no_spell_loss + mc1_fix_dragon_tail 2026-09-07,
-        // mc2_phantom_castle 2026-09-10.
-        assert_eq!(patches, 12, "all twelve patches ship on");
+        // mc2_phantom_castle 2026-09-10, dual_wield_muzzle 2026-09-15.
+        assert_eq!(patches, 13, "all thirteen patches ship on");
     }
 
     #[test]

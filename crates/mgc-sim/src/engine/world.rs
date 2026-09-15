@@ -822,6 +822,16 @@ pub struct World {
     /// (mc2l3: 479 of 583 unexplained pairs, all (9,1) births).
     /// Retail's storage is the caster's, and the caster is recorded.
     pub(crate) hand_bits: u32,
+    /// PATCH `dual_wield_muzzle` (docs/DEVIATIONS.md): the hand each
+    /// armed manifestation token was cast with, keyed by the TOKEN's
+    /// pool slot. A port-only side table — retail has no per-token
+    /// hand, only the per-wizard `hand_bits` register above. Written
+    /// at every arm in both games (both arms, so a live option flip
+    /// mid-burst reads a fresh value); read at emit ONLY under the
+    /// patched arm (`mc1_fire_hand` / `mc2_fire_side`). Follows
+    /// `hand_bits`' own policy: HASH-EXCLUDED and save-transient (a
+    /// reload inside a live burst falls back to the register).
+    pub(crate) token_hand: std::collections::HashMap<u16, bool>,
     /// The carpet pose MC1 token fires measure their muzzle from —
     /// retail reads the wizard entity's own +30/+72.. at the TOKEN's
     /// walk position, i.e. the pose settled by the PREVIOUS frame's
@@ -3138,6 +3148,7 @@ impl World {
             mc2_carpet_slot: 0,
             mc1_carpet_slot: 0,
             hand_bits: 0,
+            token_hand: std::collections::HashMap::new(),
             mc1_cast_pose: PlayerPose::default(),
             mc1_acq: [0; SPELL_COUNT],
             mc2_doom_meter: 0,
@@ -4935,6 +4946,7 @@ impl World {
             let def = &self.spells()[id];
             self.g.ent[m].f26 = def.count as i16; // :55893 reload
             self.hand_bits = if right { 0x200 } else { 0x100 }; // :55894-95
+            self.token_hand.insert(m as u16, right); // `dual_wield_muzzle`
             self.break_cloak(id); // :55896
             return;
         }
@@ -10984,6 +10996,7 @@ impl World {
             // burst reloads with a center muzzle).
             mc1_carpet_slot: _,
             hand_bits: _,
+            token_hand: _,
             mc1_cast_pose: _,
             mc1_acq: _,
             table,
@@ -11621,6 +11634,32 @@ impl World {
         } else {
             None
         }
+    }
+
+    /// PATCH `dual_wield_muzzle`: the hand token `m` was armed with,
+    /// when the patched arm is on and the token was armed through a
+    /// port cast site; `None` otherwise (retail arm, strict column,
+    /// or an imported token nothing here armed) — the caller falls
+    /// back to the shared `hand_bits` register, retail's law.
+    fn armed_hand(&self, m: usize) -> Option<bool> {
+        if !self.patches.dual_wield_muzzle || self.strict_retail {
+            return None;
+        }
+        self.token_hand.get(&(m as u16)).copied()
+    }
+
+    /// The MC1 token fire's muzzle hand: retail reads the wizard's
+    /// register at emit (`sub_55EF0` :64978-, `right` = bit 0x200);
+    /// the `dual_wield_muzzle` patch reads the token's own.
+    fn mc1_fire_hand(&self, m: usize) -> bool {
+        self.armed_hand(m).unwrap_or(self.hand_bits & 0x200 != 0)
+    }
+
+    /// The MC2 spawn's muzzle side for token `m`: [`Self::mc2_hand_side`]
+    /// (retail, the caster's register with its no-step third case) or,
+    /// under `dual_wield_muzzle`, the hand the token was armed with.
+    pub(crate) fn mc2_fire_side(&self, m: usize) -> Option<bool> {
+        self.armed_hand(m).or_else(|| self.mc2_hand_side())
     }
 
     /// The fireball cast (spells 0/23, sub_58240/sub_56090 :65029/
@@ -14012,7 +14051,7 @@ impl World {
                 } else if full {
                     self.mana_debit(self.spell_cast_cost(16));
                     let p = self.mc1_cast_pose;
-                    let right = self.hand_bits & 0x200 != 0;
+                    let right = self.mc1_fire_hand(i);
                     self.emit_spell(16, i, p, right, ctx);
                     self.g.ent[i].f26 = SPELLS[16].count as i16 - 1; // :65885
                 }
@@ -14138,7 +14177,7 @@ impl World {
                     self.mana_debit(self.spell_cast_cost(spell));
                     if launcher {
                         let p = self.mc1_cast_pose;
-                        let right = self.hand_bits & 0x200 != 0;
+                        let right = self.mc1_fire_hand(i);
                         self.emit_spell(spell, i, p, right, ctx);
                     }
                     fired = true;
@@ -20907,6 +20946,7 @@ impl World {
             // overwritten every MC2 tick before their readers run.
             mc1_carpet_slot: _,
             hand_bits: _,
+            token_hand: _,
             mc1_cast_pose: _,
             // Saved since v19 (wire position: after `wiz_charge`).
             // NOT a transient: retail's wizext+532 acquisition list
@@ -48677,6 +48717,140 @@ mod tests {
         // Bit 0 wins the `if`/`else if` even with both raised.
         w.hand_bits |= 0x200;
         assert_eq!(w.mc2_hand_side(), Some(false));
+    }
+
+    /// PATCH `dual_wield_muzzle` (MC2 arm). Retail's per-wizard hand
+    /// register is a clear-then-OR stamped by every arm and read at
+    /// SPAWN, so with both buttons pressed the right hand's stamp
+    /// lands last and BOTH tokens' spawns leave the right muzzle.
+    /// Patched: each token spawns at the hand that armed it. The
+    /// register itself is stamped identically under both arms.
+    #[test]
+    fn mc2_dual_wield_muzzle_keeps_each_hand_on_its_own_side() {
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 3712, 0);
+        let run = |patched: bool| -> (Vec<(u8, u16)>, u16, u16) {
+            let mut w = mc2_flat_world();
+            w.patches.dual_wield_muzzle = patched;
+            // Fireball (0) in the LEFT hand, possession (1) in the RIGHT.
+            w.mc2_grant_plausible(&[(0, 0)]);
+            w.mc2_set_hand(false, 0);
+            w.mc2_set_hand(true, 1);
+            let (fire, poss) = (w.mc2_book.ent[0] as usize, w.mc2_book.ent[1] as usize);
+            assert!(fire != 0 && poss != 0, "both tokens seeded");
+            for &m in &[fire, poss] {
+                w.g.ent[m].f28 = 11;
+                w.g.ent[m].max_life = 10;
+                w.g.ent[m].f26 = 0;
+            }
+            w.player.mana = 100_000;
+            for _ in 0..4 {
+                w.tick(pose, PlayerCommand::default());
+            }
+            w.tick(
+                pose,
+                PlayerCommand {
+                    fire_left: true,
+                    fire_right: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                w.hand_bits & 0x300,
+                0x200,
+                "the caster's register holds the RIGHT hand (last stamp) under both arms"
+            );
+            for _ in 0..3 {
+                w.tick(pose, PlayerCommand::default());
+            }
+            let born: Vec<(u8, u16)> = (1..w.g.ent.len())
+                .filter(|&j| w.g.ent[j].class64 == 9 && w.g.ent[j].flags & 0x400 == 0)
+                .map(|j| (w.g.ent[j].model65, w.g.ent[j].x))
+                .collect();
+            let left = w.muzzle_side(pose, Some(false)).0;
+            let right = w.muzzle_side(pose, Some(true)).0;
+            assert_ne!(left, right, "heading 0: the lateral step is along x");
+            (born, left, right)
+        };
+        let (retail, left, right) = run(false);
+        assert!(retail.len() >= 2, "both tokens fired: {retail:?}");
+        assert!(
+            retail.iter().all(|&(_, x)| x == right),
+            "retail: everything leaves the RIGHT muzzle, {retail:?} vs right {right}"
+        );
+        let (patched, _, _) = run(true);
+        assert!(patched.len() >= 2, "both tokens fired: {patched:?}");
+        assert!(
+            patched.iter().any(|&(_, x)| x == left) && patched.iter().any(|&(_, x)| x == right),
+            "patched: one spawn per hand, {patched:?} vs left {left} / right {right}"
+        );
+        assert!(
+            patched.iter().all(|&(_, x)| x == left || x == right),
+            "…and nothing anywhere else: {patched:?}"
+        );
+    }
+
+    /// PATCH `dual_wield_muzzle` (MC1 arm) — the same law on the MC1
+    /// column: the command site's `:55894-95` stamp is last-writer-
+    /// wins on the wizard, and the token fire's `sub_55EF0` muzzle
+    /// reads it at emit, so Fireball in the left hand and Repeat
+    /// Fireballs in the right both leave the right muzzle. Patched:
+    /// each token keeps the hand that armed it.
+    #[test]
+    fn mc1_dual_wield_muzzle_keeps_each_hand_on_its_own_side() {
+        use crate::mc1::spells::SpellId;
+        let pose = away();
+        let run = |patched: bool| -> (Vec<(u8, u16)>, u16, u16) {
+            let mut w = flat_world();
+            w.set_dev_spells(true);
+            w.patches.dual_wield_muzzle = patched;
+            w.tick(
+                pose,
+                PlayerCommand {
+                    equip_left: Some(SpellId(0)),
+                    equip_right: Some(SpellId(23)),
+                    ..Default::default()
+                },
+            );
+            // Both buttons the same tick: left is stamped first, right
+            // last (`sub_46B00` runs the two hands unconditionally in
+            // that order).
+            w.tick(
+                pose,
+                PlayerCommand {
+                    fire_left: true,
+                    fire_right: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(w.hand_bits & 0x300, 0x200, "the register holds the RIGHT hand");
+            for _ in 0..3 {
+                w.tick(pose, PlayerCommand::default());
+            }
+            let born: Vec<(u8, u16)> = (1..w.g.ent.len())
+                .filter(|&j| w.g.ent[j].class64 == 9 && w.g.ent[j].flags & 0x400 == 0)
+                .map(|j| (w.g.ent[j].model65, w.g.ent[j].x))
+                .collect();
+            let left = w.muzzle(pose, false).0;
+            let right = w.muzzle(pose, true).0;
+            assert_ne!(left, right, "heading 0: the lateral step is along x");
+            (born, left, right)
+        };
+        let (retail, left, right) = run(false);
+        assert!(retail.len() >= 2, "both tokens fired: {retail:?}");
+        assert!(
+            retail.iter().all(|&(_, x)| x == right),
+            "retail: everything leaves the RIGHT muzzle, {retail:?} vs right {right}"
+        );
+        let (patched, _, _) = run(true);
+        assert!(patched.len() >= 2, "both tokens fired: {patched:?}");
+        assert!(
+            patched.iter().any(|&(_, x)| x == left) && patched.iter().any(|&(_, x)| x == right),
+            "patched: one spawn per hand, {patched:?} vs left {left} / right {right}"
+        );
+        assert!(
+            patched.iter().all(|&(_, x)| x == left || x == right),
+            "…and nothing anywhere else: {patched:?}"
+        );
     }
 
     /// FOOL'S-MANA OPEN-5: the retaliation bolt leaves from the TOP of

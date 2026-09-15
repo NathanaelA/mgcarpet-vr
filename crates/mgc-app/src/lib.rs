@@ -9349,6 +9349,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         no_spell_loss: p.no_spell_loss.on(),
         mc1_fix_dragon_tail: p.mc1_fix_dragon_tail.on(),
         mc2_phantom_castle: p.mc2_phantom_castle.on(),
+        dual_wield_muzzle: p.dual_wield_muzzle.on(),
     }
 }
 

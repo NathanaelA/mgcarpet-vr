@@ -2267,7 +2267,7 @@ impl World {
             // spend it on a re-fire.
             1 if armed > 0 => {
                 self.g.ent[m].f56 = 1;
-                self.mc2_stamp_hand(right);
+                self.mc2_stamp_hand(m, right);
                 self.mc2_arm_invis_break(spell);
                 return;
             }
@@ -2314,7 +2314,7 @@ impl World {
         // EF:60973-82) — the launch reads it back exactly as
         // `sub_68E50` does.
         self.g.ent[m].f26 = self.g.ent[m].f28.max(1) as i16;
-        self.mc2_stamp_hand(right);
+        self.mc2_stamp_hand(m, right);
         // A release signal left over from the marker's last tick
         // must not refire into the fresh arm.
         self.g.ent[m].f56 = 0;
@@ -2327,8 +2327,11 @@ impl World {
     /// (EF:60855) — the SAME storage and the SAME constants as MC1's
     /// `:55894-95`, so the shared `hand_bits` register holds it and
     /// the conformance import can seed it off the recorded carpet.
-    fn mc2_stamp_hand(&mut self, right: bool) {
+    /// The `dual_wield_muzzle` patch additionally remembers the hand
+    /// on the TOKEN (`World::token_hand`, port-only, both arms write).
+    fn mc2_stamp_hand(&mut self, m: usize, right: bool) {
         self.hand_bits = (self.hand_bits & !0x300) | if right { 0x200 } else { 0x100 };
+        self.token_hand.insert(m as u16, right);
     }
 
     /// The Invisibility per-tier break-on-self-cast law (`sub_5F7E0`
@@ -3963,7 +3966,7 @@ impl World {
         // 10633->10634: retail births six (10,57) at z
         // 389/401/398/394/390/386 off a caster z of 257; the port held
         // 489/501/498/494/490/486 — the only six rows in the pair.
-        let (mx, my, _) = self.muzzle_side(p, self.mc2_hand_side());
+        let (mx, my, _) = self.muzzle_side(p, self.mc2_fire_side(m));
         let payload = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
         let tier = sub.life.max(0) as u8;
         let base = (4 * p.speed as i32).clamp(140, 280);
@@ -4043,7 +4046,7 @@ impl World {
     /// = the caster's position stepped 10240 along the launch bearing,
     /// the bearing itself, and `PrepareEventSound(…, -1, 9)`.
     fn mc2_cast_duel(&mut self, m: usize, sub: Mc2SubSpell, p: PlayerPose) {
-        let (mx, my, mz) = self.muzzle_side(p, self.mc2_hand_side());
+        let (mx, my, mz) = self.muzzle_side(p, self.mc2_fire_side(m));
         let Some(i) = self.g.mc2_spawn_cast_proj(7, mx, my, mz) else {
             return; // pool full: no dart, NO cast sound
         };
@@ -4151,8 +4154,9 @@ impl World {
         // muzzle LIFT below is untouched), revert if that point sits
         // inside terrain, then copy it onto the projectile. The side
         // is the CASTER's own flag bits, which is why `hand_bits`
-        // rather than a token register carries it.
-        let (mx, my, mz) = self.muzzle_side(p, self.mc2_hand_side());
+        // rather than a token register carries it (the
+        // `dual_wield_muzzle` patch overrides it per token).
+        let (mx, my, mz) = self.muzzle_side(p, self.mc2_fire_side(m));
         // ⭐ THE ARMY AND ALLIANCE ARMS NEITHER LIFT NOR RE-PRICE.
         // Diffed statement by statement against their five siblings,
         // `sub_6C170` (EF:57659-81) and `sub_6CD20` (EF:58062-86) are

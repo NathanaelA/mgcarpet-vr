@@ -995,6 +995,16 @@ pub struct GameplayPatches {
     /// level, whenever a hut completes under it. `patched` (default):
     /// only castles are re-painted.
     pub mc2_phantom_castle: PatchArm,
+    /// Dual wield: every spell fires from the hand it was cast with
+    /// (both games). Retail keeps a single firing-hand register per
+    /// wizard, stamped by the last successful cast and read when the
+    /// projectile is born, so with both hands casting everything —
+    /// the left hand's stream included — leaves the RIGHT muzzle, and
+    /// a burst can switch sides when the other hand casts.
+    /// `patched` (default): each hand's casts keep their own muzzle.
+    /// (Casting the same spell with both hands is a separate
+    /// mechanism and is not changed.)
+    pub dual_wield_muzzle: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -1012,6 +1022,7 @@ impl Default for GameplayPatches {
             no_spell_loss: PatchArm::Patched,
             mc1_fix_dragon_tail: PatchArm::Patched,
             mc2_phantom_castle: PatchArm::Patched,
+            dual_wield_muzzle: PatchArm::Patched,
         }
     }
 }
@@ -1033,6 +1044,7 @@ impl GameplayPatches {
             no_spell_loss: PatchArm::Retail,
             mc1_fix_dragon_tail: PatchArm::Retail,
             mc2_phantom_castle: PatchArm::Retail,
+            dual_wield_muzzle: PatchArm::Retail,
         }
     }
 
@@ -1071,6 +1083,7 @@ impl GameplayPatches {
             no_spell_loss: PatchArm::Retail,
             mc1_fix_dragon_tail: PatchArm::Retail,
             mc2_phantom_castle: PatchArm::Retail,
+            dual_wield_muzzle: PatchArm::Retail,
             ..Self::default()
         }
     }
