@@ -1088,6 +1088,9 @@ fn a_duel_re_press_collapses_the_window_without_pinning_regen() {
     // the affordability gate is not what this pins. Then play the
     // WINDOW for real: `dev_spells` short-circuits `suppress_regen`,
     // which is exactly the half under test.
+    // Earned, not lent: the dev cheat is an OVERLAY and its
+    // toggle-off below takes back every spell it minted.
+    w.mc2_grant_start_book(&[14]);
     w.set_dev_spells(true);
     w.mc2_select_spell(14, 0, 0);
     w.tick(p, fire);

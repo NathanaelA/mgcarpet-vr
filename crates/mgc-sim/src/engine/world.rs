@@ -1110,8 +1110,11 @@ pub struct World {
     /// index (MC1 class-12 / MC2 class-15 tokens), the set
     /// `set_dev_spells(false)` takes back. A real pickup of the same
     /// spell releases the dev token and clears the bit, so the spell
-    /// survives the toggle as an earned one. Hash-quiet while zero;
-    /// saved since v21.
+    /// survives the toggle as an earned one. HASH-SILENT: it is a
+    /// pure function of the recorded toggle/select stream and the
+    /// tokens it marks are pooled (and hashed) like any other, so
+    /// hashing it would only move goldens pinned under the cheat.
+    /// Saved since v21.
     pub(crate) dev_minted: u32,
     /// A recorded RETAIL cheat has fired in this world
     /// (`engine::world::cheats`). Stands in for retail's tester flag
@@ -1181,6 +1184,18 @@ pub struct World {
     /// dev family): the pre-mortality behavior — damage totaled for
     /// display, never applied.
     invincible: bool,
+    /// Ghost mode (config `ghost`, G-class cheat neither original has):
+    /// the human is permanently, universally invisible — no target
+    /// scan, seeker, rival or reveal sees them and casting does not
+    /// break it — and the carpet flies over impassable walls as if
+    /// they were terrain. NOT invincibility: damage that still lands
+    /// still hurts. Hash-tagged only while on.
+    pub(crate) ghost: bool,
+    /// Inert mode (config `inert`, G-class cheat neither
+    /// original has): the carpet trips no world trigger — no pickup,
+    /// teleporter, switch, objective trigger or castle door. Hash-
+    /// tagged only while on.
+    pub(crate) inert: bool,
     /// The top-of-screen notification line (retail's per-player
     /// `CurrentNotificationText_0x01c_2BFA` + its ~200-tick life): the
     /// shared, game-generic message surface — spell selection, spell
@@ -3194,6 +3209,8 @@ impl World {
             pending_respawn: None,
             pending_restart: false,
             invincible: false,
+            ghost: false,
+            inert: false,
             rivals: Vec::new(),
             mc2_rivals: Vec::new(),
             wiz_charge: [0; 8],
@@ -6837,7 +6854,11 @@ impl World {
         // the mob-side gates (invisible :65689-90 = +16 0x20, rebound
         // :65774 = the ported deflection bit +17 0x80). One-tick-old
         // view: the flags refresh in the manifestation ticks below.
-        self.g.player_invisible = self.player.invisible;
+        // Ghost mode rides the same mirror (every scan that honours
+        // the cloak honours it) and its own flag for the scans retail
+        // lets see THROUGH a cloak (turrets, `sub_2A6F0`).
+        self.g.player_invisible = self.player.invisible || self.ghost;
+        self.g.player_ghost = crate::engine::features::HashSilent(self.ghost);
         self.g.player_rebound = self.player.rebound;
 
         // Hand equips (the original's commands 0x15/0x16, :48717-31).
@@ -11162,7 +11183,7 @@ impl World {
             win_streak,
             completed,
             dev_spells,
-            dev_minted,
+            dev_minted: _, // hash-silent — see the field doc
             // Retail cheat replay — hashed only once armed (below), so
             // every ordinary world hashes exactly as it did before the
             // seam existed.
@@ -11183,6 +11204,8 @@ impl World {
             pending_respawn: _,
             pending_restart: _,
             invincible,
+            ghost,
+            inert,
             notification: _,
             won,
             mc2_endseq,
@@ -11203,12 +11226,13 @@ impl World {
             win_pct, win_streak, completed, dev_spells, prev_fire, invincible,
         )
             .hash(&mut h);
-        // The dev cheat's on-demand mints — TAG-ONLY while any exist,
-        // like the latches below, so every pinned golden (none of
-        // which binds an unowned spell under the cheat) is unmoved.
-        if *dev_minted != 0 {
-            h.write_u8(0xE4);
-            dev_minted.hash(&mut h);
+        // The ghost / inert cheats — TAG-ONLY while on, like the
+        // latches below, so every pinned golden is unmoved.
+        if *ghost {
+            h.write_u8(0xE5);
+        }
+        if *inert {
+            h.write_u8(0xE6);
         }
         (game, placeholders).hash(&mut h);
         // The ending latches — hash-transparent until a level ending
@@ -14045,7 +14069,7 @@ impl World {
         // Pickup needs a live carpet — the original's dead wizard is
         // out of play (flag 0x20), so the fresh scatter can't be
         // re-vacuumed while lying on it.
-        if self.player.state == LifeState::Alive && self.g.player_overlap(i, ctx) {
+        if self.player.state == LifeState::Alive && !self.inert && self.g.player_overlap(i, ctx) {
             // Retail arms every AI wizard's 200-tick learn timer on
             // the HIT itself (:64806-15), whether or not the grant
             // follows — the strict-retail poll above does exactly
@@ -15147,6 +15171,26 @@ impl World {
     /// Dev/accessibility invincibility (the pre-mortality behavior).
     pub fn set_invincible(&mut self, on: bool) {
         self.invincible = on;
+    }
+
+    /// Ghost mode — see the field doc. Every gated site reads the
+    /// flag live, so it is safe to flip mid-level.
+    pub fn set_ghost(&mut self, on: bool) {
+        self.ghost = on;
+    }
+
+    pub fn ghost(&self) -> bool {
+        self.ghost
+    }
+
+    /// Inert mode — see the field doc. Read live at every
+    /// trigger site.
+    pub fn set_inert(&mut self, on: bool) {
+        self.inert = on;
+    }
+
+    pub fn inert(&self) -> bool {
+        self.inert
     }
 
     /// Test/debug hook: the player's RAW mana pool. [`Self::loadout`]
@@ -17392,7 +17436,7 @@ impl World {
                 // scroll minted at 9215 collects for retail —
                 // `xp_vol[0] 562 -> 566` and the record reap-flags
                 // with life still 300 — and the port flew past it.
-                if self.g.player_overlap(i, ctx) {
+                if !self.inert && self.g.player_overlap(i, ctx) {
                     self.g.snd(63, i);
                     self.g.mc2_scrolls.0 += 1;
                     self.g.ent[i].flags |= 0x400;
@@ -17515,7 +17559,7 @@ impl World {
         // HIDES an owned-spell token (byte[0] bit 0) and keeps the
         // record, because the pickup is per-player and multiplayer
         // needs it to survive for the other wizards.
-        if self.player.state != LifeState::Alive || owned {
+        if self.player.state != LifeState::Alive || owned || self.inert {
             return;
         }
         let (px, py, pz) = self.human_pose;
@@ -18662,7 +18706,7 @@ impl World {
         if self.g.ent[i].f63 & 7 != 0 {
             return false;
         }
-        if self.mc2_switch_overlap(i, pose) == want {
+        if !self.inert && self.mc2_switch_overlap(i, pose) == want {
             if self.g.ent[i].model65 > 3 {
                 self.g.snd_player(41);
             }
@@ -18782,7 +18826,7 @@ impl World {
     /// `MGC_NO_MC2_SWITCH_REARM_PLAYER_TABLE=1` restores the
     /// human-only rearm probe.
     fn mc2_switch_rearm_probe(&self, i: usize, pose: (u16, u16, i16)) -> bool {
-        if self.mc2_switch_overlap(i, pose) {
+        if !self.inert && self.mc2_switch_overlap(i, pose) {
             return true;
         }
         if mc2_switch_rearm_player_table_off() {
@@ -18851,7 +18895,11 @@ impl World {
         // decrements. Ungated, the port fired disposition 9 TWICE in
         // one tick and minted eight (10,17)s, the second four seizing
         // 143/145/146/147 — 143 being a live 700-life (5,15).
+        // Inert mode: the human is off the wizard roster for every
+        // trigger's purposes — the probe misses regardless of `want`,
+        // exactly as it does for a dead carpet.
         if self.human_wiz_top
+            && !self.inert
             && !self.g.wiz_roster_head_blanked()
             && self.overlap(i, player) == want
         {
@@ -18970,7 +19018,7 @@ impl World {
     /// `MGC_NO_MC1_SWITCH_REARM_PLAYER_TABLE=1` restores the
     /// human-only rearm probe.
     fn rearm_probe(&self, i: usize, player: PlayerPose) -> bool {
-        if self.overlap(i, player) {
+        if !self.inert && self.overlap(i, player) {
             return true;
         }
         if mc1_switch_rearm_player_table_off() {
@@ -19040,7 +19088,7 @@ impl World {
         let stamp_z = crate::mc1::behavior::BEHAVIOR[self.g.ent[i].row156 as usize]
             .v_12
             .wrapping_add(self.g.ground_z(dx, dy) as i16);
-        if self.overlap(i, player) {
+        if !self.inert && self.overlap(i, player) {
             let e = &self.g.ent[i];
             // The facing cone (:29208-09): sub_42150(wizard, portal)
             // — the bearing FROM the wizard TO the portal on the full
@@ -19132,7 +19180,7 @@ impl World {
                 return;
             }
         }
-        if self.overlap(i, player) {
+        if !self.inert && self.overlap(i, player) {
             let e = &self.g.ent[i];
             // The same wizard→portal bearing as the MC1 vortex (the
             // EF twin cites the identical cone; the old tile-byte
@@ -19489,6 +19537,10 @@ impl World {
         from: (f32, f32, f32),
         to: (f32, f32, f32),
     ) -> Option<(f32, f32, f32)> {
+        // Ghost mode: walls are terrain (see `player_wall_gate_fixed`).
+        if self.ghost {
+            return Some(to);
+        }
         let fixed = |x: f32, z: f32, alt: f32| {
             (
                 (x.rem_euclid(256.0) * 256.0) as u16,
@@ -19759,7 +19811,7 @@ impl World {
         prop: (u16, u16, i16),
     ) -> crate::flight::Mc2GateOut {
         let clr = self.mc2_carpet_row().clearance as i32;
-        self.g.mc2_flight_gate(100, clr, cur, prop)
+        self.g.mc2_flight_gate(100, clr, cur, prop, self.ghost)
     }
 
     /// ⭐⭐⭐ THE HURL-AWAY BEAM IS A POSITION WRITE AT THE PYRAMID'S
@@ -19864,7 +19916,7 @@ impl World {
     /// `sub_5DD50`'s wedged test for the MC2 nudge (EF:59854-81).
     pub fn player_mc2_stuck(&self, pos: (u16, u16, i16), latched: bool) -> bool {
         let clr = self.mc2_carpet_row().clearance as i32;
-        self.g.mc2_flight_stuck(100, clr, pos, latched)
+        self.g.mc2_flight_stuck(100, clr, pos, latched, self.ghost)
     }
 
     /// The MC2 carpet tuning row by map type (`AddPlayer_4A920`
@@ -19960,6 +20012,12 @@ impl World {
         cur: (u16, u16, i16),
         prop: (u16, u16, i16),
     ) -> (bool, (u16, u16, i16)) {
+        // Ghost mode: walls are terrain — no refusal, no slide (the
+        // mover's z-floor still lifts the carpet over them), exactly
+        // MC1's rival mover (`sub_14EB0` runs no gate).
+        if self.ghost {
+            return (true, prop);
+        }
         // The CommitGateVerb seam (see `player_wall_gate`).
         match self.g.verbs.commit_gate {
             CommitGateVerb::Mc1 | CommitGateVerb::Mc2 => self.g.player_wall_slide(cur, prop),
@@ -21117,6 +21175,8 @@ impl World {
             pending_respawn,
             pending_restart,
             invincible,
+            ghost,
+            inert,
             notification,
             won,
             mc2_endseq,
@@ -21187,6 +21247,9 @@ impl World {
         w.put(mc1_acq);
         // v21 joiner — see the SNAPSHOT_VERSION history.
         w.put(dev_minted);
+        // v22 joiners.
+        w.put(ghost);
+        w.put(inert);
     }
 
     /// Overwrite this world's state from the stream, keeping the
@@ -21249,6 +21312,8 @@ impl World {
         self.wiz_charge = r.get()?;
         self.mc1_acq = r.get()?;
         self.dev_minted = r.get()?;
+        self.ghost = r.get()?;
+        self.inert = r.get()?;
         // THE BOUND-CASTLE REGISTER IS RE-DERIVED, NOT STORED. The
         // wire format does not carry `Gen::castle_reg` (see the field
         // doc on `World::Snapshot`), and a bump would invalidate every
@@ -31544,6 +31609,199 @@ mod tests {
         let mut b = crate::Simulation::with_world(flat_world());
         b.restore(&bytes).expect("identical world, same build");
         assert_eq!(b.world.as_ref().unwrap().dev_minted, 0b1010);
+    }
+
+    fn flat_planes(tile_type: u8) -> Planes {
+        Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![tile_type; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        }
+    }
+
+    /// GHOST MODE (player-set 2026-09-15, [`World::set_ghost`]): the
+    /// cloak mirror every scan reads is true on every tick while the
+    /// cheat is on, a cast does not break it (the spell latch is not
+    /// involved at all), and switching it off uncloaks again.
+    #[test]
+    fn ghost_mode_cloaks_the_human_through_a_cast_mc1() {
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.grant_all_spells();
+        w.tick(firing_line(), PlayerCommand::default());
+        assert!(!w.g.player_invisible, "uncloaked without the cheat");
+        w.set_ghost(true);
+        w.tick(firing_line(), PlayerCommand::default());
+        assert!(w.g.player_invisible, "the mirror reads cloaked");
+        assert!(!w.player.invisible, "…with the spell latch untouched");
+        // A cast runs `break_cloak` — the cheat does not care.
+        w.tick(
+            firing_line(),
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+        w.tick(firing_line(), PlayerCommand::default());
+        assert_eq!(count(&w, 9, 0), 1, "fixture: the cast went out");
+        assert!(w.g.player_invisible, "a cast does not break ghost mode");
+        assert!(w.g.player_ghost.0, "the see-through scans' own gate");
+        w.set_ghost(false);
+        w.tick(firing_line(), PlayerCommand::default());
+        assert!(!w.g.player_invisible && !w.g.player_ghost.0, "off: uncloaked again");
+    }
+
+    /// GHOST MODE flies over MC1's type-8 walls as if they were
+    /// terrain — on the very inside corner that refuses an ordinary
+    /// carpet, both gates commit the proposal unchanged.
+    #[test]
+    fn ghost_mode_flies_over_mc1_walls() {
+        let mut planes = flat_planes(5);
+        for y in 0..=255 {
+            planes.tile_type[tile(120, y)] = 8;
+        }
+        for x in 0..=255 {
+            planes.tile_type[tile(x, 101)] = 8;
+        }
+        let mut w = World::new(planes, &[], 1, assets());
+        let cur = (119 * 256 + 205, 100 * 256 + 205, 3200);
+        let prop = (120 * 256 + 51, 101 * 256 + 51, 3200);
+        let from = (119.95, 99.5, 12.5);
+        let to = (120.85, 99.9, 12.5);
+        assert!(!w.player_wall_gate_fixed(cur, prop).0, "fixture: the corner refuses");
+        assert!(
+            w.player_wall_gate(from, to).is_some_and(|p| p.0 < 120.0),
+            "fixture: the float gate slides along the wall"
+        );
+        w.set_ghost(true);
+        assert_eq!(w.player_wall_gate_fixed(cur, prop), (true, prop));
+        assert_eq!(w.player_wall_gate(from, to), Some(to));
+    }
+
+    /// GHOST MODE on the MC2 column: the deep-water barrier of
+    /// `moveTest_5D0A0` is terrain — the move commits, nothing reads
+    /// wet, and the wedged test no longer fires.
+    #[test]
+    fn ghost_mode_flies_over_mc2_deep_water() {
+        let mut w = World::new_for_game(flat_planes(8), &[], 1, assets(), GameId::Mc2);
+        let cur = (100 * 256, 100 * 256, 3300);
+        let prop = (100 * 256 + 100, 100 * 256 + 100, 3300);
+        let out = w.player_mc2_gate(cur, prop);
+        assert!(out.wet && out.pass.is_none(), "fixture: an all-water world refuses");
+        assert!(w.player_mc2_stuck(cur, false), "…and reads wedged");
+        w.set_ghost(true);
+        let out = w.player_mc2_gate(cur, prop);
+        assert!(!out.wet, "no water counter bump");
+        assert_eq!(out.pass, Some((prop, 0)), "the move commits unchanged");
+        assert!(!w.player_mc2_stuck(cur, false));
+    }
+
+    /// INERT MODE (player-set 2026-09-15, [`World::set_inert`]): the
+    /// carpet parked on a jar collects nothing; the same overlap
+    /// collects the moment the cheat is off.
+    #[test]
+    fn inert_mode_trips_no_jar_pickup_mc1() {
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 12,
+            model: 7,
+            x: 112,
+            y: 116,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(flat_planes(5), &things, 1, assets());
+        w.set_inert(true);
+        let on_jar = PlayerPose::level((112 << 8) + 128, (116 << 8) + 128, 3260, 0);
+        for _ in 0..8 {
+            w.tick(on_jar, PlayerCommand::default());
+        }
+        assert!(!w.loadout().owned[7], "inert: the jar is not collected");
+        w.set_inert(false);
+        for _ in 0..4 {
+            w.tick(on_jar, PlayerCommand::default());
+        }
+        assert!(w.loadout().owned[7], "off: the same overlap collects it");
+    }
+
+    /// INERT MODE on the MC2 column: the spell token under the carpet
+    /// stays on the ground.
+    #[test]
+    fn inert_mode_trips_no_token_pickup_mc2() {
+        let things = vec![Thing {
+            slot: 1,
+            kind: ThingKind::Entity,
+            class: 15,
+            model: 4,
+            x: 100,
+            y: 100,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 2,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new_for_game(flat_planes(5), &things, 1, assets(), GameId::Mc2);
+        w.set_inert(true);
+        let tz = w.g.ground_z(w.g.ent[1].x, w.g.ent[1].y) as i16;
+        let pose = PlayerPose::level((100 << 8) | 128, (100 << 8) | 128, tz, 0);
+        for _ in 0..8 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(w.g.mc2_spell_tokens.0 & (1 << 4), 0, "inert: not collected");
+        assert_eq!(w.mc2_book.ent[4], 0);
+        w.set_inert(false);
+        for _ in 0..8 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_ne!(w.g.mc2_spell_tokens.0 & (1 << 4), 0, "off: collected");
+    }
+
+    /// INERT MODE and the MC1 trigger volume: the proximity probe
+    /// never matches (no beacon chime, no disposition, no crater),
+    /// and fires as soon as the cheat is off.
+    #[test]
+    fn inert_mode_trips_no_trigger_volume_mc1() {
+        let mut w = flat_world();
+        w.set_inert(true);
+        let center = tile(110, 110);
+        let mut heard = false;
+        for _ in 0..32 {
+            w.tick(at_trigger(), PlayerCommand::default());
+            heard |= w.g.sounds.iter().any(|s| s.id == 41);
+        }
+        assert!(!heard, "inert: the probe never matches");
+        assert_eq!(w.planes().height[center], 100, "…so the crater never digs");
+        w.set_inert(false);
+        for _ in 0..16 {
+            w.tick(at_trigger(), PlayerCommand::default());
+            heard |= w.g.sounds.iter().any(|s| s.id == 41);
+        }
+        assert!(heard, "off: the same pose trips it");
+    }
+
+    /// v22: both cheats ride the snapshot like `invincible`.
+    #[test]
+    fn v22_ghost_and_inert_survive_a_snapshot_round_trip() {
+        let mut a = crate::Simulation::with_world(flat_world());
+        {
+            let w = a.world.as_mut().unwrap();
+            w.set_ghost(true);
+            w.set_inert(true);
+        }
+        let bytes = a.snapshot();
+        let mut b = crate::Simulation::with_world(flat_world());
+        b.restore(&bytes).expect("identical world, same build");
+        let w = b.world.as_ref().unwrap();
+        assert!(w.ghost() && w.inert());
     }
 
     /// A placed jar whose spell the player already owns is NOT DRAWN —

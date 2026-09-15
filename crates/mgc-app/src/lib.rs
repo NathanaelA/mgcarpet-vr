@@ -2831,11 +2831,11 @@ impl App {
                     },
                 );
             }
-            "dev.lift_unclamped" => {
+            "gameplay.cheat.weightless" => {
                 if let Some(sess) = self.session.as_deref_mut() {
-                    sess.sim.lift_unclamped = self.cfg.dev.lift_unclamped;
+                    sess.sim.weightless = self.cfg.gameplay.cheat.weightless;
                 }
-                self.queue_rec_toggle("lift_unclamped", self.cfg.dev.lift_unclamped.into());
+                self.queue_rec_toggle("weightless", self.cfg.gameplay.cheat.weightless.into());
             }
             "gameplay.cheat.dev_spells" => {
                 if let Some(w) = self
@@ -2856,6 +2856,26 @@ impl App {
                     w.set_invincible(self.cfg.gameplay.cheat.invincible);
                 }
                 self.queue_rec_toggle("invincible", self.cfg.gameplay.cheat.invincible.into());
+            }
+            "gameplay.cheat.ghost" => {
+                if let Some(w) = self
+                    .session
+                    .as_deref_mut()
+                    .and_then(|s| s.sim.world.as_mut())
+                {
+                    w.set_ghost(self.cfg.gameplay.cheat.ghost);
+                }
+                self.queue_rec_toggle("ghost", self.cfg.gameplay.cheat.ghost.into());
+            }
+            "gameplay.cheat.inert" => {
+                if let Some(w) = self
+                    .session
+                    .as_deref_mut()
+                    .and_then(|s| s.sim.world.as_mut())
+                {
+                    w.set_inert(self.cfg.gameplay.cheat.inert);
+                }
+                self.queue_rec_toggle("inert", self.cfg.gameplay.cheat.inert.into());
             }
             // Live selector-surface switch: the pane/book resolve is
             // cheap to redo mid-run. Quickselect
@@ -3173,6 +3193,55 @@ impl App {
                     format!("Invincibility {}", onoff(v)),
                 )
             }
+            // J = ghost mode, I = inert mode (cheats; K, the
+            // natural neighbour, is the coords overlay).
+            KeyCode::KeyJ => {
+                self.cfg.gameplay.cheat.ghost = !self.cfg.gameplay.cheat.ghost;
+                let v = self.cfg.gameplay.cheat.ghost;
+                println!(
+                    "ghost: {}",
+                    if v {
+                        "on (cheat — unseen by everything, walls are terrain)"
+                    } else {
+                        "off (seen, walled in)"
+                    }
+                );
+                ("gameplay.cheat.ghost", format!("Ghost mode {}", onoff(v)))
+            }
+            KeyCode::KeyI => {
+                self.cfg.gameplay.cheat.inert = !self.cfg.gameplay.cheat.inert;
+                let v = self.cfg.gameplay.cheat.inert;
+                println!(
+                    "inert: {}",
+                    if v {
+                        "on (cheat — no trigger fires under you)"
+                    } else {
+                        "off (triggers fire)"
+                    }
+                );
+                (
+                    "gameplay.cheat.inert",
+                    format!("Inert mode {}", onoff(v)),
+                )
+            }
+            // L = weightless (the last key of the cheat row; Shift+L is
+            // the MC1 demolish and is handled before this table).
+            KeyCode::KeyL => {
+                self.cfg.gameplay.cheat.weightless = !self.cfg.gameplay.cheat.weightless;
+                let v = self.cfg.gameplay.cheat.weightless;
+                println!(
+                    "weightless: {}",
+                    if v {
+                        "on (cheat — free climb to the global lift ceiling)"
+                    } else {
+                        "off (the per-game altitude band)"
+                    }
+                );
+                (
+                    "gameplay.cheat.weightless",
+                    format!("Weightless mode {}", onoff(v)),
+                )
+            }
             KeyCode::KeyB => {
                 self.cfg.render.debug.health_bars = !self.cfg.render.debug.health_bars;
                 let v = self.cfg.render.debug.health_bars;
@@ -3367,6 +3436,8 @@ impl App {
                 &sess.level.plausible_spells,
                 &sess.level.plausible_book_mc2,
                 self.cfg.gameplay.cheat.invincible,
+                self.cfg.gameplay.cheat.ghost,
+                self.cfg.gameplay.cheat.inert,
                 world_patches(&self.cfg.gameplay.patches),
             );
             if let Some(run) = &self.campaign {
@@ -3380,7 +3451,7 @@ impl App {
             sess.sim = Simulation::with_world(w);
             sess.sim.thrust_model = thrust;
             sess.sim.altitude_model = altitude;
-            sess.sim.lift_unclamped = self.cfg.dev.lift_unclamped;
+            sess.sim.weightless = self.cfg.gameplay.cheat.weightless;
             if let Some(start) = sess.level.start {
                 sess.sim.flyer = start;
                 sess.sim.sync_carpet_from_flyer();
@@ -3810,6 +3881,8 @@ impl App {
                     &level.plausible_spells,
                     &level.plausible_book_mc2,
                     self.cfg.gameplay.cheat.invincible,
+                    self.cfg.gameplay.cheat.ghost,
+                    self.cfg.gameplay.cheat.inert,
                     world_patches(&self.cfg.gameplay.patches),
                 );
                 if let Some(run) = &self.campaign {
@@ -3821,9 +3894,9 @@ impl App {
         };
         sim.thrust_model = sim_thrust(self.cfg.controls.models.thrust);
         sim.altitude_model = sim_altitude(self.cfg.controls.models.altitude);
-        // Dev instrument: unclamp the enhanced-altitude band to the
+        // Weightless cheat: unclamp the enhanced-altitude band to the
         // global lift ceiling (highest terrain + the 4-tile margin).
-        sim.lift_unclamped = self.cfg.dev.lift_unclamped;
+        sim.weightless = self.cfg.gameplay.cheat.weightless;
         if let Some(start) = level.start {
             sim.flyer = start;
             sim.sync_carpet_from_flyer();
@@ -7873,7 +7946,7 @@ impl ApplicationHandler for App {
                     self.mini_toast(".. CHEAT: win level");
                     return;
                 }
-                // The runtime option keys (F1/F2/F3/F5/F6, T/V/G/H/B/C)
+                // The runtime option keys (F1/F2/F3/F5/F6, T/V/G/H/J/I/L/B/C/K)
                 // — live in flight and inside the menu alike.
                 if down
                     && let PhysicalKey::Code(code) = event.physical_key
@@ -8249,6 +8322,12 @@ struct Args {
     wheel_spells: Option<bool>,
     /// CLI override of `gameplay.cheat.invincible`.
     invincible: Option<bool>,
+    /// CLI override of `gameplay.cheat.ghost`.
+    ghost: Option<bool>,
+    /// CLI override of `gameplay.cheat.inert`.
+    inert: Option<bool>,
+    /// CLI override of `gameplay.cheat.weightless`.
+    weightless: Option<bool>,
     /// CLI override of `render.enhancement.expose_jar_spells`.
     expose_jar_spells: Option<bool>,
     /// CLI override of `render.debug.grace_meter`.
@@ -8357,6 +8436,9 @@ fn parse_args() -> Result<Args, String> {
     let mut plausible_spellbook = None;
     let mut wheel_spells = None;
     let mut invincible = None;
+    let mut ghost = None;
+    let mut inert = None;
+    let mut weightless = None;
     let mut expose_jar_spells = None;
     let mut grace_meter = None;
     let mut coords = None;
@@ -8552,6 +8634,12 @@ fn parse_args() -> Result<Args, String> {
             "--no-wheel-spells" => wheel_spells = Some(false),
             "--invincible" => invincible = Some(true),
             "--no-invincible" => invincible = Some(false),
+            "--ghost" => ghost = Some(true),
+            "--no-ghost" => ghost = Some(false),
+            "--inert" => inert = Some(true),
+            "--no-inert" => inert = Some(false),
+            "--weightless" => weightless = Some(true),
+            "--no-weightless" => weightless = Some(false),
             "--expose-jar-spells" => expose_jar_spells = Some(true),
             "--no-expose-jar-spells" => expose_jar_spells = Some(false),
             "--grace-meter" => grace_meter = Some(true),
@@ -8703,6 +8791,8 @@ fn parse_args() -> Result<Args, String> {
                      [--plausible-spellbook|--no-plausible-spellbook] \
                      [--wheel-spells|--no-wheel-spells] \
                      [--invincible|--no-invincible] \
+                     [--ghost|--no-ghost] [--inert|--no-inert] \
+                     [--weightless|--no-weightless] \
                      [--expose-jar-spells|--no-expose-jar-spells] \
                      [--grace-meter|--no-grace-meter] \
                      [--dev-mode] \
@@ -8759,6 +8849,9 @@ fn parse_args() -> Result<Args, String> {
         plausible_spellbook,
         wheel_spells,
         invincible,
+        ghost,
+        inert,
+        weightless,
         expose_jar_spells,
         grace_meter,
         coords,
@@ -9324,6 +9417,8 @@ fn apply_instruments(
     plausible_spells: &[u8],
     plausible_book_mc2: &[(u8, i32)],
     invincible: bool,
+    ghost: bool,
+    inert: bool,
     patches: mgc_sim::WorldPatches,
 ) {
     w.set_patches(patches);
@@ -9338,6 +9433,12 @@ fn apply_instruments(
     }
     if invincible {
         w.set_invincible(true);
+    }
+    if ghost {
+        w.set_ghost(true);
+    }
+    if inert {
+        w.set_inert(true);
     }
 }
 
@@ -9683,12 +9784,15 @@ fn run_screenshot(
     renderer.set_anim_turn(anim_turn);
     // Spell UI (book grid or HUD), from the level-start loadout.
     if let (Some(assets), Some(w)) = (&level.ui, &mut level.world) {
-        // invincible=false: a single headless frame takes no damage.
+        // invincible/ghost/inert=false: a single headless frame
+        // takes no damage and trips nothing.
         apply_instruments(
             w,
             dev_spells,
             &level.plausible_spells,
             &level.plausible_book_mc2,
+            false,
+            false,
             false,
             mgc_sim::WorldPatches::RETAIL,
         );
@@ -10041,6 +10145,15 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     if let Some(v) = args.invincible {
         cfg.gameplay.cheat.invincible = v;
     }
+    if let Some(v) = args.ghost {
+        cfg.gameplay.cheat.ghost = v;
+    }
+    if let Some(v) = args.inert {
+        cfg.gameplay.cheat.inert = v;
+    }
+    if let Some(v) = args.weightless {
+        cfg.gameplay.cheat.weightless = v;
+    }
     if let Some(v) = args.plausible_spellbook {
         cfg.dev.plausible_spellbook = v;
     }
@@ -10152,6 +10265,9 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         }
         cfg.gameplay.cheat.dev_spells = false;
         cfg.gameplay.cheat.invincible = false;
+        cfg.gameplay.cheat.ghost = false;
+        cfg.gameplay.cheat.inert = false;
+        cfg.gameplay.cheat.weightless = false;
         // plausible_spellbook: off unless the CLI EXPLICITLY asks (the
         // config file's value never leaks into a replay). A take whose
         // header carries its import pin needs no flag — the grants ride

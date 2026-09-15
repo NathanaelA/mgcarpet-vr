@@ -142,7 +142,7 @@ fn flight_tier_golden_state_hashes() {
     // desired-altitude law). BOTH arrays move on every steering-state
     // reshape, for different reasons: FAITHFUL only because the
     // steering/altitude fields (aim_lead, turn_rate, lift_desired,
-    // lift_unclamped) feed the hash — the faithful trajectory itself
+    // weightless) feed the hash — the faithful trajectory itself
     // is untouched (this fixture runs AltitudeModel::Faithful, where
     // the new law never executes, and the integer movers were not
     // modified). ENHANCED moves because chase steering genuinely

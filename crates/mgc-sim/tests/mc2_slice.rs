@@ -705,7 +705,14 @@ fn mc2_slice_behaviors_and_goldens() {
         // The switch above was added afterwards. EVERY LAW NEEDS ITS
         // SWITCH AT LANDING TIME — this is what it costs when one does
         // not have one.
-        0x2410773a72d4f3d0, // D — re-pinned 2026-09-04 (ROUND 98) for THE
+        // Checkpoints D AND E re-pinned 2026-09-15 (post-init..C hold
+        // BYTE-FOR-BYTE) for THE DEV-SPELLS OVERLAY — the same one-line
+        // delta as `mc2_cave`'s re-pin, whose comment carries the
+        // attribution: the old toggle wiped the MC2 hand mirror
+        // (`player.left/right`, hashed); the overlay leaves it alone.
+        // A/B-ATTRIBUTED: restoring the wipe alone reproduces the
+        // previous D and E exactly; OBSERVABLE holds.
+        0x9ab46ee724229d83, // D — was 0x2410773a72d4f3d0, re-pinned 2026-09-04 (ROUND 98) for THE
         // LAUNCH AIM POINT `axis_0x9A_154x` EXTENDED TO THE WHOLE
         // class-15 fire table (`MGC_NO_MC2_LAUNCH_AXIS_BAND=1`
         // reverts). Retail stamps the flyer's @0x9A with the caster's
@@ -813,7 +820,7 @@ fn mc2_slice_behaviors_and_goldens() {
         //     a 0 moves the pin by itself.
         //   * mc2l22 stays CERTIFIED (`segments=27 devs=0 horizon=END`) and
         //     the graded corpus is unmoved.
-        0xa463e62ac91d6c3b, // E: census + villager/archer provocation
+        0xea3207cb01b8e98e, // E: census + villager/archer provocation (was 0xa463e62ac91d6c3b, 2026-09-15 — see D)
     ];
     // Checkpoints 4-6 re-pinned for the DISPOSITION-FIRE stack
     // rebuild (see mc2_cave.rs — sub_49F90 at sub_4A1E0's top,

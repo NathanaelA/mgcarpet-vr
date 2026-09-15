@@ -5353,11 +5353,12 @@ impl World {
         // froze the aim setpoint at `roll` 1414 against retail's 1726.
         // `dump-state … 27932 378 --port` printed exactly those two
         // rows and nothing else.
-        let human_invis = if rival_invis_window_off() {
-            self.player.invisible
-        } else {
-            self.mc2_spell_window_live(self.mc2_book.ent[11])
-        };
+        let human_invis = self.ghost
+            || if rival_invis_window_off() {
+                self.player.invisible
+            } else {
+                self.mc2_spell_window_live(self.mc2_book.ent[11])
+            };
         // ⭐⭐⭐ …AND THE WALK IS THE TICK-TOP CLASS-3 CHAIN ITSELF,
         // WHICH A VICTIM SEIZURE BLANKS. EF:6249 `for (ix = dword_38519;
         // ix > Entities[0]; ix = ix->next_0)` — the same head
@@ -5708,7 +5709,9 @@ impl World {
         } else {
             self.human_wiz_top
         };
-        let human_live = human_top && (pinned == 0 || intact);
+        // Ghost mode: retail has no cloak test on this scan, so the
+        // cheat's own gate stands in.
+        let human_live = human_top && !self.ghost && (pinned == 0 || intact);
         let mut human_done = false;
         let mut consider_human = |best: &mut Option<(u16, (u16, u16, i16), i64)>| {
             if human_done || !human_live {
@@ -8586,7 +8589,7 @@ impl World {
         let row = BEHAVIOR[self.g.ent[i].row156 as usize];
         let clr = row.v_12 as i32;
         let fov = self.g.ent[i].f84 as i32;
-        let out = self.g.mc2_flight_gate(fov, clr, (x, y, z), cand);
+        let out = self.g.mc2_flight_gate(fov, clr, (x, y, z), cand, false);
         let Some((p, dyaw)) = out.pass else {
             return;
         };

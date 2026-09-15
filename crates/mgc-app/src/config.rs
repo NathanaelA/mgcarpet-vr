@@ -1137,6 +1137,27 @@ pub struct GameplayCheat {
     /// MORTAL (grace window, castle respawn, castle-less death =
     /// level restart).
     pub invincible: bool,
+    /// Ghost mode — the wizard is permanently INVISIBLE to everything
+    /// (creatures, rival wizards, their spells and seekers; casting
+    /// does not break it, nothing sees through it) and flies over
+    /// impassable walls as if they were terrain (MC1's rivals can;
+    /// the human and MC2's rivals cannot). NOT invincibility: damage
+    /// that still lands still hurts. Toggle at runtime with J.
+    /// G-class; neither original has it.
+    pub ghost: bool,
+    /// Inert mode — the carpet trips NO world trigger: no jar, token
+    /// or scroll pickup, no teleporter, no trigger volume or switch
+    /// (the ending X-markers included). Castle/dolmen regen and
+    /// creature waking are NOT triggers and stay live. Toggle at
+    /// runtime with I. G-class; neither original has it.
+    pub inert: bool,
+    /// Weightless mode (was `dev.lift_unclamped` until 2026-09-15):
+    /// unclamp the enhanced-altitude band, so q/e may pin the desired
+    /// altitude anywhere up to the GLOBAL lift ceiling (the level's
+    /// highest terrain + the 4-tile soft-ceiling margin) instead of
+    /// the per-game ground-relative band (1024/3072 over terrain).
+    /// Live-applied; toggle at runtime with L. G-class.
+    pub weightless: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1236,13 +1257,6 @@ pub struct DevConfig {
     /// state; a level so launched is not a faithful fixture. Grants on
     /// top of whatever the world already gave (starting spells etc.).
     pub plausible_spellbook: bool,
-    /// Unclamp the enhanced-altitude band: q/e may pin the desired
-    /// altitude anywhere up to the GLOBAL lift ceiling (the level's
-    /// highest terrain + the 4-tile soft-ceiling margin) instead of
-    /// the per-game ground-relative band (1024/3072 over terrain).
-    /// The altitude-system inspection instrument from the original
-    /// enhanced-flight spec; live-applied, never a faithful fixture.
-    pub lift_unclamped: bool,
 }
 
 // ===========================================================================
@@ -1312,7 +1326,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 28;
+const DEFAULTS_VERSION: u64 = 30;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

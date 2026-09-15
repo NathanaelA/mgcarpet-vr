@@ -97,7 +97,7 @@ force-apply) a mismatched environment:
   takes were recorded against). Retail-source takes always pin the
   retail arms.
 - every sim-reaching option from the options registry, including
-  sim-affecting dev instruments (e.g. `dev.lift_unclamped`);
+  sim-affecting cheats (e.g. `gameplay.cheat.weightless`);
   presentation-only options are excluded and never recorded.
 - RNG seed(s) and level/campaign provenance; for mid-level starts an
   embedded start snapshot (`"start_mgcs_b64"`), otherwise the pristine
@@ -311,7 +311,8 @@ toggle from the options menu forked test.mgcr's whole course invisibly
 — 2026-08-27), so the recorder emits them as row events and a replayer
 MUST apply them before grading the row's hash, through the same
 setters the options menu uses. Current keys: `invincible`,
-`dev_spells`, `lift_unclamped` (bools), `thrust_model`,
+`dev_spells`, `ghost`, `inert`, `weightless` (bools; `lift_unclamped` is
+the pre-2026-09-15 spelling of `weightless` and still replays), `thrust_model`,
 `altitude_model` (`"classic"`/`"enhanced"`). A key the replaying build
 does not implement is a REFUSAL, not a warning — the take's course
 depends on it.

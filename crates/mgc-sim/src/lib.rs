@@ -415,11 +415,12 @@ pub struct Simulation {
     /// PINNED through flings/pins/catapults (player ruling 6); reset
     /// to the spawn offset on respawn and re-seeded at level hand-off.
     lift_desired: i16,
-    /// Dev instrument (`dev.lift_unclamped`, live-applied by the
-    /// app): unclamp the desired-altitude band to the global lift
+    /// Weightless cheat (`gameplay.cheat.weightless`; `dev.lift_unclamped`
+    /// until 2026-09-15; live-applied by the app): unclamp the
+    /// desired-altitude band to the global lift
     /// ceiling (the level's highest terrain + the 4-tile soft-ceiling
     /// margin) instead of the per-game ground-relative band.
-    pub lift_unclamped: bool,
+    pub weightless: bool,
     /// MC2's barrel roll driver state (`sub_55C60`) — see
     /// [`flight::BarrelRoll`]. Idle (all-default) off-MC2 and between
     /// rolls; hash-quiet at rest so pinned goldens stay unmoved.
@@ -484,7 +485,7 @@ impl Simulation {
             turn_rate,
             aim_lead,
             lift_desired,
-            lift_unclamped,
+            weightless,
             broll,
             terrain_height,
             world: attached,
@@ -514,7 +515,7 @@ impl Simulation {
         turn_rate.to_bits().hash(&mut h);
         aim_lead.to_bits().hash(&mut h);
         lift_desired.hash(&mut h);
-        lift_unclamped.hash(&mut h);
+        weightless.hash(&mut h);
         // Hash-quiet at rest (the transparent-at-pristine law): the
         // pinned goldens predate the barrel roll; a LIVE roll stamps a
         // tag byte (aliasing guard) + the driver state.
@@ -2027,7 +2028,7 @@ impl Simulation {
     /// debug unclamp swaps the ground-relative band for the global
     /// lift ceiling.
     fn lift_caps(&self, g: i16, band: i16) -> (i16, i16) {
-        if self.lift_unclamped {
+        if self.weightless {
             let c = ((self.lift_ceiling() * 256.0) as i32).min(i16::MAX as i32) as i16;
             (i16::MAX / 2, c)
         } else {
@@ -2698,7 +2699,7 @@ mod tests {
         th[0] = 80; // a lone 10-tile peak far away
         let mut sim = Simulation::with_terrain(th);
         sim.altitude_model = AltitudeModel::ExtendedLift;
-        sim.lift_unclamped = true;
+        sim.weightless = true;
         sim.flyer.y = 1.0;
         sim.sync_carpet_from_flyer();
         let up = FlightInput {

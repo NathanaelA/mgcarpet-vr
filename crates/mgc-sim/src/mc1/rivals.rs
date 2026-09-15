@@ -3649,7 +3649,7 @@ impl World {
                 PLAYER_TARGET,
                 self.human_pose.0,
                 self.human_pose.1,
-                self.mc1_invis_notice(self.player.owned[12], self.player.invisible),
+                self.ghost || self.mc1_invis_notice(self.player.owned[12], self.player.invisible),
                 self.player.mana_max as i64,
                 self.player.mana as i64,
                 // :18570-72 — the target's raw +50 register + owned
@@ -3900,7 +3900,7 @@ impl World {
             let human_guard = if ball_guard_excludes_own_id() && human_is_own_id {
                 None
             } else if ball_guard_is_tick_top() {
-                self.human_bucket_alive.then_some(self.human_pose)
+                (self.human_bucket_alive && !self.ghost).then_some(self.human_pose)
             } else {
                 self.wizard_pos(0)
             };

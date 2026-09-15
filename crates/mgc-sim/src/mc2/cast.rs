@@ -3460,7 +3460,7 @@ impl World {
                 // and the carpet's flags go 301 → 269 in the same tick.
                 if !crate::mc2::roster::no_metamorph_cloak() {
                     self.player.invisible = false;
-                    self.g.player_invisible = false;
+                    self.g.player_invisible = self.ghost;
                 }
                 self.g.snd_player(60);
             }

@@ -1000,6 +1000,11 @@ pub(crate) struct Gen {
     /// The player's Invisible cloak (spell 12; the wizard's +16 0x20
     /// bit, :65689-90) mirrored in for the mob-side target gates.
     pub(crate) player_invisible: bool,
+    /// Ghost mode (`World::ghost`), republished per tick beside the
+    /// cloak mirror: the gate for the scans retail lets see THROUGH
+    /// a cloak (castle turrets, the m27 branch scan). Per-tick echo
+    /// of World state — not on the wire, not hashed.
+    pub(crate) player_ghost: HashSilent<bool>,
     /// The player's Rebound deflection bit (spell 14; +17 0x80,
     /// :65774) — incoming class-9 projectiles bounce back.
     pub(crate) player_rebound: bool,
@@ -1481,6 +1486,17 @@ impl<const TAG: u8> std::hash::Hash for Mc2Quiet<TAG> {
             state.write_i32(self.0);
         }
     }
+}
+
+/// A value that hashes to NOTHING — for per-tick echoes of a World
+/// toggle whose state the World side already hashes (tag-only while
+/// on), so the echo cannot move a golden. `Gen` is `#[derive(Hash)]`;
+/// a bare field here would.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct HashSilent<T>(pub T);
+
+impl<T> std::hash::Hash for HashSilent<T> {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
 }
 
 /// A per-tick ECHO of a DRIVER-owned flight-ext field held on [`Gen`]
@@ -2920,6 +2936,7 @@ impl Gen {
             player_aggro: 0,
             rival_wanted: [0; 8],
             player_invisible: false,
+            player_ghost: HashSilent(false),
             player_rebound: false,
             player_chain: PlayerChain::default(),
             kills: 0,
@@ -8939,6 +8956,7 @@ impl Gen {
             player_aggro,
             rival_wanted,
             player_invisible,
+            player_ghost: _,
             player_rebound,
             // Bookkeeping the SAVE does not carry, on the
             // `player_deflect_debit` precedent: `cell` restores as

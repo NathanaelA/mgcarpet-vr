@@ -2844,6 +2844,9 @@ impl Gen {
     /// piece can reach it at all — a piece never targets its own
     /// owner.)
     fn mc2_piece_scan(&self, i: usize, player: Option<(u16, u16, i16)>) -> Option<u16> {
+        // Ghost mode: retail turrets see through a cloak; the cheat's
+        // own gate takes the human off the scan.
+        let player = if self.player_ghost.0 { None } else { player };
         let (px, py, own) = {
             let e = &self.ent[i];
             (e.x, e.y, e.id24)

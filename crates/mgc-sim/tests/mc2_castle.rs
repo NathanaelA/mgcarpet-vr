@@ -470,6 +470,9 @@ fn mc2_castle_cost_refreshes_on_downgrade() {
         eprintln!("skipping: level-000 has no terrain");
         return;
     };
+    // Earned, not lent: the dev cheat is an OVERLAY and its
+    // toggle-off below takes back every spell it minted.
+    w.mc2_grant_start_book(&[2]);
     w.set_dev_spells(true);
 
     let (cx, cy) = clear_spot(&w);
@@ -575,6 +578,9 @@ fn mc2_castle_death_cost() {
         eprintln!("skipping: level-000 has no terrain");
         return;
     };
+    // Earned, not lent: the dev cheat is an OVERLAY and its
+    // toggle-off below takes back every spell it minted.
+    w.mc2_grant_start_book(&[2]);
     w.set_dev_spells(true);
 
     let (cx, cy) = clear_spot(&w);

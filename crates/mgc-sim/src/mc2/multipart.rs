@@ -1855,7 +1855,9 @@ impl Gen {
         };
         // The out-of-pool human takes the roster's ENTRY test
         // (`life >= 0` at tick top) — see `m27_scan_life_law`.
-        if !ctx.pdead_top || !Self::m27_scan_life_law() {
+        // (`player_ghost`: the ghost cheat's own gate — retail lets
+        // this scan see through a cloak, the cheat does not.)
+        if (!ctx.pdead_top || !Self::m27_scan_life_law()) && !self.player_ghost.0 {
             consider(ctx.px, ctx.py, PLAYER_TARGET);
         }
         if Self::m27_scan_roster_law() {

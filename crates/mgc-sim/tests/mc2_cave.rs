@@ -869,7 +869,19 @@ fn mc2_cave_behaviors_and_goldens() {
             // round as a RED failure on purpose rather than papered
             // over, and is re-pinned only now that its cause is named.
             // (C and D carried forward under ROUND 109's two laws above.)
-            0x57237f7c82d36989,
+            // Checkpoints C AND D re-pinned 2026-09-15 (A/B hold BYTE-
+            // FOR-BYTE) for THE DEV-SPELLS OVERLAY (player ruling; see
+            // `World::set_dev_spells`). The old toggle ran MC1's
+            // `rebind_hands_canonical` on the MC2 column too, which
+            // WIPED the MC2 book's hand mirror (`player.left/right`,
+            // hashed) to None — a side effect the ghost-fireball unit
+            // test had pinned as if intended. The overlay mints nothing
+            // and leaves the mirror alone. A/B-ATTRIBUTED: putting the
+            // wipe back alone (`if on { rebind_hands_canonical() }`)
+            // reproduces the previous C and D pins exactly, and the
+            // OBSERVABLE digests below hold — the world is unchanged,
+            // only the mirror is.
+            0x3c60599369f65891, // was 0x57237f7c82d36989
             // Checkpoint D re-pinned 2026-09-10 (A/B/C hold BYTE-FOR-
             // BYTE) for THE (10,77) FIRE-ORB SATELLITE'S CLONED @0x2C —
             // the SAME CLASS as checkpoint A's 2026-09-02 fire-ctor
@@ -907,7 +919,7 @@ fn mc2_cave_behaviors_and_goldens() {
             // previous pin (0x0a717b6bbb39a15f) exactly with this
             // session's other seven laws still in — verified in the
             // main session, not merely reported.
-            0x7387656e3a5ccc62,
+            0x809b7066b17b7c08, // was 0x7387656e3a5ccc62 (2026-09-15, see C)
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );

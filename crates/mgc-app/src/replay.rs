@@ -1223,7 +1223,19 @@ fn apply_live_options(
                 .as_mut()
                 .ok_or("live option needs a world")?
                 .set_dev_spells(b()?),
-            "lift_unclamped" => sim.lift_unclamped = b()?,
+            "ghost" => sim
+                .world
+                .as_mut()
+                .ok_or("live option needs a world")?
+                .set_ghost(b()?),
+            "inert" => sim
+                .world
+                .as_mut()
+                .ok_or("live option needs a world")?
+                .set_inert(b()?),
+            // `lift_unclamped` is the pre-2026-09-15 name of the same
+            // toggle; old port takes still carry it.
+            "weightless" | "lift_unclamped" => sim.weightless = b()?,
             "thrust_model" => {
                 sim.set_thrust_model(match v.as_str() {
                     Some("classic") => ThrustModel::Mc1,

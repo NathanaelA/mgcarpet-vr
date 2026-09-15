@@ -2069,6 +2069,68 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · cheat",
+            label: "ghost",
+            class: Cheat,
+            key: Some("J"),
+            cli: Some("--ghost"),
+            cfg_path: "gameplay.cheat.ghost",
+            read: toggle!(c => gameplay.cheat.ghost),
+            desc: "Ghost mode: permanently invisible to everything (casting \
+                   does not break it, nothing sees through it) and flies \
+                   over impassable walls as if they were terrain. Not \
+                   invincibility. Neither original has it.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.gameplay.cheat.ghost = v,
+                descs: [
+                    "Seen and walled in, as the game intends.",
+                    "Unseen, walls are terrain (cheat).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · cheat",
+            label: "inert",
+            class: Cheat,
+            key: Some("I"),
+            cli: Some("--inert"),
+            cfg_path: "gameplay.cheat.inert",
+            read: toggle!(c => gameplay.cheat.inert),
+            desc: "Inert mode: the carpet trips no world trigger — no \
+                   pickups, teleporters, trigger volumes or switches. \
+                   Neither original has it.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.gameplay.cheat.inert = v,
+                descs: [
+                    "Triggers fire, as the game intends.",
+                    "Nothing you fly over fires (cheat).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · cheat",
+            label: "weightless",
+            class: Cheat,
+            key: Some("L"),
+            cli: Some("--weightless"),
+            cfg_path: "gameplay.cheat.weightless",
+            read: toggle!(c => gameplay.cheat.weightless),
+            desc: "Weightless mode (was dev.lift_unclamped): q/e may pin \
+                   the desired altitude anywhere up to the level's highest \
+                   terrain + a 4-tile margin, instead of the per-game \
+                   ground-relative band. Applies live.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.gameplay.cheat.weightless = v,
+                descs: [
+                    "The per-game band: 1024 over terrain (MC2 caves 3072).",
+                    "Free climb to the global lift ceiling (cheat).",
+                ],
+            },
+        },
         // ---- dev --------------------------------------------------------
         Spec {
             domain: Dev,
@@ -2087,28 +2149,6 @@ pub fn registry() -> Vec<Spec> {
                 descs: [
                     "Only what the level itself grants.",
                     "The campaign-plausible spell set at entry.",
-                ],
-            },
-        },
-        Spec {
-            domain: Dev,
-            group: "dev",
-            label: "lift_unclamped",
-            class: Instrument,
-            key: None,
-            cli: None,
-            cfg_path: "dev.lift_unclamped",
-            read: toggle!(c => dev.lift_unclamped),
-            desc: "Unclamp the enhanced-altitude band: q/e may pin the \
-                   desired altitude anywhere up to the level's highest \
-                   terrain + a 4-tile margin, instead of the per-game \
-                   ground-relative band. Altitude-system inspection; \
-                   applies live.",
-            ctl: Ctl::Toggle {
-                set: |c, v| c.dev.lift_unclamped = v,
-                descs: [
-                    "The per-game band: 1024 over terrain (MC2 caves 3072).",
-                    "Free climb to the global lift ceiling (instrument).",
                 ],
             },
         },

@@ -109,6 +109,7 @@ impl Gen {
         clearance: i32,
         pos: (u16, u16, i16),
         pred: (u16, u16, i16),
+        ghost: bool,
     ) -> crate::flight::Mc2GateOut {
         let mut out = crate::flight::Mc2GateOut {
             pass: None,
@@ -119,7 +120,10 @@ impl Gen {
         let mut pred = pred;
 
         // (a) the water barrier + cardinal slide (EF:59478-511).
-        if self.mc2_deep_water(pred.0, pred.1) {
+        // Ghost mode (the human only): deep water is terrain — no
+        // barrier, no slide, no wet counter. The cave arms below are
+        // untouched (cave walls stay solid).
+        if !ghost && self.mc2_deep_water(pred.0, pred.1) {
             out.wet = true;
             let elev = Gen::mc2_radix_tan(pos, pred); // v45
             let dist = Gen::mc2_dist3(pos, pred) as u16 as i32; // v42, u16-cast
@@ -221,8 +225,9 @@ impl Gen {
         clearance: i32,
         pos: (u16, u16, i16),
         latched: bool,
+        ghost: bool,
     ) -> bool {
-        if self.mc2_deep_water(pos.0, pos.1) {
+        if !ghost && self.mc2_deep_water(pos.0, pos.1) {
             return true;
         }
         if !self.is_cave() {

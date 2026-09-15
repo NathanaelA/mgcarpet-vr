@@ -128,7 +128,11 @@ const MAGIC: u32 = 0x5343_474D;
 ///     (the set `set_dev_spells(false)` releases). A resume that
 ///     dropped it would leave those tokens as earned spells forever.
 ///     Joins the World stream after `mc1_acq`.
-pub const SNAPSHOT_VERSION: u32 = 21;
+/// 22: `World::ghost` / `World::inert` — the two port-only
+///     cheats (ghost mode, inert mode), carried like
+///     `invincible` so a resume keeps the mode it was taken in. Join
+///     the World stream after `dev_minted`.
+pub const SNAPSHOT_VERSION: u32 = 22;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -535,8 +539,8 @@ impl Simulation {
             aim_lead,
             lift_desired,
             // Dev config, not game state: re-armed by the app from
-            // `dev.lift_unclamped`, never carried through a save.
-            lift_unclamped: _,
+            // `gameplay.cheat.weightless`, never carried through a save.
+            weightless: _,
             broll,
             terrain_height,
             world,

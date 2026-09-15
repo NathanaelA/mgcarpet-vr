@@ -237,6 +237,9 @@ fn mc2_castle_cost_gate_tracks_live_level() {
         eprintln!("skipping: level-000 has no terrain");
         return;
     };
+    // Earned, not lent: the dev cheat is an OVERLAY and its
+    // toggle-off below takes back every spell it minted.
+    w.mc2_grant_start_book(&[2]);
     w.set_dev_spells(true);
 
     // A 19×19 clear footprint (the castle needs room to stamp).
