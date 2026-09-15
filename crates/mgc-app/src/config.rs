@@ -1005,6 +1005,19 @@ pub struct GameplayPatches {
     /// (Casting the same spell with both hands is a separate
     /// mechanism and is not changed.)
     pub dual_wield_muzzle: PatchArm,
+    /// ONE CASTLE PER WIZARD. `retail`: a wizard can end up holding
+    /// TWO castles at once — the "do I own one" test reads a pointer
+    /// written a tick after the castle appears (MC2), demands the
+    /// castle already be transformed (MC1 delivery), or is absent
+    /// altogether (MC1 create), so two castle balls landing far
+    /// enough apart in quick succession both build. The second
+    /// castle takes the pointer and the first is orphaned ALIVE:
+    /// its balloons never find a home, cycle health and bank no
+    /// mana, and when either castle falls the owner is left with no
+    /// castle at all. `patched` (default): a castle ball that would
+    /// create a second castle for an owner who already has one is
+    /// refused.
+    pub one_castle_per_wizard: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -1023,6 +1036,7 @@ impl Default for GameplayPatches {
             mc1_fix_dragon_tail: PatchArm::Patched,
             mc2_phantom_castle: PatchArm::Patched,
             dual_wield_muzzle: PatchArm::Patched,
+            one_castle_per_wizard: PatchArm::Patched,
         }
     }
 }
@@ -1045,6 +1059,7 @@ impl GameplayPatches {
             mc1_fix_dragon_tail: PatchArm::Retail,
             mc2_phantom_castle: PatchArm::Retail,
             dual_wield_muzzle: PatchArm::Retail,
+            one_castle_per_wizard: PatchArm::Retail,
         }
     }
 
@@ -1084,6 +1099,7 @@ impl GameplayPatches {
             mc1_fix_dragon_tail: PatchArm::Retail,
             mc2_phantom_castle: PatchArm::Retail,
             dual_wield_muzzle: PatchArm::Retail,
+            one_castle_per_wizard: PatchArm::Retail,
             ..Self::default()
         }
     }
@@ -1326,7 +1342,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 30;
+const DEFAULTS_VERSION: u64 = 31;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

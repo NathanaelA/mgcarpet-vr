@@ -904,6 +904,125 @@ post-fix).
 
 ## Resolved
 
+- **ROUND 136b (2026-09-15) — THE MC2 CASTLE REGISTER REACHES ITS READERS: mc2l12 747 → 260.**
+  Round 136 built MC2's `CastleEntityIndex_0x3A_58` model (`Gen::castle_reg`, written by
+  `mc2_castle_upgrade`, cleared by the level-0 teardown) but deliberately wired it to ONE
+  reader, the create guard. The player read the residue and named the site from the symptom:
+  *"the cost ladder was probably taken and updated from the wrong castle instance."* They
+  were right, at TWO sites, and both were one-line reads:
+
+  ⑴ **`World::player_castle_bound`** carried an explicit `matches!(self.game, GameId::Mc2)`
+  fallback to `player_castle()` — a scan returning the LOWEST-NUMBERED live player-owned
+  (3,2). It feeds **15 call sites**: the at-castle regen boost, the castle-spell cost ladder,
+  the teleport anchor, the create-vs-upgrade split, the win trigger, the HUD panel. Deleting
+  the fallback (the register now exists) took mc2l12 **747 → 712** and closed the
+  `(9,10)` castle-ball flight lane (50 heads) and the `(10,43)` upgrade token (19) outright —
+  the create-vs-upgrade decision had been aimed at the wrong castle.
+
+  ⑵ **`Gen::mc2_regen_boost`** probed `player_castle().filter(f26 >= 1)` — a stand-in its own
+  comment already flagged, citing retail's `Entities[player->CastleEntityIndex_0x3A_58]`
+  (`AddPlayer03_00_5E010` EF:60290; `NETHERW.EXE` VA 0x5E03F `66 8b 50 3a` + `test dx,dx/jz`,
+  a ZERO register short-circuiting the overlap outright). Pointing it at the register took
+  mc2l12 **712 → 260** and closed the `(3,0)` WIZARD MANA lane **COMPLETELY: 501 heads → 0.**
+
+  WHY BOTH BITE ONLY HERE: with ONE castle the scan and the register agree. A SPLIT
+  (round 136) makes them name different castles — mc2l12 t=18304 onward, where the player sat
+  docked at the REGISTERED castle (708) while the port probed the ORPHAN (678, lower slot) and
+  missed the whole at-castle boost. ⭐ THE ARITHMETIC NAMED IT BEFORE THE CODE DID: retail's
+  `d88` 1293 vs the port's 129, and **1164 + 129 = 1293**, with −1164 the take's single most
+  common mana delta. The at-castle quantum is a 10× multiple of the afield one.
+
+  ⚠⚠ **A HAND-BUILT CASTLE FIXTURE IS NOW UNDER-SPECIFIED.** Three MC2 rigs set `f26 = 1` and
+  `tick70 = 4` to mean "a standing level-1 castle" and never wrote the register — which in
+  retail is stamped by the very level-up commit that takes a castle to level 1, so a castle
+  that never leveled is one retail calls UNBOUND. All three now set `castle_reg[0]` and assert
+  through `player_castle_bound`. A rig that means "my castle" must say so in the register.
+
+  GATE: `cargo test --release` **1,193/0** · fixtures **537/537, 0 regressions** · whole-corpus
+  `replay --segmented --brief` — **mc2l12 the ONLY take that moved, the other 45
+  byte-identical**, at both steps. Under the default `one_castle_per_wizard` patch a wizard
+  never holds two castles, so the scan and the register agree and none of this is reachable in
+  play; it is replay fidelity. WHAT IS LEFT on mc2l12 (259 excess resets, 175 LOCAL / 42
+  INHERITED): `(5,25)` **Cymmerian** `heading` 136 — now the take's LARGEST lane and unrelated
+  to castles · `(3,2)` castle `life`/`action` 73 · `(15,2)` 40 + `(15,1)` 21, the token COST
+  LADDER (the take's first divergence is still t=1000, a RIVAL's spell-1 token, 17,000 ticks
+  before any split) · `(10,79)` 6 · `(5,15)` 2.
+
+- **ROUND 136 (2026-09-15) — MULTIPLE CASTLES AT ONCE: THE BRAIN SPLIT IS A ONE-TICK REGISTER
+  WINDOW.** Player-reported opener, witnessed on the new `recordings/mc2l12.mgcr` (352 MB,
+  49,918 ticks, the largest take in the corpus): *"multiple castles simultaneously … it leads
+  to quite the brain split … the multiple balloons that are all stuck and cannot collect mana
+  are all collateral of this."*
+
+  ⚠ THE TAKE WOULD NOT RUN AT ALL FIRST. The recorder now captures MC2's cave CEILING plane on
+  every map type (the closure hole banked 2026-09-14, `mc2-second-heightmap-is-live-off-cave`),
+  but the port allocates that plane ONLY on caves — where its mere presence IS the cave signal
+  (`Gen::is_cave`, the night-shade derive at world.rs's MC2 level init). Installing a measured
+  ceiling on a Day level would have flipped mc2l12 (and mc2l10) into cave mode, so
+  `install_measured_terrain` now DROPS an off-cave ceiling instead of erroring, and the replay
+  banner names the drop as an ungraded lane rather than hiding it.
+
+  THE MECHANISM, from retail's own source. MC2's create guard is a REGISTER read —
+  `EF:58831`, `ball->byte_0x43_67 == 3 && Entities[ball->id_0x1A_26]->player->
+  CastleEntityIndex_0x3A_58` — and the only writer of that word is the castle's own LEVEL-UP
+  COMMIT (`sub_60480`, EF:61896, in the same statement block as `level++` / `actionIndex = 5`),
+  which runs a tick AFTER the ball minted the (3,2) record. A second castle ball landing inside
+  that one-tick window reads ZERO, passes the guard and builds; the register then latches the
+  NEWER castle and the older one is ORPHANED ALIVE — fully functional, owned by no player brain.
+  And because the level-0 teardown zeroes the owner's word UNCONDITIONALLY (EF:61969, no
+  identity test), the orphan's eventual death unbinds the castle still standing, which is the
+  player's *"your castle pointer is reset entirely."* The "sufficient distance" they described
+  is the spatial site test: close landings are refused by proximity, so only well-separated ones
+  survive to expose the timing.
+
+  WITNESSED, with the window visible as a normal one-tick lag everywhere else
+  (`cargo run --release --example castle_split_probe_mc2 recordings/mc2l12.mgcr`):
+  `t=18273 register=0 castles=[678]` → `t=18274 register=708 castles=[678, 708]`, and 678 then
+  stands unowned into the 18,890s. Seven split births in the take: 18274, 19033, 19195, 19713,
+  43270, 44038, 48357. Between t=19714 (register 293, castles [293, 678]) and t=42387
+  (register 0, castle 293 alive) the ORPHAN died and took the register for the live castle with
+  it — the unconditional clear, caught in the wild.
+
+  THE PORT DIVERGED BY BEING TIGHTER. MC2 never modelled `CastleEntityIndex` at all — every
+  "which castle is mine" question went through a pool SCAN (`Gen::mc2_castle_of`), which knows
+  the record the tick it is born — so the port REFUSED all seven builds. `replay --segmented
+  --classify` showed them as `missing in port: (class 3 model 2)` at six of the seven heads (the
+  seventh, t=18274, was truncated by the default 8-row print cap and confirmed with
+  `dump-state --port --start 18273`, where the port's slot 708 is a (10,42) castle stage instead
+  of retail's castle). FIXED by driving the existing MC1 `Gen::castle_reg` array from
+  `mc2_castle_upgrade` and the level-0 teardown, seeding it on import from the capture's
+  `castle_ent`, and reading it in the guard's retail arm: **753 → 746 excess resets, 206 → 199
+  LOCAL heads, exactly the seven split heads closed and NO new divergence anywhere in the take.**
+  `castle_reg` is hash-silent and graded only in `obs_project_mc1`, so no golden and no MC1 lane
+  moves; the whole-corpus `replay --segmented --brief` sweep is byte-identical to
+  `brief-baseline.txt` across all 41 takes.
+
+  ⚠ THE MANA LANE DID NOT FOLLOW. The take's dominant divergence is mana — 552 `slot mana` +
+  483 `player.mana` rows, most on the human's own slot 114 — and closing the castle population
+  moved it by THREE rows (552 → 549). The stuck-balloon symptom the player attributed to the
+  split is real, but the graded mana divergence is its own lane and stays open. Retail resolves
+  ~21 brain sites through `CastleEntityIndex` where the port scans; that is the obvious next
+  suspect, and it is deliberately NOT modelled (see below).
+
+  PATCHED, AND THE PATCH IS THE POINT (player ruling 2026-09-15: *"it is going to be
+  fundamentally designed to be dead code. We most definitely don't want this behaviour, and the
+  patch should be enabled by default … the guard being optionally disabled for replays, which
+  would experience all of the strange side effects of this."*). `gameplay.patches.
+  one_castle_per_wizard`, DEFAULT ON, all three games — see docs/DEVIATIONS.md. The retail arm
+  models the register ONLY for the create guard; every other MC2 castle-identity question stays
+  on its pool scan, because modelling all 21 read sites would be building the split's entire
+  blast radius faithfully for behaviour we ship disabled.
+
+  MC1 AND HW ARE LOOSER STILL AND NEED NO RACE. `SPELLS[16].count` is **101** — Create Castle is
+  a 101-shot burst, one ball per tick while held, so `castle_lock_active` (which gates a new
+  CAST, not a burst re-issue) can never help. The plain create arm (`:63588-`) carries NO owner
+  test whatsoever and the homing/delivery arm's test (`:63500-04`) demands `f26 > 0`, so a
+  castle that has landed but not yet transformed reads as unowned. That is why the split is
+  reported on the port side too, where MC2's scan holds. Both arms now take the patched guard.
+  Pinned by `mc2_second_castle_ball_inside_the_register_window_splits_only_on_retail` (retail =
+  two castles AND the register on the newer one; patched = one) and
+  `mc1_a_second_castle_ball_builds_a_second_castle_only_on_retail`.
+
 - **ROUND 130 (2026-09-10) — THE MINE LADDER'S LOW END IS `0 IN, 1 OUT`, FOUND BY BACKPORTING
   INTO remc2.** The session's task was the reverse of the usual one: carry the port's proven
   Magic-Mine laws INTO remc2, whose mine is dead upstream (turican0/remc2 #244, mc2-hd #554:

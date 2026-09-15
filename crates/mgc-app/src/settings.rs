@@ -2027,6 +2027,38 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "one_castle_per_wizard",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.one_castle_per_wizard",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.one_castle_per_wizard.on(),
+                faithful: false,
+            },
+            desc: "One castle per wizard (all three games). Retail can leave a \
+                   wizard holding TWO castles at once: the \"do I own one\" \
+                   test reads a pointer written a tick after the castle \
+                   appears (MC2), demands the castle already be transformed \
+                   (MC1 delivery), or is missing altogether (MC1 create), so \
+                   two castle balls landing far enough apart in quick \
+                   succession both build. The second takes the pointer and \
+                   the first is orphaned ALIVE — its balloons never find a \
+                   home, cycle health and bank no mana — and when either \
+                   castle falls the owner is left with none at all.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.one_castle_per_wizard = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "A second castle ball can build a second castle, as retail.",
+                    "A castle ball never builds a second castle (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2289,8 +2321,9 @@ mod tests {
         // detonation column is unconditional too (DEVIATIONS.md).
         // ball_owner_recolor added 2026-09-06 (presentation-only),
         // no_spell_loss + mc1_fix_dragon_tail 2026-09-07,
-        // mc2_phantom_castle 2026-09-10, dual_wield_muzzle 2026-09-15.
-        assert_eq!(patches, 13, "all thirteen patches ship on");
+        // mc2_phantom_castle 2026-09-10, dual_wield_muzzle and
+        // one_castle_per_wizard 2026-09-15.
+        assert_eq!(patches, 14, "all fourteen patches ship on");
     }
 
     #[test]

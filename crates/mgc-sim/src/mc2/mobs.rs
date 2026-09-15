@@ -5278,7 +5278,7 @@ impl Gen {
                 // (CastCastleProjectile_66B30 / sub_66D00) — the
                 // generic flyer's water arm was splashing the build
                 // away (mc2l3 t=244's (10,5) where retail builds).
-                self.mc2_castle_ball_tick(i);
+                self.mc2_castle_ball_tick(i, ctx);
             } else if self.ent[i].model65 == 3 && self.ent[i].tick70 == 3 {
                 self.mc2_meteor_shot_tick(i, ctx);
             } else if self.ent[i].model65 == 9 && self.ent[i].tick70 == 9 {

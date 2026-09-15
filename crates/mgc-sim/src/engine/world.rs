@@ -4598,10 +4598,23 @@ impl World {
         // [`no_mc2_castle_register`]. A freshly LANDED level-0 castle
         // is in the pool but not in the register, so it gives no boost
         // on the tick before its first rung.
-        let at_castle = self
-            .player_castle()
-            .filter(|&c| no_mc2_castle_register() || self.g.ent[c].f26 >= 1)
-            .is_some_and(|c| overlap(&self.g.ent[c]));
+        // …and since round 136 that register EXISTS on the MC2 column
+        // (`Gen::castle_reg`, driven by `mc2_castle_upgrade` and the
+        // level-0 teardown), so the probe reads it directly instead of
+        // the `f26 >= 1` pool-scan stand-in. The difference bites
+        // exactly when a wizard holds MORE THAN ONE castle: the scan
+        // returns the LOWEST-NUMBERED live (3,2), retail returns the
+        // REGISTERED one, and a split leaves those pointing at
+        // different castles — mc2l12 t=18304 onward, where the player
+        // sits docked at the registered castle and the port probed the
+        // orphan instead (retail `d88` 1293, port 129: the whole
+        // at-castle boost missed, 1164/tick).
+        let at_castle = if no_mc2_castle_register() {
+            self.player_castle()
+        } else {
+            self.player_castle_bound()
+        }
+        .is_some_and(|c| overlap(&self.g.ent[c]));
         let at_dolmen = (1..self.g.ent.len()).any(|j| {
             let e = &self.g.ent[j];
             e.class64 == 2 && e.model65 == 2 && e.flags & 0x400 == 0 && overlap(e)
@@ -12402,7 +12415,7 @@ impl World {
     /// `MGC_NO_CASTLE_BIND_REGISTER=1` restores the bare pool scan —
     /// the A/B arm for this law.
     pub(crate) fn player_castle_bound(&self) -> Option<usize> {
-        if matches!(self.game, GameId::Mc2) || crate::mc1::combat::no_castle_bind_register() {
+        if crate::mc1::combat::no_castle_bind_register() {
             return self.player_castle();
         }
         let reg = self.g.castle_reg[0] as usize;
@@ -35435,8 +35448,14 @@ mod tests {
             e.f26 = 1; // level 1
             e.flags &= !crate::mc2::castle::F_UPGRADE_ARMED;
         }
+        // …and its OWNER REGISTER, which in retail is written by the
+        // very level-up commit that took it to level 1 (EF:61896). A
+        // hand-built castle that skips the commit is a castle retail
+        // would call UNBOUND, and `player_castle_bound` would rightly
+        // read the cast as a CREATE instead of this rig's upgrade.
+        w.g.castle_reg[0] = c as u16;
         assert!(m < c, "rig: the token ({m}) must sit below the castle ({c})");
-        assert_eq!(w.player_castle(), Some(c), "the human's castle is bound");
+        assert_eq!(w.player_castle_bound(), Some(c), "the human's castle is bound");
 
         // The native input path fires a non-rapid spell ONCE per
         // click (retail's ISR press latch, `mc2_cast_input`); the
@@ -35578,6 +35597,9 @@ mod tests {
             e.f26 = 1;
             e.flags &= !crate::mc2::castle::F_UPGRADE_ARMED;
         }
+        // The register the level-up commit would have written — see
+        // the sibling rig above.
+        w.g.castle_reg[0] = c as u16;
         w.tick(castle_pose(), PlayerCommand { fire_left: true, ..Default::default() });
         let balls = live_castle_balls(&w);
         assert_eq!(balls.len(), 1, "one (9,10) in flight");
@@ -37041,9 +37063,10 @@ mod tests {
         // register only once the castle has taken a level — see
         // [`no_mc2_castle_register`].
         w.g.ent[c].f26 = 1;
+        w.g.castle_reg[0] = c as u16;
         assert!(
-            w.player_castle().is_some(),
-            "fixture: the castle resolves as the human's"
+            w.player_castle_bound().is_some(),
+            "fixture: the castle resolves as the human's REGISTERED one"
         );
         let seat = {
             let e = &w.g.ent[c];
@@ -49342,6 +49365,151 @@ mod tests {
         // Bit 0 wins the `if`/`else if` even with both raised.
         w.hand_bits |= 0x200;
         assert_eq!(w.mc2_hand_side(), Some(false));
+    }
+
+    /// PATCH `one_castle_per_wizard` (MC2 arm) — THE BRAIN SPLIT.
+    /// Retail's create guard (EF:58831) reads the owner's
+    /// `CastleEntityIndex_0x3A_58`, and only the level-up commit
+    /// writes it (`mc2_castle_upgrade`, EF:61896) — a tick after the
+    /// ball minted the (3,2). A second ball landing inside that
+    /// window therefore reads a ZERO register and builds a SECOND
+    /// castle; the register then names the newer one and the older
+    /// is orphaned ALIVE. Witnessed on `recordings/mc2l12.mgcr`
+    /// (t=18273 castle 678 born, t=18274 castle 708 born and taken
+    /// by the register, 678 unowned for hundreds of ticks).
+    /// Patched: the guard asks the POOL, which knows the record the
+    /// tick it is born, so the window closes.
+    #[test]
+    fn mc2_second_castle_ball_inside_the_register_window_splits_only_on_retail() {
+        let run = |patched: bool| -> (Vec<usize>, usize, usize) {
+            let mut w = mc2_flat_world();
+            w.patches.one_castle_per_wizard = patched;
+            // ⭐ THE WINDOW, SPELLED OUT. The ball takes the LOWER
+            // pool slot, so the entity walk resolves its landing
+            // BEFORE the standing castle's own dispatch runs the
+            // level-up commit that writes the owner's register —
+            // the same ordering mc2l12 t=18274 had. Under retail
+            // the ball therefore reads a register that is still
+            // zero.
+            //
+            // The ball is born UNDER THE PLAYER (the walk only
+            // dispatches inside the awake radius) and BELOW the
+            // ground, so the flight's terrain test lands it this
+            // tick. (Zero life would land it too, but the tick-top
+            // reap frees a life-0 record before the walk reaches it.)
+            let (bx, by) = (180u16 << 8, 180u16 << 8);
+            let ball = w
+                .g
+                .mc2_spawn_cast_proj(10, bx, by, -2000)
+                .expect("castle ball");
+            {
+                let e = &mut w.g.ent[ball];
+                e.id24 = PLAYER_TARGET;
+                e.f68 = 3;
+                e.f69 = 2;
+                e.f146 = 0;
+                e.flags |= 2; // already armed: skip the launch site test
+                e.dest_x = bx;
+                e.dest_y = by;
+            }
+            // …and only NOW the castle the owner already holds,
+            // standing well clear of the landing site so proximity is
+            // not what decides this.
+            let first = w.g.spawn_castle(60 << 8, 60 << 8).expect("first castle");
+            w.g.ent[first].id24 = PLAYER_TARGET;
+            assert!(first > ball, "the ball dispatches first");
+            assert_eq!(w.g.castle_reg[0], 0, "the register has not been written yet");
+            let pose = PlayerPose::level(bx, by, 3712, 0);
+            w.tick(pose, PlayerCommand::default());
+            let castles: Vec<usize> = (1..w.g.ent.len())
+                .filter(|&j| {
+                    let e = &w.g.ent[j];
+                    e.class64 == 3
+                        && e.model65 == 2
+                        && e.id24 == PLAYER_TARGET
+                        && e.flags & 0x400 == 0
+                })
+                .collect();
+            (castles, w.g.castle_reg[0] as usize, first)
+        };
+        let (retail, reg, first) = run(false);
+        assert_eq!(
+            retail.len(),
+            2,
+            "retail: the zero register let the second ball build — the owner holds TWO castles, \
+             {retail:?}"
+        );
+        // …and the register took the NEWER one, which is what leaves
+        // the older standing castle ORPHANED: alive, functional, and
+        // owned by no player brain.
+        assert!(retail.contains(&first), "the first castle is still standing: {retail:?}");
+        assert_ne!(
+            reg, first,
+            "retail: the register latched the NEWER castle, orphaning the first ({retail:?})"
+        );
+        let (patched, reg, first) = run(true);
+        assert_eq!(
+            patched,
+            vec![first],
+            "patched: the pool scan sees the standing castle, so the ball never builds a second"
+        );
+        assert_eq!(reg, first, "…and the register still names it");
+    }
+
+    /// PATCH `one_castle_per_wizard` (MC1 / HW arm). MC1 is looser
+    /// than MC2 and needs no timing race at all: the plain create
+    /// arm (`:63588-`) carries NO owner test whatsoever, so any
+    /// castle ball that reaches the ground builds — and Create
+    /// Castle is a 101-shot BURST (`SPELLS[16].count`), so one held
+    /// cast sprays balls for as long as you hold it. Turn while
+    /// holding and they land far enough apart that the spatial site
+    /// test does not refuse them, and each one raises its own
+    /// castle. Patched: the pool scan refuses every landing after
+    /// the first.
+    #[test]
+    fn mc1_a_second_castle_ball_builds_a_second_castle_only_on_retail() {
+        let run = |patched: bool| -> usize {
+            let mut w = flat_world();
+            w.patches.one_castle_per_wizard = patched;
+            let (bx, by) = (180u16 << 8, 180u16 << 8);
+            // Born below the ground so the flight lands it this tick
+            // (a life-0 record is reaped before the walk reaches it).
+            let ball = w.g.spawn_castle_ball(bx, by, -2000).expect("castle ball");
+            {
+                let e = &mut w.g.ent[ball];
+                e.id24 = PLAYER_TARGET;
+                e.f68 = 3;
+                e.f69 = 2;
+                e.f146 = 0; // create arm, not the homing delivery
+                e.flags |= 2; // already armed: the launch latch eats a tick
+            }
+            // The castle the owner already holds, far enough away
+            // that `castle_site_ok`'s proximity test is not what
+            // decides this — the player's own "sufficient distance".
+            let first = w.g.spawn_castle(60 << 8, 60 << 8).expect("first castle");
+            w.g.ent[first].id24 = PLAYER_TARGET;
+            let pose = PlayerPose::level(bx, by, 3712, 0);
+            w.tick(pose, PlayerCommand::default());
+            (1..w.g.ent.len())
+                .filter(|&j| {
+                    let e = &w.g.ent[j];
+                    e.class64 == 3
+                        && e.model65 == 2
+                        && e.id24 == PLAYER_TARGET
+                        && e.flags & 0x400 == 0
+                })
+                .count()
+        };
+        assert_eq!(
+            run(false),
+            2,
+            "retail: the plain create arm asks nothing, so the ball raises a SECOND castle"
+        );
+        assert_eq!(
+            run(true),
+            1,
+            "patched: the ball is refused and the owner keeps exactly one castle"
+        );
     }
 
     /// PATCH `dual_wield_muzzle` (MC2 arm). Retail's per-wizard hand

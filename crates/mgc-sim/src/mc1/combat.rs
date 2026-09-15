@@ -3263,6 +3263,7 @@ impl Gen {
     fn proj_castle_ball_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let mc1 = !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
         let patched = ctx.patches.castle_latch_bug && !ctx.strict;
+        let one_castle = ctx.patches.one_castle_per_wizard && !ctx.strict;
         // sub_53980's dispatch is on the TARGET, not the model: a
         // ball with a homing slot in +146 (the upgrade cast stamps
         // the bound castle, :65906-08) runs the HOMING arm —
@@ -3273,7 +3274,7 @@ impl Gen {
         // family). +146 = 0 falls through to the sub_53B50
         // create-castle arm below.
         if mc1 && self.ent[i].f146 != 0 {
-            return self.castle_ball_homing_tick(i);
+            return self.castle_ball_homing_tick(i, one_castle);
         }
         // The UPGRADE variant (+69 = 43, :65904-08) skips the
         // placement scans — it flies at the OWN castle and morphs
@@ -3429,15 +3430,39 @@ impl Gen {
                     self.move_relink(i, t.0, t.1, t.2);
                 }
             }
-            if let Some(c) = self.spawn_castle(bx, by) {
-                self.ent[c].id24 = own;
-                // Claim owner (+144) — the mana census counts the
-                // castle's stored mana into the owner's ceiling.
-                self.ent[c].f144 = own;
+            // ONE CASTLE PER WIZARD (patched arm only). Retail's
+            // plain create arm carries NO owner test whatsoever —
+            // land two balls far enough apart that sub_12F70 does not
+            // refuse the site and BOTH build, splitting the owner's
+            // brain (`WorldPatches::one_castle_per_wizard`). MC2's
+            // arm at least reads a register; this one reads nothing.
+            // Refuse the way MC2's guard does: despawn the ball.
+            if !(one_castle && self.castle_owned_by(own)) {
+                if let Some(c) = self.spawn_castle(bx, by) {
+                    self.ent[c].id24 = own;
+                    // Claim owner (+144) — the mana census counts the
+                    // castle's stored mana into the owner's ceiling.
+                    self.ent[c].f144 = own;
+                }
             }
             self.ent[i].flags |= 0x400;
         }
         false
+    }
+
+    /// Does `own` already hold a castle? ANY live, un-reaped (3,2)
+    /// stamped with that owner, AT ANY LEVEL — the patched arm's
+    /// answer to "do you already have one"
+    /// (`WorldPatches::one_castle_per_wizard`). Deliberately not
+    /// retail's test on either arm: retail MC1 asks nothing at all on
+    /// the plain create and demands `f26 > 0` on the delivery, and
+    /// retail MC2 reads a register written a tick late. All three
+    /// leave a window; a pool scan with no level test leaves none.
+    pub(crate) fn castle_owned_by(&self, own: u16) -> bool {
+        (1..self.ent.len()).any(|c| {
+            let e = &self.ent[c];
+            e.class64 == 3 && e.model65 == 2 && e.id24 == own && e.flags & 0x400 == 0
+        })
     }
 
     /// sub_53980's +146 arm (:63459-63518): the HOMING castle ball.
@@ -3457,7 +3482,7 @@ impl Gen {
     /// manifestation charge pin instead of killing the ball
     /// (:63513-15, sub_46D20(pool[+24], 0): the ball lives and
     /// retries next tick).
-    fn castle_ball_homing_tick(&mut self, i: usize) -> bool {
+    fn castle_ball_homing_tick(&mut self, i: usize, one_castle: bool) -> bool {
         let tgt = self.ent[i].f146 as usize;
         if tgt < self.ent.len() {
             let (tx, ty, tz) = {
@@ -3516,13 +3541,20 @@ impl Gen {
                     self.ent[i].act_life
                 );
             }
+            // `e.f26 > 0` is retail's own level test (:63500-04), and
+            // it is the second half of the split window: a castle that
+            // has LANDED but not yet transformed reads as unowned, so
+            // a delivery arriving before the first transform builds
+            // again. The patched arm drops the level test — any live
+            // (3,2) of this owner counts (`WorldPatches::
+            // one_castle_per_wizard`).
             let bound = |s: &Self| {
                 (1..s.ent.len()).any(|c| {
                     let e = &s.ent[c];
                     e.class64 == 3
                         && e.model65 == 2
                         && e.id24 == own
-                        && e.f26 > 0
+                        && (one_castle || e.f26 > 0)
                         && e.flags & 0x400 == 0
                 })
             };

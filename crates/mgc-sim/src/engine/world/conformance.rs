@@ -281,7 +281,9 @@ impl World {
     /// pair's start tick). The primary terrain source when present,
     /// layered over [`World::restore_planes`]'s pristine base so
     /// shading (and unmeasured planes) keep their level values.
-    /// Wrong-size slices are an error, never a partial write.
+    /// Wrong-size slices are an error, never a partial write; a
+    /// measured CEILING on a level that carries no ceiling plane is
+    /// dropped rather than installed (see the body).
     pub fn install_measured_terrain(
         &mut self,
         height: &[u8],
@@ -298,6 +300,17 @@ impl World {
                 self.g.t.tile_type.len()
             ));
         }
+        // OFF-CAVE CEILING: the port allocates `ceiling` only on MC2
+        // cave levels, and an allocated plane IS the cave signal
+        // (`Gen::is_cave`, world.rs's night-shade derive) — so a
+        // measured ceiling on a Day/Night take must NOT be installed;
+        // it would flip the level into cave mode. The recorder
+        // captures the plane on every map type now (retail's painters
+        // keep it live off-cave even though only the cave generator
+        // seeds it), so this is a lane the capture carries and the
+        // port does not model, not a size error. Drop it; see
+        // `has_ceiling_plane` for the harness's report of the drop.
+        let ceiling = ceiling.filter(|_| !self.g.t.ceiling.is_empty());
         if let Some(c) = ceiling
             && c.len() != self.g.t.ceiling.len()
         {
@@ -327,6 +340,15 @@ impl World {
         self.measured_terrain = true;
         self.terrain_dirty = true;
         Ok(())
+    }
+
+    /// Does this level carry a CEILING plane at all? MC2 cave levels
+    /// do; Day and Night levels do not, and for them the plane's
+    /// absence is the cave signal itself. The harness asks so it can
+    /// name the measured ceiling that [`Self::install_measured_terrain`]
+    /// drops as an UNGRADED LANE rather than leaving the drop silent.
+    pub fn has_ceiling_plane(&self) -> bool {
+        !self.g.t.ceiling.is_empty()
     }
 
     /// Seed the cast edge-trigger baseline (the held state of the tick
@@ -3202,6 +3224,25 @@ impl World {
             }
         }
         self.g.rival_ents[local] = 0;
+        // THE CASTLE REGISTER (`CastleEntityIndex_0x3A_58`, +998+58)
+        // — imported RAW, like the MC1 wizext+50 twin above, and for
+        // the same reason: it is NOT derivable from the pool. A
+        // player mid-SPLIT has two live castles and a word naming one
+        // of them; a player whose orphan just died has a live castle
+        // and a word naming NOTHING. Only the capture knows which.
+        // Must run AFTER `rival_ents`, which `owner_team` reads.
+        for t in 0..8 {
+            self.g.castle_reg[t] = 0;
+        }
+        for (i, p) in st.players.iter().enumerate().take(8) {
+            if p.play_index == 0 {
+                continue;
+            }
+            let owner = if i == local { PLAYER_TARGET } else { tr(p.play_index) };
+            if let Some(team) = self.g.owner_team(owner) {
+                self.g.castle_reg[team as usize] = p.castle_ent.max(0) as u16;
+            }
+        }
         // MC2 rival re-anchor — the MC1 rival-freeze twin: the
         // class-3 dispatch keys on `mc2_rivals[ri].ent`, which the
         // world-build seeded with fresh spawn slots, so every

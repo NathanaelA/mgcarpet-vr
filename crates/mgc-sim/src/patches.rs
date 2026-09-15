@@ -141,6 +141,53 @@ pub struct WorldPatches {
     /// SAME spell from both hands is a different mechanism (one
     /// token per spell id, not per hand) and is NOT changed here.
     pub dual_wield_muzzle: bool,
+    /// **ONE CASTLE PER WIZARD** (player-reported 2026-09-15, an
+    /// unfaithful patch, DEFAULT ON, all three games). Retail's
+    /// "do you already own a castle" test is a REGISTER read, and
+    /// the register is written ONE TICK LATE — MC2's create guard
+    /// (EF:58831) reads the owner's `CastleEntityIndex_0x3A_58`,
+    /// which only lands in the castle's own level-up commit
+    /// (`sub_60480` EF:61896, beside `level++` / `actionIndex = 5`),
+    /// a tick after the ball minted the (3,2) record. Two castle
+    /// balls in the air whose landings fall one tick apart — the
+    /// rapid-fire-while-turning cast, far enough apart that the
+    /// spatial site test does not refuse the second — therefore BOTH
+    /// build: the second reads a zero register, passes the guard,
+    /// and the register then latches the NEWER castle, orphaning the
+    /// older one ALIVE. An orphaned castle is fully functional and
+    /// belongs to no player brain: its balloons never resolve a home,
+    /// their health cycles, no mana is banked, and when the
+    /// registered castle dies the owner is left pointing at nothing
+    /// while the orphan stands. Witnessed on `recordings/mc2l12.mgcr`
+    /// — seven split births from t=18274, castle 678 orphaned for
+    /// hundreds of ticks (`castle_split_probe_mc2`).
+    ///
+    /// MC1 is looser still and needs no timing race at all: the plain
+    /// create-ball arm (:63588-) carries NO owner test whatsoever,
+    /// and the homing/delivery arm's test (:63500-04) demands
+    /// `f26 > 0`, so a castle that has landed but not yet transformed
+    /// does not count as owned. Hidden Worlds shares that arm.
+    ///
+    /// Patched: every castle-ball landing that would CREATE resolves
+    /// the owner's castle by POOL SCAN — any live, un-reaped (3,2)
+    /// stamped with that owner, at any level — and despawns the ball
+    /// instead of building a second one. The scan sees the record the
+    /// tick it is born, so the one-tick window closes; the level test
+    /// is dropped, so the not-yet-transformed window closes with it.
+    /// Retail's refusal shape is kept exactly (the ball despawns; no
+    /// refund, no re-aim), and the create-vs-upgrade decision at CAST
+    /// time is untouched.
+    ///
+    /// ⚠ The retail arm needs the register the port never modelled,
+    /// so `false` additionally drives [`crate::engine::world::Gen`]'s
+    /// `castle_reg` from the MC2 level-up commit and teardown — the
+    /// ONLY MC2 consumer of that array. Every other MC2 "which castle
+    /// is mine" question stays on its existing pool scan: retail
+    /// resolves ~21 brain sites through the register, and modelling
+    /// those would be building the split's whole blast radius
+    /// faithfully for a behaviour we ship disabled (player ruling,
+    /// 2026-09-15).
+    pub one_castle_per_wizard: bool,
 }
 
 impl WorldPatches {
@@ -158,6 +205,7 @@ impl WorldPatches {
         mc1_fix_dragon_tail: false,
         mc2_phantom_castle: false,
         dual_wield_muzzle: false,
+        one_castle_per_wizard: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -180,5 +228,6 @@ impl WorldPatches {
         mc1_fix_dragon_tail: false,
         mc2_phantom_castle: false,
         dual_wield_muzzle: false,
+        one_castle_per_wizard: false,
     };
 }

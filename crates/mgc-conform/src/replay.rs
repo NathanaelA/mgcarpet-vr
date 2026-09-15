@@ -2954,6 +2954,19 @@ fn run_mc2(
                         if measured { "MEASURED" } else { "pristine" }
                     );
                 }
+                // The recorder captures the cave CEILING on every map
+                // type; the port models the plane only on caves, where
+                // its presence IS the cave signal. Naming the drop
+                // keeps the off-cave ceiling an ANNOUNCED ungraded
+                // lane instead of a silent one.
+                if !args.brief
+                    && measured_planes(&timg).is_some_and(|(_, _, c, _)| c.is_some())
+                    && !world.has_ceiling_plane()
+                {
+                    println!(
+                        "   ⚠ measured CEILING dropped: this level carries no ceiling plane                          (off-cave) — the capture's ceiling is an UNGRADED lane here"
+                    );
+                }
                 // Same law as the MC1 arm: a reset restores terrain
                 // from the measured channel, so without one the count
                 // is a capture artifact.

@@ -586,6 +586,17 @@ impl Gen {
         self.mc2_castle_ladder(i);
         self.mc2_castle_stages(i);
         let own = self.ent[i].id24;
+        // THE OWNER'S CASTLE REGISTER (`CastleEntityIndex_0x3A_58`,
+        // EF:61896) — written HERE, in the level-up commit, and
+        // nowhere else. That is a tick after the ball minted the
+        // record, and the create guard reads this word: the lag IS
+        // the multiple-castles window (`WorldPatches::
+        // one_castle_per_wizard`). The port keeps it in the MC1
+        // `castle_reg` array rather than a second per-player field;
+        // the create guard's retail arm is its only MC2 reader.
+        if let Some(team) = self.owner_team(own) {
+            self.castle_reg[team as usize] = i as u16;
+        }
         if own == crate::mc1::mobs::PLAYER_TARGET {
             self.mc2_cast_xp.0.push((own, 2, 1));
         }
@@ -758,6 +769,23 @@ impl Gen {
             // `features.rs::castle_downgrade` leaves the fleet to its
             // wrapper tail. MC2 was the laggard column.
             self.mc2_castle_free_stages(i);
+            // …and the register zero the comment above names
+            // (EF:61969), the twin of the level-up write in
+            // `mc2_castle_upgrade`. Clearing it is what re-opens the
+            // create guard for the next castle — and, in retail, what
+            // strands an ORPHANED castle's owner pointing at nothing.
+            // ⭐ UNCONDITIONAL — retail zeroes the owner's word
+            // whatever it named (`v8x->…CastleEntityIndex = 0`, no
+            // identity test). With a SPLIT standing that is the
+            // player's "my castle pointer reset entirely": the
+            // ORPHANED castle dying takes the register for the one
+            // still standing with it. Witnessed on mc2l12 between
+            // t=19714 (register 293, castles [293, 678]) and t=42387
+            // (register 0, castle 293 alive) — orphan 678 died and
+            // unbound 293.
+            if let Some(team) = self.owner_team(self.ent[i].id24) {
+                self.castle_reg[team as usize] = 0;
+            }
             self.ent[i].flags |= 0x400;
         }
     }

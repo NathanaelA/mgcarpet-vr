@@ -9458,6 +9458,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         mc1_fix_dragon_tail: p.mc1_fix_dragon_tail.on(),
         mc2_phantom_castle: p.mc2_phantom_castle.on(),
         dual_wield_muzzle: p.dual_wield_muzzle.on(),
+        one_castle_per_wizard: p.one_castle_per_wizard.on(),
     }
 }
 

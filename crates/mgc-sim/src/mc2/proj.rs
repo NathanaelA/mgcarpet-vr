@@ -2555,7 +2555,8 @@ impl Gen {
     /// runs on the ball's own FIRST dispatch, one tick after the
     /// cast: arm bit + site test at the launch pose, no move
     /// (t=242), first flight step the tick after (243).
-    pub(crate) fn mc2_castle_ball_tick(&mut self, i: usize) {
+    pub(crate) fn mc2_castle_ball_tick(&mut self, i: usize, ctx: &MobCtx) {
+        let patched = ctx.patches.one_castle_per_wizard && !ctx.strict;
         let tgt = self.ent[i].f146 as usize;
         let upgrade_flight = tgt != 0 && tgt != PLAYER_TARGET as usize && tgt < self.ent.len();
         if !upgrade_flight && self.ent[i].flags & 2 == 0 {
@@ -2690,9 +2691,23 @@ impl Gen {
         }
         let own = self.ent[i].id24;
         let (fc, fm) = (self.ent[i].f68, self.ent[i].f69);
-        // The stale-create guard (EF:58528-31): a (3,2) delivery
-        // whose owner already holds a BOUND castle just despawns.
-        if fc == 3 && self.mc2_castle_of(own).is_some() {
+        // The stale-create guard (EF:58831): a (3,2) delivery whose
+        // owner already holds a castle just despawns.
+        //
+        // WHICH "already holds" is the whole multiple-castles bug.
+        // Retail reads the owner's REGISTER, written a tick late by
+        // the level-up commit (`Gen::mc2_castle_upgrade`), so a
+        // second ball landing in that window builds a second castle
+        // and orphans the first. The patched arm asks the POOL
+        // instead, which knows the record the tick it is born — see
+        // `WorldPatches::one_castle_per_wizard`.
+        let holds = if patched {
+            self.mc2_castle_of(own).is_some()
+        } else {
+            self.owner_team(own)
+                .is_some_and(|team| self.castle_reg[team as usize] != 0)
+        };
+        if fc == 3 && holds {
             self.ent[i].flags |= 0x400;
             return;
         }
