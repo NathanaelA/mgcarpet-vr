@@ -6466,7 +6466,7 @@ impl App {
         #[cfg(target_os = "android")]
         if enhanced {
             self.cfg.render.preference.fog_distance = 50;
-            self.cfg.sim.parameters.awake_range = Option::from(75);
+            self.cfg.sim.parameters.awake_range = Option::from(55);
         } else {
             // We reset this to actual defaults.
             self.cfg.render.preference.fog_distance = 20;
@@ -6497,38 +6497,16 @@ impl App {
     /// per-game load `App::new` runs at boot, replayed when the
     /// pre-game menu picks a different game.
     fn reload_game_audio(&mut self, is_mc2: bool) {
+        // We need to reset this so that ensure_audio will reload the proper bundle.
+        self.audio = None;
         if !(self.cfg.audio.sound || self.cfg.audio.music) {
-            self.audio = None;
             return;
         }
-        let mut a = mgc_audio::Audio::open();
-        a.set_prefer_gm(self.cfg.audio.arrangement.prefer_gm());
-        if is_mc2 {
-            a.set_mc2_danger_ramp();
-        }
-        let dir = get_baked_directory()
-            .join("assets")
-            .join(if is_mc2 { "mc2-audio" } else { "mc1-audio" });
-        if dir.is_dir() {
-            if let Err(e) = a.load_bundle(&dir, 0) {
-                eprintln!("note: audio bundle: {e}");
-            }
-        } else {
-            eprintln!("note: no audio bundle baked — sound effects disabled (rebake)");
-        }
-        a.set_volumes(
-            if self.cfg.audio.sound {
-                self.cfg.audio.sfx_volume
-            } else {
-                0.0
-            },
-            if self.cfg.audio.music {
-                self.cfg.audio.music_volume
-            } else {
-                0.0
-            },
-        );
-        self.audio = Some(a);
+
+        // self.audio is assigned in ensure_audio.
+        self.ensure_audio();
+        self.apply_volumes();
+
     }
 
     /// One frontend frame (`screen != Level`): the P options menu
@@ -10922,7 +10900,7 @@ fn parse_args() -> Result<Args, String> {
     args.crosshair = Option::from(false);
     args.vsync = Option::from(false);
     args.slot = Option::from(1);
-    args.pool_slots = Option::from(5000);
+    args.pool_slots = Option::from(20000); // Match the new rev17 defaults.
     args.thrust = Some(config::ThrustModel::Enhanced);
     args.config = Option::from(PathBuf::from("/storage/emulated/0/mgcarpet/mgcarpet.json"));
     if !args.level.starts_with("/") {
