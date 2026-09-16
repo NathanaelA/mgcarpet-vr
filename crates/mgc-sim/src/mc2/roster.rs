@@ -62,6 +62,34 @@ pub(crate) fn mc2_splash_pred_axis_law() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SPLASH_PRED_AXIS").is_none())
 }
 
+/// ⭐⭐⭐ THE MC2 WIZARD DEATH-FALL (10,1) PUFF IS SPAWNED AT RETAIL'S
+/// GLOBAL SCRATCH AXIS TOO — `sub_5E310` pushes `0x1b398`, never
+/// `&a1x->position` (shipped `NETHERW.EXE` file 0x82BDD, the bytes are
+/// quoted at the two call sites). It agrees with the corpse's own
+/// position on an ordinary fall, because `sub_5D530` committed the
+/// carpet into that global two statements earlier — and parts from it
+/// whenever the mover took its `byte[1] & 8` early return (file
+/// 0x81d3f/0x81d4d: the veto path RETURNS without writing 0x1b398), as
+/// it does for every tick of a death inside a whirlwind.
+/// `MGC_NO_MC2_FALL_PUFF_PRED_AXIS=1` restores the pre-round-138 port
+/// behaviour: the puff at the corpse's own settled axis, and no
+/// carpet-side publish into `Gen::mc2_pred_axis`.
+/// See [`crate::engine::world::World::mc2_player_fall`] and
+/// `step_player_flight_mc2`.
+pub(crate) fn no_mc2_fall_puff_pred_axis() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FALL_PUFF_PRED_AXIS").is_some())
+}
+
+/// ⭐⭐⭐ A/B toggle for **THE m15 WANDER'S UNCONDITIONAL AXIS SEED**:
+/// set `MGC_NO_MC2_M15_WANDER_PRED_AXIS` to restore the pre-dig port,
+/// which published [`Gen::mc2_pred_axis`] only when the wander
+/// actually stepped. See the citation on [`Gen::m15_wander`].
+pub(crate) fn no_mc2_m15_wander_pred_axis() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M15_WANDER_PRED_AXIS").is_some())
+}
+
 const M2_BASE: u8 = 16;
 const M9_BASE: u8 = 72;
 
@@ -238,6 +266,20 @@ fn no_mc2_m24_pose_plain_sprite() -> bool {
 fn no_mc2_m18_aim_unguarded() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M18_AIM_UNGUARDED").is_some())
+}
+/// A/B toggle for m18's UNGUARDED WATCH ARM (`sub_24E20`'s
+/// `byte_0x46_70 == 1` branch, EF:15882-15902 / NETHERW.EXE VA 0x24F9D
+/// — see [`Gen::m18_tick`]'s `0 =>`): set
+/// `MGC_NO_MC2_M18_WATCH_UNGUARDED` to restore the pre-dig behaviour,
+/// where the watch arm resolved `word_0x96_150` through the
+/// LIVENESS-GUARDED [`Gen::mc2_target`], so the tick its quarry died
+/// the tank dropped the target and re-armed the roam timer instead of
+/// keeping its bearing on the corpse — and where an empty
+/// `word_0x96_150` (or a `byte_0x46_70` of 2+) also fell into that
+/// drop instead of retail's bare `return`.
+fn no_mc2_m18_watch_unguarded() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M18_WATCH_UNGUARDED").is_some())
 }
 /// A/B toggle for the m21 PHASE-7 WRAPPER TAIL (`sub_26470`'s last
 /// two lines, EF:16963-65 — see [`Gen::m21_wrapper_tail`]): set
@@ -2168,6 +2210,50 @@ impl Gen {
                 _ => pos.0 = (pos.0 >> 8 << 8) + 128,
             }
         }
+        // ⭐⭐⭐ AND THAT CANDIDATE **IS** RETAIL'S GLOBAL SCRATCH AXIS
+        // (`predictedAxis_EB398ar`, [`Gen::mc2_pred_axis`]) — the
+        // re-seed and the tile snap are both writes to the GLOBAL, and
+        // they are UNCONDITIONAL: they happen on every wander tick,
+        // including the ~45% that never take the step below. So an m15
+        // that stands still still leaves its own position in the
+        // global for the rest of the tick. The port kept the candidate
+        // in a local and published only inside the `if`, so a
+        // non-stepping guard published NOTHING. Shipped `NETHERW.EXE`,
+        // `sub_24190` = file **0x48990** (VA 0x24190, file = VA +
+        // 0x24800); the seed is the first thing past the `%8` probe
+        // loop and every path but the `actionIndex = 124` bail reaches
+        // it (`jne 0x48a95` at 0x489c6, `jae 0x48a95` at 0x489fc):
+        // ```text
+        //   48a95: bf 98 b3 01 00  mov  edi,0x1b398    ; &predictedAxis
+        //   48a9a: 8d 73 4c        lea  esi,[ebx+0x4c] ; &a1x->position
+        //   48a9f: a5              movsd               ; ⭐ x,y
+        //   48aa0: 66 a5           movsw               ; ⭐ z
+        //   48aa2: 8a 53 3e        mov  dl,[ebx+0x3e]  ; phase — the %16
+        //   48aaf: f7 f9           idiv ecx            ;   gate comes AFTER
+        //   48ab3: 75 50           jne  0x48b05
+        //   48ae5: 66 a3 9a b3 01 00  mov [0x1b39a],ax ; snap y IN THE GLOBAL
+        //   48aff: 66 a3 98 b3 01 00  mov [0x1b398],ax ; snap x IN THE GLOBAL
+        // ```
+        // and the step the port was keying on is guarded, the seed is
+        // not (file 0x48bb2-0x48be6):
+        // ```text
+        //   48bb2: 7f 2c           jg   0x48be0        ; rand%0x14 > 10 ⇒ NO STEP
+        //   48bc5: 68 98 b3 01 00  push 0x1b398        ; MoveEntity_57FA0
+        //   48bca: e8 d1 3b 03 00  call 0x7c7a0        ;   (VA 0x57FA0)
+        //   48bd2: 68 98 b3 01 00  push 0x1b398
+        //   48bd8: e8 13 39 03 00  call 0x7c4f0        ; CopyEntityPosition_57CF0
+        //   48be1: e8 fa aa ff ff  call 0x436e0        ; sub_1EEE0 — NO publish
+        // ```
+        // WITNESS: the other half of the mc2l16 t=7844 pair. With the
+        // alt-commit over-publish removed, retail's axis at the human's
+        // fall puff is slot 300's (7002, 20864, 5248) — a (5,15) whose
+        // `rand % 0x14` came up 11+ that tick, so it did not step and
+        // the port published nothing at all, leaving the puff on slot
+        // 298, two slots earlier.
+        // `MGC_NO_MC2_M15_WANDER_PRED_AXIS=1` restores the old gate.
+        if !no_mc2_m15_wander_pred_axis() {
+            self.mc2_pred_axis = crate::engine::features::Mc2PredAxis(pos);
+        }
         // Packmate separation (:15301-11): first same-model neighbor
         // within 256 on both axes — the away bearing lands in ROLL
         // (f34), the wander heading stays in YAW (f30): retail
@@ -2274,7 +2360,29 @@ impl Gen {
                     || ((src as usize) < self.ent.len()
                         && src != 0
                         && self.ent[src as usize].class64 == 3);
-                if is_c3 && src != self.ent[i].id24 {
+                // ⭐ THE SECOND TEST IS AN **OWNER** TEST, NOT AN
+                // INDEX TEST: retail reads
+                // `Entities_EA3E4[word_0x26_38]->id_0x1A_26` and
+                // compares it to the guard's own `id_0x1A_26`
+                // (NETHERW.EXE 0x48501 `mov 0x1a(%eax),%ax` /
+                // 0x48505 `cmp 0x1a(%ebx),%ax`), so a guard hit by
+                // ANY class-3 record of its OWN wizard — its castle,
+                // its balloons, the wizard himself — stays in 121.
+                // The port compared the SOURCE SLOT against the owner
+                // tag, which is only ever equal for a wizard whose
+                // id24 is its own slot. Kill switch
+                // `MGC_NO_MC2_M15_HIT_OWNER_GATE`.
+                let own = self.ent[i].id24;
+                let foreign = if crate::mc2::mobs::no_mc2_m15_hit_owner_gate() {
+                    src != own
+                } else if src == PLAYER_TARGET {
+                    PLAYER_TARGET != own
+                } else if (src as usize) < self.ent.len() {
+                    self.ent[src as usize].id24 != own
+                } else {
+                    src != own
+                };
+                if is_c3 && foreign {
                     self.ent[i].tick70 = M15_BASE + 2;
                     self.ent[i].f146 = src;
                 }
@@ -3237,14 +3345,74 @@ impl Gen {
                     return;
                 }
                 if self.ent[i].f71 != 0 {
-                    if let Some((tx, ty, _tz)) = self.mc2_target(self.ent[i].f146, ctx) {
+                    // ⭐⭐⭐ THE WATCH ARM AIMS AT A CORPSE, TOO — the
+                    // OWED sibling of [`Gen::m18_face_raw`]'s barrage
+                    // law, and mc2l14 is its witness. Retail is
+                    // `sub_24E20`'s `byte_0x46_70 == 1` branch,
+                    // EF:15882-15902 (⚠ the stale EF:15872/15875/
+                    // 15890-92 cites in this arm are ~16 lines short —
+                    // the file has grown since). Disassembled from the
+                    // shipped NETHERW.EXE (VA 0x24E20 = file 0x49620,
+                    // VA + 0x24800), addresses shown as VAs:
+                    //
+                    //   0x24e4e  cmp  $1,%al        ; byte_0x46_70
+                    //   0x24e50  je   0x24f9d       ; ...else RETURN
+                    //   0x24f9d  cmpw $0,0x96(%ebx) ; word_0x96_150
+                    //   0x24fa5  je   0x25044       ; ...RETURN
+                    //   0x24fb4  mov  0x1a3e4(,%esi,4),%esi   ; RAW
+                    //   0x24fc3  call 0x58490       ; EuclideanDistXYZ
+                    //   0x24fd5  cmp  %edx,%eax     ; word_160_0x1c_28
+                    //   0x24fd7  jl   0x24ff6       ; near ⇒ face+roll
+                    //   0x24fde  movw $0,0x96(%ebx) ; far ⇒ drop
+                    //   0x24ff6  push $4 / push %esi / call 0x254E0
+                    //
+                    // THE TABLE LOAD HAS NO LIFE / CLASS / REAP TEST,
+                    // exactly like the barrage's case 0 eight hundred
+                    // bytes away; the port routed it through
+                    // `mc2_target`, whose baked-in guard belongs to the
+                    // FIRING phase only. And the two `RETURN` exits
+                    // above are bare — retail does NOT clear the target
+                    // or re-arm the timer on them, where the port's
+                    // `if let … else` fell through to the drop for
+                    // *any* failed resolve (an extra `mc2_rand` draw
+                    // plus an `f26` reload).
+                    //
+                    // WITNESS — mc2l14 pair 5939→5940, slot 38: the
+                    // tank was shot by slot 66 at t=5932 (mail0.src 66
+                    // ⇒ `f146 = 66`, `f71 = 1`, action 144) and had
+                    // been turning at the `(4<<11)/360` = 22/tick cap
+                    // toward bearing 1533 since t=5933. Slot 66 is
+                    // REAP-FLAGGED on t=5940 (`flags.b1_reap4 0 → 1`).
+                    // Retail turns 25 more ticks — yaw 17, 2043, 2021,
+                    // … 1537 — and clamps onto 1533 at t=5965; the port
+                    // stopped dead at yaw 17, cleared `target96` 66 → 0
+                    // and `b46` 1 → 0, and reloaded `scratch10` 61 →
+                    // 681 (the `(0,0)` timer's `d % 400 + 400`).
+                    // Retail's real exit is the `% 0x31` roll, which
+                    // hits at t=5973: action 144 → 146 with
+                    // `scratch10 = 55191 % 200 + 200 = 391`.
+                    let slot = self.ent[i].f146;
+                    if !no_mc2_m18_watch_unguarded() && (self.ent[i].f71 != 1 || slot == 0) {
+                        return; // VA 0x24e56 / 0x24fa5 — bare `return`
+                    }
+                    let t = if no_mc2_m18_watch_unguarded() {
+                        self.mc2_target(slot, ctx)
+                    } else {
+                        self.mc2_target_raw(slot, ctx)
+                    };
+                    if let Some((tx, ty, _tz)) = t {
                         let e = &self.ent[i];
                         // 2-D: retail's `EuclideanDistXYZ_58490`
-                        // (EF:15872) never reads z (2-D despite the
-                        // name).
+                        // (EF:15888) never reads z (2-D despite the
+                        // name) — VA 0x58490 reads only `+0`/`+2` and
+                        // sqrts the sum, verified in NETHERW.EXE at
+                        // file 0x7cc90.
                         let d = crate::mc2::morph::dist2d(e.x, e.y, tx as i32, ty as i32) as u32;
                         if d < BEHAVIOR[e.row156 as usize].v_28 as u32 {
-                            self.m18_face(i, ctx, 22); // (4<<11)/360 (EF:15875)
+                            // VA 0x24ff6: retail hands `sub_254E0` the
+                            // SAME `v10x` it just measured — one
+                            // lookup, not two.
+                            self.m18_face_at(i, (tx, ty, _tz), 22); // (4<<11)/360 (EF:15891)
                             let d2 = self.mc2_rand(i);
                             if d2 % 0x31 == 0 {
                                 self.m18_timer(i, 2, 0);
@@ -5237,6 +5405,62 @@ impl Gen {
             .map(|(j, _)| j)
     }
 
+    /// ⭐⭐⭐ THE M25 BRAIN'S CASTLE LOOKUP IS A **REGISTER READ**, NOT
+    /// A POOL SCAN. `sub_28860`'s three castle questions all
+    /// dereference the WIZARD's extension block and read its
+    /// `CastleEntityIndex_0x3A_58` word:
+    ///   case 3 (EF:18951) — shipped NETHERW.EXE `0x4d1b6`
+    ///       `mov 0xa4(%eax),%eax` / `cmpw $0x0,0x3a(%eax)`;
+    ///   case 5 (EF:18975) — `0x4d23f-0x4d245`
+    ///       `mov 0xa4(%eax),%eax` / `mov 0x3a(%eax),%di`;
+    ///   case 7 (EF:18988) — `0x4d2ae-0x4d2b4`
+    ///       `mov 0xa4(%eax),%eax` / `mov 0x3a(%eax),%dx`,
+    /// and cases 5/7 then use that word DIRECTLY as the pool index
+    /// (`mov 0x1a3e4(,%eax,4),%esi`) with no class, model, owner or
+    /// reap test of any kind.
+    ///
+    /// [`Gen::mc2_castle_of`] is a POOL SCAN, and round 136's law
+    /// applies verbatim: A POOL SCAN RETURNS THE LOWEST-NUMBERED
+    /// MATCH, A REGISTER THE CHOSEN ONE — ONLY A CASTLE SPLIT MAKES
+    /// THEM DIFFER. mc2l12 has a split: orphan castle 678 died at
+    /// ~t=19714 and the UNCONDITIONAL teardown clear took the
+    /// register for castle 293, which is still standing. From
+    /// t=42388 retail's register reads 0 while 293 is alive, so
+    /// retail's `case 3` takes its ELSE arm and BURNS ONE LCG DRAW
+    /// (`imul $0x24a1 … add $0x24df`, `0x4d1d4`) that the port's
+    /// scan-satisfied `case 5` arm never takes. The entity's wander
+    /// pair then reads the wrong two words and the heading walks off
+    /// by up to ±380 per re-anchor.
+    ///
+    /// Witness, mc2l12 pair 42983→42984, slot 868 (5,25):
+    /// retail `rand` 42974 → 63707 (THREE draws), port → 22140 (TWO);
+    /// retail `scratch10` −1 → 109 = 61309 % 100 + 100, the case-3
+    /// draw itself; retail `yaw`/`roll` 268 → 188 = 268 − (63707 %
+    /// 381) with sign −1 from 22140 % 157 / 79, port 310 = 268 +
+    /// (22140 % 381) with sign +1 from 61309 % 157 / 79.
+    ///
+    /// `MGC_NO_MC2_M25_CASTLE_REGISTER=1` restores the pool scan.
+    pub(crate) fn mc2_castle_reg_of(&self, wiz: u16) -> Option<usize> {
+        if crate::mc2::mobs::no_mc2_m25_castle_register() {
+            return self.mc2_castle_of(wiz);
+        }
+        // The wizard whose extension block carries the register.
+        // Retail indexes `Entities[word]` and takes `+0xA4`; the
+        // port keeps the same word per TEAM in `Gen::castle_reg`,
+        // so resolve the wizard record to its team the way
+        // `mc2_castle_of` resolves it to its `id24` owner tag.
+        let own = if wiz == PLAYER_TARGET {
+            PLAYER_TARGET
+        } else if (wiz as usize) < self.ent.len() {
+            self.ent[wiz as usize].id24
+        } else {
+            return None;
+        };
+        let team = self.owner_team(own)?;
+        let c = self.castle_reg[team as usize] as usize;
+        (c != 0 && c < self.ent.len()).then_some(c)
+    }
+
     pub(crate) fn m25_tick(&mut self, i: usize, ctx: &MobCtx) {
         match self.ent[i].tick70 - M25_BASE {
             0 => self.m25_brain(i, ctx),
@@ -5332,7 +5556,7 @@ impl Gen {
                 if !self.mc2_is_wizard(t) {
                     self.ent[i].f71 = 8;
                     self.ent[i].f26 = 100;
-                } else if self.mc2_castle_of(t).is_some() {
+                } else if self.mc2_castle_reg_of(t).is_some() {
                     self.ent[i].f71 = 5;
                     self.ent[i].f146 = t;
                 } else {
@@ -5348,7 +5572,7 @@ impl Gen {
                 }
             }
             5 => {
-                if let Some(c) = self.mc2_castle_of(self.ent[i].f146) {
+                if let Some(c) = self.mc2_castle_reg_of(self.ent[i].f146) {
                     if self.ent[i].f63 & 7 == 0 {
                         let (cx, cy) = (self.ent[c].x, self.ent[c].y);
                         let e = &self.ent[i];
@@ -5375,7 +5599,7 @@ impl Gen {
                     speed_reset = true;
                 }
                 self.ent[i].f71 = 7;
-                if let Some(c) = self.mc2_castle_of(self.ent[i].f146) {
+                if let Some(c) = self.mc2_castle_reg_of(self.ent[i].f146) {
                     let (cx, cy) = (self.ent[c].x, self.ent[c].y);
                     let e = &self.ent[i];
                     let near = ((e.x.wrapping_sub(cx)) as i16 as i32).abs()

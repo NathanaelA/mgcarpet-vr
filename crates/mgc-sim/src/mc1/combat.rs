@@ -8160,6 +8160,14 @@ impl Gen {
         // keep their velocity. (An earlier port arm gave MC1
         // unconditional friction and no roll — contradicted by its own
         // source cite and by the retail corpus's rolling balls.)
+        // ⭐⭐⭐ AND THE SLOPE READ IS RETAIL'S, IN RETAIL'S SCRATCH —
+        // `sub_58030(&a1x->position, &predictedAxis_EB398ar)`
+        // (EF:26271) writes the forward difference into the ENGINE'S
+        // ONE GLOBAL AXIS, so a grounded roll leaves that global
+        // holding two small height deltas instead of a position. See
+        // [`crate::engine::features::mc2_ball_slope_pred_axis`] for
+        // the shipped bytes and the mc2l13 witness.
+        let mut slope_kick = None;
         if grounded {
             let (tx, ty) = ((x >> 8) as u8, (y >> 8) as u8);
             let h = |dx: u8, dy: u8| {
@@ -8167,6 +8175,7 @@ impl Gen {
             };
             let sx = h(0, 0) - h(1, 0) + h(0, 1) - h(1, 1);
             let sy = h(0, 0) + h(1, 0) - h(0, 1) - h(1, 1);
+            slope_kick = Some((sx as i16 as u16, sy as i16 as u16));
             vx = ((vx as i32 + sx) * 250 / 256) as i16;
             vy = ((vy as i32 + sy) * 250 / 256) as i16;
         }
@@ -8174,6 +8183,17 @@ impl Gen {
         self.ent[i].dest_y = vy as u16;
         if (x, y, z) != (x0, y0, z0) {
             self.move_relink(i, x, y, z);
+        }
+        // AFTER the commit: retail's `CopyEntityPosition_57CF0` runs
+        // first (EF:26264) and `sub_58030` right behind it, so the
+        // slope kick is the LAST thing the ball's tick leaves in the
+        // global. `sub_58030` never writes offset 4, so z is kept.
+        if mc2
+            && let Some((kx, ky)) = slope_kick
+            && crate::engine::features::mc2_ball_slope_pred_axis()
+        {
+            let kz = self.mc2_pred_axis.0.2;
+            self.mc2_pred_axis = crate::engine::features::Mc2PredAxis((kx, ky, kz));
         }
         // Merge with an overlapping ball: absorb, despawn the other.
         // A DECAYING ball (the apocalypse-rain channel below) never

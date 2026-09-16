@@ -40,6 +40,21 @@ pub(crate) fn no_castle_scratch_arg() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_CASTLE_SCRATCH_ARG").is_some())
 }
 
+/// `MGC_NO_MC2_PIECE_HUMAN_RAISE=1` restores the pre-dig (10,79) turret
+/// aim, where [`Gen::mc2_piece_fire`] measured the out-of-pool human at
+/// his RAW pose z while `sub_655C0` (EF:63076-81, `NETHERW.EXE` file
+/// **0x89DC0**) brackets both angle calls in `sub_65580`/`sub_655A0`
+/// — which add and remove `target->array_0x52_82.yaw` on any model but
+/// 2 (file **0x89D80**: `80 78 40 02 cmpb $0x2,0x40(%eax) / 74 08 je /
+/// 66 8b 50 52 movw 0x52(%eax),%dx / 66 01 50 50 addw %dx,0x50(%eax)`).
+/// Retail's carpet is an ordinary boxed pool wizard, so the turret
+/// lifts it by its own 100 like every other candidate. The RESIDUAL
+/// named in [`Gen::mc2_piece_fire`]'s own doc comment.
+pub(crate) fn no_mc2_piece_human_raise() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PIECE_HUMAN_RAISE").is_some())
+}
+
 /// `MGC_NO_MC2_BALL_PICK_MODEL_ONLY=1` restores the pre-dig MC2 balloon
 /// retarget filter, which carried two guards `sub_5F810` (EF:60994)
 /// does not have: a `class64 == 10` test and a `tick70 != 62` action
@@ -47,6 +62,48 @@ pub(crate) fn no_castle_scratch_arg() -> bool {
 pub(crate) fn no_mc2_ball_pick_model_only() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BALL_PICK_MODEL_ONLY").is_some())
+}
+
+/// ⭐⭐⭐ **THE (10,43) UPGRADE TOKEN'S CASTLE LOOKUP IS A REGISTER
+/// READ, NOT A POOL SCAN** — the fourth `CastleEntityIndex_0x3A_58`
+/// reader round 136's law names, and the last one on the upgrade
+/// path.
+///
+/// `sub_389F0` (EF:28240-28247) resolves the delivery target as
+/// `Entities[ Entities[token->id_0x1A_26]->dword_0xA4_164x
+/// ->CastleEntityIndex_0x3A_58 ]`, verified byte-for-byte in the
+/// shipped `NETHERW.EXE` at file **0x5D24B**:
+/// `0f bf 43 1a  movswl 0x1a(%ebx),%eax` /
+/// `8b 04 85 e4 a3 01 00  mov 0x1a3e4(,%eax,4),%eax` /
+/// `8b 80 a4 00 00 00  mov 0xa4(%eax),%eax` /
+/// `66 8b 40 3a  mov 0x3a(%eax),%ax` /
+/// `8b 0c 85 e4 a3 01 00  mov 0x1a3e4(,%eax,4),%ecx` /
+/// `e8 4d 7c fd ff  call 0x34ec0` (= `sub_106C0`, the overlap test).
+/// The HIT arm at **0x5D27A** re-walks the identical chain before
+/// `66 89 90 80 00 00 00  mov %dx,0x80(%eax)` and
+/// `c7 40 7c 0a 00 00 00  movl $0xa,0x7c(%eax)`. There is no class,
+/// model, owner or reap test on that index anywhere.
+///
+/// The port used [`Gen::mc2_castle_of`], a POOL SCAN, and round 136's
+/// law applies verbatim: A POOL SCAN RETURNS THE LOWEST-NUMBERED
+/// MATCH, A REGISTER THE CHOSEN ONE — ONLY A CASTLE SPLIT MAKES THEM
+/// DIFFER. mc2l12 is split: orphan castle 678 (level 0, alive,
+/// `id24` = the human) outranks every castle the human actually
+/// plants, so EVERY upgrade token missed, `sub_106C0` compared the
+/// token against the wrong footprint, and the castle never took
+/// `action 4 -> 5`.
+///
+/// Four castles, two eras, one signature — retail's register (the
+/// `dump-state` `castle=` word) names the receiving castle exactly:
+/// t=18297 slot 708 (reg 708), t=19218 slot 843 (reg 843), t=43298
+/// slot 923 (reg 923), t=44060 slot 877 (reg 877). Each shows
+/// `mail5.amt 0 -> 10`, `flags 0x40` set and `action45 4 -> 5` in
+/// the same tick; the port scanned up 678 every time and stayed at 4.
+///
+/// `MGC_NO_MC2_TOKEN_CASTLE_REGISTER=1` restores the pool scan.
+pub(crate) fn no_mc2_token_castle_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TOKEN_CASTLE_REGISTER").is_some())
 }
 
 /// ⭐⭐⭐ **THE (10,42) PAINTER'S SETTLE LATCH IS `byte_0x3B_59`, AND
@@ -784,6 +841,23 @@ impl Gen {
             // (register 0, castle 293 alive) — orphan 678 died and
             // unbound 293.
             if let Some(team) = self.owner_team(self.ent[i].id24) {
+                // ⭐ SNAPSHOT THE PRICE REGISTER BEFORE IT DIES.
+                // `sub_60780`'s SetSpell already ran (the ladder push
+                // above), and it read `CastleEntityIndex_0x3A_58`
+                // through the OWNER — the word this line is about to
+                // clear. The port's mail drains after the dispatch, so
+                // the value has to travel with it. See
+                // [`Mc2LadderMail`] and
+                // `World::mc2_drain_ladder_sync`'s human arm.
+                let mine = self.mc2_ladder_sync.0.last().map(|&raw| raw & 0x7FFF)
+                    == Some(i as u16);
+                let reg = self.castle_reg[team as usize];
+                if mine
+                    && !crate::engine::world::no_mc2_ladder_price_register()
+                    && let Some(last) = self.mc2_ladder_sync.1.last_mut()
+                {
+                    *last = reg;
+                }
                 self.castle_reg[team as usize] = 0;
             }
             self.ent[i].flags |= 0x400;
@@ -851,6 +925,10 @@ impl Gen {
         // owner's book token, gate-suppressed (see [`Mc2LadderMail`])
         // — the book is World-side, drained same tick.
         self.mc2_ladder_sync.0.push(i as u16);
+        // No snapshot by default — the drain reads the live register
+        // (see [`Mc2LadderMail`]); only the DEATH arm, which is about
+        // to zero that register, takes one.
+        self.mc2_ladder_sync.1.push(0);
     }
 
     /// The MC2 castle build datum (ctor `sub_4AA40` EF:33399):
@@ -2929,17 +3007,32 @@ impl Gen {
         let tpos: Option<(u16, u16, i16)> = if tgt == 0 {
             None
         } else if tgt == crate::mc1::mobs::PLAYER_TARGET {
-            player
+            // ⭐ THE `sub_65580` RAISE IS NOT POOL-ONLY — IT LIFTS THE
+            // HUMAN TOO (the RESIDUAL below, now paid).
+            // `MGC_NO_MC2_PIECE_HUMAN_RAISE=1` for A/B.
+            player.map(|(hx, hy, hz)| {
+                (
+                    hx,
+                    hy,
+                    if no_mc2_piece_human_raise() {
+                        hz
+                    } else {
+                        hz.wrapping_add(crate::mc1::combat::PLAYER_HH as i16)
+                    },
+                )
+            })
         } else {
             let e = &self.ent[tgt as usize];
             // ⭐ THE AIM MEASURES THE TARGET AT ITS Z-BOX CENTRE.
             // `sub_655C0` brackets the two angle calls in
-            // `sub_65580`/`sub_655A0` (EF:62750-67) — the target's z is
+            // `sub_65580`/`sub_655A0` (EF:63055-73) — the target's z is
             // temporarily raised by its own `array_0x52_82.yaw` unless
             // it is model 2 — which is exactly [`Ent::aim_z`], already
             // the port's home for that bracket everywhere else.
-            // ⚠ RESIDUAL: the human branch above cannot apply it — the
-            // out-of-pool carpet arrives as a bare pose with no `f78`.
+            // ⚠ The human branch above cannot read an `f78` (the
+            // out-of-pool carpet arrives as a bare pose), so it adds
+            // [`crate::mc1::combat::PLAYER_HH`] = 100 — the carpet
+            // record's measured `array_0x52_82.yaw`.
             (e.act_life >= 0 && e.flags & 0x400 == 0).then_some((e.x, e.y, e.aim_z()))
         };
         let Some((tx, ty, tz)) = tpos else {

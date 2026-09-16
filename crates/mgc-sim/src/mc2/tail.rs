@@ -274,6 +274,34 @@ pub fn mc2_ww_crank_count_law() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_CRANK_COUNT").is_none())
 }
 
+/// ⭐⭐⭐ THE CRANK IS **PER FUNNEL**, AND THE CHANNEL IS A SINGLE
+/// MAILBOX. `sub_33340` has exactly ONE caller (`NETHERW.EXE` file
+/// 0x5792c `e8 …` -> file 0x57b40, inside `sub_33110`, the funnel's
+/// own dispatch), so every live (10,22) head runs the whole disc walk
+/// on its own slot and every one of them can reach the `v40` crank
+/// block (0x57c67..0x57c8d). The port's human column publishes into
+/// the single [`crate::engine::features::PlayerWhirl`] mailbox with a
+/// plain ASSIGNMENT, so with N funnels holding the wizard only the
+/// LAST one's `bumps` survived to the carpet's drain and N−1 cranks
+/// were lost. Set `MGC_NO_MC2_WW_CRANK_ACCUM` to restore that.
+///
+/// The pose does NOT need the same treatment: every funnel below the
+/// seat republishes the resolved pose into the walk `ctx`
+/// (`no_mc2_whirl_below_seat_republish`), so the next funnel starts
+/// from the previous one's result and the ABSOLUTE `grab` payload
+/// already composes. Only the COUNT is additive.
+pub(crate) fn mc2_ww_crank_accum_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WW_CRANK_ACCUM").is_none())
+}
+
+/// `MGC_WW_ROLL_TRACE=1` — dig instrument: one line per human
+/// publication in [`Gen::mc2_whirlwind_lift`].
+pub(crate) fn ww_roll_trace() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_WW_ROLL_TRACE").is_some())
+}
+
 /// How many 28-unit camera-roll cranks the whirlwind column has handed
 /// the human carpet since [`reset_whirl_cranks`]. Harness telemetry
 /// ONLY — the replay driver trial-steps a clone, reads this, and
@@ -1009,6 +1037,19 @@ impl Gen {
             };
             let sx = h(0, 0) - h(1, 0) + h(0, 1) - h(1, 1);
             let sy = h(0, 0) + h(1, 0) - h(0, 1) - h(1, 1);
+            // ⭐ The slope read is `sub_58030(&position,
+            // &predictedAxis_EB398ar)` (file 0x56FEA = VA 0x327EA):
+            // it lands in the ENGINE'S ONE GLOBAL SCRATCH AXIS, x/y
+            // only. See
+            // [`crate::engine::features::mc2_ball_slope_pred_axis`].
+            if crate::engine::features::mc2_ball_slope_pred_axis() {
+                let kz = self.mc2_pred_axis.0.2;
+                self.mc2_pred_axis = crate::engine::features::Mc2PredAxis((
+                    sx as i16 as u16,
+                    sy as i16 as u16,
+                    kz,
+                ));
+            }
             let vx = ((vx as i32 + sx) * 250 / 256) as i16;
             let vy = ((vy as i32 + sy) * 250 / 256) as i16;
             self.ent[i].dest_x = vx as u16;
@@ -2268,6 +2309,26 @@ impl Gen {
             let abs = hseized
                 || (hmid.is_some() && !no_mc2_ww_midring_abs())
                 || (hvisited && !no_mc2_ww_tail_publish());
+            // ⭐⭐⭐ THE MAILBOX IS SHARED BY EVERY FUNNEL IN THE TICK.
+            // `sub_33340` runs once per (10,22) head (ONE caller,
+            // `NETHERW.EXE` file 0x5792c) and cranks on its own slot,
+            // so the counts ADD; the assignment below used to keep the
+            // last funnel's alone. See `mc2_ww_crank_accum_law`.
+            let prior = self.player_whirl;
+            // ⚠ THE MAILBOX CAN OUTLIVE A TICK, SO `armed` IS NOT THE
+            // TEST. The above-seat drain is hooked to the next LIVE
+            // slot above the publisher; a funnel that is the highest
+            // live slot has no such walker, and its publication sits
+            // in the mailbox until the carpet's drain NEXT tick. Only
+            // `ww_walk_published` says "a lower funnel of THIS walk
+            // put that there".
+            let same_walk = prior.armed && self.ww_walk_published.0;
+            let carried = if same_walk && mc2_ww_crank_accum_law() {
+                prior.bumps
+            } else {
+                0
+            };
+            self.ww_walk_published.0 = true;
             self.player_whirl = crate::engine::features::PlayerWhirl {
                 armed: true,
                 heading: hmid.unwrap_or(0),
@@ -2277,8 +2338,16 @@ impl Gen {
                 } else {
                     None
                 },
-                from: (ctx.px, ctx.py, ctx.pz, ctx.pyaw & 0x7FF),
-                act80: hact80,
+                // The pose the FIRST funnel of the tick found him at —
+                // the enhanced mover applies `grab − from` as one
+                // delta, so a chain of funnels must span the whole
+                // chain, not just its last link.
+                from: if same_walk && mc2_ww_crank_accum_law() {
+                    prior.from
+                } else {
+                    (ctx.px, ctx.py, ctx.pz, ctx.pyaw & 0x7FF)
+                },
+                act80: hact80 || (same_walk && mc2_ww_crank_accum_law() && prior.act80),
                 // ⚠ ONE CRANK PER *PUBLISHED* SEIZURE, WHICH IS THE
                 // CHANNEL'S ARITY, NOT A CAP ON RETAIL. The grab
                 // family resolves every repeat visit into `hp`/`hyaw`
@@ -2311,8 +2380,17 @@ impl Gen {
                     hcrank
                 } else {
                     hcrank.min(1)
-                },
+                }
+                .saturating_add(carried),
             };
+            if ww_roll_trace() {
+                eprintln!(
+                    "[ww] t={} funnel={i} hcrank={hcrank} carried={carried} seized={hseized} mid={hmid:?} vis={hvisited} grab={hgrab} stop={hstop} prior_armed={} same_walk={same_walk} -> bumps={}",
+                    crate::DEBUG_TICK.load(std::sync::atomic::Ordering::Relaxed),
+                    prior.armed,
+                    self.player_whirl.bumps,
+                );
+            }
         }
         // The player arm — the tornado SWAY (retail `sub_33340`'s
         // wizard branch, EF:24296: the human [class 3, model 0] is

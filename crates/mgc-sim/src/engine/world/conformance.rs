@@ -2563,6 +2563,7 @@ impl World {
         // freed record (mc2l3's death-downgrade / balloon-pop /
         // un-stamp fixtures all pin that path).
         self.g.mc2_ladder_sync.0.clear();
+        self.g.mc2_ladder_sync.1.clear();
         self.g.mc2_castle_lock_mail.0.clear();
         // THE FIRING HAND (`struct_byte_0xc_12_15` & 0x300) — the MC1
         // twin's line verbatim (:377). `sub_5F7B0` stamps it on the
@@ -3276,7 +3277,11 @@ impl World {
                         p.cmd_speed,
                         p.strafe,
                         p.invuln.max(0) as u16,
-                        e.mana.max(0) as u32,
+                        if crate::mc2::rivals::no_rival_mana_overdraft() {
+                            e.mana.max(0)
+                        } else {
+                            e.mana
+                        },
                         e.mana_max.max(0) as u32,
                         e.d88,
                     );

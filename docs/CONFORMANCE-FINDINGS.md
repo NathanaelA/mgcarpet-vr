@@ -34300,3 +34300,163 @@ before believing it**, and re-read [[fixture-debt-round115]].
 
 **All four of the takes the player named are certified.** Two laws were needed for mc2l32 (137-1
 took 42 of its 43 heads, 137-3 the last).
+
+## 138 — FOUR PARALLEL DIGS, SIX LAWS, TWO CERTIFICATIONS (2026-09-16)
+
+Gate: **tests 1,195 / 0 failed · fixtures 539 → 545 / 0 regressions · corpus sweep: EXACTLY the
+four dug takes moved, the other 45 BYTE-IDENTICAL.**
+
+| take | open | close |
+|---|---|---|
+| **mc2l13** | 5 seg / horizon 24,078 | **CERTIFIED** — 4 seg, 0 deviation-forced, 3 registered |
+| **mc2l14** | 28 seg / horizon 5,939 | **CERTIFIED** — ONE segment, 30,549, zero divergence |
+| mc2l16 | 116 seg / horizon 4,663 | 103 seg (`(10,1)` 25 → 15, `(10,0)` 21 → 12) |
+| mc2l12 | 260 seg / horizon 999 | **63 seg** — the Cymmerian lane 136 → **0** |
+
+**42 of 49 certified.** The five besides mc2l12 and mc2l16 are ruled/registered (mc1l48,
+mc1l48-nodeath, mc1l49 = retail `build.dat` damage; mc1l6 = player-ruled open; mc1l32-terrainless
+= excluded).
+
+⭐⭐⭐ **SIX LAWS, TWO ROOT CAUSES.** Five of the six are one of two classes, and neither class was
+in any brief — **all four of my hypotheses were refuted by their digs, correctly, for the second
+round running.**
+
+### 138-A ⭐⭐⭐ THE GLOBAL SCRATCH AXIS IS NOT ALWAYS HOLDING A POSITION — 3 LAWS, 2 TAKES, 2 DIGS CONVERGING
+
+`predictedAxis_EB398ar` is retail's ONE scratch axis. The port models it at the COMMIT
+(`move_relink`, the `CopyEntityPosition_57CF0` twin) rather than at each of retail's ~101
+assignments — **an approximation the tree's own doc comment named, together with its exact blast
+radius: "one effect's spawn position".** Round 138 collected that debt twice, from two unrelated
+takes, via two digs that never spoke to each other.
+
+**`MGC_NO_MC2_BALL_SLOPE_PRED_AXIS`** (mc2l13, CERTIFYING) — `sub_58030` (shipped `NETHERW.EXE`
+file **0x7C830** = VA 0x58030) is the terrain FORWARD-DIFFERENCE helper. It writes **only**
+`dst->x` (`mov %cx,(%eax)`) and `dst->y` (`mov %bx,0x2(%eax)`) — `x = h00-h10+h01-h11`,
+`y = h00+h10-h01-h11` over the 2×2 height quad — and **RETs at 0x7C8DB having never touched
+offset 4**. ALL THREE of its callers pass the GLOBAL as `dst`, each
+`68 98 b3 01 00 push $0x1b398 / 8d 43 4c lea 0x4c(%ebx),%eax / push %eax / e8 call 0x7c830`:
+file 0x56FEA (the (10,16) volcano boulder), 0x5A6AC (the (10,39) mana ball), 0x5ADED (the (10,57)
+fool's sphere). **So after any grounded roll retail's global holds two small height deltas —
+(0,0) on flat ground — not a position.** The one reader is the m21 wade splash, which is why a
+whole class of mis-tracking surfaced as exactly ONE ROW.
+
+**`MGC_NO_MC2_FALL_PUFF_PRED_AXIS`** (mc2l16, 116 → 103) — `sub_5E310` spawns the (10,1) death
+puff **at the global itself**: file 0x82BDD `68 98 b3 01 00 push $0x1b398`. ⭐⭐ **THE
+DISCRIMINATOR IS THE IMMEDIATE, NOT THE SHAPE**: the `getTerrainAlt` call TWELVE BYTES ABOVE, at
+0x82BAD, does `8d 43 4c lea 0x4c(%ebx),%eax; push %eax` — the corpse's own position. Same
+function, two sources. They agree on an ordinary fall because `sub_5D530` committed the carpet
+two statements earlier — and part whenever the mover took its `byte[1] & 8` WHIRLWIND VETO, whose
+path **`c3 ret`s at file 0x81D4D without writing 0x1b398**. So a wizard who dies inside a funnel
+plants every puff at whatever the last record to commit a move that tick left behind.
+
+⚠⚠⚠ **A HUNK PLACED INSIDE THE FREE-RUN MOVER IS INVISIBLE TO THE PINNED-POSE ARM — AND ONLY ON
+FIXTURE PAIRS.** The dig's first placement (inside `step_player_flight_mc2`) regressed the
+`mc2l3` and `mc2l24` FIXTURES while both takes' full replays stayed clean, because the
+conformance fixture path pins the pose and takes the `post` arm, so `step_player_flight` never
+runs. **Read the one-shot in the dispatch, above both arms.** A full-take sweep cannot catch this.
+
+🏦 **OWED, PRECISELY CHARACTERISED — THE NEXT LAW ON THIS FAMILY IS THE MODEL OVER-PUBLISHING.**
+mc2l16's residual `(10,1)`/`(10,0)` heads are the same family with the opposite root: retail's m20
+state-2 chase (`sub_25E40`, state 162) writes `position_0x4C_76.z` **raw**, with no
+`CopyEntityPosition`, so the global stays on an EARLIER record; the port routes the same z change
+through `move_relink` and poisons it. **The next dig here is "which MC2 arms write `position` raw
+vs. via `CopyEntityPosition_57CF0`", not another spawn-site law.** A second unmodelled writer is
+already known: the aura-claim intake (`mc1/combat.rs`, `word_0x7A_122`) does
+`predictedAxis = {0,0,0}; MoveEntity(...)` in retail (file 0x5A229 / 0x5A854) and a local in the
+port; it did not fire in mc2l13's window.
+
+### 138-B ⭐⭐⭐ A POOL SCAN WHERE RETAIL READS `CastleEntityIndex_0x3A_58` — 3 LAWS, ALL mc2l12
+
+⭐⭐⭐ **A POOL SCAN RETURNS THE LOWEST-NUMBERED MATCH, A REGISTER THE CHOSEN ONE; ONLY A SPLIT
+MAKES THEM DIFFER** (round 136). mc2l12 has a split standing from t≈19,714 — the orphan castle's
+**unconditional** teardown clear took the register while castle 293 was still up — so
+`register == 0` while `pool scan == Some(293)` for thousands of ticks, and **every port site that
+asked the pool diverged.** Three did.
+
+**`MGC_NO_MC2_M25_CASTLE_REGISTER`** — `sub_28860` (file 0x4D060) cases 3/5/7 all read
+`dword_0xA4_164x->CastleEntityIndex_0x3A_58` (0x4D1B6 / 0x4D23F / 0x4D2AE), and 5/7 use the word
+**directly as the pool index** with no class/model/owner/reap test. ⭐ **The bug is case 3's
+register-ZERO ELSE arm, which BURNS ONE PER-ENTITY LCG DRAW** (0x4D1D4:
+`imul $0x24a1` (9377) / `add $0x24df` (9439) / `div $0x64`). Solved to the bit at pair
+42983→42984: retail `rand` 42974 → 63707 is **three** LCG steps, the port's → 22140 is **two**;
+retail's extra draw shows in its own changelog as `scratch10 −1 → 109 = 61309 % 100 + 100`. Then
+the wander decodes exactly on both sides — retail sign `2*((22140%157)/79)−1 = −1`, step
+`63707%381 = 80`, yaw 268 − 80 = **188**; port sign +1, step 42, yaw **310**. **136 heads → 0, the
+largest single lane in the corpus.**
+
+**`MGC_NO_MC2_SPELL_PRICE_REGISTER`** — `GetSpellManaCost_6D710` prices spell 2 off the
+register's record `dword_0x10_16` and takes the no-castle arm on `entity2 <= Entities[0]`
+(file 0x91F59-0x91F80). At pair 43127→43128 retail is on the NO-CASTLE arm (`mana_max` 5000 =
+2000 + the 3000 surcharge) while the port read the level-7 rung (300000000) off the standing
+castle its scan found. ⭐ **It was an INDEX bug, not a table-row bug** — the ladder itself decodes
+perfectly (4500 = lvl0×1.5+3000, then 15000/30000/60000/120000/240000/480000 ×1.5, 300000000 at
+lvl ≥ 7).
+
+**`MGC_NO_MC2_DEMOLISH_REGISTER`** — `PlayerEvents_51BB0` case 0x2A reads the register **three
+times** (file 0x77442-0x7746F: the existence test, the level-1 `byte_0x1BE_446` surcharge latch,
+and `life_0x8 = -1`). ⭐⭐ **THIS IS THE MIRRORED SIGNATURE ROUND 137 NAMED, AND IT WAS AN IDENTITY
+BUG**: at pair 43418→43419 `slot 293 life retail 4280 port −1` **and** `slot 923 life retail −1
+port 74780`. Retail razes 923 (the register's, born t=43298) and 293 lives on to spawn balloons
+957/968; the port razed the lowest-numbered match.
+
+⚠⚠ **THE GATE CAUGHT A REGRESSION THE DIG STRUCTURALLY COULD NOT.** The demolish law turned
+`a_demolish_takes_the_castle_off_the_tick_top_class3_roster_the_same_tick` red: the rig
+hand-builds a castle into the pool and never goes through `mc2_castle_upgrade`, so `castle_reg`
+stays 0 and the register-correct demolish razes nothing. **THE RIG WAS STALE, NOT THE LAW** —
+round 136 banked this exact lesson ("a rig meaning *my castle* must SAY SO IN THE REGISTER") and
+it cost three fixtures then. The dig skipped `cargo test` deliberately to avoid starving three
+concurrent replays, which was right for throughput: **the main session owns the test gate.**
+
+### 138-C ✅ THE m18 WATCH ARM AIMS AT A CORPSE (`MGC_NO_MC2_M18_WATCH_UNGUARDED`) — mc2l14 CERTIFIED
+
+`sub_24E20`'s `byte_0x46_70 == 1` WATCH arm loads `Entities_EA3E4[word_0x96_150]` **raw** —
+file 0x497B4 (VA 0x24FB4) `8b 34 b5 e4 a3 01 00`, **no life, no class, no reap test** — measures the distance
+to it, and keeps turning at the `(4<<11)/360 = 22`/tick cap while it is inside
+`word_160_0x1c_28`. mc2l14's tank was shot by slot 66 at t=5932; slot 66 is REAP-FLAGGED on
+t=5940; retail keeps turning at the corpse for 25 more ticks and exits on the `% 0x31` roll at
+t=5973. The port routed the lookup through `mc2_target`, whose liveness guard belongs to the
+FIRING phase, and dropped the target. **The tree already OWED this arm in a doc comment
+("unguarded in retail too … but it has no witness on this corpus yet") — mc2l14 is that witness.**
+Two early exits in the same branch are bare `ret`s (0x49656, 0x497A5) where the port's
+`if let … else` ran the far-target drop; fixed in the same hunk, unwitnessed but confirmed in the
+bytes.
+
+⚠⚠⚠ **`port(t) == retail(t-1)` ACROSS 25 BOUNDARIES IS NOT A ONE-TICK LATENCY.** That was my
+brief's hypothesis and it is wrong: the pattern is an **artifact of `--segmented` RE-SEEDING** —
+each of those ticks the port was handed retail's state fresh and applied **no turn at all**.
+⭐ Head 2 (t=5973, `action` + `rand`) was head 1's CONSEQUENCE, not a second law — **count
+decisions, not rows** (137).
+
+### 138-D 🏦 OWED — THE REST OF THE POOL-SCAN AUDIT (same class, not yet witnessed)
+
+1. **`mc2/multipart.rs`'s `m22_target_castle`** — its doc comment literally reads *"the target
+   player's `CastleEntityIndex_0x3A_58`"* and the body is a pool scan. Already labelled, waiting
+   on a take with an m22 worm and a split.
+2. `roster.rs`'s "parked at castle" target-election test still scans; retail source unidentified.
+3. **The whole RIVAL column is unaudited** — `mc1/rivals.rs::rival_castle` is a pool scan with
+   ~20 MC2 call sites, and retail prices/targets a rival off *its own* register. (`proj.rs` is
+   already correct — its retail arm reads `castle_reg`.)
+
+### 138-E THE REMAINING HEADS ON THE TWO OPEN TAKES
+
+- **mc2l12, 61 heads.** `(3,2)` 23, now **`action` only** (every `life` row closed) — a one-tick
+  walk-order bug on the upgrade arm: retail consumes a `0x40` flag armed on a PREVIOUS tick and
+  the token re-arms it AFTER the castle's own dispatch, where the port arms and consumes inside
+  one `mc2_castle_intake`. `(15,1)` 21 — **the take's horizon, and NOT a cost table and NOT a
+  castle**: both sides toggle rival 136's spell-1 token tier on a 10-tick cadence armed for
+  exactly ONE tick, and the port arms it for FOUR consecutive ticks. The writer is
+  `mc2_rival_tier_probe` (`sub_15F20`), whose tier-down probe calls `SetSpell` **as a side effect**
+  at each tier it tries — so this is a RIVAL CAST-DECISION CADENCE lane upstream of the token.
+  `(15,2)` 7, `(10,79)` 6, `(5,15)` 2, singletons.
+- **mc2l16, 102 boundaries.** `(10,1)` 15 + `(10,0)` 12 (the over-publish family, 138-A),
+  `(10,79)` 19, `(9,0)` 11 pitch-only, `(3,1)` 7 (the horizon head, `heading` retail 1024 port 0),
+  `(15,2)` 5, then singletons. ⭐ **`(10,79)` and `(9,0)` are measurably NOT in the position
+  family** — a law that closed a third of `(10,1)`/`(10,0)` left both at exactly 19 and 11.
+
+### 138-F 🔧 INSTRUMENTS
+
+`crates/mgc-conform/examples/slot_census_mc2.rs` — the head census **grouped by slot**. ⭐⭐⭐ **RUN
+IT BESIDE `head_census_mc2` BEFORE BRIEFING.** "136 `(5,25)` heads" became "SIX Cymmerian slots
+inside one ~2,000-tick window", which ruled out "one creature's whole life" immediately and
+pointed at the split. `field_walk_mc2.rs` — walk one retail slot's chosen fields over a window,
+printing only on change; it decoded the entire cost ladder in one run.

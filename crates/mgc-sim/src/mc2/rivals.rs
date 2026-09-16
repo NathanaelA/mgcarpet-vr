@@ -55,6 +55,61 @@ pub(crate) const HATE_NEUTRAL: u16 = 24607;
 /// (the post-spawn truce, -24609 as unsigned, EF:43850).
 const HATE_RESPAWN: u16 = 40927;
 
+/// A/B toggle for THE HUMAN RESPAWN'S POST-DEATH TRUCE: set
+/// `MGC_NO_MC2_HUMAN_RESPAWN_TRUCE` to restore the pre-dig behaviour,
+/// where only a RIVAL's (re)spawn pushed every other wizard's ledger
+/// toward the newcomer to [`HATE_RESPAWN`] and the HUMAN's respawn
+/// left the rivals' `hate[0]` running wherever the decay had carried
+/// it. `sub_5C950` is ONE function for both wizards (EF:43982) and
+/// the truce loop sits BELOW the `IsAiPlayer` fork, ungated
+/// (`reference/remc2/remc2/engine/EventsFunctions.cpp:44185-93`; the
+/// tree's older `EF:43839` numbering names the same statement):
+///
+/// ```text
+/// for (kx = ...dword_38519; kx > Entities_EA3E4[0]; kx = kx->next_0)
+///     if (kx->id_0x1A_26 != v2x->id_0x1A_26) {
+///         v32 = kx->model_0x40_64;
+///         if (!v32 || v32 == 1)
+///             kx->dword_0xA4_164x->array_0x1FC_508[4 + 4 * colour] = -24609;
+///     }
+/// ```
+///
+/// SHIPPED NETHERW.EXE, VA 0x5CE22..0x5CE5A (file 0x81622, = VA +
+/// 0x24800) — the ONLY `df 9f` immediate in the whole binary:
+///
+/// ```text
+/// 5ce22: 66 8b 50 1a           mov    0x1a(%eax),%dx        ; kx->id
+/// 5ce26: 66 3b 53 1a           cmp    0x1a(%ebx),%dx        ; vs respawner's id
+/// 5ce2a: 74 26                 je     0x5ce52
+/// 5ce2c: 8a 50 40              mov    0x40(%eax),%dl        ; kx->model_0x40_64
+/// 5ce2f: 84 d2                 test   %dl,%dl
+/// 5ce31: 74 05                 je     0x5ce38               ; model 0 = HUMAN
+/// 5ce33: 80 fa 01              cmp    $0x1,%dl
+/// 5ce36: 75 1a                 jne    0x5ce52               ; model 1 = RIVAL
+/// 5ce38: 8b 93 a4 00 00 00     mov    0xa4(%ebx),%edx
+/// 5ce3e: 0f bf 4a 38           movswl 0x38(%edx),%ecx       ; playerColorIndex
+/// 5ce42: 8b 90 a4 00 00 00     mov    0xa4(%eax),%edx
+/// 5ce48: 66 c7 84 ca 04 02 00  movw   $0x9fdf,0x204(%edx,%ecx,8)
+/// 5ce52: 8b 00                 mov    (%eax),%eax           ; kx = kx->next_0
+/// 5ce54: 3b 05 e4 a3 01 00     cmp    0x1a3e4,%eax
+/// 5ce5a: 77 c6                 ja     0x5ce22
+/// ```
+///
+/// ⚠ DISCRIMINATED ON AN ARGUMENT, NOT SHAPE: the near-identical
+/// sibling 24 bytes below (`movw $0x601f,0x1fc(%ecx,%eax,8)` at
+/// 0x5cea3) is the RESPAWNER'S OWN ledger going back to
+/// [`HATE_NEUTRAL`], and THAT one IS gated — `cmpb $0x1,0x40(%ebx)`
+/// at 0x5ce7a, i.e. model 1 only. The truce loop above it has no such
+/// test. Both write the same `array_0x1FC_508` at an 8-byte stride
+/// (0x204 + 8·colour vs 0x1fc + 8·l with `l` pre-incremented 1..8 —
+/// the same eight words).
+///
+/// See the call site in [`World::mc2_respawn_truce`].
+pub(crate) fn no_mc2_human_respawn_truce() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HUMAN_RESPAWN_TRUCE").is_some())
+}
+
 /// The MC2 AI per-spell recast cooldowns `x_WORD_D3F4C` (EF:1070) —
 /// differs wholesale from MC1's table AND is indexed by MC2 spell id.
 const AI_RECAST: [u16; MC2_SPELLS] = [
@@ -89,6 +144,145 @@ fn no_rival_token_backref() -> bool {
 fn no_mc2_rival_castle_any_site() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_CASTLE_ANY_SITE").is_some())
+}
+
+/// ⭐⭐⭐ **THE FIRST CASTLE IS FREE — AND IT IS ALSO UNRESEARCHED.**
+/// `MGC_NO_MC2_FREE_CASTLE_UNRESEARCHED=1` restores the pre-dig
+/// stage-1 research stamp on [`World::mc2_rival_cast_castle`]'s
+/// castle-less arm.
+///
+/// `array_0x24E_590` — the castle research table, whose `+9` half is
+/// the PART-TYPE that `sub_613D0` gates the (10,79) defender pieces on
+/// — has **exactly one writer in the shipped `NETHERW.EXE`**:
+/// `sub_69AB0`'s mint window, file **0x8E366**
+/// `88 8e 4e 02 00 00  mov %cl,0x24e(%esi)` (HP factor) and **0x8E379**
+/// `88 94 01 57 02 00 00  mov %dl,0x257(%ecx,%eax,1)` (part type). A
+/// whole-image scan for a store to either displacement returns those
+/// two instructions and nothing else.
+///
+/// `sub_14E10`'s case-2 CASTLE-LESS arm — the "first castle is free"
+/// leg — is, byte for byte at file **0x396A7-0x396F3**:
+/// `6a 02 / 6a 03 / 8d 83 9a 00 00 00 / 50 / e8 d9 52 03 00` (the (3,2)
+/// alloc), `66 8b 53 1a / 66 89 50 1a` (the owner id), the slot
+/// division, `8b 93 a4 00 00 00 / 66 89 42 3a  mov %ax,0x3a(%edx)`
+/// (`CastleEntityIndex_0x3A_58`), `b8 01 00 00 00 / ret`. It never
+/// reaches `sub_69AB0`, so a rival's FIRST castle carries
+/// `array_0x24E_590[9+1] == 0` for its whole level-1 life, and the
+/// level-up's `sub_613D0` walk-down (the gate at file **0x85C34**
+/// `0f be 84 06 57 02 00 00  movsbl 0x257(%esi,%eax,1),%eax` /
+/// `85 c0 / 75 05` break / `4e` dec, then **0x85C48** `85 f6` /
+/// `0f 84 bb 01 00 00` bail) falls through at `v4 == 0` and spawns
+/// **NO PIECES AT ALL**.
+///
+/// ⭐ `sub_613D0` has **exactly two** callers in the image (file
+/// 0x84D63 inside `sub_60480`, the level-up; file 0x84EE4 inside
+/// `sub_605E0`, the downgrade) and `sub_508E0`, the (10,79) ctor, has
+/// **zero** direct callers — it is reached only through the
+/// class/model dispatch from that walk. So the walk is the ONLY way a
+/// (10,79) is ever minted, and the research byte is its only gate.
+///
+/// The port stamped stage-1 research here (an "A.5 shortcut"), so the
+/// castle's very first level-up minted the stage-1 defender piece.
+/// WITNESS mc2l12 t=10016, rival player 3 (ent 164): retail pops
+/// exactly two slots — 639 the (3,2) castle, 761 the (10,42) build
+/// painter — and the free stack goes 864 -> 862 with next-pop 765; the
+/// port popped 765 as well and turned it into a `(10,79)`. Every later
+/// allocation on the take was shifted by that one pop. Landing this
+/// took mc2l12's bit-exact horizon 10,015 -> 39,625.
+///
+/// The upgrade leg is unaffected: [`World::mc2_rival_castle_mint`]
+/// still stamps `castleLevel + 1`, which is `sub_69AB0`'s own write.
+fn no_mc2_free_castle_unresearched() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FREE_CASTLE_UNRESEARCHED").is_some())
+}
+
+/// A/B toggle for THE HOME ARM'S CHAINED CAST WALK: set
+/// `MGC_NO_MC2_RIVAL_HOME_CAST_CHAIN` to restore the pre-dig shared
+/// [`World::mc2_rival_walk_cast`] at `sub_133B0`'s spell-1 site, which
+/// STOPS the tier walk at the first passing tier even when the
+/// executor then refuses — leaving the token re-priced at that tier.
+///
+/// `sub_133B0` (EF:5804) is the ONE retail tier walk that chains the
+/// executor into the loop condition:
+/// `if (sub_15F20(a1x, k, 1) == 1 && sub_14E10(a1x, 1u)) goto LABEL_6;`
+/// Shipped `NETHERW.EXE` file 0x37C08-0x37C3C (VA 0x133B0 + 0x24800),
+/// discriminated on the ARGUMENT `push $0x1` / `movsbw 0x41e(%eax),%di`
+/// (= `SpellLevels[1]`):
+/// ```text
+///   37bf7: movsbw 0x41e(%eax),%di   ; k = SpellLevels[1]
+///   37c01: push $0x1                ; a3 = spell 1
+///   37c06: push %eax                ; a2 = k
+///   37c08: call 0x3a720             ; sub_15F20  (probe; SetSpell side effect)
+///   37c10: cmp  $0x1,%ax
+///   37c14: jne  0x37c38             ; probe failed -> k--
+///   37c19: call 0x39610             ; sub_14E10  (the executor)
+///   37c21: test %eax,%eax
+///   37c23: je   0x37c38             ; ⭐ REFUSED CAST -> k--, KEEP WALKING
+///   37c38: dec  %edi
+///   37c39: test %di,%di
+///   37c3c: jge  0x37c01
+/// ```
+/// Its near-identical sibling 40 bytes later is the spell-0xB walk at
+/// 0x37C4E (`push $0xb` / `movsbw 0x428(%eax),%di`), which calls the
+/// same executor at 0x37C66 and then `jmp 0x37c76` — it does NOT test
+/// the return. `sub_135C0`'s Possess walk (0x37E2E-0x37E60) breaks out
+/// of the loop first (`je 0x37e4c`) and casts OUTSIDE it, so the
+/// shared helper stays correct there. Only the Home arm chains.
+fn no_mc2_rival_home_cast_chain() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_HOME_CAST_CHAIN").is_some())
+}
+
+/// A/B toggle for THE HOMELESS HOME ARM: set
+/// `MGC_NO_MC2_RIVAL_HOMELESS_SPEED_RUN` to restore the pre-dig
+/// paraphrase — the cloak walk, an INVENTED `state = Cruise` write,
+/// and nothing else.
+///
+/// `sub_133B0`'s castle-MISSING arm (`Entities[CastleEntityIndex_0x3A_58]
+/// <= Entities[0]`, EF:5771-97 in the tree's current copy — the
+/// surrounding `sub_133B0` citations are ~13 lines stale) is FOUR
+/// steps, not one. Shipped
+/// `NETHERW.EXE` file 0x37CCA-0x37D9F (VA 0x134CA + 0x24800),
+/// discriminated on the ARGUMENTS `push $0xb`/`0x428(%eax)` vs
+/// `push $0x3`/`0x420(%eax)` (= `SpellLevels[11]` / `SpellLevels[3]`,
+/// base 0x41D):
+/// ```text
+///   37cca: movsbw 0x428(%eax),%si  ; k = SpellLevels[11]  (CLOAK)
+///   37cd4: push $0xb / push %eax / push %ebx
+///   37cdb: call 0x3a720            ; sub_15F20 probe
+///   37ce3: cmp  $0xb,%ax
+///   37ce7: jne  0x37cf6            ; miss -> k--
+///   37ce9: push $0xb / push %ebx
+///   37cec: call 0x39610            ; sub_14E10 -- return NOT tested
+///   37cf4: jmp  0x37cfc            ; BREAK, fall through to step 2
+///   37d02: movsbw 0x420(%eax),%si  ; j = SpellLevels[3]   (SPEED)
+///   37d0c: push $0x3 / push %eax / push %ebx
+///   37d13: call 0x3a720            ; sub_15F20 probe
+///   37d1b: cmp  $0x3,%ax
+///   37d1f: jne  0x37d41            ; miss -> j--
+///   37d21: push $0x3 / push %ebx
+///   37d24: call 0x39610            ; sub_14E10 -- return NOT tested
+///   37d2d: call 0x3ad80            ; sub_16580 (water steer)
+///   37d32: mov  $0x1,%ebx          ; ⭐ RETURN 1 whatever the cast did
+///   37d47: push $0x3 / push %ebx
+///   37d4a: call 0x38ec0            ; sub_146C0(self, 3)
+///   37d52: test %eax,%eax / je 0x37d72
+///   37d56: cmpw $0x0,0x2e(%eax)    ; word_0x2E_46 (the live window)
+///   37d5b: jle  0x37d72
+///   37d5d: call 0x3ad80 / mov $0x1,%ebx  ; RETURN 1, still boosting
+///   37d72: mov  0x84(%ebx),%ax     ; minSpeed_0x84_132
+///   37d7f: mov  %ax,0xc(%esi)      ; speed_0xc_12  = minSpeed
+///   37d89: movw $0x1,0xe(%eax)     ; word_0xe_14   = 1  (brake)
+///   37d90: call 0x3ad80            ; sub_16580, return 0
+/// ```
+/// NOTHING in the whole function writes `byte_0x1C1_449`: the state
+/// byte is the SELECTOR's alone (the same law the target-gate note on
+/// [`World::mc2_rival_state_tick`] already carries), so the `Cruise`
+/// write was invented too.
+fn no_mc2_rival_homeless_speed_run() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_HOMELESS_SPEED_RUN").is_some())
 }
 
 /// A/B toggle for the FRESH-SPAWN PURSE (round 113): set
@@ -471,6 +665,106 @@ fn no_mc2_rival_life_floor() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_LIFE_FLOOR").is_some())
 }
 
+/// `MGC_NO_MC2_RIVAL_MANA_OVERDRAFT=1` restores the pre-dig
+/// affordability floor on the CHARGED-SHIELD quarter, where the
+/// wizard paid `min(dmg/4, mana)` and its purse could never go below
+/// zero.
+///
+/// ⭐⭐⭐ **RETAIL'S ONLY MANA FLOOR IS AT THE *END* OF THE TICK, AND
+/// THE LETHAL LEG RETURNS BEFORE IT.** `sub_5EFA0`'s charged arm
+/// (EF:60682-89) is a plain signed subtract with no guard at all —
+///
+/// ```text
+///   v10 = dword_0x5E_94 / 4;            // the quarter
+///   v12 = a1x->mana_0x90_144 - v10;     // NO min, NO clamp
+///   a1x->str_0x5E_94.dword_0x5E_94 = v10;
+///   a1x->mana_0x90_144 = v12;
+/// ```
+///
+/// — and the floor that normally hides it lives twenty statements
+/// later in the CALLER, `sub_12A70` (EF:5456-57, `if (mana < 0)
+/// mana = 0;`), past `mana += manaRegen` (EF:5424). When the same
+/// letter is lethal, `sub_5EFA0` returns 2 and `sub_12A70` takes
+/// `actionIndex_0x45_69 = 2; return 0;` (EF:5430-33) — skipping the
+/// regen, the rate fork AND the floor. So a rival wizard killed by a
+/// hit its charged shield quartered keeps a **negative purse for the
+/// rest of its death**, and the port, whose `Mc2Rival::mana` was
+/// `u32`, could not represent it.
+///
+/// DISASSEMBLED, not inferred. Shipped `NETHERW.EXE`, `sub_5EFA0` =
+/// file **0x837A0** (linear 0x5EFA0 + 0x24800); the CHARGED arm is
+/// file **0x839B0-0x839DA**:
+///
+/// ```text
+///   839b0: 8b 43 5e             mov  0x5e(%ebx),%eax ; dword_0x5E_94
+///   839b3: 89 c2                mov  %eax,%edx
+///   839b5: c1 fa 1f             sar  $0x1f,%edx      ; SIGN-extend
+///   839b8: c1 e2 02             shl  $0x2,%edx
+///   839bb: 1b c2                sbb  %edx,%eax
+///   839bd: c1 f8 02             sar  $0x2,%eax       ; ARITHMETIC /4
+///   839c0: 8b bb 90 00 00 00    mov  0x90(%ebx),%edi ; mana_0x90_144
+///   839c6: 8a 53 0d             mov  0xd(%ebx),%dl
+///   839c9: 29 c7                sub  %eax,%edi       ; mana - quarter
+///   839cb: 89 43 5e             mov  %eax,0x5e(%ebx) ; letter := quarter
+///   839ce: 80 e2 bf             and  $0xbf,%dl       ; byte[1] &= 0xBF
+///   839d1: 89 bb 90 00 00 00    mov  %edi,0x90(%ebx) ; STORED RAW
+///   839d7: 88 53 0d             mov  %dl,0xd(%ebx)
+/// ```
+///
+/// — `sar`/`sub`/`mov` with **no `cmp`, no `jge`/`jl`, no `cmov`**
+/// anywhere between the load and the store, and the `/4` is an
+/// ARITHMETIC (sign-aware) shift, not a logical one. Twenty-five
+/// bytes later `839f3: mov 0x5e(%ebx),%eax / 839f8: mov 0x8(%ebx),
+/// %edx / 839ff: sub %eax,%edx / 83a04: mov %edx,0x8(%ebx)` spends
+/// the SAME quartered word on `life_0x8` — which is why both
+/// witnesses show `life` and `mana` moving by the identical 400.
+///
+/// And the ordering in the caller, `sub_12A70` = file 0x37270:
+///
+/// ```text
+///   37402: e8 99 c3 04 00   call 0x837a0        ; sub_5EFA0
+///   3740a: 83 f8 02         cmp  $0x2,%eax
+///   3740d: 75 30            jne  0x3743f
+///   3740f: c6 43 45 02      movb $0x2,0x45(%ebx) ; actionIndex = 2
+///   37413: 31 d2            xor  %edx,%edx
+///   37415: e9 49 02 00 00   jmp  0x37663         ; THE EPILOGUE
+///   …
+///   37463: 8b 83 88 00 00 00 mov  0x88(%ebx),%eax ; manaRegen
+///   37469: 01 83 90 00 00 00 add  %eax,0x90(%ebx) ; mana += regen
+///   …
+///   37553: 83 bb 90 00 00 00 00  cmpl $0x0,0x90(%ebx)
+///   3755a: 7d 0a                 jge  0x37566
+///   3755c: c7 83 90 00 00 00 00  movl $0x0,0x90(%ebx)  ; THE FLOOR
+///   37566-3757c:                 the maxMana ceiling
+///   37663: 89 d0 / 89 ec / 5d …  the epilogue
+/// ```
+///
+/// 0x3740A's `jmp` lands at 0x37663, **past 0x37463 and past
+/// 0x37553** — the regen and the only mana floor in the function.
+///
+/// ⚠ CALL PATHS. `e8 rel32` scan of the shipped image: `sub_5EFA0`
+/// has exactly TWO callers — 0x37402 (this one, inside `sub_12A70`)
+/// and 0x828E9, inside the HUMAN's `AddPlayer03_00_5E010`, which
+/// DISCARDS the result (`jmp 0x82918`) and re-tests `life_0x8`
+/// itself at 0x82939. The human column already carries the
+/// overdraft through [`World::debit_mana`]'s `owed` → `mana_delta`
+/// hand-off, so its ALIVE path is covered; its own lethal tick is
+/// unwitnessed in this corpus (the human's purse is six digits) and
+/// is NOT touched by this hunk.
+///
+/// WITNESS — mc2l16, two independent rival wizards 8,000 ticks
+/// apart, both landing on the SAME constant: slot 372 at t=11721
+/// (`life 100 -> -300`, `mail0.amt 1600 -> 400`, `mana 0 -> -400`)
+/// and slot 389 at t=19784 (`life 360 -> -40`, `mail0.amt 1600 ->
+/// 2000`, `mana 0 -> -400`). Both are a 1600-point letter quartered
+/// to 400 against an empty purse on the tick it kills; retail's
+/// `d88` goes 100 -> 0 in the same instant (an ungraded lane here).
+/// The port read 0 at both.
+pub(crate) fn no_rival_mana_overdraft() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_MANA_OVERDRAFT").is_some())
+}
+
 /// A/B toggle for THE FALL VELOCITY THAT IS NEVER RESET: set
 /// `MGC_NO_RIVAL_FALL_CARRY` to restore the pre-dig behaviour, where
 /// the lethal branch of `mc2_rival_alive` stamped `f46 = 0` (the
@@ -753,6 +1047,76 @@ fn no_death_payout_victims() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_DEATH_PAYOUT_VICTIMS").is_some())
 }
 
+/// A/B toggle for the RIVAL CORPSE'S STUCK NUDGE (round 139): set
+/// `MGC_NO_MC2_RIVAL_STUCK_NUDGE` to restore the pre-dig behaviour, in
+/// which a refused commit gate left the corpse exactly where it was.
+///
+/// `sub_5DD50` (EF:60157) is called from exactly ONE place —
+/// `sub_5D530`'s `else` on `moveTest_5D0A0` (EF:60077). Shipped
+/// `NETHERW.EXE`: file 0x821F3 `e8 a8 f6 ff ff` = `call sub_5D0A0`,
+/// 0x821FB `66 85 c0` / 0x821FE `0f 84 ba 00 00 00` = `test ax,ax` /
+/// `je 0x822BE`, and 0x822BE `53` / 0x822BF `e8 8c 02 00 00` =
+/// `push a1x` / `call sub_5DD50` (file 0x82550 = VA 0x5DD50).
+/// The nudge body: 0x825E6 `bf 98 b3 01 00` + 0x825EB `8d 73 4c` +
+/// `a5 66 a5` = `predictedAxis_EB398ar = a1x->position_0x4C_76`,
+/// 0x825EE `68 80 00 00 00` = **push 128**, 0x825F8 `6a 00` = pitch 0,
+/// 0x825FA `66 8b 43 1c` = `yaw_0x1C_28`, `call 0x7C7A0`
+/// (`MoveEntity_57FA0`), then 0x82612 `call 0x7C4F0`
+/// (`CopyEntityPosition_57CF0`). The latch is the PLAYER struct's
+/// `byte_0x261_609` (0x825DF `c6 80 61 02 00 00 01`, cleared at
+/// 0x82622) — the recorder's `nudge_latch`.
+///
+/// ⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT LANDED. `sub_5D530` has exactly
+/// TWO callers in the shipped EXE (an `e8 rel32` scan): VA 0x5E134
+/// (the alive wizard tick) and VA 0x5E31D — `sub_5E310`, THE DEATH
+/// FALL, shared by the human corpse and the rival corpse. The port
+/// split that one mover in two: [`crate::flight::mc2_move`] carries
+/// the nudge, [`World::mc2_rival_carpet_move`] did not, so a rival
+/// that dies over deep water freezes at the refusal point.
+fn no_mc2_rival_stuck_nudge() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_STUCK_NUDGE").is_some())
+}
+
+/// A/B toggle for the WATER-STEER MARCH CURSOR'S BYTE WRAP (round
+/// 139): set `MGC_NO_MC2_STEER_TILE_WRAP` to restore the pre-dig
+/// 32-bit march, which let a detour walk off the map into tile
+/// x = 269 and then measured its "distance to target" from there.
+///
+/// `sub_169C0`'s two 40-step detour cursors are `baxis_2d` BYTE PAIRS
+/// (`v12`/`v11`) and every step is an 8-bit add. Shipped
+/// `NETHERW.EXE`, the LEFT march (`sub_169C0` = file 0x3B1C0):
+/// ```text
+///   3b26b  8a 82 96 3f 00 00   mov  0x3f96(%edx),%al  ; x_BYTE_D3F96[code]
+///   3b271  8a 65 ec            mov  -0x14(%ebp),%ah   ; v12.x  (BYTE)
+///   3b274  00 c4               add  %al,%ah           ; 8-BIT ADD
+///   3b279  88 65 ec            mov  %ah,-0x14(%ebp)   ; stored back as a BYTE
+///   3b27c  8a 82 a4 3f 00 00   mov  0x3fa4(%edx),%al  ; x_BYTE_D3FA4[code]
+///   3b282  00 c1               add  %al,%cl           ; v12.y, 8-BIT ADD
+///   3b284  88 4d ed            mov  %cl,-0x13(%ebp)
+/// ```
+/// and the RIGHT march is the same shape at 0x3b2b7-0x3b2d0. The
+/// exit-distance compare then loads BOTH exits and the target as
+/// ZERO-EXTENDED BYTES — `xor %eax,%eax` / `xor %edx,%edx` at
+/// 0x3b304-06 and then `8a 45 e4` / `8a 55 fc` (0x3b308/0x3b30b),
+/// `8a 55 e5` / `8a 45 fd` (0x3b31b/0x3b31e), `8a 55 e4` /
+/// `8a 45 f0` (0x3b333/0x3b336) — so every coordinate in it is 0..255.
+///
+/// WITNESS mc2l16 t=4664, THE TAKE'S HORIZON. Rival 389 at tile
+/// (247, 57), target tile (239, 47), both probes 0x8. The RIGHT
+/// detour marches east and retail's byte cursor wraps 255 -> 0,
+/// ending at tile x 13; the port's i32 cursor ended at 269. Areas:
+/// left |47-97|*|239-247| = 400 either way, right |239-13|*|47-41|
+/// = 1356 wrapped but |239-269|*|47-41| = 180 unwrapped — so retail
+/// takes `1` (LEFT, `STEER_YAW_L[8]` = 1024) and the port took `2`
+/// (RIGHT, `STEER_YAW_R[8]` = 0). ⭐ The 180-degree look of the head
+/// is an ARTEFACT: `STEER_YAW_*` only ever holds {0, 512, 1024,
+/// 1536}, so ANY wrong pick reads as a multiple of 90 degrees.
+fn no_mc2_steer_tile_wrap() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_STEER_TILE_WRAP").is_some())
+}
+
 fn rival_regen_pin_list_off() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("MGC_NO_RIVAL_REGEN_PIN_LIST").is_ok_and(|v| v == "1"))
@@ -765,6 +1129,82 @@ fn rival_regen_pin_list_off() -> bool {
 fn rival_human_chain_top_off() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("MGC_NO_RIVAL_HUMAN_CHAIN_TOP").is_ok_and(|v| v == "1"))
+}
+
+/// `MGC_NO_MC2_TARGET_ALIVE_HUMAN_LIVENESS=1` — restore the pre-dig
+/// shape, where [`World::mc2_target_alive`]'s `PLAYER_TARGET` arm
+/// ANDed a live `player.state == LifeState::Alive` onto the signature
+/// test.
+///
+/// ⭐⭐⭐ **A LAW ON ONE CALL PATH IS NOT LANDED.**
+/// [`World::mc2_target_alive`]'s own doc comment already states the
+/// law — `sub_14C60` (EF:6707) "is an IDENTITY test, not a LIVENESS
+/// test", "THE LIFE AND REAP PREDICATES DO NOT BELONG HERE" — and the
+/// pool-target arm one line below obeys it. The `PLAYER_TARGET` arm
+/// did not.
+///
+/// Shipped `NETHERW.EXE`, `sub_14C60` = file 0x39460 (linear 0x14C60
+/// + 0x24800) is SEVEN instructions and there is no life test, no
+/// reap test and no human-vs-pool branch in any of them:
+///
+/// ```text
+///   39460: 53 55 89 e5              push %ebx; push %ebp; mov %esp,%ebp
+///   39464: 8b 55 10                 mov  0x10(%ebp),%edx   ; a2 = target
+///   39467: 52                       push %edx
+///   39468: e8 d3 ff ff ff           call 0x39440           ; sub_14C40
+///   3946d: 8b 55 0c                 mov  0xc(%ebp),%edx    ; a1 = self
+///   39470: 66 8b 9a 98 00 00 00     mov  0x98(%edx),%bx    ; word_0x98_152
+///   3947a: 66 39 d8                 cmp  %bx,%ax
+///   3947d: 0f 94 c0                 sete %al
+/// ```
+///
+/// and `sub_14C40` (file 0x39440) is `(class_0x3F << 7) + model_0x40
+/// + id_0x1A` — three bytes the human's carpet record keeps unchanged
+/// through death, fall and corpse (only a FREE clears `class_0x3F`,
+/// and the human is never freed). The AttackWizard handler
+/// `sub_13890` (file 0x38090) opens on exactly this gate and on
+/// nothing else:
+///
+/// ```text
+///   3809b: 66 8b 83 96 00 00 00     mov  0x96(%ebx),%ax      ; target word
+///   380a2: 8b 34 85 e4 a3 01 00     mov  0x1a3e4(,%eax,4),%esi
+///   380ab: e8 b0 13 00 00           call 0x39460             ; sub_14C60
+///   380b5: 0f 84 2d 02 00 00        je   0x382e8             ; steer + return 0
+///   380c3: e8 18 49 04 00           call 0x7c9e0             ; tan2(self+0x4C, tgt+0x4C)
+///   380d7: 66 89 43 20              mov  %ax,0x20(%ebx)      ; roll_0x20 = the FACE
+///   380cb/0x380d0: push $0x1200 / $0xd00                     ; boost 4608 / arrive 3328
+///   380db: e8 b0 13 00 00           call 0x39490             ; sub_14C90, the approach
+/// ```
+///
+/// This is the third consumer of one idea. `human_wiz_top`
+/// ([`rival_human_chain_top_off`]) already replaced the live
+/// `player.state` with the tick-top roster sample on the two PICK
+/// sides (`sub_14030` / `sub_15FC0`); the VALIDITY gate is the arm
+/// that never got it, and unlike those two it is not a roster
+/// question at all — retail simply does not ask.
+///
+/// WITNESS mc2l16 t=16472, the take's cheapest open head. The human
+/// (slot 303) dies at t=16466 — `life` 960 -> -640, `action45` 0 -> 2
+/// — while rival 389 holds `ai_state` 8 / `target96` 303 /
+/// `word_0x98_152` 687 (= 303 + 0 + (3 << 7)). Retail's `sub_13890`
+/// keeps running on the corpse for six more ticks: it re-faces the
+/// falling body every tick and at t=16471 the setpoint finally moves,
+/// `roll` 917 -> 915 (= `angle_of(3002 - 1530, 29740 - 25513)`,
+/// ATAN[89] = 109). The yaw servo follows one tick later and that is
+/// the graded head, `slot 389 heading` retail 915 / port 917. The
+/// port's gate went false the instant the human left `Alive`, so
+/// `mc2_rival_state_tick` returned before the face: a targeted
+/// `MGC_WRITE_TRACE=389:f34` prints its last write at t=16464 and
+/// nothing again until the re-anchor. Retail's own re-election lands
+/// one tick LATER than the port's drop, at t=16472 (`ai_state` 8 ->
+/// 6, `target96` 303 -> 637, `f98` 687 -> 1956) — from the SELECTOR,
+/// which does test life, not from this gate.
+///
+/// ⚠ `roll`/`target96`/`ai_state` are all UNGRADED on a (3,1), so the
+/// defect is only ever visible one servo tick late on `heading`.
+fn no_mc2_target_alive_human_liveness() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TARGET_ALIVE_HUMAN_LIVENESS").is_some())
 }
 
 /// `MGC_NO_RIVAL_WAR_EARLYOUT=1` — restore the pre-dig shape, where
@@ -1349,6 +1789,16 @@ impl std::hash::Hash for BrakeWord {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
+/// Hash-silent bool for the corpse nudge latch (`byte_0x261_609`) —
+/// same `CrtRand` pattern as [`BrakeWord`]; a bare field here would
+/// re-pin every golden.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct NudgeLatch(pub bool);
+
+impl std::hash::Hash for NudgeLatch {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
 /// One live MC2 rival: the player-extension subset the AI machinery
 /// needs. Position/yaw/life live on the pool entity (class 3 model 1).
 #[derive(Hash, Clone)]
@@ -1369,7 +1819,7 @@ pub(crate) struct Mc2Rival {
     /// counter in retail, EF:5361-63; ours is a separate array).
     pub(crate) cooldown: [u16; MC2_SPELLS],
     /// Carried mana / ceiling / the regen delta the cast debit rides.
-    pub mana: u32,
+    pub mana: i32,
     pub mana_max: u32,
     pub(crate) mana_delta: i32,
     /// ⭐⭐ THE STORED LIFE-REGEN RATE (`lifeRegen_0x163_355`), the
@@ -1447,6 +1897,12 @@ pub(crate) struct Mc2Rival {
     /// Hash-silent (the CrtRand pattern): a new lane in a
     /// derive(Hash) struct would re-pin every golden.
     v14: BrakeWord,
+    /// `sub_5DD50`'s wedged latch — the PLAYER struct's
+    /// `byte_0x261_609`, which the nudge sets and its else clears
+    /// (recorder lane `nudge_latch`). Only the CAVE re-test reads it
+    /// back (`mc2_flight_stuck`), so it is inert off-cave; hash-silent
+    /// for the same reason as [`Mc2Rival::v14`].
+    nudge_latch: NudgeLatch,
     /// Spawn/at-castle grace (word_0x159_345): mailbox memset while
     /// > 0 (100 at spawn, pinned 2 at the own castle).
     pub(crate) grace: u16,
@@ -1493,6 +1949,7 @@ impl Mc2Rival {
             knock_dir: 0,
             knock_mag: 0,
             v14: BrakeWord(false),
+            nudge_latch: NudgeLatch(false),
             grace: 100,
             eliminated: false,
             shield: false,
@@ -2177,7 +2634,7 @@ impl World {
         vdes: i16,
         strafe: i16,
         grace: u16,
-        mana: u32,
+        mana: i32,
         mana_max: u32,
         mana_delta: i32,
     ) {
@@ -2325,7 +2782,11 @@ impl World {
         // master: re-seed it here so an entity-side write landed by
         // any other slot's handler survives this wizard's own tick.
         if !crate::mc2::cast::no_mc2_wiz_purse_is_entity() {
-            self.mc2_rivals[ri].mana = self.g.ent[i].f140.max(0) as u32;
+            self.mc2_rivals[ri].mana = if no_rival_mana_overdraft() {
+                self.g.ent[i].f140.max(0)
+            } else {
+                self.g.ent[i].f140
+            };
         }
         // ⭐ THE ENTITY WORD IS THE TARGET; the brain record only
         // MIRRORS it. Retail's AI reads `a1x->word_0x96_150` fresh on
@@ -2548,7 +3009,7 @@ impl World {
         {
             let r = &mut self.mc2_rivals[ri];
             let stepped = r.mana as i64 + r.mana_delta as i64;
-            r.mana = stepped.clamp(0, r.mana_max as i64) as u32;
+            r.mana = stepped.clamp(0, r.mana_max as i64) as i32;
             r.mana_delta = if at_castle || at_shrine {
                 ((r.mana_max / 200) as i32).max(1000)
             } else {
@@ -2559,7 +3020,7 @@ impl World {
             // half of the same block already writes the record; the
             // mana half must too (mc2l4 t=16 slot 292: +1000/tick at
             // the castle, the port's entity frozen at the import).
-            self.g.ent[i].f140 = r.mana.min(i32::MAX as u32) as i32;
+            self.g.ent[i].f140 = r.mana;
         }
         if at_castle || at_shrine {
             self.g.ent[i].flags &= !0x1000;
@@ -2776,6 +3237,26 @@ impl World {
         // never touches `word_0x98_152` here, and it does not need to
         // — target 0 is already unmatchable.
         let t = self.mc2_rivals[ri].target;
+        // ⚠ FIDELITY GAP, DELIBERATE AND REGISTERED (round 141, player
+        // ruling: ZERO UNWITNESSED CHANGE). Retail drops a dead target
+        // HERE and the human is just a pool record to this block —
+        // shipped `NETHERW.EXE` file 0x837d6-0x837e9 is
+        //   cmpl $0x0,0x8(%eax)      ; life_0x8 <= 0
+        //   jle  0x837e2
+        //   testb $0x4,0xd(%eax)     ; byte[1] & 4 (reap)
+        //   je   0x837eb
+        //   movw $0x0,0x96(%ebx)     ; word_0x96_150 = 0
+        // reached through `Entities[word_0x96_150]` with NO class,
+        // model or human test. The port excludes `PLAYER_TARGET`, so
+        // it never drops a dead HUMAN target on the undocked arm.
+        // ⭐ IT MEASURES EXACTLY ZERO across the whole 49-take corpus
+        // (mc2l16's rival 389 is DOCKED, `invuln` 1, across the only
+        // window that would show it — which is also why retail keeps
+        // acting on the corpse there), and it was NOT landed because
+        // the round had no witness for it. The selector re-elects on
+        // its own life test, so a stale corpse target self-corrects.
+        // Registered in `docs/FIDELITY.md`; do not "fix" it toward
+        // retail without a measured witness.
         if t != 0 && t != PLAYER_TARGET {
             let e = &self.g.ent[t as usize];
             if e.act_life <= 0 || e.flags & 0x400 != 0 {
@@ -2820,10 +3301,11 @@ impl World {
                 let amt = self.mc2_steal_resolve(victim, steal_src, steal_tier.min(2) as u8);
                 if amt != 0 {
                     self.credit_wizard_mana(steal_src, amt);
-                    self.mc2_rivals[ri].mana = self.mc2_rivals[ri].mana.saturating_sub(amt);
+                    self.mc2_rivals[ri].mana =
+                        (self.mc2_rivals[ri].mana as i64 - amt as i64).max(0) as i32;
                 }
                 self.mc2_rivals[ri].mana =
-                    self.mc2_rivals[ri].mana.min(self.mc2_rivals[ri].mana_max);
+                    self.mc2_rivals[ri].mana.min(self.mc2_rivals[ri].mana_max as i32);
                 if steal_src == PLAYER_TARGET {
                     self.g.mc2_cast_xp.0.push((steal_src, 13, 1));
                 }
@@ -2939,9 +3421,13 @@ impl World {
             if f & (F_SHIELD_CHARGED | F_SHIELD_ARMED) != 0 {
                 if f & F_SHIELD_CHARGED != 0 {
                     let q = (self.g.ent[i].mail[0].0.min(i32::MAX as u32) as i32) / 4;
-                    let pay = (q.max(0) as u32).min(self.mc2_rivals[ri].mana);
+                    let pay = if no_rival_mana_overdraft() {
+                        q.max(0).min(self.mc2_rivals[ri].mana)
+                    } else {
+                        q.max(0)
+                    };
                     self.mc2_rivals[ri].mana -= pay;
-                    self.g.ent[i].f140 = self.mc2_rivals[ri].mana.min(i32::MAX as u32) as i32;
+                    self.g.ent[i].f140 = self.mc2_rivals[ri].mana;
                     self.g.ent[i].mail[0].0 = q.max(0) as u32; // = v10 (EF:60684)
                     self.g.ent[i].flags &= !F_SHIELD_CHARGED; // byte[1] & 0xBF
                     self.mc2_rivals[ri].shield_state = 0;
@@ -2961,7 +3447,11 @@ impl World {
                 }
                 2 => {
                     let q = (self.g.ent[i].mail[0].0.min(i32::MAX as u32) as i32) / 4;
-                    let pay = (q.max(0) as u32).min(self.mc2_rivals[ri].mana);
+                    let pay = if no_rival_mana_overdraft() {
+                        q.max(0).min(self.mc2_rivals[ri].mana)
+                    } else {
+                        q.max(0)
+                    };
                     self.mc2_rivals[ri].mana -= pay;
                     self.g.ent[i].mail[0].0 = q.max(0) as u32; // = v10 (EF:60684)
                     self.mc2_rivals[ri].shield_state = 0;
@@ -3476,13 +3966,24 @@ impl World {
                 }
                 // March both detours 40 steps (EF:8143-8166); index
                 // the step tables by the code's LOW byte (0 = hold).
+                // ⭐⭐⭐ THE CURSOR IS A BYTE PAIR (`baxis_2d v12`/`v11`)
+                // AND EVERY STEP IS AN 8-BIT ADD — see
+                // [`no_mc2_steer_tile_wrap`] for the shipped bytes.
+                let wrap = !no_mc2_steer_tile_wrap();
+                let step = |v: i32, d: i8| {
+                    if wrap {
+                        (v as u8).wrapping_add(d as u8) as i32
+                    } else {
+                        v + d as i32
+                    }
+                };
                 let (mut lx, mut ly) = (wx, wy);
                 let (mut lex, mut ley) = (wx, wy);
                 if left != 0 {
                     for _ in 0..0x28 {
                         let idx = (left & 0xFF) as usize % 14;
-                        lx += STEER_DX_L[idx] as i32;
-                        ly += STEER_DY_L[idx] as i32;
+                        lx = step(lx, STEER_DX_L[idx]);
+                        ly = step(ly, STEER_DY_L[idx]);
                         (lex, ley) = (lx, ly);
                         left = self.mc2_steer_probe(lx, ly, false, (left & 0xFF) as u8);
                     }
@@ -3492,8 +3993,8 @@ impl World {
                 if right != 0 {
                     for _ in 0..0x28 {
                         let idx = (right & 0xFF) as usize % 14;
-                        rx += STEER_DX_R[idx] as i32;
-                        ry += STEER_DY_R[idx] as i32;
+                        rx = step(rx, STEER_DX_R[idx]);
+                        ry = step(ry, STEER_DY_R[idx]);
                         (rex, rey) = (rx, ry);
                         right = self.mc2_steer_probe(rx, ry, true, (right & 0xFF) as u8);
                     }
@@ -3690,12 +4191,12 @@ impl World {
         };
         let r = &mut self.mc2_rivals[ri];
         let d = r.mana_delta as i64 + 8;
-        r.mana = (r.mana as i64 - d).max(0) as u32;
+        r.mana = (r.mana as i64 - d).max(0) as i32;
         // Retail's purse IS `mana_0x90_144` — publish, exactly as
         // `mc2_rival_leech_apply` already does at its own drain (see
         // [`crate::mc2::cast::no_mc2_wiz_purse_is_entity`]).
         if !crate::mc2::cast::no_mc2_wiz_purse_is_entity() {
-            let m = self.mc2_rivals[ri].mana.min(i32::MAX as u32) as i32;
+            let m = self.mc2_rivals[ri].mana;
             let t = opp as usize;
             if t < self.g.ent.len() {
                 self.g.ent[t].f140 = m;
@@ -3868,7 +4369,8 @@ impl World {
             return;
         }
         let cost = self.g.ent[m].max_life;
-        let admitted = self.mc2_rival_afford(ri, m) && self.mc2_rivals[ri].mana >= cost;
+        let admitted =
+            self.mc2_rival_afford(ri, m) && self.mc2_rivals[ri].mana >= cost as i32;
         if !admitted {
             self.g.ent[m].f26 = 1; // :56466 — the release
             return;
@@ -3979,12 +4481,12 @@ impl World {
         };
         let r = &mut self.mc2_rivals[ri];
         let d = r.mana_delta as i64 + 14;
-        r.mana = (r.mana as i64 - d).clamp(0, u32::MAX as i64) as u32;
+        r.mana = (r.mana as i64 - d).clamp(0, i32::MAX as i64) as i32;
         // Retail's purse LIVES on the entity; keep the mirror the obs
         // lane and every other reader see in step, at this slot.
         let t = victim as usize;
         if t < self.g.ent.len() {
-            self.g.ent[t].f140 = r.mana.min(i32::MAX as u32) as i32;
+            self.g.ent[t].f140 = r.mana;
         }
     }
 
@@ -4034,7 +4536,7 @@ impl World {
             }
         }
         if e.f26 as u16 == e.f28.max(1) {
-            return self.mc2_rivals[ri].mana >= e.max_life;
+            return self.mc2_rivals[ri].mana >= e.max_life as i32;
         }
         true
     }
@@ -4864,8 +5366,14 @@ impl World {
             // Signature-honouring, like every pool target: an
             // imported sig that names something else (the human's
             // CASTLE after a retaliation re-point) must fail here.
-            return self.player.state == LifeState::Alive
-                && self.mc2_target_sig(PLAYER_TARGET) == sig;
+            //
+            // ⭐⭐⭐ AND NOTHING ELSE — THE HUMAN ARM CARRIED THE
+            // LIVENESS TEST THE DOC ABOVE SAYS DOES NOT BELONG HERE.
+            // See [`no_mc2_target_alive_human_liveness`].
+            if no_mc2_target_alive_human_liveness() && self.player.state != LifeState::Alive {
+                return false;
+            }
+            return self.mc2_target_sig(PLAYER_TARGET) == sig;
         }
         self.mc2_target_sig(target) == sig
     }
@@ -5316,7 +5824,7 @@ impl World {
         }
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
         let range = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as i32 + 10;
-        let my_mana = self.mc2_rivals[ri].mana;
+        let my_mana = self.mc2_rivals[ri].mana.max(0) as u32;
         let agg = self.mc2_rivals[ri].agg as u32;
         // The candidate walk, in `dword_38519` order — the roster
         // chain is TAIL-appended over an ascending pool sweep
@@ -5483,7 +5991,7 @@ impl World {
                 ex,
                 ey,
                 self.rival_castle(ent).is_none(),
-                mana,
+                mana.max(0) as u32,
                 self.mc2_rivals[ri].war[slot as usize],
                 self.mc2_hate_over(ri, slot, mana_max),
                 has_castle_spell,
@@ -6387,8 +6895,34 @@ impl World {
             // while fleeing; heal up at the castle.
             Mc2AiState::Home => {
                 let Some(c) = self.rival_castle(self.mc2_rivals[ri].ent) else {
+                    // The castle-MISSING arm (EF:5771-97; NETHERW.EXE
+                    // 0x37CCA-0x37D9F) — see
+                    // [`no_mc2_rival_homeless_speed_run`]. Four steps,
+                    // of which the port had only the first.
                     self.mc2_rival_walk_cast(ri, i, 0xB);
-                    self.mc2_rivals[ri].state = Mc2AiState::Cruise;
+                    if no_mc2_rival_homeless_speed_run() {
+                        self.mc2_rivals[ri].state = Mc2AiState::Cruise;
+                        return;
+                    }
+                    // Step 2: the SPEED tier walk. The executor's
+                    // return is NOT tested (0x37d24 -> 0x37d32
+                    // `mov $0x1,%ebx`), so a probe HIT ends the tick
+                    // whether or not the cast landed.
+                    let mut tier = self.mc2_rivals[ri].book.levels[3] as i16;
+                    while tier >= 0 {
+                        if self.mc2_rival_tier_probe(ri, tier, 3) == 3 {
+                            self.mc2_rival_cast(ri, i, 3);
+                            return;
+                        }
+                        tier -= 1;
+                    }
+                    // Step 3: already boosting -> nothing else.
+                    if self.mc2_spell_window_live(self.mc2_rivals[ri].book.ent[3]) {
+                        return;
+                    }
+                    // Step 4: cruise at the row's base speed, braked.
+                    self.mc2_rivals[ri].vdes = self.g.ent[i].f128;
+                    self.mc2_rivals[ri].v14 = BrakeWord(true);
                     return;
                 };
                 let (cx, cy) = (self.g.ent[c].x, self.g.ent[c].y);
@@ -6415,14 +6949,18 @@ impl World {
                 // the -48000 dx wraps to +17536 and the comparison
                 // clears the threshold by 3x either way.
                 //
-                // ⚠ Retail's loop is `if (probe == 1 && cast(1))
+                // ⭐⭐⭐ Retail's loop is `if (probe == 1 && cast(1))
                 // goto`, i.e. it keeps walking DOWN on a refused cast
-                // where `walk_cast` stops. Every refusal `sub_14E10`
+                // where `walk_cast` stops. The refusals `sub_14E10`
                 // can raise here (the 0xAA cone, the burst lockout)
-                // is tier-INDEPENDENT, so the two agree; the shared
-                // helper stays one implementation.
+                // ARE tier-independent — but the token's PRICE STAMP
+                // is not, and that is the graded lane: retail's walk
+                // re-stamps tier 0 on the way down, the port left the
+                // refusal's tier on the token. 21 of mc2l12's heads.
+                // [`Self::mc2_rival_walk_cast_chained`] is the site's
+                // own shape; every other retail walk breaks first.
                 if Gen::dist2_sq(self.g.ent[i].x, self.g.ent[i].y, cx, cy) as u32 > 0x640_0000
-                    && self.mc2_rival_walk_cast(ri, i, 1)
+                    && self.mc2_rival_walk_cast_chained(ri, i, 1)
                 {
                     return;
                 }
@@ -6774,14 +7312,14 @@ impl World {
         // min — that would be wrong for mid wealth).
         {
             let r = &mut self.mc2_rivals[ri];
-            if r.mana < r.mana_max / 4 {
+            if r.mana < (r.mana_max / 4) as i32 {
                 r.poverty = true;
             } else if r.poverty {
                 let mut release = r.mana_max / 4 + 6000;
                 if release >= r.mana_max {
                     release = r.mana_max / 2;
                 }
-                if r.mana >= release {
+                if r.mana >= release as i32 {
                     r.poverty = false;
                 }
             }
@@ -7007,6 +7545,55 @@ impl World {
         while tier >= 0 {
             if self.mc2_rival_tier_probe(ri, tier, s) == s as i32 {
                 return self.mc2_rival_cast(ri, i, s);
+            }
+            tier -= 1;
+        }
+        false
+    }
+
+    /// ⭐⭐⭐ THE ONE SITE THAT CHAINS THE EXECUTOR INTO THE LOOP
+    /// CONDITION. `sub_133B0`'s spell-1 walk is
+    /// `if (sub_15F20(a1x, k, 1) == 1 && sub_14E10(a1x, 1u)) goto
+    /// LABEL_6;` (EF:5804) — a REFUSED cast falls through to `k--`
+    /// and the walk keeps descending, so the probe's `SetSpell` side
+    /// effect runs again at every lower tier and the token ends the
+    /// tick re-priced at tier 0, not at the tier the refusal happened
+    /// on. [`Self::mc2_rival_walk_cast`] returns the refusal instead
+    /// and leaves the stamp behind.
+    ///
+    /// The old shared-helper comment argued the two agree because
+    /// every refusal `sub_14E10` can raise here (the 0xAA cone, the
+    /// burst lockout) is tier-INDEPENDENT. That is true of the CAST
+    /// outcome and false of the TOKEN'S PRICE STAMP, which is the
+    /// graded lane: `mana_0x90_144` / `maxMana_0x8C_140` on the
+    /// class-15 record.
+    ///
+    /// WITNESS mc2l12, rival 136's spell-1 token slot 138: retail
+    /// holds 33/100 (tier 0) and flashes 6/250 (tier 1) for exactly
+    /// the one tick the cast lands (t=1003, 1013, ... 1870). The port
+    /// held 6/250 for every tick the executor refused — t=1000-1002
+    /// (the 0xAA cone), 1288-89, 1331-37 and 1830-37 (`burst` negative
+    /// after the 8-shot lockout), 1749 — which is 21 ticks and
+    /// exactly the take's 21 `(15,1)` heads, first at the horizon
+    /// t=1000.
+    ///
+    /// See [`no_mc2_rival_home_cast_chain`] for the EXE bytes and for
+    /// the two near-identical siblings that do NOT chain.
+    pub(crate) fn mc2_rival_walk_cast_chained(
+        &mut self,
+        ri: usize,
+        i: usize,
+        s: usize,
+    ) -> bool {
+        if no_mc2_rival_home_cast_chain() {
+            return self.mc2_rival_walk_cast(ri, i, s);
+        }
+        let mut tier = self.mc2_rivals[ri].book.levels[s] as i16;
+        while tier >= 0 {
+            if self.mc2_rival_tier_probe(ri, tier, s) == s as i32
+                && self.mc2_rival_cast(ri, i, s)
+            {
+                return true;
             }
             tier -= 1;
         }
@@ -7405,7 +7992,7 @@ impl World {
         {
             return;
         }
-        if self.mc2_rivals[ri].mana < self.g.ent[m].max_life {
+        if self.mc2_rivals[ri].mana < self.g.ent[m].max_life as i32 {
             return;
         }
         let (yaw, pitch) = {
@@ -7650,7 +8237,7 @@ impl World {
             if self.g.ent[m].f26 > 0 {
                 return false;
             }
-            if self.mc2_rivals[ri].mana < self.g.ent[m].max_life {
+            if self.mc2_rivals[ri].mana < self.g.ent[m].max_life as i32 {
                 return false;
             }
             // `sub_5F7B0` (EF:60974) — the bare window write.
@@ -7724,10 +8311,20 @@ impl World {
         // never happens.
         let _ = cost;
         self.g.snd(30, c);
-        // Stage-1 research for the fresh castle (A.5 shortcut).
-        let own = self.mc2_rivals[ri].ent;
-        let tier = self.mc2_rival_castle_tier(ri);
-        self.g.mc2_research_stamp(own, 1, tier);
+        // ⭐⭐⭐ NO RESEARCH. The castle-less arm (file 0x396A7-0x396F3)
+        // writes the owner id and `CastleEntityIndex_0x3A_58` and
+        // nothing else — it never reaches `sub_69AB0`, the image's ONLY
+        // writer of `array_0x24E_590` (files 0x8E366 / 0x8E379). A
+        // rival's FIRST castle therefore stands UNRESEARCHED:
+        // `sub_613D0`'s walk-down reads `array_0x24E_590[9+1] == 0`,
+        // falls to `v4 == 0` and spawns no (10,79) defender piece at
+        // its first level-up. See [`no_mc2_free_castle_unresearched`]
+        // for the full citation and the mc2l12 t=10016 witness.
+        if no_mc2_free_castle_unresearched() {
+            let own = self.mc2_rivals[ri].ent;
+            let tier = self.mc2_rival_castle_tier(ri);
+            self.g.mc2_research_stamp(own, 1, tier);
+        }
         self.entities_dirty = true;
         let _ = i;
         true
@@ -8591,6 +9188,13 @@ impl World {
         let fov = self.g.ent[i].f84 as i32;
         let out = self.g.mc2_flight_gate(fov, clr, (x, y, z), cand, false);
         let Some((p, dyaw)) = out.pass else {
+            // `sub_5D530`'s `else` (EF:60077, file 0x821FE `je 0x822BE`
+            // -> 0x822BF `call sub_5DD50`) — the un-gated 128-unit
+            // shove out of whatever the corpse is wedged in. The human
+            // column has carried it since the flight model landed
+            // (`crate::flight::mc2_move`); this column is the SAME
+            // retail function's other caller.
+            self.mc2_rival_stuck_nudge(ri, i, fov, clr);
             return;
         };
         self.g.ent[i].f30 = ((yaw as i32 + dyaw as i32) & 0x7FF) as u16;
@@ -8608,6 +9212,36 @@ impl World {
         }
         let nz = nz.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
         self.g.move_relink(i, p.0, p.1, nz);
+    }
+
+    /// `sub_5DD50` (EF:60157) DRIVEN BY A RIVAL — the wedged shove
+    /// `sub_5D530` runs whenever `moveTest_5D0A0` refuses the commit.
+    /// Verbatim: deep water at the CURRENT position (or a sealed cave
+    /// tile, or — latched — a live ceiling collision) latches
+    /// `byte_0x261_609` and steps the position 128 units along the
+    /// entity's OWN yaw at pitch 0, publishing through
+    /// `CopyEntityPosition_57CF0` (= [`Gen::move_relink`], which is
+    /// also what writes `predictedAxis`, so the death puff follows the
+    /// shove). Anything else clears the latch. See
+    /// [`no_mc2_rival_stuck_nudge`] for the shipped bytes.
+    fn mc2_rival_stuck_nudge(&mut self, ri: usize, i: usize, fov: i32, clr: i32) {
+        if no_mc2_rival_stuck_nudge() {
+            return;
+        }
+        let (x, y, z, yaw) = {
+            let e = &self.g.ent[i];
+            (e.x, e.y, e.z, e.f30)
+        };
+        let latched = self.mc2_rivals[ri].nudge_latch.0;
+        // A rival is never the ghost-cheat carpet.
+        if self.g.mc2_flight_stuck(fov, clr, (x, y, z), latched, false) {
+            self.mc2_rivals[ri].nudge_latch = NudgeLatch(true);
+            let mut a = (x, y, z);
+            Gen::polar_step(&mut a, yaw, 0, 128);
+            self.g.move_relink(i, a.0, a.1, a.2);
+        } else {
+            self.mc2_rivals[ri].nudge_latch = NudgeLatch(false);
+        }
     }
 
     /// Action 2 — the death fall (sub_5E310 EF:60074-60099).
@@ -8649,8 +9283,24 @@ impl World {
             e.z = z;
         }
         let z = self.g.ent[i].z;
+        // ⭐⭐⭐ THE PUFF GOES AT RETAIL'S GLOBAL SCRATCH AXIS, NOT AT
+        // THE CORPSE — `sub_5E310` pushes `0x1b398` (shipped
+        // `NETHERW.EXE` file 0x82BDD `68 98 b3 01 00`, quoted in full
+        // at `World::mc2_player_fall`). ⭐ ONE BODY, TWO CALL PATHS:
+        // the human's dispatch and this one, so the rival column takes
+        // the same read. It is a no-op on an ordinary fall — the mover
+        // above ends in `move_relink`, which IS the port's model of
+        // `CopyEntityPosition_57CF0(a1x, &predictedAxis)` — and it
+        // differs exactly where `sub_5D530` did not run: the
+        // `byte[1] & 8` whirlwind veto at the head of
+        // `mc2_rival_carpet_move`, and a flight-gate rejection.
+        let (px, py, pz) = if crate::mc2::roster::no_mc2_fall_puff_pred_axis() {
+            (x, y, pre_z)
+        } else {
+            self.g.mc2_pred_axis.0
+        };
         // The (10,1) death puff (EF:60092-97), owner-flagged.
-        if let Some(s) = self.g.mc2_spawn_big_explosion(x, y, pre_z) {
+        if let Some(s) = self.g.mc2_spawn_big_explosion(px, py, pz) {
             self.g.ent[s].flags |= 0x80;
             self.g.ent[s].id24 = self.mc2_rivals[ri].ent;
         }
@@ -9023,6 +9673,48 @@ impl World {
         }
         self.entities_dirty = true;
     }
+
+    /// ⭐⭐⭐ **THE POST-DEATH TRUCE IS NOT A RIVAL-ONLY LAW.**
+    /// `sub_5C950` is ONE routine for every wizard, and its truce loop
+    /// (EF:44185-93, shipped NETHERW.EXE 0x5CE22) sits below the
+    /// `IsAiPlayer` fork with no gate: whoever just respawned, every
+    /// OTHER class-3 model-0/1 record on the tick-top roster
+    /// `dword_38519` ([`Gen::wiz_chain`]) takes
+    /// `hate[respawner colour] = 0x9FDF` = [`HATE_RESPAWN`]. The port
+    /// had the write on the two RIVAL call paths only
+    /// ([`Self::mc2_spawn_rival`] and the respawn above), so a HUMAN
+    /// respawn left every rival's `hate[0]` wherever
+    /// [`Self::mc2_rival_hate_decay`] had carried it — the §5 class,
+    /// a known-correct law that never reached one call path.
+    ///
+    /// ⚠ THE ROSTER, NOT THE RIVAL VECTOR. `dword_38519` only ever
+    /// holds `life_0x8 >= 0` records (EF:39975), so a rival that is
+    /// DEAD when the human respawns takes no truce at all.
+    ///
+    /// WITNESS (mc2l16 t=7934, the human's respawn; the rivals' own
+    /// decay runs later in the same tick, `-(256 - Aggression)`):
+    ///
+    /// | wiz | t=7933 | port (no truce) | retail t=7934 |
+    /// |-----|--------|-----------------|---------------|
+    /// | 1   | 24607  | 24607           | 40914 = 40927 − 13 |
+    /// | 4   | 45303  | 45279 = −24      | 40903 = 40927 − 24 |
+    /// | 5   | 54505  | 54459 = −46      | 40881 = 40927 − 46 |
+    ///
+    /// The debt is INVISIBLE for 1,131 boundaries — `hate` is an
+    /// ungraded lane — and surfaces at t=9066, where rival 372's
+    /// target election (`sub_14030`) picks 452 where retail picks 389
+    /// and the wizard's `z` steps −4 instead of −8.
+    pub(crate) fn mc2_respawn_truce(&mut self, colour: usize) {
+        if no_mc2_human_respawn_truce() || colour >= 8 {
+            return;
+        }
+        for c in 0..self.g.wiz_chain.visible_len() {
+            let j = self.g.wiz_chain.list[c] as usize;
+            if let Some(r) = self.mc2_rivals.iter_mut().find(|r| r.ent as usize == j) {
+                r.hate[colour] = HATE_RESPAWN;
+            }
+        }
+    }
 }
 
 impl Gen {
@@ -9106,6 +9798,7 @@ impl Snap for Mc2Rival {
             knock_dir,
             knock_mag,
             v14,
+            nudge_latch,
             grace,
             eliminated,
             shield,
@@ -9143,6 +9836,7 @@ impl Snap for Mc2Rival {
         w.put(knock_dir);
         w.put(knock_mag);
         w.put(&v14.0);
+        w.put(&nudge_latch.0);
         w.put(grace);
         w.put(eliminated);
         w.put(shield);
@@ -9182,6 +9876,7 @@ impl Snap for Mc2Rival {
             knock_dir: r.get()?,
             knock_mag: r.get()?,
             v14: BrakeWord(r.get()?),
+            nudge_latch: NudgeLatch(r.get()?),
             grace: r.get()?,
             eliminated: r.get()?,
             shield: r.get()?,

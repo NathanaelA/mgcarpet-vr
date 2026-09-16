@@ -1277,9 +1277,17 @@ struct RStats {
     segs: Vec<Segment>,
     gates: BTreeMap<&'static str, u64>,
     stick_unrec: u64,
-    /// Pairs whose stick was recovered a SECOND time because the port
-    /// counted a whirlwind crank total other than 1 (the historical
-    /// assumption) — see the trial step in the MC2 loop.
+    /// Pairs whose stick was recovered a SECOND time off the trial
+    /// step's true crank count — see the trial step in the MC2 loop.
+    /// ⚠ RELABELLED round 140: this used to count only "the port
+    /// counted a total other than 1" (the historical arity
+    /// assumption). It now ALSO counts sim-witness repasses — pairs
+    /// where the RECORDED witness is dark (no `word_0x30_48` edge, no
+    /// grab latch) but the port's own walk cranked, which the pair
+    /// predicate cannot see (`MGC_NO_MC2_WW_CRANK_SIM_WITNESS`). So a
+    /// rise here is not by itself a regression: landing the crank
+    /// accumulation law took mc2l16 from 114 to 127 while removing 50
+    /// divergences.
     crank_repass: u64,
     respawns: u64,
     suicides: u64,
@@ -1623,7 +1631,7 @@ impl RStats {
         if self.crank_repass > 0 {
             let _ = writeln!(
                 out,
-                "   whirlwind crank re-recoveries (port counted != 1): {}",
+                "   whirlwind crank re-recoveries (trial-step count or dark witness): {}",
                 self.crank_repass
             );
         }
@@ -3095,7 +3103,19 @@ fn run_mc2(
         // the live world, so nothing has to be undone and no side
         // effect (restart latch, cheat book, ktrace arm, sound) is
         // double-counted.
-        if rec.whirl_crank
+        // ⭐⭐⭐ AND THE TRIAL IS ALSO THE WITNESS, NOT ONLY THE COUNT.
+        // `recover::mc2_crank_witness` is a pair predicate and both of
+        // its disjuncts are EDGES, so a mid-ring visit that recomputes
+        // the SAME `word_0x30_48` and leaves the victim ungrabbed is
+        // invisible to it (mc2l12 t=9584 — see
+        // `recover_pair_mc2_kw`). Whenever a (10,22) head is live the
+        // trial runs anyway and the PORT supplies the witness; the
+        // recovery then reads the capture's own `rollDelta_0x4_4`,
+        // which is count-free and retail's own datum.
+        // `MGC_NO_MC2_WW_CRANK_SIM_WITNESS` restores the pair-only
+        // witness (and the trial's old `rec.whirl_crank` gate).
+        let sim_witness = !std::env::var_os("MGC_NO_MC2_WW_CRANK_SIM_WITNESS").is_some();
+        if (rec.whirl_crank || (sim_witness && world.mc2_whirlwind_alive()))
             && !args.pose_only
             && mgc_sim::mc2_ww_crank_count_law()
             && !recover::paused_turn_mc2(&pst, &st)
@@ -3105,8 +3125,18 @@ fn run_mc2(
             mgc_sim::reset_whirl_cranks();
             step_mc2(&mut trial_world, &mut trial_ch, inp, cmd);
             let k = mgc_sim::whirl_cranks();
-            if k != 1 {
-                let alt = recover::recover_pair_mc2_k(&pst, &st, respawn, tick.input.as_ref(), k);
+            // k == 0 with no pair witness is the ordinary
+            // no-funnel-reached-him tick: the alt recovery would be
+            // byte-identical, so do not spend it (or count it).
+            if (rec.whirl_crank && k != 1) || (!rec.whirl_crank && k >= 1) {
+                let alt = recover::recover_pair_mc2_kw(
+                    &pst,
+                    &st,
+                    respawn,
+                    tick.input.as_ref(),
+                    k,
+                    sim_witness && k >= 1,
+                );
                 // ⚠ NEVER TRADE A RECOVERABLE CURSOR FOR AN
                 // UNRECOVERABLE ONE. A count the port got WRONG (its
                 // funnel missed a visit retail made) must not also

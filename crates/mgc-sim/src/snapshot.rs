@@ -132,7 +132,7 @@ const MAGIC: u32 = 0x5343_474D;
 ///     cheats (ghost mode, inert mode), carried like
 ///     `invincible` so a resume keeps the mode it was taken in. Join
 ///     the World stream after `dev_minted`.
-pub const SNAPSHOT_VERSION: u32 = 22;
+pub const SNAPSHOT_VERSION: u32 = 23;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]

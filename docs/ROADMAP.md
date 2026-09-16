@@ -51,6 +51,62 @@ and lists what remains; history lives in the archive and git.
 
 ## Remaining work
 
+### 🏗 POST-CONFORMANCE REFACTOR — COLLAPSE THE PER-COLUMN ARMS (player-raised 2026-09-16)
+
+**BANKED FOR AFTER CONFORMANCE. Do not start it while the campaign is
+running — the goldens and the fixture corpus are what will make it
+safe, and they are still being built.**
+
+The player's diagnosis, from round 139's result: *"it's wrong to have
+per-column implementation in the first place — at least for some of
+them there should be a shared routine. That's probably a great note for
+some kind of final refactor after the conformance is reasonably
+considered done."*
+
+**The evidence is unusually direct.** Round 139 landed eight laws and
+**five of them were a known-correct law that had simply never reached
+one call path**:
+
+| the law | where it already lived | the arm that missed it |
+|---|---|---|
+| `sub_65580` human-raise bracket | `proj.rs`, `roster.rs`, `cast.rs`, `rivals.rs` | `castle.rs` turret aim |
+| `CastleEntityIndex_0x3A_58` register read | m25 brain, spell price, demolish | the (10,43) upgrade token |
+| castle tier-defer lag | the HUMAN column (`cast.rs`) | the RIVAL twin |
+| `sub_5DD50` 128-unit stuck nudge | `flight::mc2_move` | `World::mc2_rival_carpet_move` |
+| `sub_1EEE0` raw `position.z` write | `mc2_fire_tick` | `mc2_alt_commit` |
+
+Rounds 136-138 show the same shape (round 136's castle register, round
+137's law 2 — one retail function reached by two port call paths with
+the field home wrong on one). **It is now the dominant defect class,
+three rounds running, and it is architectural rather than accidental:**
+retail has ONE routine; the port fanned it out into per-column arms
+(human/rival, MC1/MC2, flight/pool, free-run/pinned-pose) that were
+each ported and each landed independently. So every retail law has as
+many homes as the port has columns, and landing it in one of them is
+the DEFAULT outcome, not an oversight.
+
+⭐ This is why `DIG-PROTOCOL.md` §5 ("A LAW ON ONE CALL PATH IS NOT
+LANDED") exists and why it keeps paying. The refactor is the structural
+fix for what §5 currently catches by hand, one law at a time.
+
+**Shape of the work, when it is time:**
+- Start from the laws that already have kill switches and fixtures —
+  each one names a retail routine and every port arm that implements
+  it. The round-136..139 register/raise/nudge families are a ready-made
+  worklist.
+- Collapse to one port routine per retail routine, with the per-column
+  difference passed as data (a `VerbSet` arm, a `ChassisParams` field),
+  which is the architecture the multi-game split already chose and
+  proved (see `RETROSPECTIVE-2026-07-19.md`, "architecture verdict").
+- ⚠ The guard is the state-hash goldens plus the fixture corpus (554
+  fixtures at round 139, one file per law, each A/B-proven non-vacuous
+  against its own switch). A collapse that moves a golden or reds a
+  fixture has changed behaviour and must be re-derived, not re-baselined.
+- ⚠⚠ Expect the pinned-pose / free-run split to be the hardest seam: a
+  hunk inside the free-run mover is invisible to the pinned-pose arm and
+  ONLY fixture pairs see it (round 138's trap #2).
+
+
 ### MC1 crab eggs — CLOSED 2026-08-26 (the mine bug's MC1 twin)
 
 Player-reported: crabs multiply, but nothing is ever visible to multiply

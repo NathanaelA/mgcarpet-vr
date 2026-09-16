@@ -930,6 +930,18 @@ pub(crate) struct Gen {
     /// transport shape as the spin (world writes, the carpet's own
     /// walk slot drains it once, no decay).
     pub(crate) player_whirl: PlayerWhirl,
+    /// ⭐ A WITHIN-WALK REGISTER, the [`Gen::m27_v34_slot`] idiom:
+    /// has the whirlwind column published into [`Gen::player_whirl`]
+    /// ALREADY, during THIS walk? `World::tick_inner` clears it before
+    /// the first handler runs, so it is true exactly when the mailbox
+    /// still holds a publication made by a LOWER funnel slot of the
+    /// same tick — which is what makes the crank counts additive
+    /// (`mc2::tail::mc2_ww_crank_accum_law`) without ever adding to a
+    /// publication that leaked across a tick boundary (a funnel that
+    /// is the HIGHEST live slot has no later walker to drain it, so
+    /// the mailbox can and does survive the turn).
+    /// Not on the wire, not hashed — a transient of the walk.
+    pub(crate) ww_walk_published: HashSilent<bool>,
     /// The doomsday pyramid's HURL-AWAY BEAM on the human — the
     /// second `sub_21AB0` arm that is NOT a knock. Case 7 (EF:13427-56)
     /// ramps the GLOBAL `D41A0_0.word_0x36546` 1024 → −80/tick → floor
@@ -1312,8 +1324,18 @@ impl std::hash::Hash for Mc2XpMail {
 /// Bit 15 of an entry marks a push made by the DOWNGRADE
 /// (`sub_605E0`): the castle-death token purge drains those alone
 /// (round 112, `castle::no_mc2_purge_on_downgrade_only`).
+/// `.1` is the PRICE REGISTER AS IT STOOD AT THE STAMP, parallel to
+/// `.0`, `0` = "none taken, read the live register at drain time".
+/// `sub_60780` re-prices INSIDE `sub_605E0`, BEFORE that function's
+/// level-0 arm zeroes `CastleEntityIndex_0x3A_58` — and the zero is
+/// UNCONDITIONAL, so a dying ORPHAN unbinds the castle that is still
+/// standing. The port drains this mail after the whole castle
+/// dispatch, i.e. after the clear, so the death arm records the word
+/// it is about to destroy. The UPGRADE needs no snapshot: retail
+/// writes the register (EF:61896) before `sub_60810` re-prices, which
+/// is exactly what the live read at drain time already sees.
 #[derive(Default, Clone)]
-pub(crate) struct Mc2LadderMail(pub Vec<u16>);
+pub(crate) struct Mc2LadderMail(pub Vec<u16>, pub Vec<u16>);
 
 impl std::hash::Hash for Mc2LadderMail {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -1784,6 +1806,46 @@ fn mc1_no_row0_shim_227() -> bool {
 fn mc1_no_row0_shim_32_39_40_48_89() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_32_39_40_48_89").is_some())
+}
+
+/// ⭐⭐⭐ **A GROUNDED ROLL LEAVES A SLOPE KICK IN THE GLOBAL SCRATCH
+/// AXIS, NOT A POSITION.** `sub_58030` (shipped `NETHERW.EXE` file
+/// **0x7C830** = VA 0x58030) is the terrain forward-difference helper:
+/// it takes `(src position, dst axis)` and writes ONLY `dst->x` and
+/// `dst->y` (`mov %cx,(%eax)` at 0x7C853/0x7C870/0x7C899/0x7C8C2 and
+/// `mov %..,0x2(%eax)` at 0x7C85A/0x7C885/0x7C8AE/0x7C8D3) with
+/// `x = h00 - h10 + h01 - h11`, `y = h00 + h10 - h01 - h11` over the
+/// record's 2x2 height quad — `dst->z` (offset 4) is NEVER touched.
+///
+/// ALL THREE of its callers in the shipped EXE pass the ENGINE'S ONE
+/// GLOBAL SCRATCH AXIS as `dst` (`push $0x1b398; lea 0x4c(%ebx),%eax;
+/// push %eax; call 0x7c830`):
+///   * file 0x56FEA (VA 0x327EA) — `sub_32600`, the (10,16) volcano
+///     BOULDER's resting roll (EF:23809-20) → [`Gen::mc2_boulder16_tick`]
+///   * file 0x5A6AC (VA 0x35EAC) — `TransformArcherToMana_35940`, the
+///     (10,39) MANA BALL's grounded roll (EF:26271)
+///   * file 0x5ADED (VA 0x365ED) — `sub_35FB0`, the (10,57) FOOL'S
+///     sphere twin (same arm)
+/// so after any grounded ball/sphere/boulder tick retail's
+/// `predictedAxis_EB398ar` holds TWO SMALL HEIGHT DELTAS — **(0,0) on
+/// flat ground** — and not the position the last mover committed. The
+/// port computed the identical difference into locals `sx`/`sy` and
+/// never touched [`Gen::mc2_pred_axis`], so its model of the global
+/// stayed at the last `move_relink`.
+///
+/// The one reader of that global is the m21 walker's water-contact
+/// (10,5) splash (file 0x4AFB9, see [`Gen::m21_jump`]). MEASURED on
+/// mc2l13 t=24079: slot 376, a (10,39) sphere resting at
+/// (32896, 44928, 0) on flat ground, is the LAST grounded roll before
+/// slot 380's wade splash — retail births the splash at (0,0) with
+/// `z = ground_z(0,0) = 5536`, the port at (50688, 57344, 2176), the
+/// position of the last record `move_relink` moved (slot 344).
+///
+/// `MGC_NO_MC2_BALL_SLOPE_PRED_AXIS=1` restores the pre-dig
+/// behaviour (slope kick computed into locals only).
+pub(crate) fn mc2_ball_slope_pred_axis() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BALL_SLOPE_PRED_AXIS").is_none())
 }
 
 /// `MGC_NO_BEAM_UNLINK=1` restores the pre-dig lightning beam, which
@@ -2927,6 +2989,7 @@ impl Gen {
             player_knock: (0, 0),
             player_spin: PlayerSpin::default(),
             player_whirl: PlayerWhirl::default(),
+            ww_walk_published: HashSilent(false),
             player_hurl: PlayerHurl::default(),
             player_deflect_debit: DeflectDebit::default(),
             mc2_debuffs: Mc2PlayerDebuffs::default(),
@@ -6000,7 +6063,26 @@ impl Gen {
             // the port's own MC2 resolution and carries no level
             // test either.
             let castle = if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
-                self.mc2_castle_of(own)
+                // ⭐⭐⭐ AND THE RESOLUTION IS A **REGISTER READ**, NOT A
+                // POOL SCAN. `sub_389F0` dereferences the token's owner
+                // wizard and takes its extension block's
+                // `CastleEntityIndex_0x3A_58` RAW — shipped NETHERW.EXE
+                // file 0x5D24B-0x5D26E:
+                //   `0f bf 43 1a  movswl 0x1a(%ebx),%eax`      (token owner id)
+                //   `8b 04 85 e4 a3 01 00  mov 0x1a3e4(,%eax,4),%eax`
+                //   `8b 80 a4 00 00 00     mov 0xa4(%eax),%eax` (wizext)
+                //   `66 8b 40 3a           mov 0x3a(%eax),%ax`  (the register)
+                //   `8b 0c 85 e4 a3 01 00  mov 0x1a3e4(,%eax,4),%ecx`
+                //   `e8 4d 7c fd ff        call 0x34ec0`        (sub_106C0 overlap)
+                // — no class, model, owner or reap test anywhere, and
+                // the HIT arm (0x5D27A) re-walks the SAME chain before
+                // writing `word_0x80_128` and `dword_0x7C_124 = 10`.
+                // See [`crate::mc2::castle::no_mc2_token_castle_register`].
+                if crate::mc2::castle::no_mc2_token_castle_register() {
+                    self.mc2_castle_of(own)
+                } else {
+                    self.mc2_castle_reg_of(own)
+                }
             } else {
                 (1..self.ent.len()).find(|&c| {
                     let e = &self.ent[c];
@@ -8868,10 +8950,23 @@ snap_newtype!(
     NightShade,
     Mc2Ord,
     Mc2XpMail,
-    Mc2LadderMail,
     Mc2StealMail,
     Mc2CastleResearch,
 );
+
+/// Same wire format as the `snap_newtype!` members: only `.0` is
+/// written. `.1` (the price-register snapshot) is a within-dispatch
+/// transient — empty at every boundary a snapshot can be taken at —
+/// so keeping it out of the stream leaves the format byte-identical
+/// and needs no `SNAPSHOT_VERSION` bump.
+impl Snap for Mc2LadderMail {
+    fn put(&self, w: &mut Writer) {
+        w.put(&self.0);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Self(r.get()?, Vec::new()))
+    }
+}
 
 impl<const TAG: u8> Snap for Mc2Quiet<TAG> {
     fn put(&self, w: &mut Writer) {
@@ -8950,6 +9045,8 @@ impl Gen {
             // A per-tick transient the carpet's walk slot drains — see
             // PlayerWhirl.
             player_whirl: _,
+            // A within-walk register — see the field doc.
+            ww_walk_published: _,
             // A per-tick transient the carpet's walk slot drains — see
             // PlayerHurl.
             player_hurl: _,

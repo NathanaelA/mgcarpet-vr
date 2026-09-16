@@ -918,6 +918,38 @@ pub fn recover_pair_mc2_k(
     input_end: Option<&serde_json::Value>,
     crank_k: u8,
 ) -> RecoveredPair {
+    recover_pair_mc2_kw(pst, st, respawn, input_end, crank_k, false)
+}
+
+/// ⭐⭐⭐ THE CRANK'S WITNESS CAN ALSO COME FROM THE SIMULATION.
+/// [`mc2_crank_witness`] is a PAIR predicate and both of its disjuncts
+/// are EDGES — `word_0x30_48` changed, or the mover-veto latch went up
+/// — so a mid-ring visit that recomputes the SAME bearing and leaves
+/// the victim ungrabbed is a crank with no recorded fingerprint at
+/// all. mc2l12 t=9584 is that tick: retail's `roll_acc` 97 → 95 with a
+/// recorded `rollDelta_0x4_4` of −30 solves uniquely as ONE 28-crank
+/// (97 + 28 − 30 = 95), and the take's only live funnel (slot 11,
+/// d² = 1,313,729 — squarely in the mid ring) is holding the wizard —
+/// but `word_0x30_48` is 1574 on BOTH records and `flags` is 0x20d on
+/// both, so the edge test sees nothing. The inversion then fell back
+/// to the accumulator, recovered a cursor of 43/44 where retail's was
+/// −12/−13, and the port (which DID crank, correctly) landed `roll_f`
+/// 123 against retail's 95 — one 28 HIGH, the mirror image of the
+/// missing-crank family.
+///
+/// `force_crank` lets the replay driver supply the witness the pair
+/// cannot: it trial-steps a clone, and a port that cranked at all says
+/// so. The COUNT is still only used for the accumulator fallback; the
+/// primary path is the capture's own `rollDelta`, which is retail's
+/// datum and count-free.
+pub fn recover_pair_mc2_kw(
+    pst: &RetailMc2,
+    st: &RetailMc2,
+    respawn: bool,
+    input_end: Option<&serde_json::Value>,
+    crank_k: u8,
+    force_crank: bool,
+) -> RecoveredPair {
     let pp = &pst.players[pst.local_player as usize];
     let cp = &st.players[st.local_player as usize];
     // MC2 stamps the move byte in PlayerEvents — read the END record.
@@ -1135,8 +1167,9 @@ pub fn recover_pair_mc2_k(
     // ⚠ ONE crank, not a count: the grabbed arms skip the `v40` block
     // (0x57c61 `jnz 0x57d65`) and a repeat visit inside one tick is not
     // separable from the recorded pair here. See the dig note.
-    let whirl_crank = matches!((pst.ents.get(ci), st.ents.get(ci)),
-        (Some(p), Some(c)) if mc2_crank_witness(p, c));
+    let whirl_crank = force_crank
+        || matches!((pst.ents.get(ci), st.ents.get(ci)),
+            (Some(p), Some(c)) if mc2_crank_witness(p, c));
     let crank = |acc: i16| -> i16 {
         if whirl_crank && !no_mc2_whirl_roll_crank() {
             crank_units(acc, crank_k)

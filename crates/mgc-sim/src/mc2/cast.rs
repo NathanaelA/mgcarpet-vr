@@ -358,6 +358,21 @@ pub(crate) fn no_mc2_marker_index_pin() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MARKER_INDEX_PIN").is_some())
 }
 
+/// A/B toggle for the RIVAL twin of the CASTLE-SPELL PENDING-TIER
+/// ONE-TICK LAG: set `MGC_NO_MC2_RIVAL_CASTLE_TIER_DEFER_LAG=1` to
+/// restore the pre-dig [`World::mc2_rival_castle_lock_release`], which
+/// applied the manifestation's deferred `word_0x2C_44` tier inside the
+/// release's own tick. Retail's `sub_5F890` `a2 == 0` arm runs
+/// `sub_6D880` on **the CASTLE**, not the manifestation it just
+/// released (NETHERW.EXE file 0x840BC-0x840CB) — and EF:61036 resolves
+/// `SpellsEnabled[2]` off `Entities[castle->id_0x1A_26]` with no
+/// player test, so the rival column takes the same lag as the human's
+/// [`no_mc2_castle_tier_defer_lag`].
+pub(crate) fn no_mc2_rival_castle_tier_defer_lag() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_CASTLE_TIER_DEFER_LAG").is_some())
+}
+
 /// A/B toggle for the CASTLE-SPELL PENDING-TIER ONE-TICK LAG
 /// (`sub_5F890`'s release arm + `sub_69AB0`'s entry arm — see
 /// [`World::mc2_castle_spell_tick`]): set
@@ -956,6 +971,55 @@ const CREATORS: [(u8, u8, i16, u32, u8, u16); 20] = [
     (10, 10, 384, 21, 60, 18),  // castle ball (sub_4D900 EF:34965)
 ];
 
+/// `MGC_NO_MC2_SPEED_TOKEN_LIVE_ACTSPEED=1` — the A/B arm for THE
+/// SPEED TOKEN'S REWRITE OF THE CASTER'S `actSpeed_0x82_130` IS A LIVE
+/// REGISTER EVERY LATER WALK SLOT READS (round 140, dig FALLPAIR):
+/// restore the pre-dig behaviour where every human cast thunk took the
+/// carpet's boost from the TICK-TOP pose snapshot, so a cast fired
+/// from a token seated BETWEEN the speed token and the carpet read the
+/// PREVIOUS tick's speed.
+///
+/// `GetScroll_69DB0` (EF:56595-56601 the per-tick sustain write,
+/// EF:56616-19 the burst-END restore `speed_0xc_12 = minSpeed * sign`
+/// then `actSpeed = speed_0xc_12`) writes `v1x->actSpeed_0x82_130` at
+/// the SPEED TOKEN's own pool slot. BYTE-VERIFIED, shipped
+/// `NETHERW.EXE` (file = VA + 0x24800): the function is file 0x8E5B0;
+/// the sustain store is `66 89 86 82 00 00 00  mov [esi+0x82],ax` at
+/// 0x8E737, and the expiry tail at 0x8E796-0x8E7B4 is
+/// `jnz` (counter != 0) / `66 0f af be 84...  imul di,[esi+0x84]`
+/// (sign × the caster's `minSpeed_0x84_132`) /
+/// `66 89 78 0c  mov [eax+0xc],di` (`speed_0xc_12`) /
+/// `66 89 86 82 00 00 00  mov [esi+0x82],ax` — the CASTER entity's
+/// @0x82, written from the TOKEN's dispatch.
+///
+/// Every retail thunk that adds the caster's speed reads that same
+/// register LIVE, and the port funnels all of them through three
+/// sites ([`World::mc2_launch`], [`World::mc2_possess_launch`],
+/// [`World::mc2_cast_fools_mana`]): `sub_6DCA0`'s tail
+/// `v24 = a5 + v7x->actSpeed_0x82_130` (EF:44578-82; EXE 0x927AE-0x927E5
+/// `mov eax,[ebp+0x24]` / `add` / floor 0x180 / ceiling 0x2000) with
+/// `a5 = v1x->actSpeed_0x82_130` at all eleven `sub_6DCA0` call sites
+/// (spell 9 is EF:57155; EXE 0x8F388 `mov ax,[ebx+0x82]; push eax`
+/// inside `sub_6AB00` @0x8F300), the five bare
+/// `spawned->actSpeed_0x82_130 += caster->actSpeed_0x82_130` arms —
+/// `sub_69640` EF:56304, `sub_69900` EF:56399, `sub_6C170` EF:58023,
+/// `sub_6CAC0` EF:58345, `sub_6CD20` EF:58426 — and Fool's Mana
+/// (`sub_6C870` EF:58258, `v3 = 4 * v2x->actSpeed_0x82_130`).
+/// ⚠ EF line numbers here are against the CURRENT
+/// `reference/remc2/remc2/engine/EventsFunctions.cpp`; the older
+/// `EF:56048`/`EF:44224` style cites elsewhere in this file are
+/// against a different revision and do not line up.
+///
+/// The port already mails the token's write (`pending_speed_base`),
+/// but only the CARPET's own dispatch consumed it, so a between-slot
+/// cast never saw it. The mail IS retail's register value between the
+/// token's write and the carpet's next dispatch, so reading it here is
+/// the whole law.
+pub(crate) fn no_mc2_speed_token_live_actspeed() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SPEED_TOKEN_LIVE_ACTSPEED").is_some())
+}
+
 impl Gen {
     /// The shared class-9 creator body (low-band trace preamble):
     /// NewEvent + fields + `byte[0] &= 0xF7` + map link + life copy +
@@ -1429,7 +1493,42 @@ impl World {
     /// manifestation. Mid-cast, the change is deferred (`word_0x2C_44
     /// = tier+1`, applied by `sub_6D880` when the timer expires).
     pub(crate) fn mc2_set_spell(&mut self, m: usize, tier: u8) {
-        self.mc2_set_spell_at(m, tier, self.player_castle());
+        self.mc2_set_spell_at(m, tier, self.mc2_price_castle());
+    }
+
+    /// ⭐⭐⭐ THE CASTLE-SPELL PRICE READS THE **REGISTER**, NOT THE POOL.
+    /// `GetSpellManaCost_6D710` (Level.cpp:1723-27) resolves the
+    /// pricing castle as
+    /// `Entities_EA3E4[event->dword_0xA4_164x->CastleEntityIndex_0x3A_58]`
+    /// and takes the "no castle" arm on `entity2 <= Entities_EA3E4[0]`
+    /// — shipped `NETHERW.EXE` 0x91f59-0x91f74
+    /// (`mov 0xa4(%esi),%edx` / `mov 0x3a(%edx),%bx` /
+    /// `mov 0x1a3e4(,%ebx,4),%ebx` / `cmp %edi,%ebx` / `jbe`). There is no
+    /// class, model, owner or reap test anywhere in it: the word alone
+    /// decides, and the LEVEL rung then comes off that record's
+    /// `dword_0x10_16`.
+    ///
+    /// [`World::player_castle`] is a POOL SCAN and returns the
+    /// lowest-numbered live (3,2) the human owns. Round 136's law:
+    /// A POOL SCAN RETURNS THE LOWEST-NUMBERED MATCH, A REGISTER THE
+    /// CHOSEN ONE — ONLY A CASTLE SPLIT MAKES THEM DIFFER. mc2l12 has
+    /// one: from ~t=19714 the orphan's UNCONDITIONAL teardown clear
+    /// left the register 0 with castle 293 still standing, so every
+    /// retail re-price in that window takes the NO-CASTLE arm (raw
+    /// `manaCost_6` + the 3000 surcharge = 5000) while the port keeps
+    /// pricing off the standing castle's rung.
+    ///
+    /// Witness, mc2l12 pair 43127→43128, slot 117 (15,2) owner 114:
+    /// retail `mana_max` 5000 / `mana` 49, port 300000000 / 2970297
+    /// (the level-7 rung). The same lane carries 36 of the take's
+    /// heads, every one of them a price stamped at a `SetSpell` tick.
+    ///
+    /// `MGC_NO_MC2_SPELL_PRICE_REGISTER=1` restores the pool scan.
+    pub(crate) fn mc2_price_castle(&self) -> Option<usize> {
+        if crate::engine::world::no_mc2_spell_price_register() {
+            return self.player_castle();
+        }
+        self.player_castle_bound()
     }
 
     /// [`Self::mc2_set_spell`] pricing against an EXPLICIT castle —
@@ -3368,8 +3467,16 @@ impl World {
     /// drops is a human-carpet lane.
     fn mc2_rival_castle_lock_release(&mut self, m: usize, own: u16) {
         self.g.ent[m].f26 = 0;
-        // `sub_6D880` (EF:58215): apply the deferred tier, then clear.
-        if self.g.ent[m].f44 > 0 {
+        // ⚠ RETAIL'S `sub_6D880` HERE TAKES THE **CASTLE**, NOT `m` —
+        // NETHERW.EXE file 0x840BC-0x840CB, quoted in the entry arm of
+        // [`Self::mc2_castle_spell_tick`]. The human column landed that
+        // ONE-TICK LAG ([`no_mc2_castle_tier_defer_lag`]); the rival
+        // twin kept applying the deferred tier in the release's own
+        // tick, so a rival castle's settle re-priced its (15,2) token
+        // one tick early and the import then had nothing left to run.
+        // EF:61036 indexes `SpellsEnabled[2]` with no player test, so
+        // ONE law covers both columns.
+        if no_mc2_rival_castle_tier_defer_lag() && self.g.ent[m].f44 > 0 {
             let t = (self.g.ent[m].f44 - 1) as u8;
             self.g.ent[m].f44 = 0;
             self.mc2_rival_set_spell(m, t, own);
@@ -3879,6 +3986,7 @@ impl World {
         // EF:63314/59052). The lane is not compared; the XP wiring
         // wins.
         let token_sub = self.g.ent[m].f30 as i32;
+        let caster_speed = self.mc2_caster_act_speed(p);
         {
             let e = &mut self.g.ent[i];
             e.f26 = if subtype == 1 {
@@ -3894,7 +4002,7 @@ impl World {
             // both floors a REVERSING carpet's bolt at 384 and drops
             // the negative term outright. mc2l4 t=13 slot 303 records
             // speed **336** = 384 − 48 on a backing carpet.
-            e.f126 = 384i32.saturating_add(p.speed as i32) as i16;
+            e.f126 = 384i32.saturating_add(caster_speed as i32) as i16;
         }
         // Sound 40 only on a successful spawn.
         self.g.snd_player(40);
@@ -3973,7 +4081,7 @@ impl World {
         let (mx, my, _) = self.muzzle_side(p, self.mc2_fire_side(m));
         let payload = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
         let tier = sub.life.max(0) as u8;
-        let base = (4 * p.speed as i32).clamp(140, 280);
+        let base = (4 * self.mc2_caster_act_speed(p) as i32).clamp(140, 280);
         let mut spawned = false;
         for _ in 0..6 {
             let Some(s) = self.g.mc2_spawn_mana_sphere(57, mx, my, p.z) else {
@@ -4143,6 +4251,15 @@ impl World {
         self.g.snd_player(60);
     }
 
+    /// The CASTER's live `actSpeed_0x82_130` as a cast thunk reads it
+    /// mid-walk. See [`no_mc2_speed_token_live_actspeed`].
+    pub(crate) fn mc2_caster_act_speed(&self, p: PlayerPose) -> i16 {
+        if no_mc2_speed_token_live_actspeed() {
+            return p.speed;
+        }
+        self.pending_speed_base.unwrap_or(p.speed)
+    }
+
     /// Returns the spawned projectile's slot (None = pool full).
     fn mc2_launch(
         &mut self,
@@ -4191,6 +4308,10 @@ impl World {
         // The caster token's own charge byte — retail's `a1x->byte_0x46_70`,
         // the tier index `mc2_spell_fire` reads to pick `sub`.
         let tier_index = self.g.ent[m].f71;
+        // ⭐⭐⭐ THE CARPET BOOST IS THE **LIVE** `actSpeed_0x82_130`,
+        // NOT THE TICK-TOP POSE — see
+        // [`no_mc2_speed_token_live_actspeed`].
+        let caster_speed = self.mc2_caster_act_speed(p);
         let Some(i) = self.g.mc2_spawn_cast_proj(arm.subtype, mx, my, mz) else {
             return None; // pool full: no projectile, NO cast sound
             // (retail gates the sound on the spawn, EF:44224-39)
@@ -4318,9 +4439,9 @@ impl World {
             // speed is 384, so `clamp(384, ..)` swallows the
             // difference on every existing row. No witness, no change.
             let boosted = if matches!(arm.subtype, 1 | 17 | 24 | 25 | 29) {
-                e.f126 as i32 + p.speed as i32
+                e.f126 as i32 + caster_speed as i32
             } else {
-                (e.f126 as i32 + p.speed.max(0) as i32).clamp(384, 0x2000)
+                (e.f126 as i32 + caster_speed.max(0) as i32).clamp(384, 0x2000)
             };
             e.f126 = boosted as i16;
         }

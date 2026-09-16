@@ -381,6 +381,54 @@ law (the part that gates behavior) is faithful.
 
 ---
 
+## MC2 rival dead-target drop — GAP (retail drop not implemented, measures zero)
+
+**Original.** `sub_5EFA0`'s second block is the ONE liveness/reap test
+retail applies to a wizard's target, and it resolves that target
+through `Entities[word_0x96_150]` with **no class, model or human
+test** — the human's carpet is just a pool record to it. Shipped
+`NETHERW.EXE` file 0x837b2-0x837e9:
+
+```text
+  837b2: 66 8b 93 96 00 00 00     mov  0x96(%ebx),%dx
+  837bb: 66 85 d2 / 74 2b         test %dx,%dx ; je (no target)
+  837cb: 8b 04 85 e4 a3 01 00     mov  0x1a3e4(,%eax,4),%eax
+  837d6: 83 78 08 00 / 7e 06      cmpl $0x0,0x8(%eax)   ; life_0x8 <= 0
+  837dc: f6 40 0d 04 / 74 09      testb $0x4,0xd(%eax)  ; byte[1] & 4 (reap)
+  837e2: 66 c7 83 96 00 00 00 00 00   movw $0x0,0x96(%ebx)
+```
+
+It is reached only down the UNDOCKED arm (`sub_12A70` reaches
+`sub_5EFA0` only when `word_0x159_345 == 0`); the port's `grace` gate
+at the call site is that same fork.
+
+**Port.** `mgc-sim mc2/rivals.rs::mc2_rival_intake` drops a dead
+target for every POOL target but **excludes `PLAYER_TARGET`**, so a
+rival never drops a dead HUMAN target on the undocked arm. Until round
+141 a liveness predicate wrongly parked in `mc2_target_alive` was
+standing in for it — in the wrong function, ungated by the dock, and
+never clearing the word. That predicate was a real defect (it made the
+rival skip its whole attack handler the instant the human died, the
+mc2l16 t=16472 head) and was removed; the correct drop was **built,
+measured, and deliberately NOT landed**.
+
+**Verified.** Measured across the whole 49-take corpus: the correct
+drop changes **exactly nothing** — reports byte-identical on both
+arms. mc2l16's rival 389 is DOCKED (`invuln` 1) across the only window
+that would exercise it, which is also why retail keeps acting on the
+corpse there.
+
+**Deviations & interims.** Deliberate gap under the player's standing
+rule that the port carries **zero unwitnessed change** (ruling
+2026-09-16, round 141). The selector re-elects on its own life test,
+so a stale corpse target self-corrects and no runaway behavior is
+expected. ⚠ Do NOT "fix" this toward retail without a measured
+witness — and if a witness turns up, land it as a normal law. If the
+retail behavior is ever found to be *worse* for play, it goes behind a
+default-enabled patch rather than being silently omitted.
+
+---
+
 ## MC2 rival DEFENSE disguise — APPROX (visual unported)
 
 **Original.** The AI DEFENSE state's metamorph disguise draws the

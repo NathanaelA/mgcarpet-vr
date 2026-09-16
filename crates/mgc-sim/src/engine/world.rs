@@ -1865,6 +1865,13 @@ fn mc2_switch_rearm_player_table_off() -> bool {
     })
 }
 
+/// `MGC_NO_MC2_SWITCH_DEAD_CARPET=1` restores the ungated pose probe
+/// — see [`World::mc2_switch_probe`] for the law.
+fn mc2_switch_dead_carpet_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("MGC_NO_MC2_SWITCH_DEAD_CARPET").is_ok_and(|v| v == "1"))
+}
+
 pub(crate) fn mc2_trigger_hw_off() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TRIGGER_HW").is_some())
@@ -2322,6 +2329,47 @@ pub(crate) fn no_mc2_ring_cast_bit() -> bool {
 /// miss is worth exactly 900. Receipts: mc2l1-new t=3175 (castle slot
 /// 223 born level-0 at 3173, rung 1 at 3174 — retail `d88 100 -> 1000`
 /// and `mana` +100, port +1000) and mc2l3-new t=8421 / t=12370.
+/// A/B toggle for THE DEMOLISH REGISTER: set
+/// `MGC_NO_MC2_DEMOLISH_REGISTER` to restore the pre-dig POOL SCAN
+/// ([`World::player_castle`]) in [`World::mc2_demolish_castle`].
+/// `PlayerEvents_51BB0` case 0x2A (EF:38239-46) resolves the castle it
+/// razes THREE times through `actEvent->dword_0xA4_164x->
+/// CastleEntityIndex_0x3A_58` and never scans: shipped `NETHERW.EXE`
+/// 0x77442-0x7746f —
+///   `mov 0xa4(%edx),%edx` / `mov 0x3a(%edx),%ax` /
+///   `mov 0x1a3e4(,%eax,4),%eax` / `cmp %edi,%eax` / `jbe` (no castle),
+///   `cmpl $0x1,0x10(%eax)` / `movb $0x1,0x1be(%edx)` (the level-1
+///   surcharge latch), `movl $0xffffffff,0x8(%eax)` (life = -1).
+pub(crate) fn no_mc2_demolish_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DEMOLISH_REGISTER").is_some())
+}
+
+/// A/B toggle for THE CASTLE-SPELL PRICE REGISTER: set
+/// `MGC_NO_MC2_SPELL_PRICE_REGISTER` to restore the pre-dig POOL SCAN
+/// ([`World::player_castle`]) in [`World::mc2_price_castle`].
+/// `GetSpellManaCost_6D710` (Level.cpp:1723-27, shipped NETHERW.EXE
+/// 0x91f59-0x91f74; the level rung is `mov 0x10(%ebx),%eax` at
+/// 0x91f7a) prices spell 2 off
+/// `event->dword_0xA4_164x->CastleEntityIndex_0x3A_58` with no
+/// class/model/owner/reap test of any kind.
+pub(crate) fn no_mc2_spell_price_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SPELL_PRICE_REGISTER").is_some())
+}
+
+/// A/B toggle for THE LADDER-SYNC DRAIN'S PRICE REGISTER: set
+/// `MGC_NO_MC2_LADDER_PRICE_REGISTER` to restore the pre-dig
+/// MAILING-CASTLE hand-off in [`World::mc2_drain_ladder_sync`]'s human
+/// arm. `sub_60780` (shipped `NETHERW.EXE` 0x84fbe-0x84fd6) re-stamps
+/// the MANIFESTATION, and `SetSpell_6D5E0` prices it off the OWNER's
+/// `CastleEntityIndex_0x3A_58` (0x91e74-0x91e84 → 0x91f59-0x91f6b) —
+/// the castle that mailed the ladder step never reaches the price.
+pub(crate) fn no_mc2_ladder_price_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_LADDER_PRICE_REGISTER").is_some())
+}
+
 pub(crate) fn no_mc2_castle_register() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_REGISTER").is_some())
@@ -4222,6 +4270,14 @@ impl World {
         if drive.is_none() && matches!(self.game, GameId::Mc2) {
             self.mc2_duel_enforce(pre);
         }
+        // ⭐⭐⭐ DID `sub_5D530` RUN ITS BODY THIS TICK? Read the
+        // one-shot BEFORE the mover consumes it, and before the
+        // PINNED-POSE arm below — which skips the mover entirely, so a
+        // read placed inside it would be blind on every fixture pair.
+        // The answer decides whether the death fall's (10,1) puff sees
+        // the carpet's own axis or the stale global — see
+        // [`Self::mc2_player_fall`].
+        let mover_ran = !self.mc2_player_stop_veto();
         // (5) sub_5D530. The cave ambient draw is its tail
         // (EF:60074), so it stays welded to the move — same-tick
         // activity draws split around this point (the mc2l30 sandwich
@@ -4355,7 +4411,7 @@ impl World {
         // starts on the next pass — the one-tick-late law, unchanged.
         if !native && !alive {
             match self.player.state {
-                LifeState::Falling => self.mc2_player_fall(*player),
+                LifeState::Falling => self.mc2_player_fall(*player, mover_ran),
                 LifeState::Dead => self.mc2_player_dead_wait(*player),
                 LifeState::Alive => {}
             }
@@ -6251,8 +6307,12 @@ impl World {
     fn mc2_drain_ladder_sync(&mut self) {
         if !self.g.mc2_ladder_sync.0.is_empty() {
             let mail = std::mem::take(&mut self.g.mc2_ladder_sync.0);
+            // `.1` = the price register as it stood at the stamp (0 =
+            // read it live) — see [`Mc2LadderMail`].
+            let mut regs = std::mem::take(&mut self.g.mc2_ladder_sync.1);
+            regs.resize(mail.len(), 0);
             // Bit 15 = pushed by a DOWNGRADE (see `Mc2LadderMail`).
-            for c in mail.iter().map(|&raw| raw & 0x7FFF) {
+            for (c, snap) in mail.iter().map(|&raw| raw & 0x7FFF).zip(regs.iter().copied()) {
                 let own = self.g.ent[c as usize].id24;
                 let human = own == crate::mc1::mobs::PLAYER_TARGET;
                 // `SpellsEnabled[2]` off the owner's own book: the
@@ -6276,8 +6336,52 @@ impl World {
                 self.g.ent[m].f26 = 0;
                 let tier = self.g.ent[m].f71;
                 if human {
-                    let mailing = (!mc2_recast_surcharge_off()).then_some(c as usize);
-                    self.mc2_set_spell_at(m, tier, mailing.or_else(|| self.player_castle()));
+                    // ⭐⭐⭐ THE PRICE IS THE **REGISTER'S** RUNG, NOT THE
+                    // MAILING CASTLE'S. `sub_60780` (shipped
+                    // `NETHERW.EXE` 0x84fbe-0x84fd6) calls
+                    // `SetSpell_6D5E0(a2, a2->byte_0x46)` with **a2 =
+                    // the MANIFESTATION** — the castle it was handed
+                    // (`a1`, `%ebx`) is used only for the life/cap
+                    // stores at 0x84f93-0x84fdd and never reaches the
+                    // price. `SetSpell_6D5E0` in turn calls
+                    // `GetSpellManaCost_6D710(Entities[a1->word_0x28_40],
+                    // …)` (0x91e74-0x91e84 — the OWNER wizard), and
+                    // that reads `owner->dword_0xA4_164x
+                    // ->CastleEntityIndex_0x3A_58` (0x91f59-0x91f6b)
+                    // for the rung. So ANY castle of the human that
+                    // takes a level re-stamps the cached price AT THE
+                    // REGISTER'S LEVEL — and with a castle SPLIT
+                    // standing, an ORPHAN's level change re-stamps
+                    // nothing at all.
+                    //
+                    // Round 136 landed that register in
+                    // [`World::mc2_price_castle`]; this call path
+                    // never got it (round 139's dominant class). The
+                    // `mailing` hand-off was a WORKAROUND for
+                    // [`World::player_castle`]'s reap-filtered pool
+                    // scan losing the DYING level-0 castle —
+                    // [`World::player_castle_bound`] has no reap test
+                    // at all, so the register keeps naming it and the
+                    // workaround is now dead weight.
+                    //
+                    // mc2l12: castle 678 falls to level 0 at t=42387
+                    // while the register names 293 (level 7), and
+                    // orphan 293 falls 7→6 at t=44777 and 6→5 at
+                    // t=45544 while the register names 877 (level 7).
+                    // Retail holds `mana_max` 300000000 / `mana`
+                    // 2970297 through all three; the port re-priced to
+                    // 1500/14, 480000/4752 and 240000/2376.
+                    let castle = if no_mc2_ladder_price_register() {
+                        let mailing = (!mc2_recast_surcharge_off()).then_some(c as usize);
+                        mailing.or_else(|| self.player_castle())
+                    } else if snap != 0 {
+                        // The DEATH arm's snapshot: the register this
+                        // castle's own level-0 teardown then zeroed.
+                        ((snap as usize) < self.g.ent.len()).then_some(snap as usize)
+                    } else {
+                        self.mc2_price_castle()
+                    };
+                    self.mc2_set_spell_at(m, tier, castle);
                 } else {
                     // The rival column's own SetSpell — same
                     // `SetSpell_6D5E0`, priced off the caster's own
@@ -6480,7 +6584,7 @@ impl World {
             && self.player.state == LifeState::Alive
             && !cmd.suicide
             && cmd.demolish
-            && let Some(c) = self.player_castle()
+            && let Some(c) = self.mc2_demolish_castle()
         {
             // EF:37993-95: a demolish issued at LEVEL 1 EXACTLY latches
             // the +3000 re-cast surcharge, read before the castle tick
@@ -7210,6 +7314,8 @@ impl World {
         self.g.m27_v34_slot.0 = None;
         self.g.m27_v34_slot.1 = false;
         self.g.m27_v34_slot.2 = None;
+        // Same idiom, same reason — see `Gen::ww_walk_published`.
+        self.g.ww_walk_published.0 = false;
         for i in 1..self.g.ent.len() {
             // The `--at-slot` probe: snapshot the whole pool as the
             // walk REACHES the armed slot, before it dispatches —
@@ -8857,7 +8963,14 @@ impl World {
             // 153/154 — while slot 148, below the carpet, keeps the
             // fresh values. The death puff at 156 ages the same way.
             LifeState::Falling | LifeState::Dead if mc2 && self.mc2_carpet_slot != 0 => {}
-            LifeState::Falling if mc2 && !entry_alive => self.mc2_player_fall(player),
+            // The NATIVE post-walk seat (`mc2_carpet_slot == 0`): no
+            // pooled carpet record, so no whirlwind mover veto can be
+            // latched on one and `mc2_player_stop_veto` is constant
+            // false here — the mover always ran.
+            LifeState::Falling if mc2 && !entry_alive => {
+                let mover_ran = !self.mc2_player_stop_veto();
+                self.mc2_player_fall(player, mover_ran)
+            }
             LifeState::Dead if mc2 && !entry_alive => self.mc2_player_dead_wait(player),
             // ⭐ The tick a fatal hit (or Shift+K) lands still runs
             // action 0 to its end: `AddPlayer03_00_5E010` sets
@@ -10229,7 +10342,7 @@ impl World {
     /// The pose itself is the flight model's (and, under the
     /// conformance import, the recorded pin's); what this arm owns is
     /// the puff trail and the exact-floor payout trigger.
-    fn mc2_player_fall(&mut self, player: PlayerPose) {
+    fn mc2_player_fall(&mut self, player: PlayerPose, mover_ran: bool) {
         let ground = self.g.ground_z(player.x, player.y) as i16;
         let floor = ground.saturating_add(self.mc2_carpet_row().clearance);
         // ⭐ THE PUFF SPAWNS AT THE CORPSE'S ALREADY-SETTLED POSITION.
@@ -10249,8 +10362,65 @@ impl World {
         // the record carries the leg. The landing test below stays on
         // the settled z — it is the record's position retail compares.
         let z = self.fall_pre_z.take().unwrap_or(player.z);
+        // ⭐⭐⭐ AND THE PUFF IS SPAWNED AT THE GLOBAL ITSELF, NOT AT
+        // THE CORPSE — the m21 water-splash law (`mc2_splash_pred_axis`)
+        // one effect over. Shipped `NETHERW.EXE`, `sub_5E310` = file
+        // 0x82B10 (= VA 0x5E310 + 0x24800); the ctor call at file
+        // 0x82BD9-0x82BF6:
+        //   82bd9: 6a 01              push 0x1          ; model
+        //   82bdb: 6a 0a              push 0xa          ; class
+        //   82bdd: 68 98 b3 01 00     push 0x1b398      ; &predictedAxis
+        //   82be2: e8 a9 bd fe ff     call 0x6e990      ; _4A190
+        //   82bee: 80 48 0c 80        or   [eax+0xc],0x80
+        //   82bf2: 66 8b 53 1a        mov  dx,[ebx+0x1a]
+        //   82bf6: 66 89 50 1a        mov  [eax+0x1a],dx
+        // Contrast the `getTerrainAlt` call twelve bytes above it
+        // (`82bae: 8d 43 4c  lea eax,[ebx+0x4c]; push eax`), which
+        // DOES pass the corpse's own position: the immediate 0x1b398
+        // is the discriminator. The two agree on every ordinary fall
+        // tick, because `sub_5D530` ran two statements earlier and
+        // committed the carpet's axis into that global. They part when
+        // the mover took its `byte[1] & 8` EARLY RETURN — the
+        // whirlwind's mover veto — and the global is then whatever the
+        // last record to commit a move this tick left behind.
+        //
+        // WITNESS (mc2l16, the human dies inside a funnel and falls
+        // from t=7842 to t=7881 with `flags & 0x800` armed on his
+        // pinned seat every tick): retail's puff at slot 694, t=7842,
+        // is born at (16686, 64636, 1856) — the exact post-move
+        // position of slot 301, the (5,20) that ticked earlier in the
+        // same walk — while the carpet is at (56472, 11808, 9301). At
+        // t=7844 slot 301 takes a hit and stops moving and the puff
+        // moves with the global to slot 300's (7002, 20864, 5248). The
+        // tile-chain link proves the order exactly as the splash law's
+        // witness did: the puff's `@0x16` is 301, the cell's previous
+        // head. The port planted all 40 at the carpet.
+        //
+        // The human is out of pool, so his own mover never reaches
+        // `move_relink` — the publish below IS his
+        // `CopyEntityPosition_57CF0(a1x, &predictedAxis)`, and it is
+        // skipped on exactly the ticks retail's early return skipped
+        // it. Shipped `NETHERW.EXE` file 0x81d30 (`sub_5D530` = VA
+        // 0x5D530 + 0x24800), the mover's first eleven instructions:
+        //   81d39: 8a 63 0d        mov  ah,[ebx+0xd]
+        //   81d3c: f6 c4 08        test ah,0x8
+        //   81d3f: 74 0d           je   0x81d4e       ; the body
+        //   81d41: 88 e2 / 80 e2 f7 / 88 53 0d        ; byte[1] &= 0xF7
+        //   81d4d: c3              ret                ; ⭐ NO 0x1b398 WRITE
+        //   81d4e: bf 98 b3 01 00  mov  edi,0x1b398   ; &predictedAxis
+        //   81d53: 8d 73 4c        lea  esi,[ebx+0x4c]; &position
+        //   81d56: a5 / 66 a5      movsd / movsw      ; predictedAxis = position
+        let (px, py, pz) = if crate::mc2::roster::no_mc2_fall_puff_pred_axis() {
+            (player.x, player.y, z)
+        } else {
+            if mover_ran {
+                self.g.mc2_pred_axis =
+                    crate::engine::features::Mc2PredAxis((player.x, player.y, z));
+            }
+            self.g.mc2_pred_axis.0
+        };
         // The owner-flagged (10,1) death puff (EF:60092-97).
-        if let Some(s) = self.g.mc2_spawn_big_explosion(player.x, player.y, z) {
+        if let Some(s) = self.g.mc2_spawn_big_explosion(px, py, pz) {
             self.g.ent[s].flags |= 0x80;
             self.g.ent[s].id24 = PLAYER_TARGET;
         }
@@ -10497,6 +10667,13 @@ impl World {
             self.mc2_remint_book(dest);
         }
         self.player.mana = self.player.mana_max;
+        // ⭐ THE POST-DEATH TRUCE — retail's truce loop is BELOW the
+        // `IsAiPlayer` fork and ungated, so the human's respawn pushes
+        // every rival's ledger toward colour 0 up to 0x9FDF exactly
+        // like a rival's does (EF:44185-93, NETHERW.EXE 0x5CE22).
+        // `MGC_NO_MC2_HUMAN_RESPAWN_TRUCE=1` restores the pre-dig
+        // behaviour. See [`World::mc2_respawn_truce`].
+        self.mc2_respawn_truce(0);
         // The recycle stack is emptied outright (EF:43857).
         self.g.mc2_recycle.stack.clear();
         self.entities_dirty = true;
@@ -12408,9 +12585,14 @@ impl World {
     /// the record the register names (`:27215`). The bounds check
     /// here is a port memory-safety necessity, not an invented guard.
     ///
-    /// ⚠ MC2 keeps its own register (`CastleEntityIndex_0x3A_58`,
-    /// EF:61591/61664) which `castle_reg` does not track, so the MC2
-    /// column stays on its existing stand-ins.
+    /// ⚠ MC2's own register (`CastleEntityIndex_0x3A_58`,
+    /// EF:61591/61664) IS this array now: round 136 put the MC2
+    /// level-up commit and the level-0 teardown on it
+    /// (`mc2::castle::mc2_castle_upgrade` / `mc2_castle_downgrade`),
+    /// so MC2 readers may use it directly — see
+    /// [`World::mc2_demolish_castle`], [`World::mc2_price_castle`]
+    /// and `Gen::mc2_castle_reg_of`. Readers still on the SCAN are
+    /// the ones round 138 has not yet audited.
     ///
     /// `MGC_NO_CASTLE_BIND_REGISTER=1` restores the bare pool scan —
     /// the A/B arm for this law.
@@ -12420,6 +12602,31 @@ impl World {
         }
         let reg = self.g.castle_reg[0] as usize;
         (reg != 0 && reg < self.g.ent.len()).then_some(reg)
+    }
+
+    /// ⭐⭐⭐ THE DEMOLISH RAZES THE CASTLE THE **REGISTER** NAMES.
+    /// `PlayerEvents_51BB0` case 0x2A (EF:38239-46, shipped
+    /// `NETHERW.EXE` 0x77442-0x7746f) reads
+    /// `actEvent->dword_0xA4_164x->CastleEntityIndex_0x3A_58` for all
+    /// three of its statements — the existence test, the level-1
+    /// `byte_0x1BE_446` surcharge latch and the `life_0x8 = -1` — with
+    /// no class, model, owner or reap test anywhere.
+    ///
+    /// [`World::player_castle`] is a POOL SCAN and hands back the
+    /// LOWEST-NUMBERED live (3,2) the human owns. With mc2l12's castle
+    /// SPLIT standing that is the WRONG ONE: at t=43419 retail razes
+    /// castle 923 (the register's, born t=43298) and castle 293 lives
+    /// on to spawn balloons 957/968, while the port razed 293 and left
+    /// 923 standing — the MIRRORED SIGNATURE round 137 named as an
+    /// identity bug (`slot 293 life retail 4280 port -1` /
+    /// `slot 923 life retail -1 port 74780`).
+    ///
+    /// `MGC_NO_MC2_DEMOLISH_REGISTER=1` restores the pool scan.
+    pub(crate) fn mc2_demolish_castle(&self) -> Option<usize> {
+        if no_mc2_demolish_register() {
+            return self.player_castle();
+        }
+        self.player_castle_bound()
     }
 
     /// The player's balloon ROSTER (class-3/model-3) for the HUD
@@ -15339,7 +15546,7 @@ impl World {
                 x: e.x as f32 / 256.0,
                 z: e.y as f32 / 256.0,
                 alt: e.z as f32 / 256.0,
-                mana: r.mana,
+                mana: r.mana.max(0) as u32,
                 mana_max: r.mana_max,
                 life_frac: if e.max_life > 0 {
                     (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
@@ -18719,6 +18926,55 @@ impl World {
         if self.g.ent[i].f63 & 7 != 0 {
             return false;
         }
+        // ⭐⭐⭐ A DEAD CARPET IS NOT ON THE ROSTER THE FIRE PROBE
+        // WALKS. `InitSwitchChainZaxisAndSound_6F850` does not read a
+        // pose — it walks the tick-top CLASS-3 roster
+        // (`dword_38519`, head `*(*(dword *)0x41a4 + 0x9677)`) and
+        // tests each `byte_0x40 == 0` member's box against the
+        // switch's, so its answer is "is a LIVE wizard carpet inside",
+        // not "is the human inside". `UpdateEntities_57730` builds
+        // that roster under `actLife >= 0` (:52253-62), so a corpse in
+        // the volume trips nothing. [`World::balloon_probe`], MC1's
+        // twin of this function, has carried the same gate
+        // ([`World::human_wiz_top`]) since the mc1hwl0 t=23480 dig;
+        // the MC2 arm never got it.
+        //
+        // NETHERW.EXE file 0x94050 (VA 0x6F850, = file - 0x24800):
+        // ```text
+        //   94050: 8b 75 10        mov  0x10(%ebp),%esi   ; the switch
+        //   94058: f6 46 3e 07     testb $0x7,0x3e(%esi)  ; the 8-tick cadence
+        //   9405c: jne  940d5                             ; -> return 0
+        //   94062: 8b 1d a4 41..   mov  0x41a4,%ebx
+        //   94068: 8b 9b 77 96..   mov  0x9677(%ebx),%ebx ; dword_38519 roster head
+        //   940bd: 3b 1d e4 a3..   cmp  0x1a3e4,%ebx      ; while (p > Entities[0])
+        //   94070: 80 7b 40 00     cmpb $0x0,0x40(%ebx)   ; model 0 only
+        //   94078: e8 ..           call 34f50             ; CompareAxisWithShift_10750
+        //   94083: 39 d0 / 75 34   cmp %edx,%eax / jne    ; == want
+        //   940bb: 8b 1b           mov  (%ebx),%ebx       ; next0
+        //   940c5: call 35440 -> mov %ax,0x50(%esi)       ; the MISS arm: z re-stamp
+        // ```
+        //
+        // WITNESS mc2l16 t=7904 — the take's whole first divergence.
+        // The human's carpet (slot 303) is `life -1680` from t≈7813
+        // and dives to its crash at t=7920; the (11,2) repeating
+        // switch at slot 260 (box 1280/1280 at 56704,10624, disposition
+        // 8) sees the corpse at |dx| 386 / |dy| 1077 on its open
+        // `phase3e 128 & 7` window. Retail leaves `scratch10` at 0 and
+        // fires nothing for the rest of the take. The port fired
+        // disposition 8 and minted FOUR whirlwinds — 4 x (10,22) head
+        // + 11 (10,75) nodes = 48 records (slots 13/298/354/367 +
+        // their columns) — which then swept the corpse
+        // (`pose.x/y/yaw/roll_f`), swirled the (5,17) at slot 282
+        // (`heading` retail 1051 port 1315) and pushed the two puff
+        // revivals off their retail slots (693/825 -> 432/433/436).
+        // The twin head at t=7912 is the SAME switch's next 8-tick
+        // window.
+        if !mc2_switch_dead_carpet_off() && !self.human_wiz_top {
+            let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
+            self.g.ent[i].z = self.g.ground_z(x, y) as i16;
+            self.g.m27_v34_publish_switch_probe(i, false);
+            return false;
+        }
         if !self.inert && self.mc2_switch_overlap(i, pose) == want {
             if self.g.ent[i].model65 > 3 {
                 self.g.snd_player(41);
@@ -19785,6 +20041,20 @@ impl World {
             .iter()
             .find(|r| r.slot == slot)
             .map(|r| r.debug_book_ents())
+    }
+
+    /// Is ANY (10,22) whirlwind head live in the pool? The replay
+    /// driver's cheap gate for the crank trial step — see
+    /// `mgc_formats::recover::recover_pair_mc2_kw`. O(pool), which is
+    /// the same order as the walk the trial would run anyway.
+    #[doc(hidden)]
+    pub fn mc2_whirlwind_alive(&self) -> bool {
+        matches!(self.game, GameId::Mc2)
+            && self
+                .g
+                .ent
+                .iter()
+                .any(|e| e.class64 == 10 && e.model65 == 22 && e.flags & 0x400 == 0)
     }
 
     /// A pool record's raw pose (`position_0x4C_76` + `yaw_0x1C_28` /
@@ -35665,6 +35935,17 @@ mod tests {
         }
         let gz = w.g.ground_z(cx, cy) as i16;
         w.g.link(c, cx, cy, gz);
+        // ⚠⚠ A RIG THAT MEANS "MY CASTLE" MUST SAY SO IN THE REGISTER.
+        // This rig hand-builds the record instead of going through
+        // `mc2_castle_upgrade`, which is what normally stamps
+        // `Gen::castle_reg` (castle.rs:598). Round 138 moved the
+        // demolish off the pool scan and onto that register
+        // (`World::mc2_demolish_castle`,
+        // `NETHERW.EXE` 0x77442-0x7746f), so an unregistered castle is
+        // — correctly — not the one the demolish razes. The subject of
+        // this test is the demolish's PHASE, not its IDENTITY, so the
+        // rig states the identity and keeps testing the phase.
+        w.g.castle_reg[0] = c as u16;
 
         // A quiet tick: the live castle IS on the roster.
         w.tick(away(), PlayerCommand::default());
@@ -37174,7 +37455,7 @@ mod tests {
         // Published by the dispatch's gravity leg → the puff takes it.
         let mut w = mc2_flat_world();
         w.fall_pre_z = Some(pre);
-        w.mc2_player_fall(pose);
+        w.mc2_player_fall(pose, true);
         let (_, z) = puff_z(&w).expect("the fall spawns a (10,1)");
         assert_eq!(
             z, pre,
@@ -37193,7 +37474,7 @@ mod tests {
         // nothing) → fall back to the settled z rather than inventing.
         let mut w = mc2_flat_world();
         w.fall_pre_z = None;
-        w.mc2_player_fall(pose);
+        w.mc2_player_fall(pose, true);
         let (_, z) = puff_z(&w).expect("the fall spawns a (10,1)");
         assert_eq!(z, settled, "no published scratch: fall back to the pose");
     }
@@ -44017,7 +44298,7 @@ mod tests {
             "SetSpell stamps the rung TIMES the tier-2 multiplier (Level:1761-70)"
         );
         // A purse that clears the bare rung but NOT the stamped price.
-        w.mc2_rivals[0].mana = ((rung + stamped) / 2) as u32;
+        w.mc2_rivals[0].mana = ((rung + stamped) / 2) as i32;
         assert!(
             (w.mc2_rivals[0].mana as i64) >= rung && (w.mc2_rivals[0].mana as i64) < stamped,
             "the fixture is only meaningful between the two prices"
@@ -45182,7 +45463,7 @@ mod tests {
     fn mc2_rivals_castle_less_first_castle_is_free() {
         let mut w = mc2_brain_world(&[&[(2, 0)]], &[(2, [1000, 1000, 1000])]);
         let i = w.mc2_rivals[0].ent as usize;
-        w.mc2_rivals[0].mana = crate::mc2::castle::MC2_CASTLE_COST[0] as u32;
+        w.mc2_rivals[0].mana = crate::mc2::castle::MC2_CASTLE_COST[0] as i32;
         w.mc2_rivals[0].mana_delta = 0;
         w.mc2_rivals[0].site = (w.g.ent[i].x, w.g.ent[i].y);
         // The spawn arms `SpellEnabled[2] = 4 × colour` (round 113-2,
@@ -45204,7 +45485,7 @@ mod tests {
         );
         assert_eq!(
             w.mc2_rivals[0].mana,
-            crate::mc2::castle::MC2_CASTLE_COST[0] as u32,
+            crate::mc2::castle::MC2_CASTLE_COST[0] as i32,
             "the purse is untouched"
         );
     }
@@ -45611,6 +45892,13 @@ mod tests {
         }
         let gz = w.g.ground_z(x, y) as i16;
         w.g.link(c, x, y, gz);
+        // ⭐ MC2 binds `CastleEntityIndex_0x3A_58` at the spawn and the
+        // delivery arm reads it RAW (`sub_389F0`, NETHERW.EXE file
+        // 0x5D24B) — so a rig that means "MY CASTLE" must SAY SO IN
+        // THE REGISTER. Round 136 and 138 were both bitten by a rig
+        // that hand-built a castle and left `castle_reg` at 0.
+        let team = w.g.owner_team(own).expect("the rival's team");
+        w.g.castle_reg[team as usize] = c as u16;
         // The receipt, delivered right on top of it.
         let t = w.g.spawn_creator(43, x, y, gz).expect("the (10,43) token");
         w.g.ent[t].id24 = own;
@@ -52442,8 +52730,8 @@ mod tests {
     /// no imported world runs this arm at all.
     #[test]
     fn the_duel_drain_reads_the_victims_stored_regen_raw() {
-        let start = 588u32;
-        let drain = |regen: i32, life_regen: i32, mode: u8| -> (u32, i32) {
+        let start = 588i32;
+        let drain = |regen: i32, life_regen: i32, mode: u8| -> (i32, i32) {
             let mut w = mc2_brain_world(&[&[(0, 0)]], &[(0, [10, 10, 10])]);
             let opp = w.mc2_rivals[0].ent;
             w.mc2_rivals[0].mana = start;

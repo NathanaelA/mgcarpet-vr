@@ -256,6 +256,31 @@ pub(crate) fn no_mc2_pyramid_sprite_keeps_rot() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_SPRITE_KEEPS_ROT").is_some())
 }
 
+/// A/B toggle for THE M15 HIT-RETARGET'S **OWNER** GATE: set
+/// `MGC_NO_MC2_M15_HIT_OWNER_GATE=1` to restore the pre-dig
+/// behaviour, where the guard compared the hit source's SLOT INDEX
+/// against its own owner tag and so retargeted onto anything its own
+/// wizard owned. `sub_23C40`'s non-lethal-hit arm is
+/// `v6x = Entities_EA3E4[a1x->word_0x26_38];
+///  if (v6x->class_0x3F_63 == 3 && v6x->id_0x1A_26 != a1x->id_0x1A_26)
+///  { a1x->actionIndex_0x45_69 = 122;
+///    a1x->word_0x96_150 = a1x->word_0x26_38; }` (EF:15078-85) —
+/// the second test reads the SOURCE ENTITY'S `id_0x1A_26`, not the
+/// index. Shipped `NETHERW.EXE` 0x484EE-0x48519 (VA 0x23CEE):
+/// `mov 0x26(%ebx),%ax` / `mov 0x1a3e4(,%eax,4),%eax` /
+/// `cmpb $0x3,0x3f(%eax)` / **`mov 0x1a(%eax),%ax` /
+/// `cmp 0x1a(%ebx),%ax` / `je`** / `movb $0x7a,0x45(%ebx)`.
+/// Witness mc2l12 t=39626 and t=39628: guard slot 8 (5,15), id24 114,
+/// takes 400 from slot 953 — a class-3 BALLOON of the SAME wizard
+/// (id24 114, player 0's `breg=[543, 953, 744]`). Retail compares
+/// 114 vs 114, stays in action 121; the port compared 953 vs 114 and
+/// struck the engage pose (121 -> 122, speed 30 -> 0, applied_pitch
+/// 128 -> 85, `f5a` 0 -> 206, plus a diverging rng draw).
+pub(crate) fn no_mc2_m15_hit_owner_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M15_HIT_OWNER_GATE").is_some())
+}
+
 /// A/B toggle for the CLASS-3 SCAN'S ROSTER WALK (`dword_38519`, the
 /// tick-top class-3 chain — see [`Gen::mc2_class3_scan`]): set
 /// `MGC_NO_MC2_CLASS3_SCAN_ROSTER` to restore the pre-dig LIVE POOL
@@ -265,6 +290,22 @@ pub(crate) fn no_mc2_pyramid_sprite_keeps_rot() -> bool {
 pub(crate) fn no_mc2_class3_scan_roster() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CLASS3_SCAN_ROSTER").is_some())
+}
+
+/// A/B toggle for THE M25 BRAIN'S CASTLE REGISTER: set
+/// `MGC_NO_MC2_M25_CASTLE_REGISTER` to restore the pre-dig POOL SCAN
+/// ([`Gen::mc2_castle_of`]). `sub_28860` cases 3/5/7 read the target
+/// wizard's `dword_0xA4_164x->CastleEntityIndex_0x3A_58` — shipped
+/// NETHERW.EXE `0x4d1b6` (`mov 0xa4(%eax),%eax` / `cmpw $0x0,0x3a(%eax)`),
+/// `0x4d23f`, `0x4d2ae` — and cases 5/7 use that word directly as the
+/// pool index with no class/model/owner/reap test. A pool scan returns
+/// the LOWEST-NUMBERED live castle; the register returns the one the
+/// level-up commit chose, and after mc2l12's orphaned-castle teardown
+/// cleared it the two disagree for 2,000 ticks. See
+/// [`Gen::mc2_castle_reg_of`].
+pub(crate) fn no_mc2_m25_castle_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M25_CASTLE_REGISTER").is_some())
 }
 
 /// A/B toggle for the ARCHER ACQUIRE **Scan B** (`sub_1FAA0` :11811):
@@ -345,6 +386,17 @@ pub(crate) const MC2_SPRITE_DRAW_TYPE: [u8; 347] = [
 pub(crate) fn mc2_sprite_frames(row: usize) -> u8 {
     let dt = MC2_SPRITE_DRAW_TYPE.get(row).copied().unwrap_or(0) as usize;
     D8A2E_FRAMES.get(dt).copied().unwrap_or(0)
+}
+
+/// ⭐⭐⭐ A/B toggle for **THE ALTITUDE COMMIT'S RAW `position.z`
+/// WRITE**: set `MGC_NO_MC2_ALT_COMMIT_RAW_Z` to restore the pre-dig
+/// behaviour, where [`Gen::mc2_alt_commit`] ended in
+/// [`Gen::move_relink`] and therefore PUBLISHED retail's global
+/// scratch axis `predictedAxis_EB398ar`. See the citation on
+/// [`Gen::mc2_alt_commit`].
+pub(crate) fn no_mc2_alt_commit_raw_z() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALT_COMMIT_RAW_Z").is_some())
 }
 
 /// A/B toggle for the `sub_585A0` FRAME CAP: set
@@ -564,7 +616,72 @@ impl Gen {
         }
     }
 
-    /// `sub_1EEE0` (:11172): altitude commit at the current position.
+    /// `sub_1EEE0` (:11186): altitude commit at the current position.
+    ///
+    /// ⭐⭐⭐ IT IS A **RAW `position_0x4C_76.z` WRITE**, NOT A MOVE —
+    /// so it does NOT publish retail's one global scratch axis
+    /// `predictedAxis_EB398ar` (see [`Gen::mc2_pred_axis`]), and it
+    /// does not relink the tile chain either. Shipped `NETHERW.EXE`,
+    /// `sub_1EEE0` = file **0x436E0** (VA 0x1EEE0, file = VA +
+    /// 0x24800) — the WHOLE function is 54 bytes and every one of them
+    /// is quoted here:
+    /// ```text
+    ///   436e4: 8b 55 0c        mov    edx,[ebp+0xc]   ; a1x
+    ///   436e7: 8b 82 a0 ..     mov    eax,[edx+0xa0]  ; the behaviour row
+    ///   436ed: 0f bf 58 0e     movsx  ebx,[eax+0xe]   ; zStep   (v_14)
+    ///   436f1: 53              push   ebx
+    ///   436f2: 0f bf 58 0a     movsx  ebx,[eax+0xa]   ; (unused a4)
+    ///   436f6: 53              push   ebx
+    ///   436f7: 0f bf 40 0c     movsx  eax,[eax+0xc]   ; hover   (v_12)
+    ///   436fb: 50              push   eax
+    ///   436fc: 8d 5a 4c        lea    ebx,[edx+0x4c]  ; ⭐ &a1x->position
+    ///   436ff: 53              push   ebx
+    ///   43700: e8 3b 1d ff ff  call   0x35440         ; getTerrainAlt_10C40
+    ///   43708: 98 / 50 / 53                           ; cwtl; push eax; push ebx
+    ///   4370b: e8 d0 91 03 00  call   0x7c8e0         ; sub_580E0
+    ///   43715: c3              ret
+    /// ```
+    /// There is NO `68 98 b3 01 00` (`push 0x1b398`) anywhere in those
+    /// 54 bytes and NO call to `CopyEntityPosition_57CF0` (file
+    /// 0x7C4F0) — the only two calls are the two quoted above. And
+    /// `sub_580E0` itself (file **0x7C8E0**) writes exactly ONE field,
+    /// `[edx+0x4]` = the `axis_3d`'s z:
+    /// ```text
+    ///   7c8ef: 0f bf 5a 04     movsx  ebx,[edx+0x4]      ; z
+    ///   7c8f7: 7e 12           jle    0x7c90b            ; z > ground?
+    ///   7c907: 66 89 5a 04     mov    [edx+0x4],bx       ; z += zStep
+    ///   7c914: 7f 0b           jg     0x7c921            ; z > ground+hover?
+    ///   7c91d: 66 89 72 04     mov    [edx+0x4],si       ; z  = ground+hover
+    /// ```
+    /// The port ended this helper in [`Gen::move_relink`], the
+    /// `CopyEntityPosition_57CF0` twin whose FIRST statement is the
+    /// global publish — so every altitude commit in the engine
+    /// (13 call sites, all of them `sub_1EEE0`) over-published the
+    /// axis. The x/y it passed are the record's own, unchanged, so the
+    /// relink itself was always a no-op; the publish was the whole
+    /// difference.
+    ///
+    /// WITNESS (mc2l16 pair 7843→7844, the take's biggest incident —
+    /// 141 of its 212 slot-heads live in t=7844..7912). The human is
+    /// dying inside a whirlwind, so his mover takes its `byte[1] & 8`
+    /// early return every tick and the (10,1) fall puff lands at
+    /// whatever record published the axis LAST (round 138's law, see
+    /// [`crate::mc2::roster::no_mc2_fall_puff_pred_axis`]). At 7844
+    /// slot 301, a (5,20), eats 1200 damage: its stage-held HIT arm
+    /// (`sub_1D8C0` tail, EF:10254 → `mc2_held_hit`) fires the
+    /// altitude commit, `z 1856 → 1794`, **x and y untouched**. Retail
+    /// therefore leaves the axis on slot 300 — a stationary (5,15)
+    /// that committed a real move two slots earlier — and its puff is
+    /// born at slot 300's exact (7002, 20864, 5248). The port
+    /// published (16714, 64651, 1794), slot 301's own position, and
+    /// planted the puff there. `MGC_FALL_AXIS_TRACE` on the port
+    /// printed the two publishes back to back:
+    /// ```text
+    ///   AXISPUB t=7844 slot 300 -> (7002,20864,5248)
+    ///   AXISPUB t=7844 slot 301 -> (16714,64651,1794)   ⇐ retail has no such publish
+    ///   FALLPUFF t=7844 -> (16714,64651,1794)
+    /// ```
+    /// `MGC_NO_MC2_ALT_COMMIT_RAW_Z=1` restores the `move_relink`.
     pub(crate) fn mc2_alt_commit(&mut self, i: usize) {
         let row = &BEHAVIOR[self.ent[i].row156 as usize];
         let (hover, z_step) = (row.v_12, row.v_14);
@@ -572,7 +689,11 @@ impl Gen {
         let ground = self.ground_z(x, y) as i16;
         let mut z = self.ent[i].z;
         Self::mc2_alt_core(&mut z, ground, hover, z_step);
-        self.move_relink(i, x, y, z);
+        if no_mc2_alt_commit_raw_z() {
+            self.move_relink(i, x, y, z);
+        } else {
+            self.ent[i].z = z;
+        }
     }
 
     /// `sub_102D0` with a3 = 1 (:3632): walk up to max(array.pitch,
