@@ -6415,7 +6415,7 @@ impl App {
         #[cfg(target_os = "android")]
         if enhanced {
             self.cfg.render.preference.fog_distance = 50;
-            self.cfg.sim.parameters.awake_range = Option::from(65);
+            self.cfg.sim.parameters.awake_range = Option::from(75);
         } else {
             // We reset this to actual defaults.
             self.cfg.render.preference.fog_distance = 20;
