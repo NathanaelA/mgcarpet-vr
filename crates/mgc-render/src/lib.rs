@@ -1101,27 +1101,6 @@ fn camera_basis(cam: &CameraView) -> ([f32; 3], [f32; 3], [f32; 3]) {
     (right, up, fwd)
 }
 
-/// Roll-free billboard basis (right, up) derived from yaw and pitch only.
-///
-/// In VR the view matrix carries the head's natural roll, but world
-/// sprites must stay upright relative to the player: if the billboard
-/// expansion rolled with the head, tilting your head sideways would
-/// tilt every sprite.  The mono/desktop path keeps the faithful rolled
-/// basis (the original banks billboards with the view); in stereo the
-/// billboard basis is left unrolled so sprites remain vertical.
-fn billboard_basis(cam: &CameraView) -> ([f32; 3], [f32; 3]) {
-    let (sy, cy) = cam.yaw.sin_cos();
-    let (sp, cp) = cam.pitch.sin_cos();
-    let fwd = [sy * cp, sp, -cy * cp];
-    let right = [cy, 0.0, sy];
-    let up = [
-        right[1] * fwd[2] - right[2] * fwd[1],
-        right[2] * fwd[0] - right[0] * fwd[2],
-        right[0] * fwd[1] - right[1] * fwd[0],
-    ];
-    (right, up)
-}
-
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct Vertex {
@@ -6045,7 +6024,7 @@ impl Renderer {
         // The map pane: origin at the screen corner, right edge receding
         // by BOOK_GAP from the column (the vertical bar of the "T").
         let mut map_pane = (
-            BOOK_MAP_X - 100.0,
+            BOOK_MAP_X,
             BOOK_MAP_Y,
             (col_x - f.len(BOOK_GAP)).max(0.0),
             pane_bottom,
@@ -6055,6 +6034,7 @@ impl Renderer {
         // world-space mode; it is allowed to overlap the world viewport
         // because the map view is the point of this screen.
         if self.ui_panel_mode == 1 {
+            map_pane.0 = map_pane.0 - 100.0;
             map_pane.2 = map_pane.2 * 3.0; // .min(f.w - map_pane.0);
             map_pane.3 = map_pane.3 * 2.0; //.min(f.h - map_pane.1);
         }
@@ -6105,14 +6085,6 @@ impl Renderer {
         // rotates its sprite rasterizer by -roll (SetBillboards_3B560),
         // so sprites stand on the terrain, not the rolled viewport.
         let (bb_right, bb_up, _) = camera_flat_basis(cam);
-        // Billboard basis: roll-free in stereo so sprites stay upright
-        // when the player tilts their head; faithful rolled basis on
-        // desktop (the original banks billboards with the view).
-        let (bb_right, bb_up) = if proj.is_some() {
-            billboard_basis(cam)
-        } else {
-            (right, up)
-        };
         // The basis w slots carry tan(fov/2) h/v — the sky shader's
         // per-pixel ray reconstruction (billboards read .xyz only).
         let tan_v = (cam.fov_y * 0.5).tan();
@@ -6988,7 +6960,6 @@ impl Renderer {
                     pass.set_bind_group(0, &self.fill_bind_group, &[]);
                     pass.draw(0..3, 0..1);
                     draw_world(&mut pass);
-
                     pass.set_viewport(0.0, 0.0, w as f32, hpx as f32, 0.0, 1.0);
                     pass.set_scissor_rect(0, 0, w, hpx);
                 }

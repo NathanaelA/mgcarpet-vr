@@ -233,8 +233,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // 0x2C00→0x2400; a linear WHITE-mix approximates that until the
     // LUT bake. POLARITY CHECK OWED: the locked-spell wash proved fog
     // row 0x30 DARKENS (player 2026-07-08), so rows 0x24-0x2C may
-    // darken too — if retail's player marker reads dark on the map, flip
-    // the mix target to black.
+    // darken too — if retail's cross reads dark on the map, flip the
+    // mix target to black.
     let cuv = abs(in.uv);
     let arm_x = 1.0 / 6.0;      // pane_w/12 px over a pane_w/2 half-span
     let arm_y = aspect / 6.0;   // the same PIXEL length in uv.y units
