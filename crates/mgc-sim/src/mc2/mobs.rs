@@ -5306,6 +5306,11 @@ impl Gen {
             // it out of that state. Homing the two in one `f26` blew
             // away the victim's live combat scratch on the charm tick.
             e.set_lease(dur);
+            // EF:29688 / EXE 0x5ef72 — `word_0x30_48 = v5` as well: the
+            // duration's second copy, the blink threshold `sub_1ED30`
+            // and `sub_1E9C0` measure the clock against (port home
+            // `f50`, the MC2 `f30` lane).
+            e.f50 = dur;
             if e.tick70 & 7 == 2 {
                 e.f146 = 0;
             } else {
@@ -5333,6 +5338,69 @@ impl Gen {
         self.ent[i].flags |= 0x400;
     }
 
+    /// `sub_1ED30` (EF:11060, `NETHERW.EXE` file 0x43530) — the
+    /// attack-state LOCK RESOLVER, StageVar2 == 14 branch. Every
+    /// class-5 attack handler asks it "may I keep pursuing
+    /// `Entities[word_0x96_150]`?" and it answers with the record or
+    /// with `Entities[0]`. For a creature that is NOT charmed it hands
+    /// the candidate back verbatim (EF:11167). For a charmed one it
+    /// (1) runs the ally-tint blink (cosmetic `byte[3]`, no port
+    /// lane), (2) **DECREMENTS THE CHARM CLOCK `word_0x2E_46`**
+    /// (0x43670 `dec; jle`) — the clock keeps counting in the attack
+    /// state, where `sub_1E9C0` (the state-7 wrapper's body) never
+    /// runs — and (3) answers null when the clock is ≤ 0, when the
+    /// candidate IS the parent (0x43698), or when the parent's own
+    /// lock (`word_0x96_150`, else its attacker `word_0x26_38`) names
+    /// somebody else (0x436c3): an ally may only fight what its
+    /// caster fights. A parent with neither word lets the candidate
+    /// stand.
+    ///
+    /// `None` is retail's `Entities[0]`. Nine of the ten callers leave
+    /// the attack state on it; the wyvern's `sub_24510` does not —
+    /// see [`Gen::m16_tick`] and `WorldPatches::mc2_wyvern_alliance_brain`.
+    ///
+    /// APPROX, cited (the one [`Gen::mc2_alliance_creature_tick`]
+    /// carries): the HUMAN parent is out of pool, so its
+    /// `word_0x96_150` is served as 0 and its `word_0x26_38` by
+    /// [`Gen::mc2_alliance_parent_attacker`]. On
+    /// `recordings/mc2l17.mgcr` every charmed wyvern holds candidate
+    /// 0, for which the answer is null whatever the parent's words
+    /// say.
+    pub(crate) fn mc2_ally_resolve(&mut self, i: usize, slot: u16) -> Option<u16> {
+        if self.ent[i].site_z != 14 {
+            return Some(slot);
+        }
+        self.ent[i].add_lease(-1);
+        if self.ent[i].lease() <= 0 {
+            return None;
+        }
+        let parent = self.mc2_allied.0.get(&(i as u16)).copied().unwrap_or(0);
+        if parent == 0 {
+            // `Entities[0] > Entities[0]` is false: no parent record,
+            // the candidate stands (EF:11146).
+            return Some(slot);
+        }
+        if slot == parent {
+            return None;
+        }
+        let (p96, p26) = if parent == PLAYER_TARGET {
+            (0, self.mc2_alliance_parent_attacker(i, parent))
+        } else {
+            match self.ent.get(parent as usize) {
+                Some(p) => (p.f146, p.f40),
+                None => return Some(slot),
+            }
+        };
+        let want = if p96 != 0 {
+            p96
+        } else if p26 != 0 {
+            p26
+        } else {
+            return Some(slot);
+        };
+        if want == slot { Some(slot) } else { None }
+    }
+
     /// The per-tick half of the alliance law (`sub_1E9C0` head
     /// EF:10873 + expiry EF:11003-10), run from the class-5 dispatch
     /// head in EVERY state: count the charm down, revert on expiry /
@@ -5344,6 +5412,19 @@ impl Gen {
     fn mc2_alliance_clock(&mut self, i: usize) {
         if self.ent[i].flags & 0x400 != 0 || self.ent[i].act_life < 0 {
             self.mc2_allied.0.remove(&(i as u16));
+            return;
+        }
+        // ⭐ `sub_1E9C0` IS THE STATE-7 WRAPPER'S BODY. In the attack
+        // state the clock belongs to `sub_1ED30`
+        // ([`Gen::mc2_ally_resolve`]), which the wyvern's `sub_24510`
+        // calls every tick. Running this head clock there too would
+        // count twice and — the retail bug `mc2_wyvern_alliance_brain`
+        // guards (docs/DEVIATIONS.md) — EXPIRE, which nothing in
+        // retail can do to a wyvern in action 130. Scoped to m16: the
+        // other species' attack states still run this paraphrase
+        // (🏦 OWED — their `sub_1ED30` null arms exit to idle, so the
+        // head clock is one tick early there, never a wrong state).
+        if self.ent[i].model65 == 16 && self.ent[i].tick70 & 7 == 2 {
             return;
         }
         let parent = self.mc2_allied.0.get(&(i as u16)).copied().unwrap_or(0);
@@ -5732,6 +5813,7 @@ impl Gen {
 #[cfg(test)]
 mod tests {
     use crate::engine::features::Gen;
+    use crate::mc1::mobs::PLAYER_TARGET;
 
     fn w3v_flat_gen() -> Gen {
         use crate::chassis::ChassisParams;
@@ -6340,5 +6422,59 @@ mod tests {
                 "only the exact half-turn moves ({cur} → {tgt})"
             );
         }
+    }
+
+    /// ⭐⭐⭐ THE ALLIED WYVERN'S BRAIN DEATH (`recordings/mc2l17.mgcr`,
+    /// docs/DEVIATIONS.md `mc2_wyvern_alliance_brain`): `sub_24510`
+    /// has no null arm, so a charmed wyvern whose `sub_1ED30` answers
+    /// `Entities[0]` stays in action 130 while the clock runs on —
+    /// and `sub_1E9C0`'s expiry, a state-7 body, never reaches it.
+    #[test]
+    fn a_charmed_wyvern_with_no_lock_coasts_in_130_until_it_dies() {
+        let mut g = q22_gen();
+        let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+        // `sub_3A650` on a victim mid-attack: StageVar2 14, owner = the
+        // caster, lock 0, action LEFT at 130 (EXE 0x5ef8f).
+        g.ent[i].tick70 = 16 * 8 + 2;
+        g.ent[i].f146 = 0;
+        g.ent[i].site_z = 14;
+        g.ent[i].set_lease(3);
+        g.mc2_allied.0.insert(i as u16, PLAYER_TARGET);
+        let ctx = q22_ctx();
+        for want in [2i16, 1, 0, -1, -2] {
+            g.mc2_creature_tick(i, &ctx);
+            assert_eq!(g.ent[i].tick70, 16 * 8 + 2, "0x48e0a `jbe`: no state write on a null");
+            assert_eq!(g.ent[i].site_z, 14, "sub_1E9C0 never runs in 130: no expiry");
+            assert_eq!(
+                g.ent[i].lease(),
+                want,
+                "sub_1ED30 counts the clock once per tick, straight past zero"
+            );
+        }
+        // The patched arm: the missing null arm, `actionIndex = 8m+1`.
+        let mut patched = q22_ctx();
+        patched.patches.mc2_wyvern_alliance_brain = true;
+        g.mc2_creature_tick(i, &patched);
+        assert_eq!(g.ent[i].tick70, 16 * 8 + 1, "the patch takes the other nine callers' exit");
+        // …and `strict` (conformance replay) keeps retail's arm.
+        g.ent[i].tick70 = 16 * 8 + 2;
+        patched.strict = true;
+        g.mc2_creature_tick(i, &patched);
+        assert_eq!(g.ent[i].tick70, 16 * 8 + 2, "strict_retail overrides the patch");
+    }
+
+    /// `sub_3A650` EF:29688 / EXE 0x5ef6e-0x5ef72: the charm duration
+    /// is written TWICE — `word_0x2E_46` (the clock) and
+    /// `word_0x30_48` (the threshold the tint blink measures against).
+    #[test]
+    fn the_charm_stamps_its_duration_into_both_words() {
+        let mut g = q22_gen();
+        let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+        g.ent[i].tick70 = 16 * 8 + 1;
+        g.mc2_alliance_convert(i as u16, PLAYER_TARGET, 16, 610);
+        assert_eq!(g.ent[i].site_z, 14);
+        assert_eq!(g.ent[i].lease(), 610, "word_0x2E_46");
+        assert_eq!(g.ent[i].f50, 610, "word_0x30_48 (port `f50`, the MC2 `f30` lane)");
+        assert_eq!(g.ent[i].tick70, 16 * 8 + 7, "an idle victim enters the controlled slot");
     }
 }

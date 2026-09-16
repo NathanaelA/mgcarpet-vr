@@ -2059,6 +2059,37 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc2_wyvern_alliance_brain",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_wyvern_alliance_brain",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_wyvern_alliance_brain.on(),
+                faithful: false,
+            },
+            desc: "Allied wyverns keep their wits (MC2). Retail's wyvern is the \
+                   one creature whose attack state has no exit for a lost \
+                   target: cast Alliance on a wyvern that is attacking, or let \
+                   the charm run out while it fights, and it flies its last \
+                   heading for the rest of its life - never shooting, never \
+                   re-targeting, never waking, its ally tint blinking forever. \
+                   Patched, it drops to idle like every other species and the \
+                   charm resolves normally.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_wyvern_alliance_brain =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "A charmed wyvern that loses its target flies on forever, as retail.",
+                    "A charmed wyvern that loses its target drops to idle (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2322,8 +2353,9 @@ mod tests {
         // ball_owner_recolor added 2026-09-06 (presentation-only),
         // no_spell_loss + mc1_fix_dragon_tail 2026-09-07,
         // mc2_phantom_castle 2026-09-10, dual_wield_muzzle and
-        // one_castle_per_wizard 2026-09-15.
-        assert_eq!(patches, 14, "all fourteen patches ship on");
+        // one_castle_per_wizard 2026-09-15, mc2_wyvern_alliance_brain
+        // 2026-09-16.
+        assert_eq!(patches, 15, "all fifteen patches ship on");
     }
 
     #[test]

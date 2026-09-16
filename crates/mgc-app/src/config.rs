@@ -1018,6 +1018,14 @@ pub struct GameplayPatches {
     /// create a second castle for an owner who already has one is
     /// refused.
     pub one_castle_per_wizard: PatchArm,
+    /// THE ALLIED WYVERN'S BRAIN DEATH (MC2). `retail`: the wyvern's
+    /// attack state is the one creature brain with no exit for a
+    /// lost target, so an Alliance-charmed wyvern that is attacking
+    /// when the charm lands or lapses flies its last heading until
+    /// it dies — no shots, no re-targeting, no waking. `patched`
+    /// (default): it drops to idle like every other species and the
+    /// charm resolves normally.
+    pub mc2_wyvern_alliance_brain: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -1037,6 +1045,7 @@ impl Default for GameplayPatches {
             mc2_phantom_castle: PatchArm::Patched,
             dual_wield_muzzle: PatchArm::Patched,
             one_castle_per_wizard: PatchArm::Patched,
+            mc2_wyvern_alliance_brain: PatchArm::Patched,
         }
     }
 }
@@ -1060,6 +1069,7 @@ impl GameplayPatches {
             mc2_phantom_castle: PatchArm::Retail,
             dual_wield_muzzle: PatchArm::Retail,
             one_castle_per_wizard: PatchArm::Retail,
+            mc2_wyvern_alliance_brain: PatchArm::Retail,
         }
     }
 
@@ -1100,6 +1110,7 @@ impl GameplayPatches {
             mc2_phantom_castle: PatchArm::Retail,
             dual_wield_muzzle: PatchArm::Retail,
             one_castle_per_wizard: PatchArm::Retail,
+            mc2_wyvern_alliance_brain: PatchArm::Retail,
             ..Self::default()
         }
     }

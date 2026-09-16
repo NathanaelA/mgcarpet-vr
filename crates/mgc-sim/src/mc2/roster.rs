@@ -2896,7 +2896,11 @@ impl Gen {
                     2 => self.ent[i].tick70 = M16_BASE + 4,
                     _ => {
                         self.mc2_move_core(i);
-                        let slot = self.ent[i].f146;
+                        // EF:15451 — `sub_1ED30(a1x, Entities[word_0x96_150])`:
+                        // the charmed branch counts the charm clock and
+                        // can answer `Entities[0]` ([`Gen::mc2_ally_resolve`]).
+                        let raw = self.ent[i].f146;
+                        let slot = self.mc2_ally_resolve(i, raw).unwrap_or(0);
                         // ⭐⭐⭐ RETAIL'S POINTER TEST AND ITS LIFE TEST
                         // ARE TWO DIFFERENT TESTS, AND THE AIM SITS
                         // BETWEEN THEM. `sub_24510` (EF:15450-66)
@@ -2937,7 +2941,39 @@ impl Gen {
                             self.mc2_target(slot, ctx)
                         };
                         let Some((tx, ty, tz)) = resolved else {
-                            self.ent[i].tick70 = M16_BASE + 1;
+                            // ⭐⭐⭐ THE WYVERN'S ATTACK STATE HAS NO NULL
+                            // ARM. `sub_24510` is the ONLY one of
+                            // `sub_1ED30`'s ten callers that does
+                            // nothing when the resolver answers
+                            // `Entities[0]`: `if (iz > Entities[0])
+                            // {…}` and the function ends —
+                            // `NETHERW.EXE` 0x48e0a `jbe 0x48fc3`, the
+                            // epilogue. So a charmed wyvern whose charm
+                            // clock lapses in action 130, or that was
+                            // charmed mid-attack (`sub_3A650` zeroes
+                            // its lock and leaves it in 130, EXE
+                            // 0x5ef8f), flies its last heading for the
+                            // rest of its life: the state-7 expiry
+                            // never runs, the tick-top snap skips
+                            // phase 2, and damage only rewrites the
+                            // lock. WITNESS `recordings/mc2l17.mgcr`:
+                            // seven wyverns (slots 1/2/3/5/7 from
+                            // t=26939, 8 from t=11964, 11 from
+                            // t=33560), every one in 130 with lock 0
+                            // and the clock running negative (slot 8
+                            // to −11,806) until the player killed it.
+                            // PATCH OPTION `mc2_wyvern_alliance_brain`
+                            // (docs/DEVIATIONS.md): the missing arm,
+                            // the same `actionIndex = 8m+1` the other
+                            // nine callers take. The legacy `!aim_law`
+                            // arm folds the life test into
+                            // `mc2_target`, so its `None` keeps the
+                            // old exit.
+                            let stay = aim_law
+                                && !(ctx.patches.mc2_wyvern_alliance_brain && !ctx.strict);
+                            if !stay {
+                                self.ent[i].tick70 = M16_BASE + 1;
+                            }
                             return;
                         };
                         if self.ent[i].f63 & 7 == 0 {

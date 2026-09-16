@@ -9459,6 +9459,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         mc2_phantom_castle: p.mc2_phantom_castle.on(),
         dual_wield_muzzle: p.dual_wield_muzzle.on(),
         one_castle_per_wizard: p.one_castle_per_wizard.on(),
+        mc2_wyvern_alliance_brain: p.mc2_wyvern_alliance_brain.on(),
     }
 }
 

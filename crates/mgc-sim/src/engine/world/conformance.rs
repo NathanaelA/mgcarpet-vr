@@ -5633,6 +5633,16 @@ pub(crate) fn import_ent_mc2(
         e.f140 = r.f2a as i32;
         e.f44 = r.f2c as u16;
     }
+    // The (10,74) ALLIANCE EXECUTOR: `sub_3A650` (EF:29685-88) reads
+    // the charm DURATION off `subSpellIndex_0x2A_42` (610/1100/2710)
+    // and stamps it into every victim's `word_0x2E_46`/`word_0x30_48`.
+    // The port's ctor homes it in `f140` (`mc2_spawn_alliance_exec`)
+    // and the uniform import fed f140 the dead `@0x90`, so an
+    // executor imported on its one live tick charmed for ONE tick:
+    // mc2l17 t=26938→26939 slot 3, retail `f2e` 610 / port 1.
+    if r.class3f == 10 && r.model40 == 74 {
+        e.f140 = r.f2a as i32;
+    }
     // The (10,23) BLAST / (10,51) ridge BEAM / (10,38) lightning STORM
     // — the three rows the class-10 ctor audit found missing from this
     // list; see the `c10_2a_home` doc above for the EXE citations.
@@ -7440,6 +7450,97 @@ mod tests {
         assert_eq!(
             w.g.ent[6].f52, 44,
             "…and every other class-5 record keeps @0x32 verbatim"
+        );
+    }
+
+    /// The (10,74) ALLIANCE EXECUTOR's charm DURATION rides
+    /// `subSpellIndex_0x2A_42` (`sub_3A650` EF:29685-88) and the port's
+    /// ctor homes it in `f140` (`mc2_spawn_alliance_exec`), which
+    /// `mc2_alliance_exec_tick` reads back. The uniform import fed
+    /// f140 the dead `@0x90`, so an executor imported on its one live
+    /// tick charmed for ONE tick — `recordings/mc2l17.mgcr`
+    /// t=26938→26939 slot 3: retail `f2e` 610 / port 1. The record
+    /// below is mc2l17's slot 674 at t=26938, read off the take.
+    /// Non-vacuous: without the model-74 seat `f140` holds the
+    /// record's mana (0) and the assert fails.
+    #[test]
+    fn the_alliance_executor_s_duration_has_an_import_seat() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|_| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                e.extend_from_slice(&[4, 4]);
+                e
+            })
+            .collect();
+        let mut dat = Vec::new();
+        for _ in 0..4 {
+            dat.push(4u8);
+            dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+            dat.push(0);
+        }
+        let fa = crate::engine::features::FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        let mut w = World::new_for_game(planes, &[], 1, fa, crate::ids::GameId::Mc2);
+        let pool = w.g.ent.len();
+        let mut ents = vec![RetailEntMc2::default(); pool];
+        ents[1] = RetailEntMc2 {
+            class3f: 3,
+            model40: 0,
+            max_life: 10_000,
+            life: 10_000,
+            ..Default::default()
+        };
+        ents[7] = RetailEntMc2 {
+            class3f: 10,
+            model40: 74,
+            action45: 0x51,
+            f1a: 1,
+            f2a: 610,
+            b46: 16,
+            ..Default::default()
+        };
+        let st = RetailMc2 {
+            things: vec![],
+            stage_binds: [(0, 0, None); 8],
+            rand: 1,
+            vortex: 0,
+            fire_col: 0,
+            local_player: 0,
+            player_count: 1,
+            spawn_ord: [0; 29],
+            players: vec![mgc_formats::mgcr::RetailPlayerMc2 {
+                play_index: 1,
+                hand_left: -1,
+                hand_right: -1,
+                ..Default::default()
+            }],
+            ents,
+            free_stack: (8..pool as u16).collect(),
+            recycle_stack: Vec::new(),
+            level: 24,
+            base160: 0,
+            objectives: [[0u8; 11]; 8],
+            stagevars: [[0u8; 8]; 11],
+            doom_beam: 0,
+        };
+        w.retail_import_mc2(&st).expect("import");
+        assert_eq!(
+            w.g.ent[7].f140, 610,
+            "@0x2A -> f140: the charm duration mc2_alliance_exec_tick reads"
         );
     }
 

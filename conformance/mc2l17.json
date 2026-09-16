@@ -1,0 +1,24 @@
+{
+ "dir": "fixtures/mc2l17",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 26938,
+   "file": "a-charm-landing-on-a-wyvern-mid-attack-leaves-it-in-130.mgcr",
+   "source": "mc2l17",
+   "note": "A CHARM LANDING ON A WYVERN MID-ATTACK ZEROES ITS LOCK AND LEAVES IT IN 130: `sub_3A650` (EF:29685-90, NETHERW.EXE 0x5ef6e-0x5ef96) reads the charm length off the executor's `subSpellIndex_0x2A_42` (610 at tier 1), writes it to every same-species victim's `word_0x2E_46` AND `word_0x30_48`, and on a victim whose `actionIndex & 7 == 2` writes `word_0x96_150 = 0` INSTEAD of the controlled slot (0x5ef80 `je` past the `8*model+7` store). WITNESS mc2l17 t=26938->26939: executor slot 674 (victim 3, radius 16) converts wyverns 1/2/3/5/7, all attacking slot 209 (action 130): f96 209 -> 0, sv2 0 -> 14, owner 0 -> 91, action stays 130 - the entry into the brain-death trap the next fixture pins. This pair GRADES action/owner/sv2 only: the executor's @0x2A -> f140 import seat (without it an imported executor charmed for ONE tick - slot 3 retail f2e 610 / port 1 on this very pair) and the `word_0x30_48` copy live in ungraded lanes and are pinned by unit tests (`the_charm_stamps_its_duration_into_both_words`, `the_alliance_executor_s_duration_has_an_import_seat`).\""
+  },
+  {
+   "t": 26941,
+   "file": "a-charmed-wyvern-with-no-lock-never-leaves-its-attack-state.mgcr",
+   "source": "mc2l17",
+   "note": "A CHARMED WYVERN WITH NO LOCK NEVER LEAVES ITS ATTACK STATE - THE ONLY `sub_1ED30` CALLER WITH NO NULL ARM: `sub_24510` (EF:15451, the (5,16) action-130 body) resolves its lock through `sub_1ED30`, whose StageVar2==14 branch decrements the charm clock `word_0x2E_46` (EXE 0x43670 `dec; jle`) and returns `Entities[0]` when the clock is <= 0, when the lock IS the parent, or when the parent's own lock/attacker names somebody else. Nine callers exit the attack state on that null; the wyvern's does nothing - `if (iz > Entities[0]) {...}` then the epilogue (EXE 0x48e0a `jbe 0x48fc3`). Charmed mid-attack with lock 0 (previous fixture), the five wyverns therefore stay in 130 forever: `sub_1E9C0`'s expiry lives in the state-7 wrapper, `sub_12500`'s snap skips phase 2, damage only rewrites the lock. The port dropped to 129 (retail 130) on the null pointer and its head clock would later EXPIRE them in phase 2. WITNESS mc2l17 pair 26941->26942: slots 1/2/3/5/7 retail action 130 / port 129, f2e 607 -> 606 on both sides once the clock lives in the resolver. The same seven wyverns run their clocks negative (slot 8 to -11,806) until the player kills them - the retail bug the default-on patch `mc2_wyvern_alliance_brain` removes (docs/DEVIATIONS.md)."
+  },
+  {
+   "t": 12573,
+   "file": "the-charm-clock-lapsing-mid-attack-expires-nothing-on-a-wyvern.mgcr",
+   "source": "mc2l17",
+   "note": "THE CHARM CLOCK LAPSING MID-ATTACK EXPIRES NOTHING ON A WYVERN: the port's head clock (`mc2_alliance_clock`, the `sub_1E9C0` paraphrase run in every state) took the wyvern to StageVar2 10 / owner 0 the tick `word_0x2E_46` reached 0; retail's `sub_1E9C0` is the state-7 wrapper's body and never runs in action 130, where `sub_1ED30` alone counts the clock and keeps answering null. WITNESS mc2l17 slot 8, charmed at t=11964 while attacking the human (lock 0 from the conversion), pair 12573->12574: retail f2e 1 -> 0, sv2 14, owner 91, action 130 - and the same lanes every tick after, the clock at -11,806 when it dies at t=24423."
+  }
+ ]
+}

@@ -188,6 +188,16 @@ pub struct WorldPatches {
     /// faithfully for a behaviour we ship disabled (player ruling,
     /// 2026-09-15).
     pub one_castle_per_wizard: bool,
+    /// An Alliance-charmed wyvern whose attack state loses its lock
+    /// drops to idle like every other species (MC2). Retail's wyvern
+    /// attack state `sub_24510` (EF:15451) is the ONLY caller of the
+    /// lock resolver `sub_1ED30` with no null arm (`NETHERW.EXE`
+    /// 0x48e0a `jbe` → epilogue): once the charm clock lapses
+    /// mid-attack — or the charm lands mid-attack and zeroes the lock
+    /// (`sub_3A650`, 0x5ef8f) — the wyvern flies its last heading
+    /// until it dies, never shooting, re-targeting or waking
+    /// (`recordings/mc2l17.mgcr`, seven witnesses).
+    pub mc2_wyvern_alliance_brain: bool,
 }
 
 impl WorldPatches {
@@ -206,6 +216,7 @@ impl WorldPatches {
         mc2_phantom_castle: false,
         dual_wield_muzzle: false,
         one_castle_per_wizard: false,
+        mc2_wyvern_alliance_brain: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -229,5 +240,6 @@ impl WorldPatches {
         mc2_phantom_castle: false,
         dual_wield_muzzle: false,
         one_castle_per_wizard: false,
+        mc2_wyvern_alliance_brain: false,
     };
 }

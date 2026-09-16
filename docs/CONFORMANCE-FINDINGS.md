@@ -34460,3 +34460,99 @@ IT BESIDE `head_census_mc2` BEFORE BRIEFING.** "136 `(5,25)` heads" became "SIX 
 inside one ~2,000-tick window", which ruled out "one creature's whole life" immediately and
 pointed at the split. `field_walk_mc2.rs` — walk one retail slot's chosen fields over a window,
 printing only on change; it decoded the entire cost ladder in one run.
+
+## 142 — THE ALLIED WYVERN'S BRAIN DEATH (2026-09-16, `recordings/mc2l17.mgcr`)
+
+Player report: "if a wyvern is allied and the alliance expires, the wyvern becomes brain damaged —
+it flies forward and does nothing else." Confirmed from the decompile and the shipped
+`NETHERW.EXE` before any take existed, then witnessed seven times over on the dedicated take the
+player recorded (mc2l17, LEVELS.DAT entry 17, a "charm everything" session).
+
+### 142-A THE MECHANISM — one missing `else` in one species
+
+- **`sub_1ED30` (EF:11060, file 0x43530) is the attack-state LOCK RESOLVER.** Every class-5
+  attack handler calls it on `Entities[word_0x96_150]`. For StageVar2 ≠ 14 it returns the
+  candidate verbatim (EF:11167). For a CHARMED creature it (1) runs the ally-tint blink switch,
+  (2) **decrements the charm clock `word_0x2E_46` on every call** (0x43670 `dec; jle`) — the
+  clock counts in the attack state, where `sub_1E9C0` (the state-7 wrapper's body, the only
+  place the EXPIRY lives) never runs — and (3) answers `Entities[0]` when the clock is ≤ 0, when
+  the candidate IS the parent (0x43698), or when the parent's own lock (`word_0x96_150`, else
+  its attacker `word_0x26_38`) names somebody else (0x436c3): an ally may only fight what its
+  caster fights.
+- **Ten callers. Nine leave the attack state on the null** (`sub_1C310` → a2+1, `sub_1C980`,
+  `sub_20C50` → 73, `sub_24930` → 137, `sub_250B0` → `sub_253B0`, `sub_255C0` → 153,
+  `sub_26220`, `sub_27E00`, `sub_28690`). **The wyvern's `sub_24510` (EF:15451, action 130)
+  is the only one with no null arm**: `if (iz > Entities[0]) {…}` and the function ends —
+  0x48e0a `jbe 0x48fc3`, the epilogue. Nothing after the null is reachable, including the
+  8-tick range check that would otherwise drop it to 129.
+- **So a charmed wyvern in 130 whose resolver answers null is stuck for life.** `sub_1E9C0`'s
+  expiry (sv2 = 10, parent = 0, lock = 0) needs state 7; `sub_12500`'s tick-top snap (the 0xE
+  arm) skips phase 2; damage (`word_0x62_98`) only rewrites the lock, and the resolver still
+  answers null. Each tick is `sub_1B8C0` alone: fly the yaw, servo to a stale roll, bounce off
+  impassable terrain — the "manoeuvres around cliffs" the player saw. The tint keeps blinking
+  (clock below the 16-tick threshold forever). Only death (`v3 == 2 → 132`) ends it.
+- **Two entries into the trap.** (i) The conversion itself: `sub_3A650` (EF:29690, 0x5ef7e-96)
+  on a victim with `actionIndex & 7 == 2` writes `word_0x96_150 = 0` and LEAVES action 130 —
+  the resolver then answers null from the first tick (parent's lock ≠ `Entities[0]`, or no
+  parent words → `Entities[0]` itself). (ii) The lapse: an ally legitimately engaged (sent to
+  130 by `sub_1E9C0`'s reach hand-off) whose clock crosses 0 mid-fight.
+
+### 142-B THE WITNESS — every charm on the take, read off the raw pool
+
+| slot | charmed at | how | stuck in 130 | clock at death | died at |
+|---|---|---|---|---|---|
+| 8 | 11964 | mid-attack on the human (lock → 0) | 12,459 ticks | −11,806 | 24423 |
+| 1 / 2 / 3 / 5 / 7 | 26939 | mid-attack on slot 209, one executor (victim 3, radius 16) | 799 / 1,394 / 4,273 / 3,210 / 1,040 | −152 / −747 / −3,625 / −2,554 / −393 | killed by the player |
+| 11 | 33560 | mid-attack on slot 8 (lock → 0) | 158 ticks | +487 (never lapsed — trap (i) alone) | 33718 |
+| 6 | 33074 | IDLE (129 → 135) while the human's carpet was DEAD (life −2800) | — | — | expired after ONE tick via `sub_1E9C0`'s parent-life test, resumed a normal life, charmed AGAIN mid-attack at 33441 → stuck → killed |
+
+Slot 11 is the clean proof that the conversion alone brain-kills: its clock was still positive
+when the player killed it. Slot 6 is the one "waking" the player saw: nothing about it was
+damaged afterwards (it re-engaged 811, 80 and 91), it simply got charmed a second time while
+attacking. ⭐ The clock running to −11,806 is `sub_1ED30`'s unconditional decrement, visible in
+retail's own memory; `sub_1E9C0` would have parked it at 0.
+
+### 142-C THE PORT — it healed the wyvern (three gaps, all closed)
+
+1. `mc2_summon_lock_pos` knew nothing of StageVar2 14 (no clock, no parent-lock filter, no null),
+   `m16_tick`'s state 2 dropped to 129 on a null pointer, and `mc2_alliance_clock` (the
+   `sub_1E9C0` paraphrase, run at the dispatch head in EVERY state) expired the charm in phase 2
+   — the one thing retail cannot do to a wyvern. Pair census on mc2l17 (`verify-deltas`):
+   `action` 23,455 / `owner` 19,691 / `sv2` 19,642 rows, the take's three largest families,
+   all this law. **Landed:** `Gen::mc2_ally_resolve` = `sub_1ED30`'s charmed branch;
+   `m16_tick` state 2 calls it after the move core and STAYS on its null; the head clock no
+   longer runs on an m16 in phase 2. Fixtures `a-charmed-wyvern-with-no-lock-never-leaves-its-
+   attack-state` (pair 26941→26942: five wyverns, retail 130 / port was 129) and
+   `the-charm-clock-lapsing-mid-attack-expires-nothing-on-a-wyvern` (slot 8, pair
+   12573→12574: retail sv2 14 / owner 91 / 130, port was 10 / 0). Both REGRESSION on the
+   pre-change binary on exactly those lanes, nothing else; 3/3 pass after.
+2. The (10,74) executor's DURATION (`subSpellIndex_0x2A_42`) had no import seat: an executor
+   imported on its one live tick charmed for ONE tick (t=26938→26939 slot 3: retail `f2e` 610,
+   port 1). `c10_2a_in_f140` already listed model 74 on the PUBLISH side; the import block did
+   not. Landed; unit test `the_alliance_executor_s_duration_has_an_import_seat` (the lane is
+   ungraded by fixtures).
+3. `word_0x30_48` (the duration's second copy, EXE 0x5ef72) was never written; landed as `f50`,
+   unit test `the_charm_stamps_its_duration_into_both_words`.
+
+**PATCH OPTION `mc2_wyvern_alliance_brain` (default patched, docs/DEVIATIONS.md):** the missing
+null arm, `actionIndex = 8·16+1`, the other nine callers' exit. Under it the wyvern drops to
+idle, the tick-top snap returns it to the controlled slot and the charm resolves normally.
+`strict_retail` / conformance keep the retail arm (unit test
+`a_charmed_wyvern_with_no_lock_coasts_in_130_until_it_dies` pins both arms and the override).
+
+### 142-D LESSONS + OWED
+
+- ⭐⭐⭐ **A RETAIL BUG REPORT IS A CALL-PATH ENUMERATION PROBLEM.** "Wyvern only" was the tell:
+  list the callers of the shared helper and diff their null arms. Ten callers, one missing
+  `else`, found before a take existed.
+- ⭐⭐ **THE `.mgcr` POOL SCAN IS THE FASTEST WITNESS INSTRUMENT** — a 60-line Python
+  run-length scan over `struct_b64` (class @0x3F, model @0x40, sv2 @0x49, action @0x45, clock
+  @0x2E, lock @0x96, parent @0x28) produced the whole table above in one pass.
+- ⚠ The fixture runner grades the OBS fields (`action`/`owner`/`sv2`/pose…), NOT the raw lanes
+  — a law whose only observable is `f2e`/`f30`/`f2a` cannot take a recording pin
+  (the conversion-tick fixture was renamed to claim only what it grades).
+- 🏦 OWED: the other nine species' attack states still run the head-clock paraphrase instead of
+  `sub_1ED30` — one tick early on a lapse (retail exits to idle, then expires on the next
+  state-7 tick) and, more visibly, WITHOUT the parent-lock filter (an ally may only fight what
+  its caster fights). mc2l17 charmed exactly one other creature — a (5,20), slot 65, t=29084, one full 610-tick charm — and mc2l0-spells-galore's archers; dig from their pair censuses.
+- 🏦 OWED: mc2l17's general ingestion (its other families) — this round touched the alliance only.
