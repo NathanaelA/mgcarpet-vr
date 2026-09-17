@@ -621,6 +621,11 @@ pub struct Mc2Ext {
     /// crank folded in beside it. Set by the carpet's dispatch from
     /// [`PlayerWhirl::bumps`], drained here.
     pub whirl_bumps: u8,
+    /// ⭐ `sub_3A200`'s class-3 model-0 pitch seizure owed to THIS
+    /// tick's mover (`pitch = pitch_acc = 512`, `NETHERW.EXE` 0x5ea55 /
+    /// 0x5ea5b) — `whirl_bumps`' phase and lifetime, on the pitch lane.
+    /// See `engine::features::no_mc2_flood_human_spin`.
+    pub flood_spin: bool,
 }
 
 /// ⚠ `whirl_bumps` IS HASH-TRANSPARENT, exactly like the snapshot
@@ -643,6 +648,7 @@ impl std::hash::Hash for Mc2Ext {
             nudge_latch,
             row,
             whirl_bumps: _,
+            flood_spin: _,
         } = self;
         move_speed.hash(state);
         move_speed_ctr.hash(state);
@@ -883,6 +889,15 @@ pub fn mc2_move(
             }
             cranks -= 1;
         }
+    }
+    // ⭐⭐ THE QUAKE'S CLOSE BAND SEIZES THE PITCH, AT THE SAME PHASE.
+    // `sub_3A200` stores 512 into the record pitch AND `pitch_acc`
+    // (0x5ea55 / 0x5ea5b) at the quake's slot: after `dp` was taken off
+    // the un-seized accumulator (0x774b2), before `sub_5D530` adds it
+    // (0x81d7e), and a vetoed tick keeps both 512s.
+    if std::mem::take(&mut ext.flood_spin) {
+        st.pitch_f = 512;
+        st.aim_pitch = 512;
     }
 
     // `sub_5D530`'s early return — everything from here down is
@@ -1307,6 +1322,7 @@ impl Snap for Mc2Ext {
             // mover in the SAME call drains it, so it never crosses a
             // snapshot boundary and takes no SNAPSHOT_VERSION bump.
             whirl_bumps: _,
+            flood_spin: _,
         } = self;
         w.put(move_speed);
         w.put(move_speed_ctr);
@@ -1328,6 +1344,7 @@ impl Snap for Mc2Ext {
             nudge_latch: r.get()?,
             row: r.get()?,
             whirl_bumps: 0,
+            flood_spin: false,
         })
     }
 }
@@ -2420,5 +2437,52 @@ mod tests {
         );
         assert_eq!(st.yaw, 0, "already on the bearing: the servo is a no-op");
         assert_eq!(st.y, y0.wrapping_add(120), "shoved AWAY from the opponent");
+    }
+
+    /// ⭐⭐ THE QUAKE'S CLOSE BAND SEIZES `pitch_acc`, BETWEEN THE INPUT
+    /// PASS AND THE ADD (`engine::features::no_mc2_flood_human_spin`).
+    /// mc2l18 t=27,263→27,264: accumulator 284, stick −4 (`pitchDelta`
+    /// −73 off the UN-seized 284), and retail records 439 = 512 − 73.
+    #[test]
+    fn mc2_flood_spin_seizes_pitch_before_the_add() {
+        let run = |acc: i16, stick: i16, spin: bool, stop: bool| {
+            let mut st = Mc1State {
+                z: 256,
+                pitch_f: acc,
+                ..Default::default()
+            };
+            let mut ext = Mc2Ext {
+                flood_spin: spin,
+                ..Default::default()
+            };
+            let inp = Mc1Input {
+                stick_y: stick,
+                mc2_stop: stop,
+                ..Default::default()
+            };
+            mc2_move(
+                &mut st,
+                &mut ext,
+                &inp,
+                None,
+                None,
+                None,
+                &flat_ground,
+                &no_ceiling,
+                &open_gate2,
+                &never_stuck,
+            );
+            assert!(!ext.flood_spin, "the seizure is a one-shot");
+            (st.pitch_f, st.aim_pitch)
+        };
+        // POSITIVE CONTROL: the plain filter step the port took.
+        assert_eq!(run(284, -4, false, false), (211, 211));
+        // THE LAW: 512 + the delta taken off 284.
+        assert_eq!(run(284, -4, true, false), (439, 439));
+        // t=27,261: −7 with a zero delta lands on 512 exactly.
+        assert_eq!(run(-7, -2, false, false), (-7, 2041));
+        assert_eq!(run(-7, -2, true, false), (512, 512));
+        // A vetoed tick keeps both stores (the add never runs).
+        assert_eq!(run(284, -4, true, true), (512, 512));
     }
 }

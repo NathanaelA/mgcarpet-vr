@@ -437,12 +437,33 @@ impl Mc2RespawnWitness {
         let press = press_pos(input);
         let space = respawn_key(input);
         let mouse = mouse_pos(input);
-        let recentred = press.is_some() && press != self.prev_press && mouse == press;
+        // ⭐ THE PRESS SNAPSHOT JUMPING ONTO THE RECENTRE POINT IS THE
+        // WITNESS BY ITSELF. `SetCenterScreenForFlyAssistant_6EDB0`
+        // (EF, resolve by name; `VGA_Set_mouse(w >> 1, h >> 1)`) moves
+        // both registers to the screen centre, but the live cursor
+        // keeps moving AFTER the handler inside the same frame — mc2l22-new
+        // record 27599: SPACE down, press 264,276 → **320,200**, cursor
+        // 318,264 → 322,201. `mouse == press` missed it and the reset
+        // was dated one frame late (retail revives the human in frame
+        // 27599). `MGC_NO_MC2_RESPAWN_CENTRE_POINT=1` restores the old
+        // cursor-equality-only rule.
+        let jumped = press.is_some() && press != self.prev_press;
+        let centre = !no_mc2_respawn_centre_point()
+            && matches!(press, Some((320, 200)) | Some((320, 240)));
+        let recentred = jumped && (mouse == press || centre);
         let fire = space && (self.prev_space || recentred);
         self.prev_space = space;
         self.prev_press = press.or(self.prev_press);
         fire
     }
+}
+
+/// Kill switch for [`Mc2RespawnWitness::observe`]'s centre-point arm:
+/// `MGC_NO_MC2_RESPAWN_CENTRE_POINT=1` dates the respawn press by
+/// cursor == press-snapshot alone (the pre-round-146 rule).
+pub fn no_mc2_respawn_centre_point() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RESPAWN_CENTRE_POINT").is_some())
 }
 
 /// MC1 dw_0 fire bits (0x10/0x20) — the CONSUMED per-tick fire
@@ -759,6 +780,17 @@ fn mc2_steal_not_a_rebind_off() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_STEAL_NOT_A_REBIND").is_some())
 }
 
+/// `MGC_NO_MC2_PENDING_COMMIT=1` — the A/B arm for THE PANE COMMIT IS
+/// THE PENDING BYTE'S OWN CLEAR EDGE. Set it to restore the pre-dig
+/// behaviour, where a commit that moved neither hand pointer nor
+/// `array_0x437` was invisible and the port never ran the handler —
+/// so `SetSpell_6D5E0`'s unconditional RE-PRICE of the held
+/// manifestation never happened.
+fn mc2_pending_commit_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PENDING_COMMIT").is_some())
+}
+
 /// `MGC_NO_MC2_ROLL_DELTA_CAPTURE=1` — restore the pre-dig stick
 /// inversion for the ROLL axis, which un-cranked the recorded
 /// `roll_acc` by a GUESSED number of 28s instead of reading the
@@ -766,6 +798,65 @@ fn mc2_steal_not_a_rebind_off() -> bool {
 pub fn no_mc2_roll_delta_capture() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ROLL_DELTA_CAPTURE").is_some())
+}
+
+/// `MGC_NO_MC2_FLOOD_HUMAN_SPIN=1` — the kill switch shared with the
+/// sim half (`mgc_sim::engine::features::no_mc2_flood_human_spin`);
+/// the pitch inversion and the mover's seizure move together.
+pub fn no_mc2_flood_human_spin() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FLOOD_HUMAN_SPIN").is_some())
+}
+
+/// ⭐⭐ THE QUAKE'S CLOSE BAND IS A SECOND `pitch_acc` WRITER. `sub_3A200`
+/// stores `pitch_acc = 512` (`NETHERW.EXE` file 0x5ea5b) between the
+/// input pass's `pitchDelta` (+6, taken off the UN-seized accumulator)
+/// and `sub_5D530`'s add, so the recorded step is `512 + pitchDelta`
+/// (slow-scaled) and inverting `acc[N] -> acc[N+1]` reads a jump no
+/// signed byte reaches (mc2l18 t=27,261: `-7 -> 512`, delta 0) or the
+/// wrong cursor. Returns the stick inverted off the captured delta
+/// when the pair carries that exact shape.
+pub fn mc2_flood_spin_stick(acc_n: i16, acc_n1: i16, pitch_delta: i16, move_speed: u8) -> Option<i16> {
+    if no_mc2_flood_human_spin() {
+        return None;
+    }
+    let scaled = if move_speed > 0 {
+        (pitch_delta as i32 * (4 - move_speed as i32) / 4) as i16
+    } else {
+        pitch_delta
+    };
+    let seized = 512i16.wrapping_add(scaled);
+    if acc_n1 != seized || acc_n.wrapping_add(scaled) == acc_n1 {
+        return None;
+    }
+    recover_stick(acc_n, acc_n.wrapping_add(pitch_delta))
+}
+
+#[cfg(test)]
+mod flood_spin_tests {
+    use super::*;
+
+    /// ⭐⭐ THE QUAKE'S PITCH SEIZURE IS A SECOND `pitch_acc` WRITER —
+    /// invert off the captured `pitchDelta` when the pair lands on
+    /// `512 + delta`. The mc2l18 t=27,261..27,270 pairs.
+    #[test]
+    fn a_flood_spin_pair_inverts_off_the_captured_delta() {
+        // POSITIVE CONTROL: −7 → 512 is unreachable by any signed byte.
+        assert_eq!(recover_stick(-7, 512), None);
+        let s = mc2_flood_spin_stick(-7, 512, 0, 0).expect("seized pair");
+        assert_eq!((2 * s as i32 + 7) / 4, 0, "the delta the tick used");
+        // 284 → 439 (+155) is out of reach as well — every seized pair
+        // was fed a CENTRED stick.
+        assert_eq!(recover_stick(284, 439), None);
+        let s = mc2_flood_spin_stick(284, 439, -73, 0).expect("seized pair");
+        assert_eq!((2 * s as i32 - 284) / 4, -73);
+        // The un-seized steps between stay on the plain inversion.
+        assert_eq!(mc2_flood_spin_stick(512, 382, -130, 0), None);
+        assert_eq!(mc2_flood_spin_stick(382, 284, -98, 0), None);
+        // Slowed: the store is 512 + the SCALED delta, the cursor raw.
+        let s = mc2_flood_spin_stick(284, 512 - 54, -73, 1).expect("slowed seize");
+        assert_eq!((2 * s as i32 - 284) / 4, -73);
+    }
 }
 
 /// `MGC_NO_MC2_SLOW_STAMP_PHASE=1` — restore the pre-dig reading of
@@ -1039,9 +1130,36 @@ pub fn recover_pair_mc2_kw(
         };
         Some((s as u8, cp.sel[s], hand))
     });
+    // ⭐⭐⭐ A COMMIT THAT CHANGES NOTHING IS STILL A COMMIT, AND THE
+    // PENDING BYTE IS ITS OWN WITNESS. `byte_0x457_1111` is 1/2 while
+    // a hand equip is mid-flight and the handler's first act is to
+    // clear it, so a 1|2 -> 0 edge IS the press — even when the player
+    // re-picks the spell and tier that hand already holds, which moves
+    // neither `SpellIndexLeft/Right` nor `array_0x437` and left the
+    // pair looking idle. Retail still runs the whole handler, and
+    // `SetSpell_6D5E0` re-prices the held manifestation against the
+    // CURRENT castle — which is why mc2l19 t=5,937 matters: the human's
+    // castle 86 went down at t=5,931, the castle token at slot 39 kept
+    // its castle-ful price, and the re-commit of Lightning Tower
+    // (spell 2 tier 2 — already in the left hand, already `sel` 2)
+    // re-prices it to the castle-LESS raw 5000 (`mana_max` 1500 ->
+    // 5000, `mana` 14 -> 49). MEASURED over the 40-take MC2 corpus:
+    // 1,008 pending-clear edges, of which 40 move neither lane — and
+    // ALL 40 carry a fresh SELECT toast (`@19`) naming exactly the
+    // TIER of the hand's own spell, i.e. every one is a commit and
+    // none is a cancel.
+    let recommit = (!mc2_pending_commit_off() && pp.hand_pending != 0 && cp.hand_pending == 0)
+        .then(|| {
+            let hand = pp.hand_pending - 1;
+            let s = if hand == 0 { cp.hand_left } else { cp.hand_right };
+            (0..26i16)
+                .contains(&s)
+                .then(|| (s as u8, cp.sel[s as usize], hand))
+        })
+        .flatten();
     let (mc2_select, rebind_dropped) = match (left, right) {
         (Some(l), Some(_)) => (Some(l), true),
-        (l, r) => (l.or(r).or(tier_swap), false),
+        (l, r) => (l.or(r).or(tier_swap).or(recommit), false),
     };
     // Demolish (Shift+L → `PlayerAction` 0x2A, EF:37991-96): MC2's
     // command never touches the move byte, so the witness is the own
@@ -1235,7 +1353,13 @@ pub fn recover_pair_mc2_kw(
                 ms_eff,
             )
         }),
-        stick_y: recover_stick_slowed(pp.pitch_acc as i16, cp.pitch_acc as i16, ms_eff),
+        stick_y: mc2_flood_spin_stick(
+            pp.pitch_acc as i16,
+            cp.pitch_acc as i16,
+            cp.pitch_delta,
+            ms_eff,
+        )
+        .or_else(|| recover_stick_slowed(pp.pitch_acc as i16, cp.pitch_acc as i16, ms_eff)),
         move_byte: mb,
         fire_left,
         fire_right,
@@ -1291,7 +1415,9 @@ pub fn recover_pair_mc2_kw(
             let s = cp.play_index as usize;
             !mc2_suicide_witness_off()
                 && matches!((pst.ents.get(s), st.ents.get(s)), (Some(a), Some(b))
-                    if a.life > 0 && b.life == -1 && b.f24 == 0 && b.f26 == 0)
+                    if a.life > 0 && b.life == -1
+                        && (if mc2_suicide_stale_killer_off() { b.f24 == 0 } else { b.f24 == a.f24 })
+                        && b.f26 == 0)
                 && cp.knock_mag <= pp.knock_mag
         },
         cheat: cheat_fired_mc2(&pp.notify, &cp.notify),
@@ -1306,6 +1432,16 @@ pub fn recover_pair_mc2_kw(
 fn mc2_suicide_witness_off() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SUICIDE_WITNESS").is_some())
+}
+
+/// A/B toggle for the SUICIDE WITNESS'S STICKY KILLER LATCH: set
+/// `MGC_NO_MC2_SUICIDE_STALE_KILLER` to restore the pre-dig clause
+/// `b.f24 == 0`, which demanded the killer latch be CLEAR on the
+/// self-kill tick. `word_0x24_36` is never cleared by retail — see the
+/// write-up at the call site.
+fn mc2_suicide_stale_killer_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SUICIDE_STALE_KILLER").is_some())
 }
 
 // ------------------------------------------------- capture-grade laws
@@ -2055,5 +2191,36 @@ mod whirl_crank_tests {
             -28,
             "retail's roll_acc at mc2l24 t=8699"
         );
+    }
+}
+
+#[cfg(test)]
+mod mc2_respawn_witness_tests {
+    use super::*;
+
+    fn rec(keys: &[i64], mouse: (i16, i16), press: (i16, i16)) -> serde_json::Value {
+        serde_json::json!({
+            "keys_down": keys,
+            "mouse": {"x": mouse.0, "y": mouse.1},
+            "mouse_press_pos": {"x": press.0, "y": press.1},
+        })
+    }
+
+    /// mc2l22-new records 27598..27600 verbatim: the respawn frame is
+    /// 27599 (retail's human revives in it, life −1200 → 10000), whose
+    /// cursor already drifted off the centre the handler slammed it to.
+    /// POSITIVE CONTROL: under `MGC_NO_MC2_RESPAWN_CENTRE_POINT=1` the
+    /// first assertion fails (the old rule fires at 27600 instead).
+    #[test]
+    fn a_respawn_press_is_dated_by_the_centre_jump_even_if_the_cursor_moved() {
+        let mut w = Mc2RespawnWitness::default();
+        assert!(!w.observe(Some(&rec(&[], (318, 264), (264, 276)))), "27598");
+        let fired = w.observe(Some(&rec(&[57], (322, 201), (320, 200))));
+        assert!(fired, "27599 is the reset frame");
+        // An ordinary click with SPACE newly down, off-centre, cursor
+        // drifted: still no fire (the rule is not "any press jump").
+        let mut w = Mc2RespawnWitness::default();
+        w.observe(Some(&rec(&[], (100, 100), (50, 50))));
+        assert!(!w.observe(Some(&rec(&[57], (131, 99), (130, 100)))));
     }
 }

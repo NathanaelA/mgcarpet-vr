@@ -146,6 +146,21 @@ pub(crate) const TIER2_STATE: u8 = 234; // 0xEA
 /// `mc2l24-hydra-residual`), not a dig.
 const V34_ENTRY: u32 = 0x1000_002A;
 
+/// Which arm of the (5,15) guard's action-121 brain `sub_23C40` ran,
+/// for [`Gen::m27_v34_publish_guard`].
+#[derive(Clone, Copy)]
+pub(crate) enum GuardV34 {
+    /// The lethal arm (no call at all).
+    Silent,
+    /// The non-lethal-hit arm (`sub_1EEE0`).
+    Hit,
+    /// The clean arm: `sub_24190`'s packmate byte (`None` = its
+    /// action-124 bail) and no acquire candidate tested.
+    Wander(Option<bool>),
+    /// The clean arm, and the acquire walk tested a candidate.
+    Scanned,
+}
+
 /// `str_D404C[5]` — the m27 per-branch spline parameters
 /// (engine/Type_D404C.cpp, a static array compiled into the binary;
 /// only the sim-read fields are carried — w8/w16/w18/w20 are
@@ -996,19 +1011,26 @@ impl Gen {
     /// amounts are consumed for STEER only (the m22 head is
     /// damage-immune through its own suite — trace §12, retail
     /// check banked); the ch1 tag retargets the head.
-    fn m22_relay(&mut self, i: usize, ctx: &MobCtx) {
+    ///
+    /// Returns the W-52 stack residue of its LAST call (`None` = no
+    /// call; `Some(None)` = a call whose residue is not modelled) —
+    /// see `no_mc2_m22_stale_probe`.
+    fn m22_relay(&mut self, i: usize, ctx: &MobCtx) -> Option<Option<u32>> {
         if self.ent[i].f58 == 0 {
-            return;
+            return None;
         }
         let head = self.ent[i].f146 as usize;
         if head == 0 || head >= self.ent.len() {
-            return;
+            return None;
         }
         let ha = self.ent[head].tick70;
         if !(ha == M22_BASE || ha == M22_BASE + 2) {
-            return; // relay only acts in 0xB0 / 0xB2 (EF:17460)
+            return None; // relay only acts in 0xB0 / 0xB2 (EF:17460)
         }
+        let mut residue = None;
         if self.ent[i].mail[0].1 != 0 {
+            // `26d97 e8 → sub_581E0`, two args: its return address.
+            residue = Some(Some(0x0020_7D9C));
             let src = self.ent[i].mail[0].1;
             let (mn, mx) = (self.ent[head].f128, self.ent[head].f130);
             self.ent[head].f126 = ((mn - mx) >> 2) + mx;
@@ -1051,6 +1073,17 @@ impl Gen {
         let tag = self.ent[i].mail[1].1;
         if tag != 0 {
             if tag != self.ent[head].f144 {
+                // `26e9c 98 / 26e9d 50`: the sign-extended tag is the
+                // sound call's third push. Retail skips the call when
+                // `dword_0x64 == 0` and the seg's byte-0xE bit 0x20 is
+                // already set (26e73-26e7d).
+                if self.ent[i].mail[1].0 != 0 || self.ent[i].flags & 0x20_0000 == 0 {
+                    residue = Some(if tag == PLAYER_TARGET {
+                        None
+                    } else {
+                        Some(tag as i16 as i32 as u32)
+                    });
+                }
                 self.ent[head].f144 = tag;
                 self.ent[head].tick70 = M22_BASE + 1; // 177
                 self.ent[head].f26 = ((self.ent[i].f71 as i8 as i16) << 8) as i16;
@@ -1066,6 +1099,7 @@ impl Gen {
                 j = self.ent[j].f54 as usize;
             }
         }
+        residue
     }
 
     /// `sub_26CC0` (EF:17427): the chain-kill — one pass, every
@@ -1209,6 +1243,22 @@ impl Gen {
         }
     }
 
+    /// `sub_26FF0`'s uninitialised `v9x` (`[ebp-0x10]`) as the 0xB0
+    /// head frame sees it: the DWORD the slot directly below left at
+    /// `W-52`, split x = low word, y = high word. `None` = not
+    /// modelled (another head frame, another predecessor, or an
+    /// unmodelled residue) — the caller keeps the head's own position.
+    /// See `no_mc2_m22_stale_probe`.
+    fn m22_stale_probe(&self, i: usize) -> Option<(u16, u16)> {
+        if self.ent[i].tick70 != M22_BASE {
+            return None;
+        }
+        match self.m22_seg_residue.0 {
+            Some((slot, Some(v))) if slot as usize + 1 == i => Some((v as u16, (v >> 16) as u16)),
+            _ => None,
+        }
+    }
+
     /// `sub_26FF0` (EF:17589): head move + altitude — actSpeed
     /// decay, the move core bracketed by a tail-length shift, the
     /// every-16th anti-stack, and the whole-chain ceiling clamp
@@ -1227,8 +1277,16 @@ impl Gen {
         self.mc2_shift_rot(i, save_p, save_f);
         // Whole-chain highest terrain altitude (+ the position it
         // occurred at, for the rise-rate roughness test).
-        let mut best: i16 = i16::MIN;
-        let mut best_pos = (self.ent[i].x, self.ent[i].y);
+        // ⭐ Retail seeds the maximum at 0 and copies the position on a
+        // strict `>` only, so an all-water chain probes the stale stack
+        // word the previous handler left (`no_mc2_m22_stale_probe`).
+        let stale = if crate::engine::features::no_mc2_m22_stale_probe() {
+            None
+        } else {
+            self.m22_stale_probe(i)
+        };
+        let mut best: i16 = if stale.is_some() { 0 } else { i16::MIN };
+        let mut best_pos = stale.unwrap_or((self.ent[i].x, self.ent[i].y));
         let mut j = i;
         loop {
             let (cx, cy) = (self.ent[j].x, self.ent[j].y);
@@ -1661,8 +1719,20 @@ impl Gen {
             }
             // 0xB4 tail segment: spiral follow + hit relay.
             4 => {
+                // `sub_271D0` reaches `CopyEntityPosition_57CF0` (whose
+                // `push esi` leaves this record's pointer at W-52)
+                // whenever the head link is set; a relay call then
+                // overwrites it (`no_mc2_m22_stale_probe`).
+                let reached = self.ent[i].f146 != 0;
                 self.m22_tail_follow(i);
-                self.m22_relay(i, ctx);
+                let call = self.m22_relay(i, ctx);
+                let own = crate::engine::features::MC2_RETAIL_REC_PTR_0
+                    .wrapping_add(168 * i as u32);
+                self.m22_seg_residue.0 = match call {
+                    Some(v) => Some((i as u16, v)),
+                    None if reached => Some((i as u16, Some(own))),
+                    None => None,
+                };
             }
             // 0xB5 chain-kill.
             5 => self.m22_chain_kill(i),
@@ -2371,6 +2441,7 @@ impl Gen {
         self.m27_v34_slot.0 = Some(v);
         self.m27_v34_slot.1 = true;
         self.m27_v34_slot.2 = None;
+        self.m27_v34_slot.3 = None;
     }
 
     /// A handler left an entity-pool or stack POINTER on the slot:
@@ -2380,6 +2451,7 @@ impl Gen {
         self.m27_v34_slot.0 = None;
         self.m27_v34_slot.1 = false;
         self.m27_v34_slot.2 = None;
+        self.m27_v34_slot.3 = None;
     }
 
     /// A/B toggle for the M27 `v34` BUILDING-RESIDUE law (round 128):
@@ -2450,6 +2522,331 @@ impl Gen {
         } else {
             Some(Self::M27_V34_WALK_ESI)
         };
+        self.m27_v34_slot.3 = None;
+    }
+
+    /// A/B toggle for the M27 `v34` FIRE-RESIDUE law (dig W19, round
+    /// 144): `MGC_NO_M27_V34_FIRE_RESIDUE` silences the (10,0) fire
+    /// tick's stack leaving (`Gen::mc2_fire_tick`).
+    ///
+    /// ⭐⭐⭐ A LIVE (10,0) FIRE BETWEEN THE LAST BUILDING AND THE BODY
+    /// PUTS A POINTER BACK ON THE SLOT — AND IT IS THE *ACTING* ARM
+    /// ONLY. `sub_30D50` (file 0x55550, prologue `53 56 57 55 89 e5 83
+    /// ec 04` ⇒ `ebp = W-20`, `esp = W-24` — one dword of locals, so
+    /// every frame below it sits FOUR BYTES LOWER than the (10,45)
+    /// house's) has three exits:
+    /// * the fuse arm `if (dword_0x10_16 & 3) dword_0x10_16--;`
+    ///   (EF:22726) — NO call at all, so the previous handler's
+    ///   leaving survives untouched;
+    /// * the reap arm `DisableEntityDrawing04_57F10(a1x)` (file
+    ///   0x7C710: `55 89 e5 8b 45 08 80 48 0d 04 5d c3` — a LEAF,
+    ///   deepest write W-36) — also leaves the slot alone;
+    /// * the acting arm, whose LAST TWO calls are
+    ///   `sub_580E0(&position, alt, 0, 0, word_0x2C_44)` and
+    ///   `sub_585A0(a1x)`. `sub_585A0` (file 0x7CDA0: `53 55 89 e5`, one
+    ///   arg, and it CALLS NOTHING — `mov edx,[ebp+0xc]` / two byte
+    ///   compares / `ret`) bottoms out at W-40, so the last writer of
+    ///   W-64 is `sub_580E0` (file 0x7C8E0, `53 56 57 55 89 e5`): five
+    ///   args at W-28..W-44, return at W-48, then `push ebx` W-52,
+    ///   `push esi` W-56, `push edi` W-60, **`push ebp` W-64** — the
+    ///   caller's own frame pointer, a 4-aligned stack address.
+    ///   W-52 takes its saved EBX, which `8b 5d 14` loaded with
+    ///   `a1x` itself. Both dwords are therefore POSITIVE, EVEN and
+    ///   far above 4 — the seed's class — so a body walked after an
+    ///   acting fire keeps `f71 = 4` AND TAKES the wander draw.
+    ///
+    /// ⭐⭐ A HANDLER'S OWN LOCAL-FRAME SIZE RE-HOMES WHICH REGISTER
+    /// LANDS ON THE `v34` SLOT: the fire's `sub esp,4` is the only
+    /// difference from the (10,45) house, and it is what puts
+    /// `sub_580E0`'s saved EBP on W-64 where the house leaves ESI.
+    ///
+    /// WITNESS (mc2l19, body 5 behind the (10,45) house at slot 3 with
+    /// the (10,0) smoke column at slots 1/2/4): 20 state-0 gate
+    /// openings read the house's 29 in the port; retail skips the
+    /// wander draw on SEVENTEEN of them — every one with slot 4
+    /// already recycled to class 0 — and TAKES it on the three where
+    /// slot 4 is still a live (10,0) that ran its acting arm
+    /// (t=12,665 and t=12,949 on the `life-- == -1` last acting tick,
+    /// t=13,388 with `life` 5). Those three are exactly the take's
+    /// three divergent boundaries (`slot N heading` + `rand`, retail
+    /// two LCG steps to the port's one). **mc2l19 CERTIFIED: 1
+    /// segment, 0 deviations, horizon END.**
+    fn m27_v34_fire_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_V34_FIRE_RESIDUE").is_none())
+    }
+
+    /// `Gen::mc2_fire_tick`'s seam: the acting arm only.
+    pub(crate) fn m27_v34_publish_fire(&mut self) {
+        if Self::m27_v34_fire_law() {
+            self.m27_v34_publish_pointer();
+        }
+    }
+
+    /// A/B toggle for the M27 `v34` LEVIATHAN-RESIDUE law (dig W21,
+    /// round 145): `MGC_NO_M27_V34_LEVIATHAN_RESIDUE` silences the
+    /// (5,23) dweller's patrol-tick stack leaving
+    /// (`Gen::m23_tick` sub-state 0).
+    ///
+    /// ⭐⭐⭐ A QUIET (5,23) PATROL TICK LEAVES ITS OWN **TARGET YAW**
+    /// ON THE 0xDA DWORD AND ITS **PRE-RETRY YAW** ON THE 0xD9 ONE.
+    /// `sub_27950` (file 0x4C150, `53 56 57 55 89 e5 83 ec 04` — the
+    /// fire's frame shape, `ebp = W-20`, `esp = W-24`) opens with
+    /// `push ebx / call sub_1B8C0` (0x4C15C-5D, the move core, file
+    /// 0x400C0, same prologue ⇒ `ebp = W-48`, `esp = W-52`) and closes
+    /// with `push ebx / call sub_28110` (0x4C30C-0D, the post pass).
+    /// Inside the move core every COMMIT arm ends with the turn
+    /// `sub_58350(yaw, target_yaw, v_4, v_2)` — four pushes at
+    /// W-56/W-60/**W-64**/W-68 (0x401A1..0x401BA, 0x4023D..0x40246 and
+    /// the two retry twins) — so the THIRD push,
+    /// `xor eax,eax / mov ax,0x20(%ebx)` (0x401AE), parks the record's
+    /// **zero-extended `+0x20`** on the 0xD8/0xDA/0xDB dword. And the
+    /// retry head stores `xor eax,eax / mov ax,0x1c(%ebx) /
+    /// mov %eax,-0x4(%ebp)` (0x40274-7A) — the move core's ONE local,
+    /// `[ebp-4] = W-52`, the 0xD9 dword — so a move that had to rotate
+    /// (result 3 or 4) also leaves its **pre-retry `+0x1C`** there,
+    /// while results 1 and 2 never touch W-52 at all.
+    ///
+    /// ⭐⭐ WHAT THE LATER ARMS DO IS OVERWRITE BOTH WITH POINTERS.
+    /// `sub_28420` (the node validity test, 0x4CC20) is a LEAF
+    /// (`53 55 89 e5 … 5d 5b c3`, deepest write W-40) and
+    /// `sub_27FE0` (the mode setter, 0x4C7E0, `55 89 e5 … 5d c3`)
+    /// bottoms out at W-48, so neither disturbs the slot. The ones
+    /// that do:
+    /// * the `byte_0x46_70 == 2` re-aim (0x4C2CB-E6, gated on
+    ///   `!(0x3E(%ebx) & 3)`) ends with
+    ///   `push edi / push esi / call EuclideanDistXY_58490` (0x4C2D8-DE,
+    ///   return W-36), whose `push ebx` W-40 / `push ebp` W-44 /
+    ///   `push eax` W-48 / `call isqrt 0x96F7A` (return **W-52**) is
+    ///   followed by the isqrt's `push ebp` W-56 / `push ebx` W-60 /
+    ///   `push ecx` **W-64** — and ECX is still `0xc(%ebp)`, the
+    ///   dweller's own `&position`. Both dwords become positive even
+    ///   addresses, the seed's class.
+    /// * the `== 1` arm always calls something deep — `sub_28000`
+    ///   (the node hunt, 0x4C800) pushes two position pointers at
+    ///   W-52/W-56 for `sub_584D0` whose `push ebx` lands on W-64, and
+    ///   the no-node fallback is `push esi / call getTerrainAlt_10C40`
+    ///   (0x4C29C-9D) whose interpolator parks its saved EBP on W-52
+    ///   and the position pointer (EDX) on W-64.
+    /// * `sub_28110`'s own arms (post): a wizard-sourced hit, a death,
+    ///   or the `!(0x3E & 0x1F)` owner hunt. All three END on the
+    ///   4-argument mode setter (0x4C9B5-CA, 0x4C9DE-F5, 0x4CAAE-BF)
+    ///   whose pushes are `$0` W-52, `$0` W-56, `$0xBA` W-60,
+    ///   `%ebx` W-64 — **ZERO on the 0xD9 dword** and the record
+    ///   pointer on the 0xDA one — except the owner hunt's two early
+    ///   exits (no target, or out of range), which bottom out on
+    ///   pointer-class values instead.
+    ///
+    /// ⚠ SCOPED TO SUB-STATE 0. `sub_27B20` (action 185, file 0x4C320)
+    /// is `53 56 55 89 e5 83 ec 04` — THREE pushed registers, not four
+    /// — so every frame under it sits four bytes higher and none of
+    /// this arithmetic carries. The other m23 sub-states are left
+    /// alone.
+    ///
+    /// WITNESS (mc2l21, hydra body at slot 2 with the dweller at slot
+    /// 1 immediately ahead of it in the walk — the body's `+0x45`
+    /// ALTERNATES 0xD9/0xDA, so one take exercises both dwords).
+    /// **21 of 21.** Twenty-one state-0 head-of-chain branches open the
+    /// `f63 & 7` gate on a residue over the take — fifteen with the
+    /// body on 0xDA (W-64), six on 0xD9 (W-52) — and the per-branch
+    /// draw-count oracle (retail's recorded per-record LCG: one step =
+    /// draw #A alone, the wander SKIPPED ⇒ odd; two = TAKEN ⇒ even)
+    /// scores this model 21/21 where the even seed scored 13/21. The
+    /// eight it gets right and the seed does not are exactly the
+    /// take's eight body-2 divergent boundaries (t=11,460 / 12,402 /
+    /// 12,648 / 12,680 / 12,720 / 12,840 / 12,908 / 12,940 —
+    /// `heading` + `rand` on the branch, retail one LCG step to the
+    /// port's two). `--segmented --classify`: **11 segments / 10
+    /// deviation heads / horizon 11,459 → 3 / 2 / 14,867.** Decompile:
+    /// EF:18068 (`sub_27950`), EF:8754 (`sub_1B8C0`), EF:18462
+    /// (`sub_28110`), EF:18614 (`sub_28420`), EF:18388 (`sub_27FE0`),
+    /// EF:18400 (`sub_28000`), EF:40696 (`sub_58350`) — banner lines,
+    /// resolved by address.
+    fn m27_v34_leviathan_law() -> bool {
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("MGC_NO_M27_V34_LEVIATHAN_RESIDUE").is_none())
+    }
+
+    /// `Gen::m23_tick` sub-state 0's seam. `yaw0` is `+0x1C` as the
+    /// move core entered, `code` its result, and `deep`/`post` say
+    /// which later arm (if any) ran last — see
+    /// [`Gen::m27_v34_leviathan_law`]. `post`: 0 = the post pass made
+    /// no call, 1 = it ended on the 4-argument mode setter, 2 = it
+    /// ended on a pointer-class call.
+    pub(crate) fn m27_v34_publish_leviathan(
+        &mut self,
+        i: usize,
+        yaw0: u16,
+        code: u8,
+        deep: bool,
+        post: u8,
+    ) {
+        if !Self::m27_v34_leviathan_law() {
+            return;
+        }
+        self.m27_v34_slot.1 = false;
+        self.m27_v34_slot.3 = Some(i as u16);
+        match post {
+            1 => {
+                // `sub_27FE0(a1x, 0xBA, 0, 0)`: `$0` on W-52, the
+                // record pointer on W-64.
+                self.m27_v34_slot.0 = Some(0);
+                self.m27_v34_slot.2 = None;
+            }
+            2 => {
+                self.m27_v34_slot.0 = None;
+                self.m27_v34_slot.2 = None;
+            }
+            _ if deep => {
+                self.m27_v34_slot.0 = None;
+                self.m27_v34_slot.2 = None;
+            }
+            _ => {
+                self.m27_v34_slot.0 = if code >= 3 { Some(yaw0 as u32) } else { None };
+                self.m27_v34_slot.2 = Some(self.ent[i].f34 as u32);
+            }
+        }
+    }
+
+    /// `MGC_NO_MC2_M27_V34_GUARD_RESIDUE` — see
+    /// [`crate::engine::features::no_mc2_m27_v34_guard_residue`] for
+    /// the law and the NETHERW.EXE citation. `Gen::m15_brain`'s seam:
+    /// `guard` = which arm of `sub_23C40` ran, `engaged` = the tick
+    /// ended in action 122 (the `sub_24100` engage pose ran last).
+    pub(crate) fn m27_v34_publish_guard(&mut self, i: usize, guard: GuardV34, engaged: bool) {
+        if crate::engine::features::no_mc2_m27_v34_guard_residue() {
+            return;
+        }
+        if matches!(guard, GuardV34::Silent) {
+            // The lethal arm stores action 124 and returns without a
+            // call: both dwords survive.
+            self.m27_v34_transparent(i);
+            return;
+        }
+        // The W-64 view this handler was entered with (the `[ebp-4]`
+        // byte store keeps its upper three bytes).
+        let prior = match self.m27_v34_slot.3 {
+            Some(p) if self.m27_v34_broken(p as usize, i) => None,
+            _ => self.m27_v34_slot.2,
+        };
+        let (w52, w64) = match guard {
+            // `sub_24100` (file 0x48900): `push ebp` W-52, its
+            // `call 0x6e4d0` return address (linear 0x205142) W-64.
+            _ if engaged => (None, None),
+            // `sub_1EEE0` (file 0x436E0): `push ebp` W-52, then
+            // `movswl 0xc(row)` pushed on W-64.
+            GuardV34::Hit => (
+                None,
+                Some(BEHAVIOR[self.ent[i].row156 as usize].v_12 as i32 as u32),
+            ),
+            // `sub_581E0`'s `push ebx` (the guard pointer) on W-52 and
+            // its `cwtl` dy push on W-64 for the LAST tested candidate
+            // (roster order — not modelled: seed class), then
+            // `sub_582B0`'s `push ebp` on W-52 again.
+            GuardV34::Scanned => (None, None),
+            // `sub_24190` (file 0x48990): `push esi` = the brain's
+            // arm selector, ZERO on this arm, lands on W-52; its
+            // `[ebp-4]` is W-64 and takes a BYTE (0x48B07 / 0x48B71).
+            GuardV34::Wander(None) => (Some(0), prior),
+            GuardV34::Wander(Some(found)) => (
+                Some(0),
+                Some((prior.unwrap_or_else(Self::m27_v34_seed) & !0xFF) | found as u32),
+            ),
+            GuardV34::Silent => unreachable!(),
+        };
+        self.m27_v34_slot.0 = w52;
+        self.m27_v34_slot.1 = false;
+        self.m27_v34_slot.2 = w64;
+        self.m27_v34_slot.3 = Some(i as u16);
+    }
+
+    /// `MGC_NO_MC2_M27_V34_SPHERE_RESIDUE` — see
+    /// [`crate::engine::features::no_mc2_m27_v34_sphere_residue`].
+    /// `Gen::ball_tick`'s seam, the (10,39) ball's MOVING arm only:
+    /// `esi` = this tick's `getTerrainAlt` (the full sampler word) when
+    /// the arm ended on `SetManaSphereColorAndRot_36920`, `None` when
+    /// the decaying gate skipped that call (unmodelled: seed class).
+    pub(crate) fn m27_v34_publish_sphere(&mut self, esi: Option<u32>) {
+        if crate::engine::features::no_mc2_m27_v34_sphere_residue() {
+            return;
+        }
+        // W-52: the pushed sphere record pointer.
+        self.m27_v34_slot.0 = None;
+        self.m27_v34_slot.1 = false;
+        // W-64: `SetManaSphereColorAndRot_36920`'s saved ESI.
+        self.m27_v34_slot.2 = esi;
+        self.m27_v34_slot.3 = None;
+    }
+
+    /// `MGC_NO_MC2_M27_V34_BLAST_SOUND_RESIDUE` — see
+    /// [`crate::engine::features::no_mc2_m27_v34_blast_sound_residue`].
+    /// `Gen::mc2_blast23_tick`'s seam, the burst tick only (right after
+    /// its `PrepareEventSound_6E450(id, -1, 24)`).
+    pub(crate) fn m27_v34_publish_blast_sound(&mut self, i: usize, ctx: &MobCtx) {
+        if crate::engine::features::no_mc2_m27_v34_blast_sound_residue() {
+            return;
+        }
+        let (bx, by, fl) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.flags)
+        };
+        // `sub_584D0` (file 0x7CCD0): i16 deltas, squared, summed; the
+        // `ja` at 0x92CE4 is unsigned.
+        let dx = bx.wrapping_sub(ctx.px) as i16 as i32;
+        let dy = by.wrapping_sub(ctx.py) as i16 as i32;
+        let sq = (dx * dx).wrapping_add(dy * dy) as u32;
+        // W-52: `sub_581E0`'s full EAX (the atan2 word) — not modelled.
+        self.m27_v34_slot.0 = None;
+        self.m27_v34_slot.1 = false;
+        // W-64: `[ebp-0x14]` = `EuclideanDistXYZ_58490(listener, blast)`,
+        // stored only past the silent-emitter and hearing-range exits.
+        self.m27_v34_slot.2 = if fl & 0x80 == 0 && sq <= 0x0900_0000 {
+            Some(crate::mc2::morph::dist2d(ctx.px, ctx.py, bx as i32, by as i32) as u32)
+        } else {
+            None
+        };
+        self.m27_v34_slot.3 = None;
+    }
+
+    /// `MGC_NO_MC2_M27_V34_WYVERN_RESIDUE` — see
+    /// [`crate::engine::features::no_mc2_m27_v34_wyvern_residue`].
+    /// `Gen::m16_tick` action 130's seam: `quiet` = the call-free hit /
+    /// death arms; otherwise `w52` is the 0xD9 dword the normal arm
+    /// has left so far (`None` = a pointer or unmodelled), and the
+    /// 0xDA dword is not modelled.
+    pub(crate) fn m27_v34_publish_wyvern(&mut self, i: usize, w52: Option<u32>, quiet: bool) {
+        if crate::engine::features::no_mc2_m27_v34_wyvern_residue() {
+            return;
+        }
+        if quiet {
+            self.m27_v34_transparent(i);
+            return;
+        }
+        self.m27_v34_slot.0 = w52;
+        self.m27_v34_slot.1 = false;
+        self.m27_v34_slot.2 = None;
+        self.m27_v34_slot.3 = Some(i as u16);
+    }
+
+    /// The ring iterator's handle: `sub_10080` (file 0x34880) returns
+    /// the LOWEST index of its 100-row table whose `+8` is −1, and every
+    /// user releases its handle (`sub_10100`, file 0x34900) before
+    /// returning — so a handler that opens one always holds 1.
+    pub(crate) const M27_V34_RING_HANDLE: u32 = 1;
+
+    /// `MGC_NO_MC2_M27_V34_METEOR_RESIDUE` — see
+    /// [`crate::engine::features::no_mc2_m27_v34_meteor_residue`].
+    /// `Gen::mc2_meteor_tick`'s seam, acting arm only (the expiry arm
+    /// is `DisableEntityDrawing04_57F10`, a leaf: transparent — and the
+    /// port models it as a break, which only restores the seed).
+    pub(crate) fn m27_v34_publish_meteor(&mut self, i: usize) {
+        if crate::engine::features::no_mc2_m27_v34_meteor_residue() {
+            return;
+        }
+        self.m27_v34_slot.0 = None;
+        self.m27_v34_slot.1 = false;
+        self.m27_v34_slot.2 = Some(Self::M27_V34_RING_HANDLE);
+        self.m27_v34_slot.3 = Some(i as u16);
     }
 
     /// A/B toggle for the M27 `v34` SWITCH-RESIDUE law (round 127):
@@ -3248,12 +3645,56 @@ impl Gen {
     /// positive, even stack address, the seed's class — so a body on
     /// any other path drops the pad value and reads the seed.
     pub(crate) fn m27_v34_enter(&mut self, i: usize) {
+        // ⭐ AN ADJACENCY-SCOPED PUBLICATION IS THE *PREVIOUS* HANDLER'S
+        // LEAVING AND NOTHING MORE (dig W21). Every dispatched record
+        // between the publisher and this body re-occupies the frames
+        // the two dwords live in, and what an unmodelled handler leaves
+        // there is the seed's class — so drop the publication unless
+        // this body is the very next dispatched record. Conservative by
+        // construction: a record the walk merely calls
+        // `DisableEntityDrawing04_57F10` for (a LEAF, deepest write
+        // W-36) counts as dispatched here, which only ever restores the
+        // pre-law seed.
+        if let Some(p) = self.m27_v34_slot.3.take() {
+            if self.m27_v34_broken(p as usize, i) {
+                self.m27_v34_slot.0 = None;
+                self.m27_v34_slot.2 = None;
+            }
+        }
         if self.ent[i].tick70 != M27_BASE + 1 {
             // The deeper dword: what a same-walk writer published
             // there (`.2`), else the seed's class.
             self.m27_v34_slot.0 = self.m27_v34_slot.2;
         }
         self.m27_v34_slot.1 = false;
+    }
+
+    /// Did a dispatched record between the adjacency-scoped publisher
+    /// at walk slot `p` and slot `i` re-occupy the `v34` frames? Class-0
+    /// records are never dispatched, and the class-5 action-233/234
+    /// chain members carry a NULL handler.
+    pub(crate) fn m27_v34_broken(&self, p: usize, i: usize) -> bool {
+        p >= i
+            || (p + 1..i).any(|k| {
+                self.ent[k].class64 != 0
+                    && !(self.ent[k].class64 == 5 && matches!(self.ent[k].tick70, 233 | 234))
+            })
+    }
+
+    /// A dispatched handler that provably leaves BOTH `v34` dwords
+    /// alone: an adjacency-scoped publication survives it, so re-scope
+    /// the publication to this walk slot (or drop it here if it was
+    /// already broken upstream). Unscoped publications are untouched.
+    pub(crate) fn m27_v34_transparent(&mut self, i: usize) {
+        if let Some(p) = self.m27_v34_slot.3 {
+            if self.m27_v34_broken(p as usize, i) {
+                self.m27_v34_slot.0 = None;
+                self.m27_v34_slot.2 = None;
+                self.m27_v34_slot.3 = None;
+            } else {
+                self.m27_v34_slot.3 = Some(i as u16);
+            }
+        }
     }
 
     pub(crate) fn m27_tick(&mut self, i: usize, ctx: &MobCtx) {

@@ -3131,35 +3131,6 @@ impl App {
                 ("render.preference.sky", format!("Sky {}", onoff(v)))
             }
             // F7 = retail shadows — no shadows option yet.
-            KeyCode::KeyT => {
-                self.cfg.render.enhancement.smooth_shading =
-                    !self.cfg.render.enhancement.smooth_shading;
-                let v = self.cfg.render.enhancement.smooth_shading;
-                println!(
-                    "shading: {}",
-                    if v {
-                        "smooth (enhanced)"
-                    } else {
-                        "per-tile (original)"
-                    }
-                );
-                (
-                    "render.enhancement.smooth_shading",
-                    format!("Shading {}", if v { "smooth" } else { "per-tile" }),
-                )
-            }
-            KeyCode::KeyV => {
-                self.cfg.render.debug.map_trigger_areas = !self.cfg.render.debug.map_trigger_areas;
-                let v = self.cfg.render.debug.map_trigger_areas;
-                println!(
-                    "map trigger overlay: {}",
-                    if v { "on (enhanced)" } else { "off (original)" }
-                );
-                (
-                    "render.debug.map_trigger_areas",
-                    format!("Trigger overlay {}", onoff(v)),
-                )
-            }
             KeyCode::KeyG => {
                 self.cfg.gameplay.cheat.dev_spells = !self.cfg.gameplay.cheat.dev_spells;
                 let v = self.cfg.gameplay.cheat.dev_spells;
@@ -3193,8 +3164,24 @@ impl App {
                     format!("Invincibility {}", onoff(v)),
                 )
             }
-            // J = ghost mode, I = inert mode (cheats; K, the
-            // natural neighbour, is the coords overlay).
+            // ⭐⭐ THE CHEAT ROW IS `G H J` + `B N`, AND NOTHING ELSE
+            // IS A BARE LETTER. Cheats sat on G/H/J/I/L and the five
+            // view toggles on T/V/B/C/K until 2026-09-17, when the
+            // player found `weightless` on L EATING THE MC1 DEMOLISH
+            // (Shift+L): `option_key` carries no shift test and the
+            // demolish handler sits BELOW it in the dispatch, so the
+            // bare-letter toggle won every time. Shift+L and Shift+K
+            // are pressed hundreds of times a session during castle
+            // demolition — "it is always a mistake, one of them I
+            // accidentally hit the next key instead" — so a toggle
+            // that shadows either of them is a gameplay regression,
+            // not a nuisance. The player's ruling (2026-09-17): the
+            // five VIEW toggles lose their keys entirely (they live in
+            // the options menu, where every one of them already has a
+            // row) and the two displaced cheats move DOWN a row onto
+            // B and N — under G/H/J, unmapped by anything, and clear
+            // of the WASD pad. `option_key` is now shift-gated too, so
+            // no future Shift+<letter> can be shadowed this way.
             KeyCode::KeyJ => {
                 self.cfg.gameplay.cheat.ghost = !self.cfg.gameplay.cheat.ghost;
                 let v = self.cfg.gameplay.cheat.ghost;
@@ -3208,7 +3195,7 @@ impl App {
                 );
                 ("gameplay.cheat.ghost", format!("Ghost mode {}", onoff(v)))
             }
-            KeyCode::KeyI => {
+            KeyCode::KeyB => {
                 self.cfg.gameplay.cheat.inert = !self.cfg.gameplay.cheat.inert;
                 let v = self.cfg.gameplay.cheat.inert;
                 println!(
@@ -3224,9 +3211,8 @@ impl App {
                     format!("Inert mode {}", onoff(v)),
                 )
             }
-            // L = weightless (the last key of the cheat row; Shift+L is
-            // the MC1 demolish and is handled before this table).
-            KeyCode::KeyL => {
+            // N = weightless (the last key of the cheat row).
+            KeyCode::KeyN => {
                 self.cfg.gameplay.cheat.weightless = !self.cfg.gameplay.cheat.weightless;
                 let v = self.cfg.gameplay.cheat.weightless;
                 println!(
@@ -3241,43 +3227,6 @@ impl App {
                     "gameplay.cheat.weightless",
                     format!("Weightless mode {}", onoff(v)),
                 )
-            }
-            KeyCode::KeyB => {
-                self.cfg.render.debug.health_bars = !self.cfg.render.debug.health_bars;
-                let v = self.cfg.render.debug.health_bars;
-                println!(
-                    "monster health bars: {}",
-                    if v {
-                        "on (debug enhancement)"
-                    } else {
-                        "off (original)"
-                    }
-                );
-                (
-                    "render.debug.health_bars",
-                    format!("Health bars {}", onoff(v)),
-                )
-            }
-            KeyCode::KeyC => {
-                self.cfg.render.preference.crosshair = !self.cfg.render.preference.crosshair;
-                let v = self.cfg.render.preference.crosshair;
-                println!(
-                    "aim crosshair: {}",
-                    if v { "on" } else { "off (no aim cursor)" }
-                );
-                (
-                    "render.preference.crosshair",
-                    format!("Crosshair {}", onoff(v)),
-                )
-            }
-            KeyCode::KeyK => {
-                self.cfg.render.debug.coords = !self.cfg.render.debug.coords;
-                let v = self.cfg.render.debug.coords;
-                println!(
-                    "coordinate overlay: {}",
-                    if v { "on (engine units)" } else { "off" }
-                );
-                ("render.debug.coords", format!("Coordinates {}", onoff(v)))
             }
             _ => return false,
         };
@@ -7946,9 +7895,15 @@ impl ApplicationHandler for App {
                     self.mini_toast(".. CHEAT: win level");
                     return;
                 }
-                // The runtime option keys (F1/F2/F3/F5/F6, T/V/G/H/J/I/L/B/C/K)
-                // — live in flight and inside the menu alike.
+                // The runtime option keys (F1/F2/F3/F5/F6 and the
+                // cheat row G/H/J/B/N) — live in flight and inside the
+                // menu alike. ⚠ SHIFT-GATED: `Shift+<letter>` belongs
+                // to gameplay (Shift+K suicide, Shift+L demolish,
+                // Shift+digit equips), and a bare-letter toggle that
+                // also answers the shifted press SHADOWS it — see the
+                // cheat-row note on `option_key`.
                 if down
+                    && !self.shift_held
                     && let PhysicalKey::Code(code) = event.physical_key
                     && self.option_key(code)
                 {
@@ -9460,6 +9415,8 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         dual_wield_muzzle: p.dual_wield_muzzle.on(),
         one_castle_per_wizard: p.one_castle_per_wizard.on(),
         mc2_wyvern_alliance_brain: p.mc2_wyvern_alliance_brain.on(),
+        mc2_orphan_balloon_reap: p.mc2_orphan_balloon_reap.on(),
+        mc2_house_flag_color: p.mc2_house_flag_color.on(),
     }
 }
 

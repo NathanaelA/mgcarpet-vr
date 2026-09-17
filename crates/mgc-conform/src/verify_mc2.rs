@@ -376,7 +376,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             // equip. Without it every equip pair left the port's
             // hand one spell behind (the 12-row player0.hand_left
             // family, mc2l3 t=108: the (70,312) panel click's flip).
-            let pair_cmd = {
+            let (pair_cmd, pair_full_stop) = {
                 let mut c = pair_cmd;
                 let rec =
                     mgc_formats::recover::recover_pair_mc2(&pst, &st, false, tick.input.as_ref());
@@ -399,7 +399,11 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                 // it, or `verify-deltas` and the suite grade a live
                 // human where retail's own key killed it.
                 c.suicide = rec.suicide;
-                c
+                // The FULL STOP travels with them: `PlayerEvents_51BB0`
+                // case 0x27 is an input-pass write the pair importer
+                // cannot see from the state at N
+                // (`World::mc2_full_stop_import`).
+                (c, rec.mc2_park)
             };
             if args.start.is_some_and(|s| pt < s) {
                 // Before the triage window — keep the pairing chain
@@ -451,6 +455,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         } else {
                             crate::verify::PairPose::PinN
                         },
+                        pair_full_stop,
                     )
                     .map_err(|e| format!("t={pt}: {e}"))?;
                     let human_slot = report.human_slot;
@@ -704,6 +709,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                             } else {
                                 crate::verify::PairPose::PinN1
                             },
+                            pair_full_stop,
                         )
                         .map_err(|e| format!("t={pt}: pose-alt: {e}"))?;
                         crate::verify::pose_reclassify(tg, &pd, &alt);
@@ -734,6 +740,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                             } else {
                                 crate::verify::PairPose::PinN
                             },
+                            pair_full_stop,
                         )
                         .map_err(|e| format!("t={pt}: {e}"))?;
                         print!("{}", pd.render(pt, usize::MAX));
@@ -1034,6 +1041,11 @@ pub(crate) fn exec_pair_mc2(
     cmd: PlayerCommand,
     prev_cmd: PlayerCommand,
     phase: crate::verify::PairPose,
+    // The recovered `mc2_park` for THIS pair — retail's
+    // `PlayerEvents_51BB0` case 0x27 full stop, which the import
+    // cannot see from the state at N alone
+    // (`World::mc2_full_stop_import`).
+    full_stop: bool,
 ) -> Result<
     (
         PairDiff,
@@ -1052,6 +1064,7 @@ pub(crate) fn exec_pair_mc2(
     let report = world
         .retail_import_mc2(pst)
         .map_err(|e| format!("import: {e}"))?;
+    world.mc2_full_stop_import(pst, full_stop);
     world.set_prev_fire(prev_cmd.fire_left, prev_cmd.fire_right);
     // The barrel roll's homing-lock break (`sub_55EB0`) — retail's
     // PLAYER FRAME fires it before `UpdateEntities_57730`, and the

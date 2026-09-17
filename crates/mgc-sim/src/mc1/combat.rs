@@ -7563,6 +7563,9 @@ impl Gen {
         // spheres; the conformance import carries it.
         if mc2 && self.ent[i].flags & (1 << 26) != 0 {
             self.ent[i].flags &= !(1 << 26);
+            if self.ent[i].model65 == 39 && !crate::engine::features::no_mc2_m27_v34_sphere_transparent() {
+                self.m27_v34_transparent(i);
+            }
             return false;
         }
         // MC2 (10,57) — the RANDOM-VALUE sphere. Its retail tick is
@@ -8019,6 +8022,11 @@ impl Gen {
             // sphere still runs the decay tail (EF:26289 sits
             // outside the mode branch).
             if settle == 0 && !kicked {
+                // Call-free unless the claim intake sounded: see
+                // [`crate::engine::features::no_mc2_m27_v34_sphere_transparent`].
+                if !is_fool && !claimed && !crate::engine::features::no_mc2_m27_v34_sphere_transparent() {
+                    self.m27_v34_transparent(i);
+                }
                 self.ball_decay_tail(i);
                 return false;
             }
@@ -8102,7 +8110,8 @@ impl Gen {
                 self.ent[i].f46 = -128;
             }
         }
-        let ground = self.ground_z(x, y) as i16;
+        let ground_full = self.ground_z(x, y);
+        let ground = ground_full as i16;
         // Clamp + rebound ONLY when the step went STRICTLY below the
         // ground (`tempV13 > z` :29538 / `v22 > z` EF:26244): a ball
         // landing EXACTLY on it keeps its falling lift one more tick
@@ -8388,8 +8397,16 @@ impl Gen {
         // port recoloured the m57 to 141, and that one field was the
         // take's certification wall.
         let m57_no_resize = is_fool && !no_m57_tick_resize();
-        if (!(mc2 && decaying) || claimed) && !m57_no_resize {
+        let resized = (!(mc2 && decaying) || claimed) && !m57_no_resize;
+        if resized {
             self.ball_resize(i);
+        }
+        // The hydra `v34` seam (`Gen::m27_v34_publish_sphere`): the
+        // (10,39) ball's moving arm ends on `SetManaSphereColorAndRot_
+        // 36920`, whose saved ESI — this tick's `getTerrainAlt` — lands
+        // on W-64. (10,57)'s `sub_35FB0` is a different frame.
+        if mc2 && !is_fool {
+            self.m27_v34_publish_sphere(resized.then_some(ground_full as u32));
         }
         self.ball_decay_tail(i);
         false

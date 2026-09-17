@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc2l23",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 6932,
+   "file": "a-quake-shove-is-published-at-the-quakes-own-walk-slot.mgcr",
+   "source": "mc2l23",
+   "note": "THE QUAKE'S SHOVE IS A POSITION WRITE AT THE QUAKE'S OWN POOL SLOT, SO EVERY READER DISPATCHED BETWEEN THE QUAKE AND THE CARPET SEES THE SHOVED POSITION. `sub_39B60` (the (10,67) quake / Gravity Well, decompile banner `//----- (00039B60)` EF:29057) ends its victim arm with `CopyEntityPosition_57CF0(victim, &predictedAxis)` - `NETHERW.EXE` file 0x5E592 `e8 59 df 01 00` with `push %ebx` = the victim record - having built `predictedAxis` from `MoveEntity_57FA0(&axis, tan2(victim,quake), 0, v6)` (0x5E4DA) plus the wizard arm's vertical pull (`mov 0x3f(%ebx),%ah` / `cmp $0x3,%ah` / `cmpb $0x0,0x40(%ebx)` at 0x5E4EF-FA, then the `0x1000 - v5` block at 0x5E500-533). The port funnels the two legs through one-shot mailboxes (`Gen::player_knock` horizontal, `Gen::player_flood_pull` vertical) and spends BOTH at the CARPET's dispatch - the right phase for the flight state, and one walk position too late for every reader in between. ⭐⭐⭐ THIS IS THE LAW THE TREE ALREADY CARRIES FOR THE DOOMSDAY HURL BEAM (`mc2_hurl_walk_pose` / `mc2_hurl_walk_republish`), ONE CHANNEL OVER - A LAW LANDED ON ONE CHANNEL IS NOT LANDED. WITNESS mc2l23 pair 6932->6933: quake slot 101, the human's equipped `(15,9)` meteor manifestation slot 105, carpet slot 207, so `101 < 105 < 207` and `sub_6AB00` (EF:57134, file 0x8F300, reach `push $0x2800` = 10,240 at 0x8F44D) launches from `position_0x4C_76` ALREADY SHOVED. The two `(9,3)` meteors at slots 550 and 557 record retail x/y/z 116.988/45.195/2587 where the port has 117.199/45.141/2605 - the shove `(-56, +17, 0)` and pull 19 TO THE UNIT. Solving retail's axis stamp back through `MoveEntity(origin, yaw 1671, pitch 5, 10240)` gives origin (30464, 11660, 2487) = tick-top (30520, 11643, 2506) + that shove, and BOTH the carpet's tick-top and end-of-tick positions are geometrically IMPOSSIBLE origins (|dest-pos| 10284.5 and 10208.2 against a step that must be 10240). A/B: `MGC_NO_MC2_FLOOD_WALK_POSE=1` re-reds this pair; the take goes 13 -> 5 segments, 12 -> 4 devs, horizon 6,932 -> 6,940. ⚠ RE-DERIVED, NEVER DRAINED - the carpet's own dispatch still spends both legs, so the flight state and the end-of-tick pose are untouched and only the MID-WALK publication moves."
+  }
+ ]
+}

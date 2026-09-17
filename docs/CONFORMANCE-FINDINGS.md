@@ -106,6 +106,669 @@ rejection streaks; the gate now counts only `dv±1` steps as tear
 suspects.) Every open entry below reproduced across all takes,
 including the 75%-torn pre-gate corpus.
 
+## ROUND 143 (2026-09-16/17) — THE ELEVEN-TAKE INTAKE, SIX LAWS, AND A SILENT REGRESSION
+
+The player delivered **eleven new MC2 takes in one batch** (levels 17-24 plus the last two
+hidden levels, 33 and 34). The corpus went **49 -> 60 takes and every MC2 level now has at
+least one witness.** `conformance/brief-baseline.txt`'s header carries the full numbers; this
+entry records what the round is FOR.
+
+**Intake.** `mc2l34` certified on its first graded run (29,658 ticks, 6 segments, 0
+deviations, horizon END). `mc2l19` and `mc2l19-taketwo` were cut at the level seam — the
+player triggered hidden level 34 in both and the recorder ran on into it — at t=17,040 and
+t=14,832 via `recordings/find_boundary.py` + `cut_mgcr.py`; both re-verify `check-decode`
+100% clean with the terrain base materialised, and the pristine originals are preserved under
+`recordings-new/`. **All eleven takes' generated terrain is bit-identical to retail at record
+0** on every plane the port models (this needed a `terrain-check` fix: an EMPTY port plane is
+an ungraded lane, not an error — see `docs/RECORDING-TERRAIN-V2.md`).
+
+**⚠⚠⚠ THE REGRESSION, AND THE LESSON THAT OUTRANKS THE LAWS.** The intake header first
+claimed the 49 inherited baseline rows were "byte-identical to round 141's — no code moved at
+intake". That was an ASSUMPTION. A full 60-take sweep found 59 identical and **`mc2l22`
+SILENTLY DE-CERTIFIED** (`8 seg / 0 dev / END` -> `11 / 3 / horizon 10,019`). The bisect
+exonerated round 142 and landed on **round 141's own commit `e463002`**: it correctly removed
+the port's `player.state == Alive` predicate from `mc2_target_alive` (`sub_14C60` IS a pure
+identity compare) and **never landed the write that replaces it** — `sub_5EFA0`'s second block
+(`NETHERW.EXE` file 0x837b2-0x837e9), which resolves `Entities[word_0x96_150]` with no class,
+model or human test and zeroes the word. It had been parked as a `docs/FIDELITY.md` gap that
+"measures exactly zero across the whole 49-take corpus", and mc2l22 was one of those 49.
+⭐⭐⭐ **A MEASURED ZERO IS ONLY EVIDENCE IF IT WAS MEASURED ON THE TREE THE CHANGE PRODUCES.**
+⭐⭐⭐ **RE-SWEEP THE WHOLE CORPUS AT INTAKE** — the round that adds takes is the one least
+likely to look at the ones it did not touch. ⭐ And when two takes disagree about whether a law
+matters, find the state that differs: here mc2l16's rival is DOCKED (`invuln` 1) and
+`sub_12A70` reaches `sub_5EFA0` only down the undocked arm, so one take looked like proof of
+what the other refutes. Gap CLOSED; both write-ups rewritten.
+
+**The `mana_max` family (dig W9) added two, and the first is a PORT-SIDE FIELD-HOMING BUG
+rather than a behaviour bug.** `MGC_NO_MC2_CENSUS_CREDIT_HOME` — retail's per-tick mana census
+`sub_61000` (`NETHERW.EXE` file 0x85825 `add %edx,0x8c(%eax)`) credits every record's cargo to
+`Entities[owner]->@0x8C` with NO class, model, life or reap test, so an owner tag naming a
+non-wizard accumulates forever (the MC2 twin of MC1's `(10,40)` grave). The port ported that
+faithfully and wrote `f136` — **but `f136` is only `@0x8C` for the UNIFORM record**:
+`import_ent_mc2`'s class-15 block moves the homes (`f136` = @0x88, `max_life` = @0x8C) and m27
+keeps bolt power there, so on a spell manifestation the port added retail's claim into the
+wrong field and corrupted the class-15 upkeep lane instead. ⭐ Proven ARITHMETICALLY: summing
+@0x90 over every record tagged to the owner reproduces retail's step to the unit every tick,
+and mc2l18's run ENDS on the tick the last sphere is collected. mc2l17 469 → 275 seg, mc2l18
+340 → 97. ⚠ Carries one UNWITNESSED RIDER (measures exactly zero): the (5,27) arm skips the
+credit rather than inflating the hydra's bolt power — same law applied consistently, flagged
+for a player ruling. `MGC_NO_MC2_RIVAL_LADDER_PRICE_DYING_CASTLE` — §5: `GetSpellManaCost_6D710`
+prices off the `CastleEntityIndex_0x3A_58` REGISTER; round 136 landed that on the HUMAN column,
+the RIVAL twin still priced off a pool scan filtering `flags & 0x400 == 0`, so a level-0
+destruction (reap bit stamped before the ladder drain) took the castle-less arm. ⚠ THE FIX IS A
+FALLBACK, NOT THE REGISTER — the faithful version gives `rival_castle` the rival's own register,
+but ~20 rival-AI gates read that scan: a separate, wider law, BANKED.
+
+**The last wave (digs W13 + W12) added five more, and certified a second take.**
+`MGC_NO_MC2_SPEED_SIGN_CMD` — `GetScroll_69DB0` takes the Speed token's direction from the
+caster's `speed_0xc_12`, the flight block's COMMAND word (`NETHERW.EXE` 0x8e5f8), not
+`actSpeed`; the tree had written that discrepancy down and DISMISSED it as "only while a
+decelerating carpet crosses zero", and mc2l33 t=8,896 is exactly that — **mc2l33 CERTIFIED,
+16,204 boundaries bit-exact, off one bit.** ⚠⚠ It needed a THIRD SEAT that only the gate could
+see: the enhanced tier keeps no retail command register at all (measured `tgt_speed` =
+`act_speed` = 0 after 30 reverse-thrust steps that genuinely drift the flyer backward), so the
+law as first landed would have boosted forward while flying backward there.
+`MGC_NO_MC2_FLOOD_HUMAN_Z_PULL` — the quake's vertical pull on the human was never ported
+though `flood.rs`'s own header banked it (mc2l23 35 → 13 seg, mc2l18 97 → 59).
+`MGC_NO_MC2_TOWNIE_TARGET_REAP_BLIND` — §5 again: `m12_site_reap_blind` three call paths over.
+`MGC_NO_MC2_TRADER_INVALID_TARGET_RETURN` — the invalid-handle arm RETURNS, spending no draws.
+`MGC_NO_MC2_PENDING_COMMIT` — ⭐⭐ **there is no cancel edge**: a re-commit of the spell a hand
+already holds moves neither a hand pointer nor `sel[]`, which was all the recovery watched;
+**1,008 `hand_pending → 0` edges across 40 takes, the 40 that move nothing else ALL carry a
+fresh select toast naming that hand's own spell** (mc2l19 hz 4,893 → 12,664).
+
+**The six laws** (all kill-switched, all A/B-proven one switch at a time, full-corpus
+re-swept after each): `MGC_NO_MC2_SWITCH_REARM_POLARITY` (mc2l18 3,608 -> 340 segments; the
+rearm probe takes `want` as an ARGUMENT, and the port folded it into the call site — the same
+expression for an ENTER switch and the exact INVERSE for a LEAVE switch; **MC1 has the
+identical bug and the fix landed on both columns**), `MGC_NO_MC2_SV_WATCH_IMPORT` (mc2l21 986
+-> 11), `MGC_NO_MC2_BASE160_RECOVER` (mc2l22-new horizon 0 -> 2,661; **a capture taken before
+its process ever saved reads `base160` = 0, which stamps the stand-in behaviour row 59 on all
+645 live records**), `MGC_NO_MC2_SUICIDE_STALE_KILLER` + `MGC_NO_MC2_REVIVE_TICK_TURN`
+(mc2l24-crazy horizon 12,643 -> 53,387; retail's killer latch `word_0x24_36` is STICKY and the
+port's Shift+K witness demanded it be clear — A and D land together), and
+`MGC_NO_MC2_INTAKE_DROPS_DEAD_HUMAN` (the re-certification above). Gate 1,201/0, fixtures
+563/563, `SNAPSHOT_VERSION` unchanged, `DEFAULTS_VERSION` 31 -> 32 (one new patch option,
+`mc2_orphan_balloon_reap` — a player-reported retail bug the port already reproduced
+bit-exactly; see `docs/DEVIATIONS.md`).
+
+## ROUND 144 (2026-09-17) — THE ROUND-143 FIXTURE DEBT, PAID BY MEASUREMENT
+
+Round 143 landed thirteen laws and cut **zero fixtures**; the player spotted it at the close.
+This entry records how the debt was paid, and the instrument matters more than the tally.
+
+**⭐⭐⭐ THE REVERSION PROBE, RUN OFF THE KILL SWITCHES.** `docs/CONFORMANCE.md` defines a
+fixture candidate as `divergent PRE-FIX ∧ raw-clean at HEAD`, with a pre-fix binary out of a
+worktree supplying the left conjunct. **A LAW'S OWN KILL SWITCH IS A PRE-FIX BINARY THAT NEEDS
+NO WORKTREE**, and `extract --sample-every 1` emits exactly the set the conjunction needs (it
+selects on `PairDiff::clean()` — the same predicate the suite runner grades with). So for every
+law, over every take that could plausibly witness it:
+
+```
+conform extract <take> --out head.json --sample-every 1
+conform --env MGC_NO_MC2_<LAW>=1 extract <take> --out off.json --sample-every 1
+candidates = ticks(head) − ticks(off)
+```
+
+Eleven takes × thirteen laws is under ten minutes of wall clock (mc2l33's 16,204 pairs grade in
+7.5 s), and the answer is a MEASUREMENT rather than a judgement call: it names the witness tick,
+proves non-vacuity before a byte is cut, and proves the negative — "no fixture can see this" —
+just as firmly.
+
+**SEVEN LAWS TOOK FIXTURES, and the probe found each one's witness for free:**
+
+| law | fixture | witness |
+|---|---|---|
+| `CENSUS_CREDIT_HOME` | `mc2l17/the-mana-census-credits-its-owner-tag-at-0x8c` | t=15,059 slot 4 `mana_max` 2300/100 |
+| `RIVAL_LADDER_PRICE_DYING_CASTLE` | `mc2l18/a-rival-ladder-mail-prices-off-the-castle-it-just-lost` | t=6,633 slot 556 `mana_max` 1500/5000 |
+| `PENDING_COMMIT` | `mc2l19/a-pane-commit-that-moves-no-pointer-still-re-prices` | t=5,936 slot 39 `mana_max` 5000/1500 |
+| `TRADER_INVALID_TARGET_RETURN` | `mc2l19/a-trader-s-invalid-target-returns-and-spends-no-draws` | t=4,893 slot 447 `speed` 18/30 |
+| `SV_WATCH_IMPORT` | `mc2l21/a-severed-stagevar-watch-row-grazes-it-never-shadows` | t=550 slot 131 `rand`, 1 of 933 |
+| `INTAKE_DROPS_DEAD_HUMAN` | `mc2l22/the-rival-intake-drop-has-no-human-exemption` | t=10,019, 166 extra records |
+| `SUICIDE_STALE_KILLER` | `mc2l24/the-self-kill-witness-survives-a-sticky-killer-latch` | t=12,643 slot 116 `life` −1/10000 |
+
+Each was re-verified through the suite runner itself, one switch at a time: all seven pass at
+HEAD and **exactly one goes red per switch, with no collateral**.
+
+**SIX LAWS TOOK UNIT TESTS, AND THE PROBE IS WHY THAT IS NOW A FINDING RATHER THAN AN EXCUSE.**
+`SPEED_SIGN_CMD`, `FLOOD_HUMAN_Z_PULL`, `SWITCH_REARM_POLARITY`, `TOWNIE_TARGET_REAP_BLIND`,
+`REVIVE_TICK_TURN` and `BASE160_RECOVER` return **zero candidates across all nine MC2 intake
+takes** — pose lanes are pinned by `exec_pair_mc2`, `dword_0x10_16` is not in the obs schema,
+and `base160`'s only witness is pair **t=0**, which has no `t-1` and so cannot be cut at all.
+New tests: `a_zero_base160_is_recovered_from_the_pool_base_and_validated`,
+`the_revive_tick_takes_no_grey_screen_turn`,
+`the_quake_pulls_the_human_down_as_well_as_sideways`,
+`a_townie_keeps_rallying_to_a_dwelling_reaped_this_tick` (villager + archer),
+`the_trader_rally_target_is_reap_blind_and_an_invalid_one_returns` (the third call path — A LAW
+ON ONE CALL PATH IS NOT LANDED), and
+`a_leave_switch_holds_its_rearm_while_any_wizard_is_outside`.
+
+**⚠⚠⚠ AND THE KILL-SWITCH PROOF CAUGHT A VACUOUS TEST THAT WAS ALREADY IN THE GATE.**
+Round 143's own `mc2_speed_direction_follows_current_velocity` — the one test the whole round
+touched — **passed with `MGC_NO_MC2_SPEED_SIGN_CMD=1`**. Every arm of it set the pose speed and
+`set_mc2_cmd_speed` to the SAME value, so it could not tell the two readings apart; it had been
+updated to keep working under the new law, not to witness it. The discriminating arm is the only
+shape in which the readings differ, and it is mc2l33 t=8,896 itself: pose `speed` −112 with the
+command word zeroed by the cave wall, which must boost FORWARD. ⭐⭐⭐ **RUN THE KILL-SWITCH PROOF
+ON UNIT TESTS TOO, NOT JUST FIXTURES — AND ESPECIALLY ON A TEST THAT WAS *EDITED* BY THE LANDING
+RATHER THAN WRITTEN FOR IT.** A test edited to keep passing is the exact shape of a test that
+cannot fail.
+
+**⚠⚠ THE DEBT MEMO'S OWN ⭐⭐⭐ WAS WRONG.** Round 143 closed with "A POSE LAW *IS* FIXTURABLE",
+written after `--classify`'s INHERITED tag was found meaningless on a `sig=pose:*` head. The tag
+is indeed meaningless there — but the conclusion does not follow, and the A/B refutes it
+directly: mc2l33 t=8,896 CONFORMS IN BOTH ARMS, because `exec_pair_mc2` pins the pose by
+construction. A pose law is fixturable only if it ALSO moves a world lane. ⭐⭐ Correcting an
+instrument's blind spot is not the same as establishing the opposite.
+
+## ROUND 144b (2026-09-17) — **mc2l19 AND mc2l20 CERTIFIED**, TWO LAWS
+
+Two parallel digs, two laws, two levels closed end-to-end. Both kill-switch proofs are
+ORTHOGONAL — each switch restores exactly its own take's original row and leaves the other
+certified — and both laws carry a fixture cut by the reversion probe above.
+
+**`MGC_NO_M27_V34_FIRE_RESIDUE` — AN ACTING (10,0) FIRE PUTS A POINTER BACK ON THE m27 `v34`
+SLOT.** `sub_29A90`'s `[ebp-0x10]` is stack residue from whichever entity handler ran last
+before the m27 body. The port modelled the (10,45) house, the (10,34) pad, the (11,x) switches
+and the 0xDA aim pass — and had nothing for `sub_30D50`, the (10,0) fire, which on mc2l19 sits
+at slots 1/2/4, i.e. BETWEEN the house at slot 3 and the body at slot 5. Only the ACTING arm
+publishes: the fuse arm (`if (dword_0x10_16 & 3) dword_0x10_16--;`, EF:22726) makes no call at
+all, and the reap arm (`DisableEntityDrawing04_57F10`, file 0x7C710) is a LEAF bottoming out at
+W-36. The acting arm's last deep call is `sub_580E0` (file 0x7C8E0), whose `push ebp` lands the
+caller's own frame pointer on W-64 — positive, even, far above 4, so the body keeps `f71 = 4`
+AND TAKES the wander draw where the house's odd 29 makes it SKIP.
+
+⭐⭐ **A HANDLER'S OWN LOCAL-FRAME SIZE RE-HOMES WHICH REGISTER LANDS ON THE `v34` SLOT.** The
+fire's prologue carries `83 ec 04` — one dword of locals — where the house has none, so every
+frame beneath it sits FOUR BYTES LOWER and `sub_580E0`'s saved EBP takes the slot the house
+leaves ESI on. That single `sub esp,4` is the whole difference between the two publishers.
+
+Discriminated 20/20 on the take: of the twenty state-0 wander-gate openings that read the
+house's 29, retail SKIPS the draw on the seventeen where slot 4 has already recycled to class 0
+and TAKES it on the three where slot 4 is still an acting (10,0) — t=12,665, t=12,949, t=13,388,
+**exactly the take's three divergent boundaries**. mc2l19 3 devs → **0, horizon END**.
+
+**`MGC_NO_MC2_FULL_STOP_KILLS_SPEED` — THE FULL STOP HAS THREE REGISTER WRITES, AND THE PORT
+TRANSCRIBED TWO.** `PlayerEvents_51BB0` case `0x27` ("Full stop player", EF:38260-72;
+`NETHERW.EXE` file 0x773DC) zeroes the carpet's `actSpeed_0x82_130` (0x773F1), the flight
+block's `speed_0xc_12` (0x77400) **and** `Entities[SpellEnabled[3]]->word_0x2E_46` (0x7740F
+loads the handle, 0x77425 stores the zero) — the Accelerate manifestation's burst counter. The
+port carried the two speed zeros in `Mc1Input::mc2_park` and never the third.
+
+**THE PHASE IS THE WHOLE LAW.** Retail's input pass runs AHEAD of the frame function, so by the
+time `GetScroll_69DB0` reaches the token's slot its own `word_0x2E_46 > 0` guard skips the body
+whole: `sub_68DE0` never runs, nothing pins the wizard's `manaRegen`, and
+`AddPlayer03_00_5E010` pays the full quantum on that very tick. mc2l20's human armed Speed at
+t=31,726 and the mid-burst pin held the purse FLAT at 742,721 for 99 ticks against a recomputed
+regen of `763984 / 2000` = **381**. ⭐ The +381 at t=31,827 is not a credit anyone adds — it is
+the regen that STOPPED BEING SUPPRESSED. mc2l20 1 dev → **0, horizon END**.
+
+⚠⚠ **IT NEEDED TWO CALL PATHS AND THE FREE RUN ALONE WOULD NOT HAVE LANDED IT.** With only the
+tick-head hunk the take certified but `verify-deltas` stayed RED on the same pair: the pair
+importer's `mc2_applied_mana_delta` reconstructs the pin from the RECORDED PRE-TICK
+`@0x2E = 201`, which retail's input pass had already discarded. `World::mc2_full_stop_import`
+is the importer's half, threaded through `exec_pair_mc2`'s new `full_stop` argument.
+
+⭐⭐⭐ **A PORT FLAG NAMED FOR ITS SYMPTOM HIDES THE REST OF ITS RETAIL STATEMENT.**
+`Mc1Input::mc2_park` IS the recovered witness of `PlayerAction 0x27`, but its name and doc
+describe what it looks like from the outside ("modal park: big map / spell book") rather than
+the retail case it stands in for — and so nobody ever counted the statement's three writes
+against the port's two. When a flag is named for the appearance, the rest of the statement is a
+dig lead.
+
+🏦 Residual, inert today: the port still applies the two speed zeros at the CARPET'S WALK SLOT
+(`flight::mc2_move`'s `if inp.mc2_park`) where retail does them in the input pass. The only
+intervening reader is `World::mc2_cmd_speed` (GetScroll's sign source), and on a full-stop tick
+the token it feeds is already dead — but fold it into the tick-head case if anyone touches this
+again. 🏦 `mc2_park` also has a keyless `frozen` arm beside the BACKSPACE `key_held(input, 14)`
+arm; both now kill the token, which is right if retail really has only the one site that zeroes
+both speed registers (the 40-take sweep found no counter-example), but a dig that ever SPLITS
+those two arms must re-check it.
+
+⏭ **mc2l19-taketwo is NOT closed by either law** (5 devs, unchanged). Its t=12,906 head narrows
+to a hard constraint worth carrying: the port reads the house residue 29, but retail's `b46`
+goes 0 → 1 rather than 4 and it TAKES the draw, so **retail's `v34` there is EVEN and not
+signed-`> 4`**. Nine of that take's ten `v34 == 29` openings are correct, so the house model is
+right and something intervened only there. Ruled out: slots 6..19, the body's own aim/clobber
+gates, the mover's flag write, and any earlier branch's draw. ⏭ mc2l21 looks like the SAME
+family with a different publisher — its m27 body is at slot 2 and the only entity ahead of it is
+slot 1, a `(5,23)` action-184 creature with no `v34` publisher in the tree.
+
+## ROUND 145 (2026-09-17) — TWO RE-LAUNCHED DIGS, TWO LAWS; mc2l21 10 → 2, mc2l23 12 → 4
+
+Both digs had been KILLED mid-flight at the round-144 roll-over, in sandboxes since cleaned.
+Both briefs were re-issued verbatim from the hand-off note; **one hypothesis was confirmed and
+one was refuted, and each produced a law.** Every fixture below is kill-switch proven (pass with
+the law on, regress with it off, on the named lanes).
+
+**`MGC_NO_M27_V34_LEVIATHAN_RESIDUE` — A QUIET (5,23) PATROL TICK LEAVES ITS OWN YAW ON BOTH
+`v34` DWORDS.** The brief said "the m27 `v34` family with a fifth publisher, and the `(5,23)` at
+slot 1 is the suspect". Right about the entity, **wrong about the mechanism**: the value is not a
+register left by a deep callee, it is the move core's **own argument pushes and its single stack
+local**. `sub_27950` (file 0x4C150, `53 56 57 55 89 e5 83 ec 04` — the fire's frame shape,
+`ebp = W-20`) opens with `push ebx / call sub_1B8C0` (0x4C15C-5D, the move core, same prologue ⇒
+`ebp = W-48`). Inside it **every commit arm ends on the turn `sub_58350(yaw, target_yaw, v_4,
+v_2)`**, whose four pushes land on W-56/W-60/**W-64**/W-68 — so the third push,
+`xor eax,eax / mov ax,0x20(%ebx)` (0x401AE), parks the dweller's **zero-extended `+0x20` (target
+yaw)** on the 0xD8/0xDA/0xDB dword. And the retry head stores `xor eax,eax / mov ax,0x1c(%ebx) /
+mov %eax,-0x4(%ebp)` (0x40274-7A) — the move core's ONE local, `[ebp-4] = W-52`, the 0xD9 dword —
+so a move that had to ROTATE (result 3 or 4) also leaves its **pre-retry `+0x1C`** there, while
+results 1 and 2 never touch W-52 at all. The later arms overwrite both with pointer-class values
+and the law models each: the `f71 == 2` re-aim ends on `EuclideanDistXY_58490` (isqrt return on
+W-52, the dweller's `&position` in ECX on W-64); the `== 1` arm always calls something deep; and
+`sub_28110`'s post arms end on the 4-argument mode setter whose `push $0` lands on W-52 — a
+literal ZERO, the `v34 == 0` wizard-scan arm. `sub_28420` (0x4CC20) is a LEAF (W-40) and
+`sub_27FE0` (0x4C7E0) bottoms out at W-48, so neither disturbs the slot. ⚠ SCOPED TO SUB-STATE 0:
+the action-185 sibling `sub_27B20` (0x4C320) is `53 56 55 89 e5 83 ec 04` — THREE pushed
+registers — so none of this arithmetic carries. Decompile EF:18068 / 8754 / 18462 / 18614 /
+18388 / 18400 / 40696, banner-resolved. **mc2l21: 11 segments / 10 devs / horizon 11,459 →
+3 / 2 / 14,867.**
+
+⭐⭐⭐ **A `v34` PUBLICATION CAN BE ADJACENCY-SCOPED, AND THE ROUND-127/128 PUBLISHERS ARE THE
+EXCEPTION, NOT THE RULE.** The dweller's leaving survives only as far as the NEXT dispatched
+handler, because every dispatched record re-occupies those frames and what an unmodelled handler
+leaves there is the seed's class. `Gen::m27_v34_enter` therefore drops the publication unless the
+body is the very next dispatched record (a record the walk merely calls
+`DisableEntityDrawing04_57F10` for — a LEAF, deepest write W-36 — counts as dispatched, which can
+only restore the pre-law seed). ⭐ **THIS IS ALSO THE SHAPE OF mc2l19-taketwo's BANKED
+CONSTRAINT** — nine openings read the house's 29 correctly and one does not — so that take's
+t=12,906 head is now a named hypothesis rather than a mystery.
+
+⭐⭐ **THE PER-BRANCH DRAW-COUNT ORACLE SCORED 21/21 WHERE THE BARE SEED SCORES 13/21**, and the
+eight it gets right that the seed does not are exactly the take's eight body-2 divergent
+boundaries. Two traps the instrument records for its successors: rows where the body's `b39 == 1`
+are **VACUOUS** (the pre-pass decrements it to 0, so the whole state-1 block is skipped — four
+such rows look like "odd, ≤ 4" and say nothing), and **a body's action can ALTERNATE 0xD9/0xDA
+tick by tick**, so a single-dword reading of one take can contradict itself (t=12,348 vs t=12,908
+carry an identical dweller record and opposite parity — that pair falsified the dig's first
+model). FIXTURES: `mc2l21/a-dwellers-rotate-retry-leaves-its-pre-retry-yaw` (t=12,647, slot 3,
+the 0xD9 dword) and `mc2l21/a-quiet-dweller-patrol-leaves-its-target-yaw` (t=12,719, slot 91, the
+0xDA dword) — 6 reversion-probe candidates, 0 lost.
+
+**`MGC_NO_MC2_FLOOD_WALK_POSE` — THE QUAKE'S SHOVE IS A POSITION WRITE AT THE QUAKE'S OWN POOL
+SLOT.** ⭐ **THE BRIEF WAS REFUTED OUTRIGHT, AND SO WAS ROUND 143'S NOTE ON THIS TAKE.** There is
+no "32-tick fall": the wizard is being dragged by a `(10,67)` quake / Gravity Well at slot 101,
+and `sub_39B60` (banner `//----- (00039B60)`, EF:29057) implements the drag as
+`CopyEntityPosition_57CF0(victim, &predictedAxis)` — `NETHERW.EXE` file 0x5E592, `push %ebx` =
+the victim record — after `MoveEntity_57FA0(&axis, tan2(victim,quake), 0, v6)` (0x5E4DA) and the
+wizard arm's vertical pull (`mov 0x3f(%ebx),%ah` / `cmp $0x3,%ah` / `cmpb $0x0,0x40(%ebx)` at
+0x5E4EF-FA, then the `0x1000 − v5` block at 0x5E500-533). mc2l23's human keeps casting Meteor
+from his equipped `(15,9)` at slot 105 while the carpet is slot 207, so `101 < 105 < 207` and
+retail's `sub_6AB00` (EF:57134, file 0x8F300, reach `push $0x2800` = 10,240 at 0x8F44D) reads
+`position_0x4C_76` **already shoved this tick**. The port funnels the two legs through one-shot
+mailboxes (`Gen::player_knock` horizontal, `Gen::player_flood_pull` vertical) and spends **both at
+the CARPET's dispatch** — the right phase for the flight state, and one walk position too late for
+every reader in between.
+
+⭐⭐⭐ **THIS IS THE LAW THE TREE ALREADY CARRIED FOR THE DOOMSDAY HURL BEAM
+(`mc2_hurl_walk_pose` / `mc2_hurl_walk_republish`), ONE CHANNEL OVER — A LAW LANDED ON ONE
+CHANNEL IS NOT LANDED.** The fix re-derives the displacement at the reader and **never drains**:
+the carpet's own dispatch still spends both legs, so the flight state and the end-of-tick pose are
+untouched and only the MID-WALK publication moves. Arithmetic at the head is exact — shove
+`(−56, +17, 0)` and pull 19, and solving retail's axis stamp back through `MoveEntity(origin, yaw
+1671, pitch 5, 10240)` gives an origin that is the tick-top position plus that shove, while **both
+the carpet's tick-top and its end-of-tick positions are geometrically impossible origins**
+(|dest − pos| 10,284.5 and 10,208.2 against a step that must be 10,240). **mc2l23: 13 segments /
+12 devs / horizon 6,932 → 5 / 4 / 6,940; mc2l18 59 → 56 segments, 58 → 55 devs**, a second,
+independent gravity-well witness on another level. FIXTURES:
+`mc2l23/a-quake-shove-is-published-at-the-quakes-own-walk-slot` (t=6,932 — two `(9,3)` meteors)
+and `mc2l18/a-quake-shove-reaches-every-reader-walked-behind-it` (t=27,158 — three simultaneous
+readers, and a displacement an order of magnitude smaller that still resolves to the unit, so it
+discriminates the arithmetic and not merely the presence of a republication). 20 reversion-probe
+candidates across the two takes, 0 lost.
+
+🏦 **RETAIL SHOVES THE HUMAN TWICE IN ONE QUAKE SWEEP — REGISTERED, NOT IMPLEMENTED.** mc2l23's
+residual t=6,941 head is exactly one extra shove (`dist ≈ 88`, pull 22): `sub_39B60`'s 26×26 cell
+sweep re-heads the moved victim in the **destination** cell (`NETHERW.EXE` 0x5E5E6
+`mov 0x16(%ebx),%ax`), so a victim pushed into a not-yet-visited cell is shoved **again** — which
+the tree already documents for a POOL victim (mc2l6-rsg t=26,325, `flood.rs:~470`). The port's
+human arm is a special case OUTSIDE the cell walk and can only fire once. ⭐ The witness: the
+shove at t=6,941 is the only one in the window that crosses a tile edge (`y 11,775 → 11,803`
+crosses `46·256 = 11,776`). Fixing it needs the human's shove moved inside the disc walk with an
+**accumulating** displacement transport — the current `(bearing, dist)` mailbox cannot add two
+shoves — so it is a real change, not a hunk. t=6,962 / 6,964 are almost certainly downstream of
+it. ⏭ mc2l23's t=17,830 is a separate lane and untouched: a death/respawn event (`pose.act_speed`
+240 vs 80, eight `(15,*)` scatter jars alive in retail and parked at life 0 in the port).
+
+**`MGC_NO_MC2_PIECE_SCAN_CHAIN_TILE` + `MGC_NO_MC2_PIECE_SCAN_ALLY` — THE `(10,79)` TURRET RING
+SCAN, TWO DECISIONS.** ⭐ **THE BRIEF WAS REFUTED TWICE AND STILL PRODUCED TWO LAWS.** `(10,79)`
+does have an explicit arm in the port's class-10 dispatch (`world.rs:8060`, a full port of
+`sub_3AF00`) — nothing falls through; and the "273 deviations on one species" reading was a
+mis-count: the head census is `(10,23)`×112 · `(9,9)`×108 · `(9,3)`×72 · `(5,16)`×50 · `(10,0)`×41
+· `(10,67)`×18 · **`(10,79)`×17**. `(10,79)` was only the FIRST divergence, and its 17 heads were
+**two decisions**. Both are now zero.
+
+⭐⭐⭐ **THE RING CENTRE AND THE CHAIN INDEX USE DIFFERENT TILE ARITHMETIC, AND THE HUMAN IS THE
+ONLY CANDIDATE THE PORT HAS TO PLACE BY HAND.** `sub_3AF00` case 3 rounds **its own** scan centre
+(`v36 = (position.x + 128) >> 8`, EF:30204-05, `NETHERW.EXE` 0x5F7DB-E9) — but every candidate it
+can reach is found through `mapEntityIndex_15B4E0`, whose index `AddEventToMap_57D70` stamps with
+**no rounding at all**: file 0x7C570 does `mov 0x3(%esi),%al` (the HIGH byte of `position.y`) /
+`shl $0x8,%edx` / `lea 0x1(%esi),%eax ; mov (%eax),%al` (the HIGH byte of x) / `add %edx,%eax` —
+`((y >> 8) << 8) | (x >> 8)`, EF:40626. Retail's carpet is an ordinary pool record linked by that
+call, so the turret meets it at `x >> 8`; **and so is every record the PORT links — `Gen::link` is
+already `tile((x >> 8) as u8, (y >> 8) as u8)`.** Only the out-of-pool human had to have his cell
+named by hand, and it was named with the CENTRE's rounding. The two disagree exactly on the
+half-tile `x & 0xFF >= 128`, and one tile of x is the difference between SEARCH.DAT ring 12
+(inside the disc) and ring 13 (outside). WITNESS mc2l17 t=6,710, the take's first divergence:
+piece 797 on tile (16,16), human at x=2005 → chain cell 7, rounded cell 8; the port latched the
+human, wound up, and rode the `+160` windup z-boost, `z` 4,896 against retail's 4,756.
+
+⭐⭐ **THE CLASS-5 ARM HAS THREE CLAUSES, NOT TWO** (EF:30331-38; `NETHERW.EXE` 0x5F885
+`cmpb $0xe,0x49(%ecx)` then 0x5F891 `mov dx,0x28(%ecx)` / `cmp %eax,%edx` / `je`): a creature with
+`StageVar2 == 14` whose `parentId_0x28_40` is the turret's own owner is skipped, the charm/alliance
+twin of the class-3 same-owner skip. The port kept the `model != 22` and `id_0x1A` clauses and
+dropped the third, so **any castle whose owner had charmed something near its walls opened fire on
+its own ally**, latched it and rode the windup boost. WITNESS mc2l17 t=12,084, the human's own
+piece 128 against its owner's charmed `(5,16)` at slot 8; that one slot heads five of the take's
+`(10,79) z` segments, each exactly 64 ticks — one `byte_0x3E_62 & 0x3F` scan period — after the
+last. Both seats already existed and are already imported (`Ent::site_z` carries class-5
+`StageVar2`, `Gen::mc2_allied` carries `parentId_0x28`), so **no new field and no snapshot bump**.
+
+⭐⭐⭐ **A COMMENT CLAIMING A LANE IS DELIBERATELY UNMODELLED IS A DIG LEAD, NOT A RULING.**
+`mc2_piece_scan`'s own doc comment called this exemption *"skipped (deliberate: the stage binding
+lives in side-vecs; only shields own summons at own walls)"*. That sentence named where the SEAT
+lives — not a reason the CLAUSE is optional. It has been corrected in place.
+
+**mc2l17: 275 segments / 273 devs / horizon 6,710 → 259 / 257 / 7,066** (17 `(10,79)` heads closed,
+one new downstream head at t=29,694, net −16); **mc2l22-new 25 → 24** for free (t=2,864). 40-take
+sweep: 38 of 40 BRIEF lines byte-identical, the two that moved are both improvements.
+
+⚠ **MEASURED ZERO, RE-MEASURED OVER THE WHOLE TAKE — UNIT TESTS, NOT FIXTURES.** The dig's probe
+was window-scoped; the main session re-ran `extract --sample-every 1` over the FULL takes and
+confirms `ticks(HEAD) − ticks(laws off)` = **∅** on mc2l17 (34,087 clean both arms) and mc2l22-new
+(55,596 clean both arms), 0 lost. The structural reason is clean: the mis-latch lands on
+**`byte_0x46_70`** and **`word_0x96_150`**, and neither lane is graded (`conformance.rs:2298-2320`
+states the `(10,79)` `target96` projection is `port_ent_lanes_mc2` only, "never `obs_project_mc2`,
+so this adds no grading floor"). The divergence only reaches a graded lane (`z`) two ticks later
+via the `+160` windup boost, by which time a pair has re-anchored — the same shape as the
+round-127/128 `v34` laws. WITNESSES: the free run above plus two unit tests in
+`mc2/castle.rs`, both **kill-switch proven and orthogonal** (each switch fails exactly its own
+test): `a_turret_meets_the_human_at_the_chains_tile_not_the_centres_rounding` and
+`a_turret_does_not_shoot_its_owners_own_charmed_creature`. Each carries a POSITIVE CONTROL — a
+second assert that passes in both arms — so a future edit cannot quietly turn either into the
+vacuous shape round 143 shipped.
+
+⛔ **`(10,79)` IS NOT mc2l21's SIXTH `v34` PUBLISHER — IT IS TRANSPARENT, AND THAT IS A NEW
+MECHANISM.** `sub_3AF00` is `53 56 57 55 89 e5 83 ec 30` — four pushes and **0x30 of locals** — so
+`ebp = W-20`, `esp = W-68`, and **`[ebp-0x20]` IS W-52 and `[ebp-0x2C]` IS W-64**. ⭐⭐⭐ **THE
+PIECE'S OWN LOCAL FRAME COVERS BOTH `v34` DWORDS**: every previous publisher writes them through a
+*callee's* pushed register, this handler owns them as locals (`89 45 e0` at 0x5F7E9 stores the scan
+centre to `[ebp-0x20]`; `8d 45 d0 / 50 / 8d 45 d4 / 50 / 56 / e8 <sub_10130>` at 0x5F8EB passes
+`&[ebp-0x2C]`, and `sub_10130` writes both out-params unconditionally before choosing its return
+code). And `esp = W-68` means **no callee of the piece can reach W-52 or W-64**. Consequence: a
+`(10,79)` publishes ONLY on a scan tick (`byte_0x3E_62 & 0x3F == 0` and `byte_0x46_70 == 3`) and is
+**transparent on the other 63 ticks in 64**. mc2l21's body 101 has three `(10,79)` predecessors
+(slots 88/89/98) whose scan ticks are `t ≡ 22/31/32 (mod 64)` while the four residue ticks are
+`t ≡ 8/14/20/24` — **no piece scans at any of them**. The real publisher is further up: slot 87,
+a `(5,15)` at action 121 at t=14,855 and a `(10,17)` meteor at action 17 at t=15,319.
+🏦 **The concrete banked hunk**: `Gen::m27_v34_enter`'s adjacency drop exempts only the class-5
+action-233/234 NULL-handler members, and **a `(10,79)` on a non-scan tick belongs in that
+exemption list** — proven from the binary. Deliberately NOT landed: an exemption with no upstream
+publisher modelled measures nothing. ⏭ Next brief: *what do the `(5,15)` guard and the `(10,17)`
+meteor leave on W-52/W-64, and does adding `(10,79)`-non-scan to the transparency list then close
+mc2l21's last two heads?* The seed's **exactly 0** reading at t=14,856/14,862 is a `push $0` — the
+same signature as the m23 mode setter's 4-argument call.
+
+🏦 Two residuals registered, neither witnessed on the corpus: the port checks the human BEFORE the
+cell's chain, where retail's pooled carpet is walked at its own head-insertion seat (matters only
+when the human shares a cell with another hostile — MC1's `ball_impact` already models this); and
+the port omits retail's `v3.un_0x6E8E == 0` guard after `AddE7EE0x_10080`, which is harmless
+because that allocator never returns 0 (`Events.cpp:133`, `for (i = 1; …)`).
+
+**`MGC_NO_MC2_SPEED_BROKE_SURVIVES` — SPEED IS THE ONE MANIFESTATION OF TWENTY-SIX WHOSE
+*UNAFFORDABLE* TICK DOES NOT COLLAPSE ITS BURST WINDOW, AND A DYING WIZARD IS UNAFFORDABLE.**
+Twenty-five MC2 handlers close their effect body with a bare `else { word_0x2E_46 = 1 }`
+(EF:56236 / 56372 / 56700 / 56819 / 57041 / 57107 / 57388 / 57586 / 58049 …) and the port
+implements that as ONE SHARED ARM. `GetScroll_69DB0` (banner `//----- (00069DB0)`, the arm at
+EF:56567-70) is the exception, and ⭐ **it is the only function in the whole image that reads
+`word_0xe_14` at all** (`grep -n 'word_0xe_14)'` returns exactly two hits, both inside it): its
+collapse is guarded on the BRAKE WORD ALONE, so an unaffordable tick skips the effect body and
+falls through to the plain `--word_0x2E_46`. `NETHERW.EXE` file 0x8E779 (VA 0x69F79) is the join
+of the afford `je` at 0x8E61F and the brake `jne` at 0x8E630: `mov 0xa4(%esi),%eax` /
+`cmpw $0x0,0xe(%eax)` / `je 0x8e78c` — **no brake ⇒ no collapse** — then `movw $0x1,0x2e(%ebx)`
+on the brake arm only, and the shared `mov 0x2e(%ebx),%cx ; dec %cx ; mov %cx,0x2e(%ebx)` with
+`jne 0x8e7cd`, zero falling into `imul 0x84(%esi),%di` — the ±minSpeed restore. And the afford
+test `sub_68D50` (banner `//----- (00068D50)`, EF:55901-03; file 0x8D55B `cmpl $0x0,0x90(%edx)`
+then 0x8D568 `cmpl $0x0,0x8(%edx)`) bails on the **CASTER's own vitals** — `mana < 0` then
+`life < 0` — so a wizard who has just been killed is unaffordable for every remaining tick of his
+death fall while his Speed window keeps counting down untouched.
+
+⭐ **THE BRIEF'S CONSTRAINT 2 DESCRIBED THE SYMPTOM PERFECTLY AND MISREAD IT.** It said t=3,257
+"is NOT an m27 head — it is a BIRTH TICK: slot 6 becomes `(10,40)` action 42 and the whole
+class-15 band wakes". Every word is true, and nothing about the birth was wrong: **that "birth"
+IS retail's death touchdown**, and the defect was one register 80 units off, upstream of it.
+mc2l19-taketwo t=3,256: the player is flying BACKWARD under Speed (`cmd_speed`/`actSpeed` −240 at
+t=3,243, −160 from t=3,244), takes lethal damage at t=3,256 (`life` −1200, `actionIndex` 0 → 2)
+and touches down at t=3,257. Retail's Speed token (slot 16, the `(15,3)`) records `word_0x2E_46`
+**287 → 286** — a plain decrement — and the flight columns stay pinned at **−160** through the
+landing and the whole dead wait (t=3,258..3,320 all −160). The port collapsed the counter to 1,
+decremented it to 0 in the same tick and mailed `pending_speed_base = −80`, so the corpse fell 79
+units short. **mc2l19-taketwo: 7 segments / 5 devs / horizon 3,256 → 6 / 4 / 12,905** — segment 1
+now runs t=2,528..12,906 bit-exact, 10,377 boundaries — and it carried **mc2l22-new 24 → 23** and
+**mc2l23 5 → 4** for free.
+
+⚠⚠ **BOTH HALVES OF THE RETAIL `else` ARE REQUIRED, AND THE SECOND ONE IS WHAT MAKES THE LAW
+MEASURABLE.** The Speed slipstream puff lives inside the same `else` (EF:56602-10), so an
+unaffordable tick spawns no `(10,2)` either. With only the register hunk the pair stays dirty (the
+phantom puff rotates the allocation) and **the reversion probe measures ZERO** — verified by A/B.
+That gate is inert in isolation, because while the window still collapsed on the broke tick the
+token died before a fourth tick could come round: ⭐ **a second hunk that measures nothing on its
+own can be the one that makes the first one witnessable.**
+
+FIXTURE: `mc2l19/the-speed-window-survives-its-casters-death-fall` (t=3,256, source
+mc2l19-taketwo — the directory is the LEVEL and the take is provenance). ⭐⭐ **THE HEAD'S
+SIGNATURE IS `sig=pose:*` AND THE LAW IS STILL FIXTURABLE**, which is round 144's correction used
+correctly rather than as a rule of thumb: `sub_5E310`'s touchdown places the `(10,40)` grave and
+scatters all 26 spell tokens from the carpet's MID-TICK position, so the pair is dirty on world
+lanes too — the kill switch regresses it on `extra:10,1` plus nine `(10,1)` field lanes, not on
+the pinned pose. Probe: GAINED `[3256]`, LOST `[]`.
+
+⚠ **THE PROBE'S `LOST` TICKS WERE RUN DOWN, NOT WAVED THROUGH** — 50 on mc2l22-new and 8 on
+mc2l23. They are **shared-world artefacts of the pair harness**, which `fixtures.rs::isolate_worlds`
+documents in terms ("`retail_import_mc2` does not reset every cross-pair latch"): under
+`MGC_FIXTURE_ISOLATE=1` the mc2l22-new window scores 179/179 with **LOST=0** where the shared world
+scored 164/175, and mc2l23's eight do not reproduce in a slice in either mode. The decisive check is
+that the **full gate is green — 576 fixtures, 0 regressions, 0 not reached** — so nothing enforced
+moved, and both takes' free-run rows improved. 🏦 But the instrumentation found a real defect while
+proving it: on mc2l22-new the Speed unafford arm fires **exactly once in the take** (pair ≈20,795)
+on token slot 106, a `(15,3)` the recording shows at `action45 = 10` — a dropped/jarred token with
+`word_0x2E_46` frozen at 257 — because **the port's `mc2_book.ent[3]` points at that jar while
+retail's live manifestation is slot 143.** That phantom book binding is a separate, pre-existing
+port defect and a dig lead of its own.
+
+🏦 Secondary lead, registered: `World::mc2_afford` (`mc2/cast.rs:2512`) implements `sub_68D50`'s
+caster gate as `self.player.state != LifeState::Alive` where retail is `mana < 0 || life < 0`.
+They agree on this take (life −1200) but part at `life == 0` and wherever the port's `LifeState` is
+Falling/Dead with a non-negative recorded life.
+
+**`MGC_NO_MC2_AIM_ALLY` — THE CREATURE WALK'S ROSTER PREDICATE HAS THREE CLAUSES, NOT TWO, AND
+IT IS THE SAME THIRD CLAUSE AS THE TURRET'S.** ⭐⭐⭐ **A LAW ON ONE CALL PATH IS NOT LANDED —
+TWICE IN ONE ROUND, ON THE SAME CLAUSE.** Dig W79 landed the own-parent alliance exemption on
+`sub_3AF00`'s turret ring scan earlier this round; `sub_67CB0`'s per-model creature walk is the
+OTHER home and was still missing it. Retail (EF:55265-69 `case 9`, identical at EF:55159-63 and
+EF:55312-16 `case 0x10`) reads `cand->id_0x1A != shot->id_0x1A && cand->byte_0x39_57 &&
+(cand->StageVar2_0x49_73 != 14 || cand->parentId_0x28_40 != shot->id_0x1A)`; the port kept the
+first two clauses and dropped the third. `NETHERW.EXE` file 0x8C570 (VA 0x67D70) — identified as
+`case 9` by its OWN OPERANDS rather than by shape (`minSpeed*maxLife` at 0x8C4FC, the `cmpl $0x1d`
+bucket loop at 0x8C5BB, `push $0x200` pitch cone at 0x8C594, ⚠⚠ A NEAR-IDENTICAL SIBLING WILL EAT
+YOUR CONSTANT): `cmpb $0xe,0x49(%esi)` / `jne 0x8c594` / `xor %edx,%edx` /
+`movswl 0x1a(%ebx),%eax` / `mov 0x28(%esi),%dx` / `cmp %eax,%edx` / `je 0x8c5ae` — my own ally,
+skip. ⚠ `case 0x19` (the `(9,25)` alliance carrier, EF:55334-46) is the ONE arm that does not carry
+the clause — it screens with `sub_3A7F0` instead — hence the `charm_eligible` guard on the port's
+arm.
+
+⭐⭐⭐ **ONE DECISION ON ONE TICK GENERATED FOUR HEAD FAMILIES AND A 130-TICK BURST — COUNT
+DECISIONS, NOT ROWS.** At t=27,218 the human (carpet 91) releases a charged tier-0 Lightning
+(`charge` 162 → 1). Retail's beam lands at slot 289 with `word_0x96_150` = **0** — its acquisition
+found NOTHING — and flies the caster's own 1745/1957, walking 10 steps and laying an 81-node trail.
+The port locked slot 5, a `(5,16)` wyvern with `StageVar2 = 14` and `parentId_0x28_40 = 91`, **the
+human's own charmed creature**; it snapped to 1798/1938, walked only 8 steps and laid its trail
+down the wrong ray. Tier 0 is RAPID, so it re-fires every tick: mc2l17's `(9,9)`×108,
+`(10,23)`×112, `(9,3)`×72 and `(10,0)`×41 head families are ALL downstream of that single
+predicate. **mc2l17: 259 segments → 75 on this law alone**, and the 400-tick slice
+t=27,000..27,400 — 112 heads at baseline — becomes BIT-EXACT.
+
+**`MGC_NO_MC2_ALLY_SEAT_RECYCLE` — THE ALLIANCE PARENT SEAT DIES WITH THE RECORD, NOT WITH THE
+CREATURE.** `sub_1E9C0` clears `parentId_0x28_40` on exactly one leg — the charm's EXPIRY
+(EF:11019-22, which sets `StageVar2 = 10`, `word_0x96_150 = 0` and `parentId = 0` together) — and
+**nothing clears it on death**: a killed-but-unreaped record keeps its owner word until
+`NewEvent_4A050` overwrites the slot. The port's parent rides the `mc2_allied` side map and
+`mc2_alliance_clock`'s dead guard dropped it the moment `life` went negative, so `obs_project_mc2`
+— which reads `owner28` for a class-5 `site_z == 14` record straight out of that map — published 0.
+The seat now drops in `Gen::new_event`, beside the `mc2_aura_claim` drop that is its exact
+precedent. WITNESS mc2l17 pair 24,423: wyvern slot 8, a `(5,16)` at action 133, **`owner` retail 91
+/ port 0 — and that single row IS the pair.** The record is dead (`life` −1012) and NOT reaped
+(`flags` 12, so not even a ghost) with `word_0x2E_46` = −11,806: ⭐ the state-7 expiry can never run
+on a wyvern (cf. `mc2_wyvern_alliance_brain`), so retail simply holds `owner28 = 91` for the nine
+ticks between the kill and the reap. Seven more wyverns repeat it — the take's fifty single-row
+`(5,16) owner` heads. **mc2l17: 75 → 26 segments / 24 devs.**
+
+⚠ **`Mc2SlotMap` IS HASHED** (custom `Hash`, transparent only while empty), so this law changes
+when an entry leaves `Gen` state and could have moved every golden. The full gate was re-run in the
+main tree: **1,210 tests, 0 failed, NO GOLDEN MOVED.**
+
+FIXTURES, both kill-switch proven and orthogonal (each switch regresses exactly its own file):
+`mc2l17/a-shot-does-not-acquire-its-casters-own-charmed-ally` (t=27,217 — fifteen `(9,9)` trail
+nodes MISSING plus the `(10,23)` blast, 112 probe candidates, 0 lost) and
+`mc2l17/the-alliance-parent-seat-dies-with-the-record` (t=24,423 — the single `field:5,16:owner`
+row, 45 candidates, 0 lost).
+
+**⭐ mc2l17 ACROSS THE WHOLE ROUND: 275 segments / 273 devs → 26 / 24.** The dirtiest take in the
+MC2 corpus, closed by four decisions (two turret, two roster/seat) and none of them in the species
+the head census pointed at first.
+
+⏭ WHAT IS LEFT ON mc2l17 (24 heads), as leads rather than findings: **`(10,67)` slot 526, 18 heads,
+`rand` ONLY, t=35,087..35,140** — one entity burning a different number of draws in two dense runs,
+the biggest remaining family and probably one decision; `(3,1)`×4, the original 7,067/7,754/7,766/
+7,786 INHERITED cluster; and ⭐ **`(5,16)` slot 6 t=33,075 with `(5,20)` slot 65 t=29,694, which
+point OPPOSITE WAYS** — at 29,694 the port expires the charm one tick EARLY (retail `owner 91
+sv2 14`, port `0 / 10`), at 33,075 one tick LATE (retail `owner 0 action 135`, port `91 / 130`).
+That is the charm-EXPIRY tick itself, a distinct off-by-one from the seat law, and it is probably
+`mc2_ally_resolve`'s lease decrement racing `mc2_alliance_clock`'s — the wyvern double-count
+already flagged 🏦 OWED at `mobs.rs:5479` for non-m16 species. `(10,42)` t=28,524 is the registered
+`mc2-painter-oob-build-row-applied-pitch` deviation.
+
+⏭ **HANDED OFF TO A LIVE DIG: the `(10,79)` CASTLE STAGE PIECE IS A CROSS-TAKE SUSPECT.** mc2l21's
+two residual heads are both on body 101, whose walk predecessor at every one of its residue reads
+is slot 98, a `(10,79)` at action 86 — retail reads **exactly 0** at t=14,856 / 14,862 on the 0xD9
+dword (the signature of a 4-argument call's `push $0` landing on W-52) and odd, signed ≤ 4 at
+t=15,320 on the 0xDA one. **And mc2l17's own first divergence is `(10,79) slot797:z`** — 273
+deviations, the dirtiest take left in the corpus. `(10,79)` has no explicit arm in the port's
+class-10 dispatch, where retail dispatches class-10 action 86 through `str_D4C48ar[10]` row 86
+regardless of model.
+
+## ROUND 146 (2026-09-17, vm113) — **THE MC2 CERTIFICATION DRIVE IS WRAPPED: ALL SIX OPEN TAKES CERTIFIED**, THIRTY LAWS
+
+Eight digs, one per open take plus two follow-ups. **Every MC2 take in the corpus now certifies**
+(devs 0, roster-excused boundaries only; mc2l24-crazy within its player-ruled scope, horizon
+53,387). The session-end 60-take sweep moved exactly the six target rows, all to 0 devs; the other
+54 are byte-identical to round 145. ⭐ **COMBINED REVERSION PROBE:** all 30 kill switches below set
+together reproduce round 145's BRIEF row on all six takes byte for byte, so nothing moved that a
+switch does not own. Gate 1,210 → **1,224 / 0**; fixtures 579 → **594** (15 new, each proven to
+regress under its own switch); the laws without a LOCAL pair carry unit tests with a positive
+control, each shown to fail with its switch set.
+
+| take | before | after |
+|---|---|---|
+| mc2l17 | 26 seg / 24 dev | 2 / 0 (roster 1) |
+| mc2l18 | 56 / 55 | 1 / 0 |
+| mc2l19-taketwo | 6 / 4 | 2 / 0 (roster 1) |
+| mc2l21 | 3 / 2 | 1 / 0 |
+| mc2l22-new | 23 / 17 | 7 / 0 (roster 6) |
+| mc2l23 | 4 / 3 | 1 / 0 |
+
+⭐⭐ **FIVE OF EIGHT BRIEFS WERE REFUTED AND EVERY ONE STILL PRODUCED LAWS** (thirteenth round
+running): mc2l17's "one `(10,67)` rng decision" was the importer linking the human's hole into tile
+(0,0); mc2l18's "15-slot formation" was a worm head reading a stale stack word; mc2l19-taketwo's
+"one-line adjacency fix" would have broken the nine good openings, and its "allocator bug" was a
+fireball the port deleted 96 ticks before the head; mc2l22-new's phantom book binding did not
+reproduce at all. The one brief that held exactly — mc2l23's double quake shove — also cleared
+mc2l18's t=27,161 burst on another take.
+
+**THE LAWS, BY DIG** (every citation is in the switch's doc comment in `features.rs` unless noted):
+
+- **w146e (mc2l23)** — `MGC_NO_MC2_FLOOD_HUMAN_SEAT`: the quake (`sub_39B60`) shoves the human AT HIS
+  TILE-CHAIN SEAT inside its cell walk, and a shove into an unvisited row shoves him AGAIN
+  (0x5e592 / 0x5e5e6). The port's one-shot knock-channel arm is gone; the delta accumulates and is a
+  direct record write. Fixture mc2l18 t=27,160; unit test (mc2l23 t=6,941 geometry).
+- **w146a (mc2l17)** — `MGC_NO_MC2_IMPORT_HOLE_UNLINKED` (conformance.rs; ⚠ shared import path, an
+  early corpus sweep was run: clean): the MC2 importer no longer links the human's zeroed hole into
+  tile (0,0), where a quake's disc spent its 1-in-7 roll on it (fixture t=35,086).
+  `MGC_NO_MC2_ALLY_HUMAN_PARENT_DEATH` (mobs.rs): `sub_1E9C0` releases a charm whose parent — the
+  human included — has `life <= 0` (fixture t=33,074). `MGC_NO_MC2_CHASE_ALLY_RESOLVE`: for the
+  seven `sub_1C310` species the attack-state charm clock is counted inside the chase's quiet arm, not
+  at the dispatch head (8 `e8` call sites enumerated; unit test). `MGC_NO_MC2_TELEPORT_HUMAN_POSE`
+  (world.rs): the mid-walk teleport peek republishes `human_pose` as well as `ctx` — ⭐ **A LAW ON
+  ONE CALL PATH IS NOT LANDED**, again (unit test).
+- **w146b (mc2l18)** — `MGC_NO_MC2_M22_STALE_PROBE`: `sub_26FF0` seeds its chain maximum at 0 and
+  probes roughness at an uninitialised local over water — the previous tail segment's record pointer
+  (0x35CEC6 + 168·slot) (fixture t=5,618). ⚠ The relay-call residue (0x207D9C) rests on an INFERRED
+  code base and is unwitnessed. `MGC_NO_MC2_STAGEVAR_REACT_ROSTER`: `sub_12500` runs only over the
+  tick-top class-5 roster, so a creature dead at the tick top gets no StageVar reaction (fixture
+  t=2,454).
+- **w146f (mc2l18 residuals)** — `MGC_NO_MC2_FLOOD_HUMAN_SPIN` (+ `mgc_formats::recover` twin): the
+  quake's close band (`sub_3A200`, 0x5ea55/0x5ea5b) stores `pitch = pitch_acc = 512` between the
+  input pass and the mover's add — NOT presentation, as the module doc had it; the stick inversion
+  reads the captured delta on those pairs. `MGC_NO_MC2_FLOOD_MAIL_SEAT`: the mailbox drain bears the
+  knock off the quake-SHOVED record (463 vs 462). Pose-only ⇒ unit tests.
+- **w146c (mc2l22-new)** — `MGC_NO_MC2_HOUSE_CLAIM_RAW_COLOR`: the shipped EXE adds the owner's RAW
+  player index to a claimed house's flag (0x38484), remc2's Transform is its own fix (fixture
+  t=2,661; ⚖ now also PATCH OPTION `mc2_house_flag_color`, below). `MGC_NO_MC2_CASTLE_PURGE_BEFORE_EJECT`
+  + `MGC_NO_MC2_EJECT_OWNER_LIVE_READ`: `sub_5FCA0` purges a dying castle's tokens before its spill,
+  and `sub_5FD00` re-reads the castle owner per sphere — a full pool's GC can hand the castle's own
+  record to a sphere (one shared fixture t=3,957; this is the orphan-balloon event).
+  `MGC_NO_MC2_M15_SCAN_ROSTER`, `MGC_NO_MC2_M16_SWEEP_ROSTER`, `MGC_NO_MC2_BUILD_REPAINT_ROSTER`:
+  three more walkers of the tick-top rosters (fixtures t=4,858 / 20,627 / 33,773; the last needed
+  three older tests to build the roster). `MGC_NO_MC2_RESPAWN_CENTRE_POINT` (recover.rs): the respawn
+  press is dated by the press snapshot jumping to the screen centre (⚠ hard-coded 320,200 / 320,240).
+- **w146d (v34, mc2l21 + mc2l19-taketwo)** — six hydra `v34` publishers/transparencies:
+  `_M27_V34_GUARD_RESIDUE` (the (5,15) wander's `push esi` = 0), `_PIECE_TRANSPARENT` (the round-145
+  banked `(10,79)` exemption, landed with its publisher), `_METEOR_RESIDUE` (ring handle 1; fixture
+  mc2l21 t=15,319), `_TOKEN_TRANSPARENT` (all 26 class-15 handlers disassembled),
+  `_LIGHTNING_TOKEN_RESIDUE` (W-52 = 0), `_METEOR_CAST_RESIDUE` (the muzzle buffer on W-64; fixture
+  mc2l19 t=12,905). The main session re-homed the dig's new `m15_scan_tests_any` onto w146c's roster
+  law before landing.
+- **w146g (mc2l19-taketwo)** — `MGC_NO_MC2_DEPTH_REFUSAL_KEEPS_FLYER`: the three depth-gated effect
+  ctors (`AddFireSpheres_4F2A0` ≥ 26, `AddWind_4F040` ≥ 12, `sub_51800` ≥ ring) refuse like a dry
+  pool and the projectile SURVIVES (`sub_65C20` / `sub_65820`); the port despawned it, freed its
+  slot 96 ticks early and slid every later allocation (unit test; the dirty lane was the ungraded
+  reap bit).
+- **w146h (mc2l22-new hydras)** — seven more `v34` laws: `_SPHERE_RESIDUE` (a settling sphere's
+  ground height on W-64; fixture t=49,983), `_BLAST_SOUND_RESIDUE` (the listener distance from
+  `PrepareEventSound`; fixture t=49,897 — ⚠ assumes sound was ENABLED in the recorded take; a take
+  recorded with sound off would read the house's value here), `_DOLMEN_RESIDUE` (pointers on both
+  dwords; fixture mc2l24-crazy t=51,653, witnessed only with the sphere law on),
+  `_SPHERE_TRANSPARENT`, `_NODE_TRANSPARENT`, `_CORPSE_TRANSPARENT`, `_WYVERN_RESIDUE` (unit tests).
+  All four INHERITED heads were `v34` zeros from guards and wyvern arms passing through transparent
+  records.
+
+**⚖ PLAYER RULINGS THIS ROUND.** (1) **House flags**: "a known issue from mc2 … for replays we need
+the retail behaviour, but we very clearly want the fixed behaviour" → PATCH OPTION
+`gameplay.patches.mc2_house_flag_color` (default patched, retail under record/replay,
+`DEFAULTS_VERSION` 33; `docs/DEVIATIONS.md`). (2) **The census law's `(5,27)` rider**: re-probed,
+still exactly zero (positive control: the switch reds its own mc2l18 witness 0 → 242 devs); no ruling
+while unwitnessed — PARKED. The retail record agrees: on mc2l22-new slot 637 (the castle recycled by
+law above) is a hydra from t=20,127 to ≥ 51,208 and its `@0x8C` stays 0, because the only sphere
+tagged 637 was gone by t=11,497.
+
+**🏦 BANKED, UNWITNESSED OR OUT OF SCOPE:**
+- ⭐⭐ **`capture_clean_mc2` FALSE-TEARS EVERY TICK A BIG FIRESTORM IS UP**: its `d1 >= d0` phase test
+  loses to hundreds of `(10,77)` satellites that never advance phase. It hid w146g's defect for 96
+  ticks; mc2l19-taketwo still grades 14,571 of 14,831 boundaries. A checker bug, its own item.
+- `MC2_RETAIL_POOL_BASE = 0x35CE1E` (multipart.rs) may be one slot below the list terminator
+  0x35CEC6 used by the m22 law — unwitnessed. `m22_relay` ignores the 0x26e73 gate;
+  `m22_tail_follow`'s `anchor == 0` return is invented.
+- MC1 twins not checked: `Gen::castle_eject`'s hoisted owner; the MC1 teleport peek moving only
+  `ctx`. The remaining `sub_1ED30` callers still head-clock. `mc2_spawn_summon_ring`'s `_ => 8`
+  vs retail's 2 outside models {2,19,25}.
+- Rival wizards: `pitch_0x157` has no port home (the quake spin's rival half publishes 0);
+  rival manifestations get no `v34` transparency.
+- `v34` values not modelled (seed used): the guard scan arm's W-64, the Meteor cast's W-52, the
+  blast's W-52, the wyvern's W-64, the human corpse arm. `m27_v34_broken` counts records born this
+  tick behind the cursor as dispatched — latent, measures zero today.
+- The quake: a quake ABOVE the carpet's walk slot loses its delta (no capture shows one); the
+  human's `|= 0x100001` flag write; the enhanced mover ignores the pitch seizure.
+
 ## Confirmed conforming (worth naming)
 
 - **Global LCG draw law**: 627/627 MC1 pairs and 48/48 HW pairs draw

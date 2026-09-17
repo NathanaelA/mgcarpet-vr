@@ -1207,6 +1207,21 @@ fn no_mc2_target_alive_human_liveness() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TARGET_ALIVE_HUMAN_LIVENESS").is_some())
 }
 
+/// `MGC_NO_MC2_INTAKE_DROPS_DEAD_HUMAN=1` — restore the round-141
+/// shape, where `sub_5EFA0`'s dead-target drop EXEMPTED
+/// `PLAYER_TARGET`. See [`World::mc2_rival_intake`]: the drop resolves
+/// its target through `Entities[word_0x96_150]` with NO class, model
+/// or human test (shipped `NETHERW.EXE` file 0x837b2-0x837e9), so the
+/// human's carpet is just a pool record to it. WITNESS
+/// `recordings/mc2l22.mgcr` t=10,020 — the human (slot 424) dies and
+/// rival 530, undocked and holding him in `sub_13890`, fires one more
+/// lightning (spell 7) at the corpse: 1 (10,23) + 82 (9,9) records
+/// retail never mints.
+fn no_mc2_intake_drops_dead_human() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_INTAKE_DROPS_DEAD_HUMAN").is_some())
+}
+
 /// `MGC_NO_RIVAL_WAR_EARLYOUT=1` — restore the pre-dig shape, where
 /// `sub_14030`'s WAR arm was folded into the hated/bully score behind
 /// the `range + 10` gate instead of returning immediately.
@@ -2270,6 +2285,20 @@ impl World {
     /// ladder cost against the HUMAN castle — this one uses the
     /// owner's own castle level.
     pub(crate) fn mc2_rival_set_spell(&mut self, m: usize, tier: u8, own: u16) {
+        self.mc2_rival_set_spell_at(m, tier, own, None)
+    }
+
+    /// [`Self::mc2_rival_set_spell`] with an explicit FALLBACK pricing
+    /// castle, used when the scan misses — the rival twin of the human
+    /// arm's `snap` register snapshot. See
+    /// [`crate::engine::features::no_mc2_rival_ladder_price_dying_castle`].
+    pub(crate) fn mc2_rival_set_spell_at(
+        &mut self,
+        m: usize,
+        tier: u8,
+        own: u16,
+        fallback: Option<usize>,
+    ) {
         let spell = self.g.ent[m].model65 as usize;
         let Some(row) = self.g.assets.spells.get(spell).copied() else {
             return;
@@ -2310,7 +2339,7 @@ impl World {
             // (= rung 2 20000 ×384>>8, /101), the port 20000 / 198.
             // Retail stamps the same multiply on that token at t=6619
             // (60000 = rung 3 ×1.5) and t=23090 (15000 = rung 1 ×1.5).
-            match self.rival_castle(own) {
+            match self.rival_castle(own).or(fallback) {
                 None => sub.mana_cost,
                 Some(c) => {
                     let lvl = self.g.ent[c].f26.clamp(0, 7) as usize;
@@ -2459,6 +2488,11 @@ impl World {
             return;
         };
         if self.mc2_rivals[ri].eliminated {
+            // Retail still dispatches the corpse: `sub_5E7C0`'s
+            // banished arm, call-free.
+            if self.g.ent[i].tick70 == 3 && !crate::engine::features::no_mc2_m27_v34_corpse_transparent() {
+                self.g.m27_v34_transparent(i);
+            }
             return;
         }
         match self.g.ent[i].tick70 {
@@ -3237,29 +3271,50 @@ impl World {
         // never touches `word_0x98_152` here, and it does not need to
         // — target 0 is already unmatchable.
         let t = self.mc2_rivals[ri].target;
-        // ⚠ FIDELITY GAP, DELIBERATE AND REGISTERED (round 141, player
-        // ruling: ZERO UNWITNESSED CHANGE). Retail drops a dead target
-        // HERE and the human is just a pool record to this block —
-        // shipped `NETHERW.EXE` file 0x837d6-0x837e9 is
+        // ⭐⭐⭐ RETAIL DROPS A DEAD TARGET HERE AND THE HUMAN IS JUST
+        // A POOL RECORD TO THIS BLOCK — shipped `NETHERW.EXE` file
+        // 0x837b2-0x837e9 is
+        //   mov  0x96(%ebx),%dx      ; word_0x96_150
+        //   test %dx,%dx / je        ; no target
+        //   mov  0x1a3e4(,%eax,4),%eax  ; Entities[target]
+        //   cmp  %edx,%eax / jbe     ; <= Entities[0]
         //   cmpl $0x0,0x8(%eax)      ; life_0x8 <= 0
-        //   jle  0x837e2
         //   testb $0x4,0xd(%eax)     ; byte[1] & 4 (reap)
-        //   je   0x837eb
         //   movw $0x0,0x96(%ebx)     ; word_0x96_150 = 0
         // reached through `Entities[word_0x96_150]` with NO class,
-        // model or human test. The port excludes `PLAYER_TARGET`, so
-        // it never drops a dead HUMAN target on the undocked arm.
-        // ⭐ IT MEASURES EXACTLY ZERO across the whole 49-take corpus
-        // (mc2l16's rival 389 is DOCKED, `invuln` 1, across the only
-        // window that would show it — which is also why retail keeps
-        // acting on the corpse there), and it was NOT landed because
-        // the round had no witness for it. The selector re-elects on
-        // its own life test, so a stale corpse target self-corrects.
-        // Registered in `docs/FIDELITY.md`; do not "fix" it toward
-        // retail without a measured witness.
-        if t != 0 && t != PLAYER_TARGET {
-            let e = &self.g.ent[t as usize];
-            if e.act_life <= 0 || e.flags & 0x400 != 0 {
+        // model or human test.
+        //
+        // ⚠⚠⚠ THIS WAS PARKED IN ROUND 141 AS A FIDELITY GAP THAT
+        // "MEASURES EXACTLY ZERO ACROSS THE WHOLE 49-TAKE CORPUS", AND
+        // THAT CLAIM WAS FALSE. Round 141 removed the port's
+        // `player.state == Alive` predicate from `mc2_target_alive`
+        // (correctly — `sub_14C60` IS a pure identity compare) and did
+        // not land the WRITE that replaces it, on a measurement that
+        // could not have been taken against the post-removal tree.
+        // **mc2l22 was one of those 49 takes and it is the witness**:
+        // it de-certified silently (8 seg / 0 dev / END -> 11 / 3 /
+        // horizon 10,019) and stayed that way through round 142, which
+        // three round-143 digs then hit independently. At t=10,020 the
+        // human (slot 424) dies and rival 530 — undocked, holding
+        // `PLAYER_TARGET` in `sub_13890` — fires ONE more lightning at
+        // the corpse: 1 (10,23) + 82 (9,9) chain nodes retail never
+        // mints. mc2l16 does not show it because ITS rival 389 is
+        // DOCKED (`invuln` 1) across the only window that would, so
+        // retail genuinely keeps facing that corpse there — the dock
+        // is the discriminator, and it is why one take can look like
+        // proof that the other refutes.
+        // ⭐⭐⭐ A MEASURED ZERO IS ONLY EVIDENCE IF IT WAS MEASURED ON
+        // THE TREE THE CHANGE PRODUCES.
+        // `MGC_NO_MC2_INTAKE_DROPS_DEAD_HUMAN=1` restores the parked
+        // shape (see the switch's doc comment).
+        if t != 0 {
+            let dead = if t == PLAYER_TARGET {
+                !no_mc2_intake_drops_dead_human() && self.player.life <= 0
+            } else {
+                let e = &self.g.ent[t as usize];
+                e.act_life <= 0 || e.flags & 0x400 != 0
+            };
+            if dead {
                 self.mc2_rivals[ri].target = 0;
                 self.g.ent[i].f146 = 0;
             }
@@ -9468,6 +9523,13 @@ impl World {
     /// BANISHED (checked every tick — losing the castle mid-wait
     /// converts to elimination).
     fn mc2_rival_dead_wait(&mut self, ri: usize, i: usize) {
+        // The two call-free arms of `sub_5E7C0` (banished, countdown)
+        // leave both hydra `v34` dwords alone — see
+        // [`crate::engine::features::no_mc2_m27_v34_corpse_transparent`].
+        let quiet = self.rival_castle(self.mc2_rivals[ri].ent).is_none() || self.g.ent[i].f26 > 0;
+        if quiet && !crate::engine::features::no_mc2_m27_v34_corpse_transparent() {
+            self.g.m27_v34_transparent(i);
+        }
         if self.rival_castle(self.mc2_rivals[ri].ent).is_none() {
             // The FINAL-death broadcast (retail lang 283, sub_5E7C0
             // EF:60282-97: printed once on the elimination edge —

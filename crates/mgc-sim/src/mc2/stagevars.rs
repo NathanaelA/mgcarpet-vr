@@ -71,6 +71,19 @@ fn no_sv_watch_sibling_chain() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_SV_WATCH_SIBLING_CHAIN").is_some())
 }
 
+/// ⭐⭐⭐ A/B toggle for the IMPORTED `&2`-CLEAR WATCH BINDING: set
+/// `MGC_NO_MC2_SV_WATCH_IMPORT` to restore the pre-dig import, which
+/// left `mc2_stagevar_attach`'s AUTHORED pass-3 binding standing on a
+/// conformance import instead of taking retail's own (usually severed)
+/// `StageVars2[i] + 4` union from the recording. Native play never
+/// reaches this switch. The citation, the shipped guard bytes and the
+/// mc2l21 witness live at the call site in
+/// `engine/world/conformance.rs`.
+pub(crate) fn no_mc2_sv_watch_import() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SV_WATCH_IMPORT").is_some())
+}
+
 /// A/B toggle for the WATCH-HANDLE RESOLVE CADENCE: set
 /// `MGC_NO_SV_WATCH_CADENCE` to restore the pre-dig behaviour, where
 /// the kind-3/4/5 shadow leg resolved AND CACHED the watch handle on
@@ -668,6 +681,17 @@ impl World {
                 || self.g.ent[ent].flags & 0x400 != 0
             {
                 self.mc2_sv_held.retain(|x| x.ent != h.ent);
+                continue;
+            }
+            // Retail reaches `sub_12500` only through the tick-top
+            // class-5 ROSTER (no life<0, no 0xB4/0xE8/0xEA member) —
+            // see `no_mc2_stagevar_react_roster`.
+            if !crate::engine::features::no_mc2_stagevar_react_roster()
+                && !self
+                    .g
+                    .mc2_roster(self.g.ent[ent].model65)
+                    .contains(&h.ent)
+            {
                 continue;
             }
             let slot = h.slot;

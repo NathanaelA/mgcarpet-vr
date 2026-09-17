@@ -963,10 +963,18 @@ fn mc2_speed_direction_follows_current_velocity() {
     };
 
     // Cast while flying BACKWARD → a backward boost.
+    // ⚠ THE DIRECTION COMES FROM THE COMMAND WORD, NOT THE POSE.
+    // `speed_0xc_12` is the caster's flight-block COMMAND speed, which
+    // this rig drives the world without (no `FlightDrive`), so it has
+    // to seat it the way the enhanced tier and the conformance
+    // importer do — see `World::set_mc2_cmd_speed`. Setting only
+    // `PlayerPose::speed` expresses a velocity with no command behind
+    // it, which retail reads as a standstill (forward).
     let back = PlayerPose {
         speed: -80,
         ..pose_at(&w, cx, cy)
     };
+    w.set_mc2_cmd_speed(-80);
     w.mc2_select_spell(3, 0, 0);
     w.tick(back, fire);
     let over = w.accel_override().expect("the Speed boost is live");
@@ -991,13 +999,52 @@ fn mc2_speed_direction_follows_current_velocity() {
     );
     assert!(w.accel_override().is_none());
 
-    // Standstill counts as FORWARD (retail `>= 0`).
+    // Standstill counts as FORWARD (retail `>= 0`) — and standstill
+    // means the COMMAND word is 0, so the rig drops it back here too.
     let still = pose_at(&w, cx, cy);
     assert_eq!(still.speed, 0, "fixture pose is at standstill");
+    w.set_mc2_cmd_speed(0);
     w.mc2_select_spell(3, 0, 0);
     w.tick(still, fire);
     let over = w.accel_override().expect("the Speed boost is live");
     assert!(over > 0.0, "standstill casts a forward boost ({over})");
+
+    // ⭐⭐⭐ THE ARM THAT DISCRIMINATES — mc2l33 t=8,896, and the ONLY
+    // shape in which the two readings differ: a DECELERATING CARPET
+    // CROSSING ZERO. The tree's own note had written this discrepancy
+    // down and dismissed it ("they differ only while a decelerating
+    // carpet crosses zero"), and the dismissal was the head.
+    //
+    // The player cast Speed BACKWARD at t=8,891 (`cmd_speed`/`actSpeed`
+    // −240 → −160), walled into a cave at 8,892 — which zeroed
+    // `cmd_speed` — and by 8,895 the carpet was still coasting at
+    // `actSpeed` −112 with `cmd_speed` 0. Re-pressing Speed makes
+    // retail read `speed_0xc_12 >= 0` → FORWARD (+240); reading
+    // `actSpeed` instead gives −240, which flew the carpet into the
+    // wall behind it, took the refusal's `tgt_speed = 0` +
+    // `waterCounter++`, and it never moved again. Six pose lanes, ONE
+    // bit — and it certified mc2l33 (1 segment, 0 deviations, 16,204
+    // boundaries bit-exact).
+    //
+    // The three arms above all keep the pose and the command word in
+    // agreement, so they pass under EITHER reading; this one fails
+    // with `MGC_NO_MC2_SPEED_SIGN_CMD=1`.
+    w.accel_brake_immediate(-1.0);
+    w.tick(still, PlayerCommand::default());
+    assert!(w.accel_override().is_none(), "the standstill boost is braked");
+    let coasting = PlayerPose {
+        speed: -112,
+        ..pose_at(&w, cx, cy)
+    };
+    w.set_mc2_cmd_speed(0); // the cave wall zeroed the COMMAND word
+    w.mc2_select_spell(3, 0, 0);
+    w.tick(coasting, fire);
+    let over = w.accel_override().expect("the Speed boost is live");
+    assert!(
+        over > 0.0,
+        "a carpet COASTING backward with a zeroed command word boosts \
+         FORWARD — the sign is `speed_0xc_12`, not `actSpeed` ({over})"
+    );
 }
 
 #[test]
@@ -2040,6 +2087,101 @@ fn mc2_whirlwind_duration_law_8x_tier_life() {
             expect - 1, // observed after its first countdown tick
             "T{} whirlwind head runs 8×life = {expect} ticks",
             tier + 1
+        );
+    }
+}
+
+
+#[test]
+fn mc2_speed_window_survives_the_casters_death_fall() {
+    // ⭐⭐⭐ THE ONE MANIFESTATION WHOSE UNAFFORDABLE TICK DOES NOT
+    // COLLAPSE ITS WINDOW — see `Gen::m27`… no: see
+    // `no_mc2_speed_broke_survives` in `mc2/cast.rs`.
+    //
+    // `sub_68D50` (IDA banner `//----- (00068D50)`) bails on the
+    // CASTER's own vitals — `mana_0x90_144 < 0`, then `life_0x8 < 0`
+    // — so a wizard who has just taken a lethal hit is unaffordable
+    // for every remaining tick of his death fall. Twenty-five of the
+    // twenty-six MC2 handlers answer that with a bare
+    // `else { word_0x2E_46 = 1 }`; `GetScroll_69DB0` does not:
+    //
+    //     if (!sub_68D50(a1x, v1x) || v1x->…->word_0xe_14)
+    //     { if (v1x->…->word_0xe_14) a1x->word_0x2E_46 = 1; }
+    //
+    // — shipped `NETHERW.EXE` 0x8E779 (`mov 0xa4(%esi),%eax` /
+    // `cmpw $0x0,0xe(%eax)` / `je 0x8e78c` — NO brake, NO collapse),
+    // the join of the afford `je` at 0x8E61F and the brake `jne` at
+    // 0x8E630. The shared `dec` at 0x8E78C..0x8E792 then runs, and
+    // only a counter that reaches ZERO fires the ±minSpeed restore at
+    // 0x8E798.
+    //
+    // mc2l19-taketwo t=3257 is the witness: the Speed token (slot 16)
+    // records `word_0x2E_46` 287 → 286 across the lethal boundary and
+    // the flight columns stay pinned at −160 through the landing and
+    // the whole dead wait. The port collapsed the counter to 1,
+    // decremented it to 0 in the same tick and mailed −80.
+    //
+    // ⚠ KILL-SWITCH PROVEN: this test FAILS with
+    // `MGC_NO_MC2_SPEED_BROKE_SURVIVES=1`.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    w.set_dev_spells(true);
+    let (cx, cy) = open_spot(&w);
+    let fire = PlayerCommand {
+        fire_left: true,
+        ..Default::default()
+    };
+    // High enough that the death FALL lasts several ticks — the
+    // touchdown's token scatter is a different law and would end the
+    // window legitimately.
+    let base = pose_at(&w, cx, cy);
+    let flying = PlayerPose {
+        speed: -80,
+        z: base.z.saturating_add(8192),
+        ..base
+    };
+    w.set_mc2_cmd_speed(-80);
+    w.mc2_select_spell(3, 0, 0);
+    w.tick(flying, fire);
+    assert!(w.mc2_book_view().armed[3], "the Speed window is live");
+    assert_eq!(
+        w.take_speed_base(),
+        Some(-240),
+        "the arm tick spikes 3x backward"
+    );
+    w.tick(flying, PlayerCommand::default());
+    assert_eq!(
+        w.take_speed_base(),
+        Some(-160),
+        "…then sustains 2x backward"
+    );
+
+    // THE LETHAL HIT. From the next dispatch on, `sub_68D50` answers
+    // false on `life_0x8 < 0` and the effect body is skipped.
+    w.debug_kill_player();
+    for tick in 0..6 {
+        w.tick(flying, PlayerCommand::default());
+        if !w.player_falling() {
+            // The corpse has landed — the scatter owns the window now.
+            assert!(tick > 0, "the fall must last at least one tick");
+            return;
+        }
+        assert_eq!(
+            w.take_speed_base(),
+            None,
+            "tick {tick} of the death fall mailed a speed base — retail's \
+             unaffordable arm writes NOTHING (NETHERW.EXE 0x8E784 `je`)"
+        );
+        assert!(
+            w.mc2_book_view().armed[3],
+            "tick {tick}: the Speed window must keep counting down \
+             uncollapsed while its caster falls"
         );
     }
 }

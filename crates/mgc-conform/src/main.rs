@@ -1114,6 +1114,17 @@ impl TerrainReport {
     fn identical(&self) -> bool {
         self.planes.iter().all(|p| p.2 == 0)
     }
+
+    /// The verdict line's honesty tail: a plane the port does not
+    /// generate is NOT evidence of agreement, so an IDENTICAL verdict
+    /// has to say which lanes it never looked at.
+    fn ungraded_tail(&self) -> String {
+        if self.skipped.is_empty() {
+            String::new()
+        } else {
+            format!("  ⚠ UNGRADED: {}", self.skipped.join(", "))
+        }
+    }
 }
 
 /// The shared core of `terrain-diff` and `terrain-check`: decode the
@@ -1249,6 +1260,20 @@ fn terrain_compare(
             std::fs::write(dir.join(format!("{name}.port")), baked)
                 .map_err(|e| format!("{name}.port: {e}"))?;
         }
+        // ⚠ THE RECORDER DECLARES A CEILING ON EVERY MC2 TAKE SINCE
+        // e792c5b, CAVE OR NOT — and off-cave the port generates no
+        // ceiling at all (`Planes::ceiling` stays empty). That is the
+        // same UNGRADED LANE `replay` reports as "measured CEILING
+        // dropped: this level carries no ceiling plane (off-cave)";
+        // erroring the whole take out on it threw away the verdict on
+        // the four planes that ARE comparable, which is how eight of
+        // round 143's eleven new takes arrived with no terrain
+        // verdict at all. An EMPTY port plane is a lane the port does
+        // not model; any OTHER size disagreement is still a defect.
+        if baked.is_empty() && !measured.is_empty() {
+            report.skipped.push(format!("{name} (port generates none)"));
+            continue;
+        }
         if baked.len() != measured.len() {
             return Err(format!(
                 "{name}: size mismatch — port {} cells vs measured {}",
@@ -1311,7 +1336,7 @@ fn terrain_diff(path: &std::path::Path, args: &Args) -> i32 {
                 r.settle
             );
             for other in &r.skipped {
-                println!("  {other}: not a port plane — skipped");
+                println!("  {other}: UNGRADED — skipped");
             }
             for (name, cells, diffs, examples) in &r.planes {
                 if *diffs == 0 {
@@ -1352,7 +1377,7 @@ fn terrain_check(path: &std::path::Path, args: &Args) -> i32 {
     match terrain_compare(path, args, args.settle) {
         Ok(r) if r.identical() => {
             println!(
-                "TERRAIN {name}: IDENTICAL — {} plane(s) × {} cells, port settled {} tick(s){}",
+                "TERRAIN {name}: IDENTICAL — {} plane(s) × {} cells, port settled {} tick(s){}{}",
                 r.planes.len(),
                 r.planes.first().map_or(0, |p| p.1),
                 r.settle,
@@ -1360,7 +1385,8 @@ fn terrain_check(path: &std::path::Path, args: &Args) -> i32 {
                     " (recorder phase, read from record 0)"
                 } else {
                     ""
-                }
+                },
+                r.ungraded_tail()
             );
             0
         }
@@ -1374,7 +1400,7 @@ fn terrain_check(path: &std::path::Path, args: &Args) -> i32 {
                 .collect();
             println!(
                 "TERRAIN {name}: DIFFERENT — {} of {cells} cells, port settled {} tick(s){} (level {}, \
-                 base @t={})",
+                 base @t={}){}",
                 detail.join(" · "),
                 r.settle,
                 if args.settle.is_none() {
@@ -1383,7 +1409,8 @@ fn terrain_check(path: &std::path::Path, args: &Args) -> i32 {
                     ""
                 },
                 r.level,
-                r.base_t
+                r.base_t,
+                r.ungraded_tail()
             );
             1
         }

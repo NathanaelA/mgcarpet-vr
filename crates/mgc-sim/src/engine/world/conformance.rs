@@ -2499,6 +2499,44 @@ impl World {
             .collect()
     }
 
+    /// ⭐⭐⭐ THE PAIR/IMPORT TWIN OF THE FULL STOP'S THIRD
+    /// STATEMENT — `PlayerEvents_51BB0` case `0x27`
+    /// (`NETHERW.EXE` 0x77425 `66 c7 40 2e 00 00`, see
+    /// [`crate::engine::world::mc2_full_stop_kills_speed_off`] for the
+    /// whole block). Call it right after [`Self::retail_import_mc2`]
+    /// on a pair whose recovered input carries `mc2_park`.
+    ///
+    /// The import cannot see it on its own: the stop is an input event
+    /// of tick N+1 and the importer is handed the state at N, where
+    /// the Accelerate window is still counting. So both halves of the
+    /// seed are wrong on such a pair — the manifestation keeps its
+    /// counter, and [`mc2_applied_mana_delta`] replays a `sub_68DE0`
+    /// mid-burst pin that retail's input pass had already made
+    /// unreachable. ⭐ A LAW ON ONE CALL PATH IS NOT LANDED: the
+    /// free-run half lives at the tick head in `World::tick_inner`.
+    pub fn mc2_full_stop_import(&mut self, st: &RetailMc2, on: bool) {
+        if !on || crate::engine::world::mc2_full_stop_kills_speed_off() {
+            return;
+        }
+        let m = self.mc2_book.ent[3] as usize;
+        if m != 0 && m < self.g.ent.len() {
+            self.g.ent[m].f26 = 0;
+        }
+        let local = st.local_player as usize;
+        let Some(ply) = st.players.get(local) else {
+            return;
+        };
+        let human_slot = ply.play_index;
+        let Some(carpet) = st.ents.get(human_slot as usize) else {
+            return;
+        };
+        let spell6_life = self.g.assets.spells.get(6).map_or([0i8; 3], |r| {
+            [r.tiers[0].life, r.tiers[1].life, r.tiers[2].life]
+        });
+        self.player.mana_delta =
+            mc2_applied_mana_delta(st, ply, human_slot, carpet, spell6_life, true);
+    }
+
     /// Apply a decoded MC2 retail closure onto this (already-built,
     /// same-level) world. The MC2 twin of [`World::retail_import_mc1`]
     /// — same shape: overwrite the pool, rebuild the tile lists and
@@ -2531,6 +2569,10 @@ impl World {
         self.human_pose_prev = self.human_pose;
         self.human_yaw = carpet.yaw as u16;
         self.human_yaw_prev = self.human_yaw;
+        // The flight COMMAND register the speed token reads for its
+        // direction (`World::mc2_cmd_speed`). A pinned-pose pair never
+        // runs a driven tick, so this seed is its only source.
+        self.mc2_cmd_speed = ply.cmd_speed;
         // Cast-charge meters (wizext `byte_0x154_340`) — the MC1
         // twin's seeding law: unseeded, every projectile spawned
         // inside a pair banks a made-up charge in its @0x10. The
@@ -2826,6 +2868,7 @@ impl World {
         // skipped law surface — unlike the import loop above, which
         // round 105 moved to `0..n` for the scratch record.
         let splice = chain_ghost_splice();
+        let hole_out = mc2_import_hole_unlinked();
         let hop = |mut s: usize, back: bool| -> usize {
             let mut guard = 0usize;
             while s != 0 && s < n && !linkable(&st.ents[s]) {
@@ -2860,7 +2903,12 @@ impl World {
                     break; // cycle guard — torn capture
                 }
                 seen[cur] = true;
-                chain.push(cur);
+                // The human's record is the reserved hole (zeroed
+                // pose, class 0): splice it OUT, as the MC1 rebuild
+                // does — see [`mc2_import_hole_unlinked`].
+                if cur != human_slot as usize || !hole_out {
+                    chain.push(cur);
+                }
                 let next = st.ents[cur].next16 as usize;
                 let next = if splice {
                     hop(next, false)
@@ -2884,7 +2932,7 @@ impl World {
             }
         }
         for slot in 1..n {
-            if seen[slot] {
+            if seen[slot] || (hole_out && slot == human_slot as usize) {
                 continue;
             }
             if linkable(&st.ents[slot]) {
@@ -3047,6 +3095,68 @@ impl World {
             v.cadence = raw[3];
             if matches!(v.kind, 6 | 7) {
                 v.param = u16::from_le_bytes([raw[4], raw[5]]);
+            }
+            // ⭐⭐⭐ **AND THE `&2`-CLEAR WATCH BINDING IS RETAIL'S, NOT
+            // THE LOADER'S.** The union at `StageVars2[i] + 4` is a raw
+            // GUEST POINTER on those rows, and `sub_1D8C0`'s idle arm
+            // (NETHERW.EXE **0x4221e-0x42232**) throws it away unless it
+            // clears the pool base — `test %esi,%esi / je 0x423a4` then
+            // `cmp 0x1a3e4,%esi / jbe 0x423a4`, both landing on the
+            // GRAZE `else`. `RetailMc2::stagevar_watch` decodes the
+            // recorded dword through exactly that guard.
+            //
+            // The port's own `mc2_stagevar_attach` pass 3 binds the
+            // AUTHORED law (the live pool slot whose thing index matches
+            // the row's 16-bit key), which is what retail does at LOAD —
+            // but retail's one-shot in-level checkpoint autosave
+            // (`sub_57640` → `SaveLevel_55080(1, …)`, ~tick 5-15)
+            // serializes that pointer to `slot × 0xA8` IN PLACE and the
+            // paired restore cannot undo it, so by the time any
+            // recording starts the row is SEVERED (docs/traces/
+            // mc2-level004-stagevar-ground-truth.md §6, the registered
+            // "MC2 stagevar death-watch" deviation). The recording
+            // carries retail's ACTUAL row, so the import takes it —
+            // NATIVE play is untouched and keeps the authored law.
+            //
+            // MEASURED, every `&2`-clear kind-3/4/5/8/9 row in the
+            // corpus: mc2l21 row 5 = 24696 (147 × 168), row 6 = 336
+            // (2 × 168), mc2l4 row 2 = 29232 (174 × 168) — bare slot
+            // offsets against a ~3.5 M pool base, i.e. all severed.
+            //
+            // WITNESS mc2l21 (22,170 ticks, level 21) — **985 of the
+            // take's 986 segments**. The goat herd at slots 78..146 is
+            // held kind 5 on StageVar slot 5 (`index` 0x85: kind 5, `&1`
+            // set, `&2` CLEAR; watch template 237 → the (5,14) at slot
+            // 147, which the port's pass 3 duly bound). Retail's severed
+            // row resolves NOTHING, so every herd member takes
+            // `sub_1D8C0`'s graze `else` on its own 16-tick
+            // `byte_0x3E_62 & 0xF` gate: ONE `9377x+9439` draw and
+            // `roll_0x20_32 += rand % 0x71 + 142` (0x423b0-0x423e1).
+            // Slot 88's recorded `roll` reads 0, 214, 214, 403, 403,
+            // 577, 577, … — moving only every 16th tick, by
+            // +189/+174/+219/+146. The port took the AIM arm instead (an
+            // absolute `tan2` bearing every 8 ticks, NO draw) and so
+            // lost exactly one entity-LCG step per member per 16 ticks:
+            // pair 0→1 is `slot 88 rand: retail 18866 port 24819`, where
+            // 24819 is ONE step off 44948 and 18866 is TWO. The four
+            // blocks march their divergent slot DOWN by one per tick
+            // because `byte_0x3E_62` is seeded per slot.
+            //
+            // `MGC_NO_MC2_SV_WATCH_IMPORT=1` restores the pre-dig
+            // import, which left the loader's authored binding standing.
+            // ⚠ SCOPED TO KINDS 3/4/5 — the only kinds whose movement
+            // leg is `sub_1D8C0` and therefore the only ones that read
+            // this union for a WATCH. Kinds 8/9 graze in place
+            // (`sub_1D880`/`sub_1D8A0` → `sub_1E1C0`) and touch it only
+            // through `sub_12780`'s FIRED gate, which is the registered
+            // "MC2 stagevar death-watch" deviation (docs/DEVIATIONS.md,
+            // deferred pending a player pick) — 🏦 OWED, left alone
+            // here, and UNWITNESSED on this corpus.
+            if !crate::mc2::stagevars::no_mc2_sv_watch_import()
+                && matches!(v.kind, 3 | 4 | 5)
+                && v.flags & 0x02 == 0
+            {
+                v.watch_ent = st.stagevar_watch[i];
             }
         }
         // LAW A — THE THING TABLE IMPORTS VERBATIM
@@ -3368,7 +3478,7 @@ impl World {
             // The pending regen/debit delta (@0x88) — the value the
             // wizard body will APPLY next frame, which is NOT always
             // the recorded one: see [`mc2_applied_mana_delta`].
-            mana_delta: mc2_applied_mana_delta(st, ply, human_slot, &carpet, spell6_life),
+            mana_delta: mc2_applied_mana_delta(st, ply, human_slot, &carpet, spell6_life, false),
             life: carpet.life,
             // MORTALITY (the MC1 arm's twin): the human carpet's
             // `actionIndex_0x45_69` IS the wizard's life state on the
@@ -4112,6 +4222,7 @@ fn mc2_applied_mana_delta(
     human_slot: u16,
     carpet: &RetailEntMc2,
     spell6_life: [i8; 3],
+    full_stop: bool,
 ) -> i32 {
     let recorded = carpet.d88;
     // `MGC_NO_MC2_BURST_DELTA=1` — the A/B lane (both halves; see
@@ -4151,6 +4262,23 @@ fn mc2_applied_mana_delta(
             continue;
         }
         if e.f2e == 0 {
+            continue;
+        }
+        // ⭐⭐⭐ THE FULL STOP ZEROES `word_0x2E_46` IN THE **INPUT
+        // PASS**, SO THE SPEED TOKEN NEVER REACHES `sub_68DE0` AT ALL.
+        // `PlayerEvents_51BB0` case 0x27 (EF:38260-72, `NETHERW.EXE`
+        // 0x77425 `movw $0x0,0x2e(%eax)`) runs ahead of the frame
+        // function, so on a full-stop tick the recorded `@0x2E` this
+        // loop reads is a counter retail had ALREADY discarded —
+        // `GetScroll_69DB0`'s own `word_0x2E_46 > 0` guard skips the
+        // whole body, pin included. Reconstructing the pin from the
+        // recorded pre-tick counter is exactly the free-run bug one
+        // call path over (see
+        // [`crate::engine::world::mc2_full_stop_kills_speed_off`]).
+        if full_stop
+            && spell == 3
+            && !crate::engine::world::mc2_full_stop_kills_speed_off()
+        {
             continue;
         }
         // HEAL (5) NEVER REACHES `sub_68DE0` AT ALL: `sub_6A300`
@@ -4517,6 +4645,44 @@ pub(crate) fn recycle_ghost_keep() -> bool {
 pub(crate) fn chain_ghost_splice() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_CHAIN_GHOST_SPLICE").is_none())
+}
+
+/// ⭐⭐⭐ **THE MC2 IMPORTER LINKED THE HUMAN'S RESERVED HOLE INTO
+/// TILE (0,0).** [`World::retail_import_mc2`] zeroes the recorded
+/// carpet slot (`Ent::default()`: class 0, x = y = z = 0) and then the
+/// tile-chain rebuild asked `linkable` of the RECORDED record — class
+/// 3, `byte[0] & 4` set — so the hole was head-inserted into the chain
+/// of tile (0,0) at the zeroed pose. Nothing ever relinks it (the human
+/// lives out-of-pool), and the native path never links it at all
+/// (`Gen::mc2_spawn_human_record` leaves the record unlinked). The MC1
+/// rebuild ~2,300 lines above has always spliced the hole out
+/// (`if cur != human_slot { chain.push(cur) }` + the fallback skip);
+/// the MC2 copy never got the guard.
+///
+/// It is not inert: a class-0 record is admissible to any walker that
+/// does not filter on class. The (10,67) flood's shove filter
+/// `sub_39FA0` (`NETHERW.EXE` file 0x5E7A0: `b0 01  mov $0x1,%al` /
+/// `8a 62 3f  mov 0x3f(%edx),%ah` / `28 c4  sub %al,%ah` /
+/// `80 fc 0e  cmp $0xe,%ah` / `0f 87 ..  ja 0x5e888` → `pop/pop/ret`
+/// with `al = 1`) returns "shoveable" for class 0 (`0 − 1` = 0xFF
+/// misses the `class − 1` jump table), and `sub_39B60`'s chain
+/// walk (0x5E40A `call 0x5e7a0 / test %al,%al`) has no other test, so
+/// a quake whose 26×26 disc wraps over the map origin reached the hole
+/// at `z = 0` (the close band `v5 ≤ 96`) and spent the 1-in-7
+/// `sub_3A200` roll on it EVERY tick. WITNESS mc2l17 t=35,087..35,140:
+/// flood slot 526 at (65450, 1931) — retail's `rand_0x14_20` holds 4257
+/// across 35,087..35,094 (its real human, slot 91, is at (61388, 11247),
+/// 37 tiles away, on its own chain), the port drew 4257 → 15904 on the
+/// hole each tick: 18 `rand`-only heads.
+///
+/// Retail's human is an ordinary member of HIS OWN cell's chain; the
+/// port carries every walker's human arm out-of-pool (the flood's
+/// `ctx.px/py/pz` arm), so the pool chain must hold the hole nowhere.
+///
+/// `MGC_NO_MC2_IMPORT_HOLE_UNLINKED=1` restores the linked hole.
+pub(crate) fn mc2_import_hole_unlinked() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_IMPORT_HOLE_UNLINKED").is_none())
 }
 
 /// `MGC_NO_ORB_SAT_FOV=1` restores the dropped lane for A/B.
@@ -6258,6 +6424,7 @@ pub fn mc2_state_from_retail(st: &RetailMc2, slot: u16, row: Mc2Row) -> (Mc1Stat
             nudge_latch: p.nudge_latch != 0,
             row,
             whirl_bumps: 0,
+            flood_spin: false,
         },
     )
 }
@@ -7136,6 +7303,7 @@ mod tests {
             base160: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
+            stagevar_watch: [0u16; 11],
             doom_beam: 0,
         };
         w.retail_import_mc2(&st).expect("import");
@@ -7297,6 +7465,7 @@ mod tests {
             base160,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
+            stagevar_watch: [0u16; 11],
             doom_beam: 0,
         };
         w.retail_import_mc2(&st).expect("import");
@@ -7438,6 +7607,7 @@ mod tests {
             base160: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
+            stagevar_watch: [0u16; 11],
             // mc2l24 t=44656: the third beam tick of the 44654..44677
             // burst, ramp 784 (1024 − 80·3).
             doom_beam: 784,
@@ -7535,6 +7705,7 @@ mod tests {
             base160: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
+            stagevar_watch: [0u16; 11],
             doom_beam: 0,
         };
         w.retail_import_mc2(&st).expect("import");
@@ -7625,6 +7796,7 @@ mod tests {
             base160: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
+            stagevar_watch: [0u16; 11],
             doom_beam: 0,
         };
         let report = w.retail_import_mc2(&st).expect("import");
@@ -7978,6 +8150,7 @@ mod tests {
             base160: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
+            stagevar_watch: [0u16; 11],
             doom_beam: 0,
         };
         let report = w.retail_import_mc2(&st).expect("import");
@@ -8061,6 +8234,7 @@ mod tests {
             base160: 0,
             objectives: [[0; 11]; 8],
             stagevars: [[0; 8]; 11],
+            stagevar_watch: [0; 11],
             doom_beam: 0,
         };
         (st, ply)
@@ -8105,7 +8279,7 @@ mod tests {
         // recorded 100, mana FLAT).
         let (st, ply) = burst_closure(167, carpet(100, 0), 109, tok(1, 2, 3, 100));
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1], false),
             0
         );
 
@@ -8115,7 +8289,7 @@ mod tests {
         // (mc2l3 t=8445, the 40,000 Create Castle out of 41,359).
         let (st, ply) = burst_closure(167, carpet(1000, 0), 114, tok(2, 101, 101, 40000));
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1], false),
             0
         );
 
@@ -8123,7 +8297,7 @@ mod tests {
         // not counting) → no pin at all: mc2l3 t=8446+ climbs +1000.
         let (st, ply) = burst_closure(167, carpet(1000, 0), 114, tok(2, 100, 101, 40000));
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1], false),
             1000
         );
 
@@ -8132,7 +8306,7 @@ mod tests {
         // 116, recorded −100 then 0).
         let (st, ply) = burst_closure(116, carpet(-100, 0), 118, tok(1, 2, 3, 100));
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1], false),
             -100
         );
 
@@ -8142,7 +8316,7 @@ mod tests {
         stolen.action45 = 78;
         let (st, ply) = burst_closure(167, carpet(100, 0), 109, stolen);
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1], false),
             100
         );
 
@@ -8150,7 +8324,7 @@ mod tests {
         // action-0 body alone, so NOTHING is applied (mc2l3 t=22621+).
         let (st, ply) = burst_closure(167, carpet(100, 12), 109, tok(1, 0, 3, 100));
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167], [0, 0, 1], false),
             0
         );
     }
@@ -8192,14 +8366,14 @@ mod tests {
         // recomputed +100 is applied in full.
         let (st, ply) = burst_closure(116, carpet(100, 64), 6, tok(0, 5, 5, 100));
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1], false),
             100
         );
         // The same token one tick earlier, affordable: the first-tick
         // wipe stands (the port's own pass lands the debit).
         let (st, ply) = burst_closure(116, carpet(100, 292), 6, tok(0, 5, 5, 100));
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1], false),
             0
         );
 
@@ -8210,7 +8384,7 @@ mod tests {
         t3.b46 = 2;
         let (st, ply) = burst_closure(116, carpet(345, 645_325), 40, t3);
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1], false),
             345
         );
         // …and one tick earlier it still pins (`@0x2E - 1 == 1`).
@@ -8218,7 +8392,7 @@ mod tests {
         t3.b46 = 2;
         let (st, ply) = burst_closure(116, carpet(345, 645_325), 40, t3);
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1], false),
             0
         );
         // Shield I/II (`life_0x1A == 0`) keep the ordinary order: the
@@ -8227,7 +8401,7 @@ mod tests {
         t1.b46 = 0;
         let (st, ply) = burst_closure(116, carpet(345, 645_325), 40, t1);
         assert_eq!(
-            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1]),
+            mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1], false),
             0
         );
     }

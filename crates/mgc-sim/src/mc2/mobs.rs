@@ -156,6 +156,123 @@ pub(crate) fn no_mc2_alliance_record() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALLIANCE_RECORD").is_some())
 }
 
+/// `MGC_NO_MC2_ALLY_SEAT_RECYCLE=1` restores the pre-dig behaviour,
+/// where `Gen::mc2_alliance_clock`'s dead-record guard DISCARDED the
+/// `mc2_allied` seat the moment the charmed creature's `life` went
+/// negative.
+///
+/// ⭐⭐ RETAIL ZEROES `parentId_0x28_40` AT EXPIRY AND NOWHERE ELSE.
+/// `sub_1E9C0` decrements `word_0x2E_46` and, on the expiry leg
+/// (EF:11019-22), writes `StageVar2_0x49_73 = 10`,
+/// `word_0x96_150 = 0`, `parentId_0x28_40 = 0` — the three together.
+/// Nothing in the function, and nothing in the reaper, clears `@0x28`
+/// on DEATH: a killed-but-unreaped record keeps its owner word until
+/// `NewEvent_4A050` overwrites the slot. The port's alliance parent
+/// rides a SIDE MAP rather than the record, so "it dies with the
+/// record" has to be spelled out — and the port spelled it at the
+/// wrong moment, at death instead of at reallocation. The
+/// `mc2_aura_claim` seat two lines away in [`Gen::new_event`] is the
+/// precedent that gets it right.
+///
+/// The visible half is the `owner` obs lane: `obs_project_mc2` reads
+/// `owner28` for a class-5 `site_z == 14` record straight out of
+/// `mc2_allied`, so a dropped seat publishes 0 where retail's stale
+/// record still reads the caster.
+///
+/// WITNESS mc2l17 t=24,424..24,432: wyvern slot 8 is a `(5,16)` in
+/// action 133 with `life` **−1012** and its charm clock long past
+/// zero (`word_0x2E_46` −11,806 — the state-7 expiry can never run on
+/// a wyvern, see `mc2_wyvern_alliance_brain`), flags **12** so it is
+/// not even a ghost. Retail holds `parentId_0x28_40` 91 for the nine
+/// ticks between the kill and the reap; the port dropped the seat on
+/// every one of them and published `owner` 0. Seven more wyverns
+/// (slots 1/2/3/5/6/7/11) repeat it — 50 of the take's remaining
+/// heads, single-row, `owner` only.
+pub(crate) fn no_mc2_ally_seat_recycle() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALLY_SEAT_RECYCLE").is_some())
+}
+
+/// The class-5 models whose attack state (`8m+2`) is a `sub_1C310`
+/// wrapper — the eight `e8` call sites of file 0x40B10 (VA 0x1C310)
+/// in `NETHERW.EXE` sit in exactly these seven functions:
+/// `sub_1EF70` (m0), `sub_1F6D0` (m2), `sub_1F990` (m3),
+/// `AddArcher0504_1FF40` (m4), `sub_25E40` (m20, twice),
+/// `sub_28570` (m24), `sub_28C60` (m25) — and the port's seven
+/// [`Gen::mc2_chase_attack`] users match them one for one.
+pub(crate) const CHASE_ATTACK_MODELS: [u8; 7] = [0, 2, 3, 4, 20, 24, 25];
+
+/// ⭐⭐⭐ **THE ATTACK-STATE CHARM CLOCK IS INSIDE `sub_1C310`'s QUIET
+/// ARM, NOT AT THE DISPATCH HEAD.** `sub_1C310` (EF:9254 banner
+/// `(0001C310)`) calls the charm resolver `sub_1ED30` — the only thing
+/// that decrements `word_0x2E_46` outside the state-7 body — on ONE
+/// arm: after the inbox head found no mail (`v4 == 0`) and after
+/// `sub_1B8C0`'s move (EF:9308-09; `NETHERW.EXE` file 0x40BFC
+/// `e8 2f 29 00 00  call 0x43530`, the first of `sub_1ED30`'s ten
+/// callers). A damaged tick, a dying tick, and every wrapper that
+/// bails BEFORE calling `sub_1C310` (m20's bare pointer head test at
+/// `sub_25E40`, m2's `else` arm) count NOTHING. The port instead ran
+/// [`Gen::mc2_alliance_clock`] at the class-5 dispatch head in every
+/// state, and never called [`Gen::mc2_ally_resolve`] on this path —
+/// the 🏦 OWED note in that function ("the head clock is one tick
+/// early there").
+///
+/// So the clock moves to the call: [`Gen::mc2_chase_attack`] resolves
+/// its lock through [`Gen::mc2_ally_resolve`] (decrement, null on an
+/// expired clock / the parent itself / a lock the parent is not
+/// fighting — `sub_1C310` then takes `actionIndex = a2 + 1`), and the
+/// head clock stands down in state 2 for [`CHASE_ATTACK_MODELS`].
+///
+/// WITNESS mc2l17 t=29,084..29,694: slot 65, a `(5,20)`, is charmed by
+/// the human at 29,084 in action 162 with `target96` 0 (clock 610).
+/// At 29,085 `sub_25E40`'s pointer head test sends it to 161 without
+/// reaching `sub_1C310` — retail's clock stays 610; the port's head
+/// clock took it to 609. From 29,086 (the tick-top snap to 167) both
+/// count once per tick, so the port ran one tick early for 608 ticks
+/// and expired the charm at 29,694 (`owner` 0, `sv2` 10, re-steered)
+/// where retail still holds `owner` 91, `sv2` 14, clock 1.
+///
+/// `MGC_NO_MC2_CHASE_ALLY_RESOLVE=1` restores the head clock.
+pub(crate) fn no_mc2_chase_ally_resolve() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CHASE_ALLY_RESOLVE").is_some())
+}
+
+/// ⭐⭐ **A DEAD HUMAN CASTER RELEASES HIS ALLIES.** `sub_1E9C0`
+/// (EF:10888 banner `(0001E9C0)`, `NETHERW.EXE` file 0x431C0) tests
+/// the parent record on EVERY call, after the clock decrement and
+/// the tint blink:
+///   0x43307 `39 ce`            cmp %ecx,%esi   ; parent <= Entities[0]
+///   0x43309 `0f 86 02 01 00 00` jbe 0x43411    ; -> LABEL_66 (expiry)
+///   0x4330f `83 7e 08 00`      cmpl $0,0x8(%esi) ; parent life_0x8
+///   0x43313 `0f 8e f8 00 00 00` jle 0x43411    ; <= 0 -> expiry
+/// — the decompile's `if (v3x <= Entities[0] || v3x->life_0x8 <= 0)`
+/// (EF:11004). The human's carpet is an ordinary pool record in
+/// retail, so a charm cast by the human expires the moment the human
+/// is dead (StageVar2 → 10, `word_0x96_150` → 0, `parentId` → 0). The
+/// port's [`Gen::mc2_alliance_clock`] served the human parent as
+/// ALWAYS ALIVE ("the human parent's death restarts the level") —
+/// true of MC1's campaign loss, false for MC2, where the human
+/// respawns at his castle.
+///
+/// WITNESS mc2l17 pair 33074→33075: the human (slot 91) holds
+/// `life` −2800; wyvern slot 6, a `(5,16)` charmed by him (`owner`
+/// 91, `sv2` 14, clock 610) in its controlled slot 135, is released in
+/// retail (`owner` 0, `sv2` 10, `target96` 91 → 0, action stays 135).
+/// The port kept the charm, ran the alliance slot and walked to the
+/// attack state 130.
+///
+/// APPROX, cited: the port's human life reaches the Gen only as
+/// `ctx.pdead` (`life < 0`), so a human standing at exactly `life` 0
+/// still reads alive here where retail's `jle` releases.
+///
+/// `MGC_NO_MC2_ALLY_HUMAN_PARENT_DEATH=1` restores the immortal
+/// human parent.
+pub(crate) fn no_mc2_ally_human_parent_death() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALLY_HUMAN_PARENT_DEATH").is_some())
+}
+
 /// A/B toggle for the ALLIANCE CHARM'S PARENT SEAT: set
 /// `MGC_NO_MC2_ALLIANCE_PARENT_SEAT` to restore the pre-dig behaviour,
 /// where the pair importer cleared `mc2_allied` and never re-seeded it
@@ -1631,7 +1748,16 @@ impl Gen {
             }
             _ => {
                 self.mc2_move_core(i);
-                let slot = self.ent[i].f146;
+                // EF:9309 — `v10x = sub_1ED30(a1x, Entities[word_0x96_150])`:
+                // the quiet arm resolves the lock through the charm
+                // resolver, which counts the charm clock. See
+                // [`no_mc2_chase_ally_resolve`].
+                let raw = self.ent[i].f146;
+                let slot = if no_mc2_chase_ally_resolve() {
+                    raw
+                } else {
+                    self.mc2_ally_resolve(i, raw).unwrap_or(0)
+                };
                 let Some((tx, ty, tz)) = self.mc2_target(slot, ctx) else {
                     self.ent[i].tick70 = base + 1;
                     return false;
@@ -2081,11 +2207,17 @@ impl Gen {
                     // Shrine handling (:11700-24): only a (10,45)
                     // stays a destination; walk to it and be
                     // consumed at 0x1000.
+                    // ⭐⭐ `if (class != 10 || model != 45)` and
+                    // NOTHING ELSE — NETHERW.EXE 0x446cf
+                    // `cmpb $0xa,0x3f(%esi)` / 0x446d5
+                    // `cmpb $0x2d,0x40(%esi)`; the third call path of
+                    // `townie_target_reap_blind`.
                     let t = self.ent[i].f146 as usize;
                     let shrine = t < self.ent.len()
                         && self.ent[t].class64 == 10
                         && self.ent[t].model65 == 45
-                        && self.ent[t].flags & 0x400 == 0;
+                        && (crate::mc2::roster::townie_target_reap_blind()
+                            || self.ent[t].flags & 0x400 == 0);
                     if !shrine {
                         self.ent[i].f146 = 0;
                     } else {
@@ -2484,10 +2616,17 @@ impl Gen {
                         // (:14584-99: shrine.minSpeed > shrine
                         // counter).
                         let t = self.ent[i].f146 as usize;
+                        // ⭐⭐ NETHERW.EXE 0x47d9d
+                        // `cmpb $0xa,0x3f(%esi)` + 0x47daf
+                        // `cmpb $0x2d,0x40(%esi)` and NOTHING ELSE —
+                        // the reap bit is invisible to the rally test,
+                        // exactly as it is to the m12 site test
+                        // (`m12_site_reap_blind`).
                         let shrine = t < self.ent.len()
                             && self.ent[t].class64 == 10
                             && self.ent[t].model65 == 45
-                            && self.ent[t].flags & 0x400 == 0;
+                            && (crate::mc2::roster::townie_target_reap_blind()
+                                || self.ent[t].flags & 0x400 == 0);
                         if shrine {
                             let (sp, tp) = {
                                 let e = &self.ent[i];
@@ -2805,6 +2944,13 @@ impl Gen {
                 self.ent[i].z = c;
             }
         }
+        // The v34 residue seam (`Gen::m27_v34_publish_fire`): the
+        // acting arm's `sub_580E0` left the caller's EBP on W-64 and
+        // `a1x` on W-52, and the `sub_585A0` below is a leaf that
+        // never reaches either. The two early returns above (the fuse
+        // arm and the reap arm) make no call that deep, so neither
+        // touches the slot.
+        self.m27_v34_publish_fire();
         // sub_585A0 (EF:22758): frame advance, CAPPED by the sprite's
         // own count.
         self.mc2_anim_step(i);
@@ -3491,7 +3637,28 @@ impl Gen {
                 let human_hit =
                     !castle_only && alive && wd(pose.0, bx) < bw + pw && wd(pose.1, by) < bh + pw;
                 let n = self.ent.len().max(slot + 1);
+                // ⭐ THE WALK IS THE TICK-TOP ROSTER `dword_38519`, NOT
+                // THE POOL — see `features::no_mc2_build_repaint_roster`.
+                // The walk order below is the pool order with every
+                // non-member skipped; the human keeps its slot seat.
+                let roster: Option<Vec<u16>> = (!crate::engine::features::no_mc2_build_repaint_roster())
+                    .then(|| self.wiz_chain.list[..self.wiz_chain.visible_len()].to_vec());
+                let intact = self.wiz_chain.visible_len() == self.wiz_chain.list.len();
                 for w in 1..n {
+                    if let Some(r) = &roster {
+                        let is_human_seat = human_in_walk && w == slot;
+                        if !is_human_seat && r.binary_search(&(w as u16)).is_err() {
+                            continue;
+                        }
+                        // A blanked head hides every member past the cut,
+                        // the pooled carpet included.
+                        if is_human_seat
+                            && !intact
+                            && r.last().is_none_or(|&l| (l as usize) < w)
+                        {
+                            continue;
+                        }
+                    }
                     if human_in_walk && w == slot {
                         // The out-of-pool carpet, tested where its
                         // pool slot sits in retail's walk. Its spare
@@ -3872,7 +4039,7 @@ impl Gen {
     /// base row (there is no team-tint stage in the billboard pass —
     /// the earlier note claiming one was wrong, and bare 177 flew the
     /// human's flag on rival-claimed houses).
-    pub(crate) fn mc2_house_tick(&mut self, i: usize) {
+    pub(crate) fn mc2_house_tick(&mut self, i: usize, patches: crate::patches::WorldPatches) {
         // CompareEvent08_38B00 (:28255): 0 idle / 1 hit / 2 dead.
         self.ent[i].f40 = 0;
         let status = if self.ent[i].act_life < 0 {
@@ -3959,8 +4126,20 @@ impl Gen {
                 // derivation off the base row — flag family 177 +
                 // COLOR_ART[slot], same as the rival castle flag. Bare
                 // 177 flew the HUMAN's flag on rival-claimed houses.
+                // ⭐ RAW index, not the Transform: the shipped EXE adds
+                // `[player+0x38]` bare (see
+                // `features::no_mc2_house_claim_raw_color`) — so a
+                // rival's houses fly a different band from its castle
+                // for players 2/4/6/7. PATCH OPTION
+                // `mc2_house_flag_color` restores the matching band.
                 let team = self.owner_team(src).unwrap_or(0);
-                self.ent[i].type86 = 177 + crate::mc2::color_art(team) as u16;
+                self.ent[i].type86 = if patches.mc2_house_flag_color
+                    || crate::engine::features::no_mc2_house_claim_raw_color()
+                {
+                    177 + crate::mc2::color_art(team) as u16
+                } else {
+                    177 + team as u16
+                };
             }
         }
         // ⭐⭐⭐ THE PERIODIC POPULATION SPAWN — AN ABSENCE IN AN
@@ -4169,7 +4348,7 @@ impl Gen {
         // kind-10 resume shim on expiry or parent death; it also
         // re-enters the controlled slot after a combat resolves.
         if self.ent[i].site_z == 14 {
-            self.mc2_alliance_clock(i);
+            self.mc2_alliance_clock(i, ctx);
         }
         let action = self.ent[i].tick70;
         // The shared class-5 `8*M+7` slot (`sub_1D5D0`, EF:9977) — a
@@ -5409,9 +5588,15 @@ impl Gen {
     /// re-enter the controlled slot once a combat resolves (retail
     /// returns controlled creatures to `8m+7`; our model machines
     /// drop to their wander phases 0/1 instead).
-    fn mc2_alliance_clock(&mut self, i: usize) {
+    fn mc2_alliance_clock(&mut self, i: usize, ctx: &MobCtx) {
         if self.ent[i].flags & 0x400 != 0 || self.ent[i].act_life < 0 {
-            self.mc2_allied.0.remove(&(i as u16));
+            // ⚠ NO SEAT DROP HERE — retail clears `parentId_0x28_40`
+            // only on the charm's EXPIRY leg (EF:11019-22), never on
+            // death; the seat dies with the RECORD, in
+            // [`Gen::new_event`]. See [`no_mc2_ally_seat_recycle`].
+            if no_mc2_ally_seat_recycle() {
+                self.mc2_allied.0.remove(&(i as u16));
+            }
             return;
         }
         // ⭐ `sub_1E9C0` IS THE STATE-7 WRAPPER'S BODY. In the attack
@@ -5427,11 +5612,30 @@ impl Gen {
         if self.ent[i].model65 == 16 && self.ent[i].tick70 & 7 == 2 {
             return;
         }
+        // The seven `sub_1C310` species: their attack-state clock is
+        // the resolver's, called from [`Gen::mc2_chase_attack`] — see
+        // [`no_mc2_chase_ally_resolve`].
+        if self.ent[i].tick70 & 7 == 2
+            && CHASE_ATTACK_MODELS.contains(&self.ent[i].model65)
+            && !no_mc2_chase_ally_resolve()
+        {
+            return;
+        }
         let parent = self.mc2_allied.0.get(&(i as u16)).copied().unwrap_or(0);
         // Parent-death probe on the 8-tick cadence (pool wizards by
         // owner id; the human parent's death restarts the level, so
         // it counts as alive here).
         let mut parent_dead = parent == 0;
+        // The HUMAN parent is NOT immortal here — see
+        // [`no_mc2_ally_human_parent_death`]. Scoped to the state-7
+        // slot, the only state `sub_1E9C0` itself runs in.
+        if parent == PLAYER_TARGET
+            && ctx.pdead
+            && self.ent[i].tick70 & 7 == 7
+            && !no_mc2_ally_human_parent_death()
+        {
+            parent_dead = true;
+        }
         if parent != 0 && parent != PLAYER_TARGET && self.ent[i].f63 & 7 == 0 {
             parent_dead = !(1..self.ent.len()).any(|j| {
                 let e = &self.ent[j];
@@ -5814,6 +6018,7 @@ impl Gen {
 mod tests {
     use crate::engine::features::Gen;
     use crate::mc1::mobs::PLAYER_TARGET;
+    use super::{ARCHER_BASE, VILLAGER_BASE};
 
     fn w3v_flat_gen() -> Gen {
         use crate::chassis::ChassisParams;
@@ -5851,6 +6056,112 @@ mod tests {
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         }
+    }
+
+    /// ⭐⭐ ROUND 143 — **THE TOWNIE RALLY TARGET IS REAP-BLIND TOO**,
+    /// which is `m12_site_reap_blind` (round ~105) THREE CALL PATHS
+    /// OVER. The villager brain `sub_23340` (EF:14599-601,
+    /// `NETHERW.EXE` 0x47d9d `cmpb $0xa,0x3f(%esi)` / 0x47daf
+    /// `cmpb $0x2d,0x40(%esi)`), the archer's shrine leg (0x446cf /
+    /// 0x446d5) and the trader brain `sub_237B0` (EF:14828-30,
+    /// 0x4822d / 0x48233) all validate `word_0x96_150` on **class 10
+    /// + model 45 and NOTHING else**; not one of them reads the reap
+    /// bit. The port added `flags & 0x400 == 0` to all three, and that
+    /// term is false exactly when it matters — a dwelling is
+    /// reap-flagged the tick it dies and keeps its class and model
+    /// until the free pass actually recycles the record — so a townie
+    /// dropped its destination one whole tick early.
+    ///
+    /// ⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT LANDED: this test drives the
+    /// villager and archer paths; the trader's is pinned beside
+    /// `m14_brain` in `mc2::roster`.
+    ///
+    /// ⛔ NOT FIXTURABLE on this corpus: the reversion probe
+    /// (`MGC_NO_MC2_TOWNIE_TARGET_REAP_BLIND=1`, conforming-at-HEAD ∧
+    /// divergent-with-the-law-off) finds ZERO candidate pairs across
+    /// all nine MC2 intake takes — the window is one tick wide and no
+    /// take's graded boundary lands inside one. Measured, not assumed.
+    ///
+    /// `MGC_NO_MC2_TOWNIE_TARGET_REAP_BLIND=1` restores the extra term
+    /// and both halves of this test fail.
+    #[test]
+    fn a_townie_keeps_rallying_to_a_dwelling_reaped_this_tick() {
+        // A (10,45) dwelling REAP-FLAGGED this tick: still class 10,
+        // still model 45, and the free pass has not run.
+        let dwelling = |g: &mut Gen, reaped: bool| -> usize {
+            let d = g.new_event().expect("dwelling slot");
+            {
+                let e = &mut g.ent[d];
+                e.class64 = 10;
+                e.model65 = 45;
+                e.act_life = 1_000;
+                e.f128 = 4; // minSpeed: capacity for four townies
+                e.f26 = 0;
+                if reaped {
+                    e.flags |= 0x400;
+                }
+            }
+            let (dx, dy) = (120u16 << 8, 100u16 << 8);
+            let dz = g.ground_z(dx, dy) as i16;
+            g.link(d, dx, dy, dz);
+            d
+        };
+        // A townie 20 tiles out — well past the 0x800 rally radius, so
+        // the graded arm is the RE-AIM, not the consume.
+        let townie = |g: &mut Gen, model: u8, base: u8, target: u16| -> usize {
+            let v = g.new_event().expect("townie slot");
+            {
+                let e = &mut g.ent[v];
+                e.class64 = 5;
+                e.model65 = model;
+                e.tick70 = base; // state 0 — the walk
+                e.max_life = 1_000;
+                e.act_life = 1_000;
+                e.f146 = target;
+                e.f63 = 0; // on the cadence
+                e.f34 = 0;
+            }
+            let (vx, vy) = (100u16 << 8, 100u16 << 8);
+            let vz = g.ground_z(vx, vy) as i16;
+            g.link(v, vx, vy, vz);
+            v
+        };
+
+        // THE LAW, villager path (`sub_23340`).
+        let mut g = w3v_flat_gen();
+        let ctx = w3v_ctx();
+        let d = dwelling(&mut g, true);
+        let v = townie(&mut g, 12, VILLAGER_BASE, d as u16);
+        g.villager_brain(v, &ctx);
+        assert_eq!(
+            g.ent[v].f146, d as u16,
+            "the rally handle survives the reap stamp"
+        );
+        let (vx, vy) = (g.ent[v].x, g.ent[v].y);
+        assert_eq!(
+            g.ent[v].f34,
+            Gen::angle_between(vx, vy, 120 << 8, 100 << 8),
+            "…and the villager keeps walking to the dwelling"
+        );
+
+        // NON-VACUITY: the class/model test itself still bites — a
+        // target that is NOT a (10,45) is dropped, reap bit or no.
+        let mut g = w3v_flat_gen();
+        let d = dwelling(&mut g, false);
+        g.ent[d].model65 = 44; // not a dwelling
+        let v = townie(&mut g, 12, VILLAGER_BASE, d as u16);
+        g.villager_brain(v, &ctx);
+        assert_eq!(g.ent[v].f146, 0, "a non-(10,45) handle is cleared");
+
+        // THE LAW, archer path (the third `sub_23340` sibling).
+        let mut g = w3v_flat_gen();
+        let d = dwelling(&mut g, true);
+        let a = townie(&mut g, 13, ARCHER_BASE, d as u16);
+        g.archer_brain(a, &ctx);
+        assert_eq!(
+            g.ent[a].f146, d as u16,
+            "the archer's shrine handle survives the reap stamp too"
+        );
     }
 
     /// ⭐ ROUND 104 — **THE TANK'S HIT LATCHES ITS ATTACKER AS ITS
@@ -6253,6 +6564,48 @@ mod tests {
         );
     }
 
+    /// ⭐ ROUND 146 (w146c) — the wyvern's idle building sweep
+    /// (`sub_24440`) walks the TICK-TOP `(10,45)` roster, so a house
+    /// reap-stamped earlier in the same tick is still the nearest
+    /// candidate. Witness mc2l22-new t=20384 (wyvern 203 → house 80).
+    /// See `features::no_mc2_m16_sweep_roster`; under
+    /// `MGC_NO_MC2_M16_SWEEP_ROSTER=1` the last assert fails (the pool
+    /// walk skips the stamped house and locks the far one). POSITIVE
+    /// CONTROL: with no stamp both arms lock the near house.
+    #[test]
+    fn the_wyvern_sweep_locks_a_house_reaped_earlier_this_tick() {
+        let build = |stamp: bool| {
+            let mut g = q22_gen();
+            let mk = |g: &mut Gen, tx: u16| {
+                let h = g.new_event().expect("a house slot");
+                g.ent[h].class64 = 10;
+                g.ent[h].model65 = 45;
+                g.ent[h].tick70 = 52;
+                g.ent[h].act_life = 1000;
+                g.link(h, tx * 256, 40 * 256, 400);
+                h
+            };
+            let near = mk(&mut g, 41);
+            let far = mk(&mut g, 42);
+            if stamp {
+                g.ent[near].flags |= 0x400;
+            }
+            g.rebuild_bldg_chain();
+            let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+            g.ent[i].tick70 = 16 * 8 + 1; // idle
+            g.ent[i].f58 = 0; // asleep: no wizard scan in the shared idle
+            g.ent[i].f63 = 0; // the sweep cadence is open
+            g.m16_tick(i, &q22_ctx());
+            (g.ent[i].tick70, g.ent[i].f146, near as u16, far as u16)
+        };
+        let (act, lock, near, _) = build(false);
+        assert_eq!((act, lock), (16 * 8 + 2, near), "control: the nearest house is locked");
+        let (act, lock, near, far) = build(true);
+        assert_ne!(near, far);
+        assert_eq!(act, 16 * 8 + 2, "the sweep engages");
+        assert_eq!(lock, near, "0x2449B walks dword_38527: no reap test, the stamped house stays nearest");
+    }
+
     /// Build a hive + one edible neighbour of the model its bucket
     /// selects, and return `(hive, prey, pool length before the
     /// split)`. Row 80's `v_26 = 25` and `f63` is the per-model spawn
@@ -6476,5 +6829,50 @@ mod tests {
         assert_eq!(g.ent[i].lease(), 610, "word_0x2E_46");
         assert_eq!(g.ent[i].f50, 610, "word_0x30_48 (port `f50`, the MC2 `f30` lane)");
         assert_eq!(g.ent[i].tick70, 16 * 8 + 7, "an idle victim enters the controlled slot");
+    }
+
+    /// ⭐⭐⭐ ROUND 146 — the `sub_1C310` species count their attack-state
+    /// charm clock INSIDE the chase's quiet arm (`sub_1ED30`, file
+    /// 0x40BFC), never at the dispatch head — see
+    /// [`super::no_mc2_chase_ally_resolve`]. Witness mc2l17 slot 65
+    /// (t=29,085): a (5,20) charmed in 162 with no lock bails at
+    /// `sub_25E40`'s pointer head test and its clock stays put.
+    ///
+    /// INHERITED on the take (the clock `word_0x2E_46` is not an obs
+    /// lane; the head lands 609 ticks later), so it is pinned here.
+    /// `MGC_NO_MC2_CHASE_ALLY_RESOLVE=1` fails the first assert; the
+    /// two POSITIVE CONTROLS (state 7, and a live lock that reaches
+    /// the resolver — ONE count, not two) pass in both arms.
+    #[test]
+    fn a_charmed_chaser_counts_its_clock_only_where_it_reaches_the_resolver() {
+        let charmed = |g: &mut Gen, action: u8, lock: u16| -> usize {
+            let i = g.mc2_spawn_m20(40 * 256, 41 * 256, 400).expect("a pool slot");
+            g.ent[i].tick70 = action;
+            g.ent[i].f146 = lock;
+            g.ent[i].f71 = 0;
+            g.ent[i].site_z = 14;
+            g.ent[i].set_lease(610);
+            g.mc2_allied.0.insert(i as u16, PLAYER_TARGET);
+            i
+        };
+        let ctx = q22_ctx();
+        // POSITIVE CONTROL 1: the state-7 body counts once, both arms.
+        let mut g = q22_gen();
+        let i = charmed(&mut g, 20 * 8 + 7, 0);
+        g.mc2_creature_tick(i, &ctx);
+        assert_eq!(g.ent[i].lease(), 609, "sub_1E9C0 decrements once");
+        // POSITIVE CONTROL 2: a lock on the human reaches the quiet arm
+        // — ONE count (the resolver's), never the head's as well.
+        let mut g = q22_gen();
+        let i = charmed(&mut g, 20 * 8 + 2, PLAYER_TARGET);
+        g.mc2_creature_tick(i, &ctx);
+        assert_eq!(g.ent[i].lease(), 609, "one count per tick in the attack state");
+        // THE WITNESS — last, so the switched arm proves both controls:
+        // 162 with no lock → 161, the clock untouched.
+        let mut g = q22_gen();
+        let i = charmed(&mut g, 20 * 8 + 2, 0);
+        g.mc2_creature_tick(i, &ctx);
+        assert_eq!(g.ent[i].tick70, 20 * 8 + 1, "sub_25E40's bare pointer test bails");
+        assert_eq!(g.ent[i].lease(), 610, "no sub_1ED30 call, no count");
     }
 }

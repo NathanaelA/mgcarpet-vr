@@ -397,7 +397,7 @@ pub fn registry() -> Vec<Spec> {
             group: "render · preference",
             label: "crosshair",
             class: Preference,
-            key: Some("C"),
+            key: None,
             cli: Some("--crosshair"),
             cfg_path: "render.preference.crosshair",
             // Faithful = ON: both retails steered by a live on-screen
@@ -699,7 +699,7 @@ pub fn registry() -> Vec<Spec> {
             group: "render · preference",
             label: "smooth_shading",
             class: Preference,
-            key: Some("T"),
+            key: None,
             cli: Some("--smooth-shading"),
             cfg_path: "render.enhancement.smooth_shading",
             read: toggle!(c => render.enhancement.smooth_shading),
@@ -1060,7 +1060,7 @@ pub fn registry() -> Vec<Spec> {
             group: "render · debug",
             label: "health_bars",
             class: Debug,
-            key: Some("B"),
+            key: None,
             cli: Some("--health-bars"),
             cfg_path: "render.debug.health_bars",
             read: toggle!(c => render.debug.health_bars),
@@ -1103,7 +1103,7 @@ pub fn registry() -> Vec<Spec> {
             group: "render · debug",
             label: "map_trigger_areas",
             class: Debug,
-            key: Some("V"),
+            key: None,
             cli: Some("--map-triggers"),
             cfg_path: "render.debug.map_trigger_areas",
             read: toggle!(c => render.debug.map_trigger_areas),
@@ -1165,7 +1165,7 @@ pub fn registry() -> Vec<Spec> {
             group: "render · debug",
             label: "coords",
             class: Debug,
-            key: Some("K"),
+            key: None,
             cli: Some("--coords"),
             cfg_path: "render.debug.coords",
             read: toggle!(c => render.debug.coords),
@@ -2090,6 +2090,65 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc2_orphan_balloon_reap",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_orphan_balloon_reap",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_orphan_balloon_reap.on(),
+                faithful: false,
+            },
+            desc: "Dead mana balloons always pop (MC2). The only thing in retail \
+                   that clears a dead mana balloon is its own castle's fleet \
+                   pass, so destroy a wizard's castle before his balloon and \
+                   what is left cannot be hurt, cannot be killed and never goes \
+                   away: it keeps his colours, drifts after whatever has taken \
+                   over the dead castle's slot - a hydra, a creature, you - and \
+                   is still there when the level ends. Patched, a dead balloon \
+                   with no castle left dissolves into its mana sphere the way \
+                   the castle pass would have done.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_orphan_balloon_reap =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "A castle-less dead balloon haunts the level forever, as retail.",
+                    "A castle-less dead balloon dissolves into mana (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc2_house_flag_color",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_house_flag_color",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_house_flag_color.on(),
+                faithful: false,
+            },
+            desc: "Claimed houses fly their owner's castle colour (MC2). Retail \
+                   colours a claimed house's flag by the owner's raw player \
+                   slot while the castle uses the proper team colour, so for \
+                   four of the eight wizards a rival's houses and castle show \
+                   different colours. Patched, houses match the castle.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_house_flag_color = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Houses fly the owner's raw slot colour, as retail.",
+                    "Houses fly the owner's castle colour (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2158,7 +2217,7 @@ pub fn registry() -> Vec<Spec> {
             group: "gameplay · cheat",
             label: "inert",
             class: Cheat,
-            key: Some("I"),
+            key: Some("B"),
             cli: Some("--inert"),
             cfg_path: "gameplay.cheat.inert",
             read: toggle!(c => gameplay.cheat.inert),
@@ -2178,7 +2237,7 @@ pub fn registry() -> Vec<Spec> {
             group: "gameplay · cheat",
             label: "weightless",
             class: Cheat,
-            key: Some("L"),
+            key: Some("N"),
             cli: Some("--weightless"),
             cfg_path: "gameplay.cheat.weightless",
             read: toggle!(c => gameplay.cheat.weightless),
@@ -2354,8 +2413,9 @@ mod tests {
         // no_spell_loss + mc1_fix_dragon_tail 2026-09-07,
         // mc2_phantom_castle 2026-09-10, dual_wield_muzzle and
         // one_castle_per_wizard 2026-09-15, mc2_wyvern_alliance_brain
-        // 2026-09-16.
-        assert_eq!(patches, 15, "all fifteen patches ship on");
+        // and mc2_orphan_balloon_reap 2026-09-16, mc2_house_flag_color
+        // 2026-09-17.
+        assert_eq!(patches, 17, "all seventeen patches ship on");
     }
 
     #[test]

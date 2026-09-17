@@ -37,7 +37,10 @@
 //!   `sub_69AB0` build-queue variant is OPEN; the MC2 mana ladder
 //!   (L:1729-55) applies either way.
 
-use crate::engine::features::Gen;
+use crate::engine::features::{
+    Gen, no_mc2_m27_v34_lightning_token_residue, no_mc2_m27_v34_meteor_cast_residue,
+    no_mc2_m27_v34_token_transparent,
+};
 use crate::engine::world::{AimLock, LifeState, PlayerPose, World};
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc2::spells::Mc2SubSpell;
@@ -650,6 +653,121 @@ pub(crate) fn mc2_launch_axis_reach(spell: usize, life: i8) -> Option<(i16, bool
 pub(crate) fn no_mc2_shield_armed() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SHIELD_ARMED").is_some())
+}
+
+/// ⭐⭐⭐ **THE SPEED TOKEN STEERS BY THE *COMMAND* REGISTER, NOT BY
+/// THE CARPET'S ACTUAL SPEED — AND THE TWO PART EVERY TIME THE SPELL
+/// IS CAST WHILE STILL COASTING BACKWARD.**
+///
+/// `GetScroll_69DB0` (`reference/remc2/remc2/engine/EventsFunctions.cpp`
+/// — IDA banner `//----- (00069DB0)`, signature the next line) opens
+/// its body with
+///
+/// ```text
+///   if (v1x->dword_0xA4_164x->speed_0xc_12 >= 0) v2 = 1; else v2 = -1;
+///   ...
+///   v1x->dword_0xA4_164x->speed_0xc_12 = v2 * minSpeed * (sub + 1);   // arm tick
+///   v1x->actSpeed_0x82_130            = v1x->dword_0xA4_164x->speed_0xc_12;
+/// ```
+///
+/// `dword_0xA4_164` is the caster's `Type_str_164` flight block and
+/// `speed_0xc_12` is its **command** word — the pose channel's
+/// `tgt_speed` / `RetailPlayerMc2::cmd_speed` (+998+12) — NOT the
+/// entity's `actSpeed_0x82_130` (+0x82), which the token writes a
+/// line later FROM it. Shipped `NETHERW.EXE`: the compare is at file
+/// `0x8E603` (`mov eax,[esi+0xA4]` / `cmp word [eax+0xC],0` /
+/// `jl`), i.e. VA `0x69E03` = `0x8E603 − 0x24800`, and the pair of
+/// stores is `mov [eax+0xC],dx` + `mov [esi+0x82],dx`.
+///
+/// The port derived the sign from the POSE's `speed`, which is
+/// `actSpeed`. `mc2/cast.rs` even wrote the discrepancy down and
+/// dismissed it — *"the two agree on every tick of a live window and
+/// on the arm tick they differ only while a decelerating carpet
+/// crosses zero"* — and that dismissal is exactly the head:
+/// **mc2l33 t=8896**. The player had cast Speed BACKWARD at t=8891
+/// (`cmd_speed`/`actSpeed` −240 → −160), walled into a cave at 8892,
+/// which zeroed `cmd_speed`, and by 8895 the carpet was still coasting
+/// at `actSpeed` −112 with `cmd_speed` **0**. Re-pressing Speed at
+/// 8896 makes retail read `0 >= 0` → forward → `+240`; the port read
+/// −112 → backward → `−240`, flew into the wall behind it, took the
+/// refusal's `tgt_speed = 0` + `waterCounter++`, and never moved
+/// again. One bit, six pose lanes.
+///
+/// Set `MGC_NO_MC2_SPEED_SIGN_CMD` to restore the `actSpeed` read.
+pub(crate) fn no_mc2_speed_sign_cmd() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SPEED_SIGN_CMD").is_some())
+}
+
+/// ⭐⭐⭐ **SPEED IS THE ONE MANIFESTATION WHOSE *UNAFFORDABLE* TICK
+/// DOES NOT COLLAPSE ITS WINDOW — AND A DYING WIZARD IS
+/// UNAFFORDABLE, SO EVERY DEATH FALL USED TO FIRE THE ±80 RESTORE.**
+///
+/// The twenty-five other MC2 handlers close their effect body with a
+/// bare `else { word_0x2E_46 = 1 }` (EF:56236, :56372, :56700,
+/// :56819, :57041, :57107, :57388, :57586, :58049 …), and the port
+/// implements that as one shared arm. `GetScroll_69DB0`
+/// (`reference/remc2/remc2/engine/EventsFunctions.cpp`, IDA banner
+/// `//----- (00069DB0)`; the arm is at :56567-70) is the EXCEPTION,
+/// and it is the ONLY function in the binary that reads
+/// `word_0xe_14` at all:
+///
+/// ```text
+///   if (!sub_68D50(a1x, v1x) || v1x->dword_0xA4_164x->word_0xe_14)
+///   {
+///       if (v1x->dword_0xA4_164x->word_0xe_14)
+///           a1x->word_0x2E_46 = 1;          // the BRAKE alone
+///   }
+///   else { ...the effect body... }
+///   v8 = a1x->word_0x2E_46 - 1;             // shared by both arms
+///   a1x->word_0x2E_46 = v8;
+///   if (!v8) { speed = minSpeed * v2; actSpeed = speed; sub_6D880(a1x); }
+/// ```
+///
+/// Shipped `NETHERW.EXE`, VA `0x69F79` = file `0x8E779` (+0x24800) —
+/// the join of the afford `je` at `0x8E61F` (on `sub_68D50`'s return,
+/// `call 0x8D550` at `0x8E615`) and the brake `jne` at `0x8E630`:
+///
+/// ```text
+///   8e779: 8b 86 a4 00 00 00   mov  0xa4(%esi),%eax   ; caster Type_str_164
+///   8e77f: 66 83 78 0e 00      cmpw $0x0,0xe(%eax)    ; word_0xe_14
+///   8e784: 74 06               je   0x8e78c           ; ⭐ NO brake ⇒ NO collapse
+///   8e786: 66 c7 43 2e 01 00   movw $0x1,0x2e(%ebx)   ; brake ⇒ word_0x2E_46 = 1
+///   8e78c: 66 8b 4b 2e         mov  0x2e(%ebx),%cx    ; the plain decrement
+///   8e790: 66 49               dec  %cx
+///   8e792: 66 89 4b 2e         mov  %cx,0x2e(%ebx)
+///   8e796: 75 35               jne  0x8e7cd           ; nonzero ⇒ no restore
+///   8e798: 66 0f af be 84 …    imul 0x84(%esi),%di    ; ±minSpeed = the ±80 restore
+/// ```
+///
+/// And the afford test `sub_68D50` (banner `//----- (00068D50)`,
+/// :55901-03) bails on the CASTER's own vitals —
+/// `if (locEvent2->mana_0x90_144 < 0) return false;` then
+/// `if (locEvent2->life_0x8 < 0) return false;` — so a wizard who has
+/// just been killed is unaffordable for every remaining tick of his
+/// death fall, while his Speed window keeps counting down untouched.
+///
+/// **mc2l19-taketwo t=3257 is the witness.** The player is flying
+/// backward under Speed (`cmd_speed`/`actSpeed` −240 at t=3243, −160
+/// from t=3244), takes lethal damage at t=3256 (`life` −1200,
+/// `actionIndex` 0 → 2) and touches down at t=3257. Retail's Speed
+/// token (slot 16, the `(15,3)`) records `word_0x2E_46` **287 → 286**
+/// across that boundary — a plain decrement, no collapse — and the
+/// flight columns stay pinned at **−160** through the landing, the
+/// whole dead wait and past it (t=3258…3320 all −160). The port read
+/// `mc2_afford` false, collapsed the counter to 1, decremented it to
+/// 0 in the same tick and mailed `pending_speed_base = −80`, so the
+/// carpet's own dispatch slammed `act_speed`/`tgt_speed` to −80 and
+/// the corpse fell 79 units short. The head is not pose-only: the
+/// touchdown's 26-token scatter and the `(10,40)` grave are placed
+/// from the carpet's mid-tick position, so slot 6 and the whole
+/// class-15 band land at the wrong spot too.
+///
+/// Set `MGC_NO_MC2_SPEED_BROKE_SURVIVES` to restore the shared
+/// collapse on Speed's unaffordable tick.
+pub(crate) fn no_mc2_speed_broke_survives() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SPEED_BROKE_SURVIVES").is_some())
 }
 
 /// ⭐⭐⭐ **SHIELD III DECREMENTS ITS BURST COUNTER *BEFORE* IT BILLS,
@@ -1370,6 +1488,14 @@ impl Gen {
             self.snd(9, pr);
         }
     }
+}
+
+/// See [`World::mc2_v34_token_pre`].
+#[derive(Clone, Copy)]
+pub(crate) enum TokenV34 {
+    Idle,
+    MeteorFire(u32),
+    Other,
 }
 
 impl World {
@@ -2514,6 +2640,67 @@ impl World {
         }
     }
 
+    /// What a HUMAN manifestation's tick is about to do to the hydra
+    /// `v34` dwords, read at dispatch entry: `Idle` for the call-free
+    /// `word_0x2E_46 <= 0` exit, `MeteorFire(word)` for spell 9's fire
+    /// tick (`word` = `sub_68E50`'s muzzle buffer, low dword). See
+    /// [`crate::engine::features::no_mc2_m27_v34_token_transparent`] and
+    /// [`crate::engine::features::no_mc2_m27_v34_meteor_cast_residue`].
+    pub(crate) fn mc2_v34_token_pre(&self, spell: usize, m: usize, p: PlayerPose) -> TokenV34 {
+        let e = &self.g.ent[m];
+        if e.f26 <= 0 {
+            return TokenV34::Idle;
+        }
+        if spell == 9 && e.f26 as u16 == e.f28.max(1) && self.mc2_afford(m) {
+            let (mx, my, _) = self.muzzle_side(p, self.mc2_fire_side(m));
+            return TokenV34::MeteorFire(u32::from(mx) | u32::from(my) << 16);
+        }
+        TokenV34::Other
+    }
+
+    pub(crate) fn mc2_v34_token_post(&mut self, spell: usize, m: usize, v34: TokenV34) {
+        match v34 {
+            // Lightning's body `sub_6A5C0` zeroes its `[ebp-0x20]` local
+            // — W-52 — BEFORE its idle gate.
+            TokenV34::Idle if spell == 7 && !no_mc2_m27_v34_lightning_token_residue() => {
+                let slot = &mut self.g.m27_v34_slot;
+                slot.0 = Some(0);
+                slot.1 = false;
+                if let Some(p) = slot.3 {
+                    if self.g.m27_v34_broken(p as usize, m) {
+                        self.g.m27_v34_slot.2 = None;
+                    }
+                    self.g.m27_v34_slot.3 = Some(m as u16);
+                }
+            }
+            // The castle's idle tail runs `sub_6D880`, which goes deep
+            // only with a tier pending (`word_0x2C_44`).
+            TokenV34::Idle
+                if !no_mc2_m27_v34_token_transparent()
+                    && spell != 7
+                    && (spell != 2 || self.g.ent[m].f44 == 0) =>
+            {
+                self.g.m27_v34_transparent(m);
+            }
+            TokenV34::MeteorFire(word) if !no_mc2_m27_v34_meteor_cast_residue() => {
+                // A window that closed on this tick with a pending tier
+                // (`word_0x2C_44`) ran `sub_6D880`'s deep
+                // `call 0x91de0` too: not modelled.
+                let w64 = if self.g.ent[m].f26 == 0 && self.g.ent[m].f44 != 0 {
+                    None
+                } else {
+                    Some(word)
+                };
+                let slot = &mut self.g.m27_v34_slot;
+                slot.0 = None;
+                slot.1 = false;
+                slot.2 = w64;
+                slot.3 = Some(m as u16);
+            }
+            _ => {}
+        }
+    }
+
     /// ONE manifestation's effect state — the body of
     /// [`World::mc2_cast_tick`]'s loop, split out because retail runs it
     /// as the class-15 entity's OWN action at its OWN pool slot, not
@@ -2693,9 +2880,12 @@ impl World {
                             self.g.ent[m].f56 = 0;
                         }
                     }
-                } else {
+                } else if spell != 3 || no_mc2_speed_broke_survives() {
                     // Can't afford mid-cast → collapse to one tick
                     // (EF:63... skeleton line `word_0x2E_46 = 1`).
+                    // ⭐⭐⭐ …EXCEPT SPEED, whose unaffordable arm
+                    // collapses ONLY on the brake word — see
+                    // [`no_mc2_speed_broke_survives`].
                     self.g.ent[m].f26 = 1;
                 }
                 // Mid-burst regen suppression (`sub_68DE0` else
@@ -2924,14 +3114,24 @@ impl World {
                 // spike down and filed it as an "optional fidelity
                 // nicety".
                 //
-                // ⚠ The direction is retail's `sign(speed_0xc_12)` —
-                // the COMMAND. The carpet is out of pool here, so the
-                // pose's `speed` (`actSpeed`) stands in; the two agree
-                // on every tick of a live window (the token writes both
-                // from the same value) and on the arm tick they differ
-                // only while a decelerating carpet crosses zero.
+                // ⚠⚠ The direction is retail's `sign(speed_0xc_12)` —
+                // the COMMAND, and this comment used to end *"the
+                // carpet is out of pool here, so the pose's `speed`
+                // (`actSpeed`) stands in; … on the arm tick they
+                // differ only while a decelerating carpet crosses
+                // zero."* That dismissal WAS the defect: mc2l33
+                // t=8896 is exactly a decelerating carpet crossing
+                // zero, and it cost the take its certification. The
+                // command now reaches this seat as
+                // `World::mc2_cmd_speed` — see
+                // [`no_mc2_speed_sign_cmd`].
                 if spell == 3 && afford && !v14_collapse {
-                    let sign = if p.speed >= 0 { 1i16 } else { -1 };
+                    let dir_src = if no_mc2_speed_sign_cmd() {
+                        p.speed
+                    } else {
+                        self.mc2_cmd_speed
+                    };
+                    let sign = if dir_src >= 0 { 1i16 } else { -1 };
                     let factor = self.g.ent[m].f30 as i16 + i16::from(first);
                     self.pending_speed_base = Some(sign * 80 * factor);
                 }
@@ -2948,7 +3148,14 @@ impl World {
                 // was. mc2l3 t=15500+ is the instrument: one puff
                 // every 4 ticks marching along the boosted flight
                 // path, 175 of them across the take.
+                // ⭐ AND THE PUFF LIVES INSIDE THE SAME `else` AS THE
+                // REGISTER WRITE (EF:56602-10) — an unaffordable tick
+                // spawns nothing. See [`no_mc2_speed_broke_survives`]:
+                // this gate is inert while the window still collapsed
+                // on the broke tick, because the collapse killed the
+                // token before a fourth tick could come round.
                 if spell == 3
+                    && (afford || no_mc2_speed_broke_survives())
                     && !v14_collapse
                     && self.g.ent[m].f63 & 3 == 0
                     && let Some(s) = self.g.mc2_spawn_speed_puff(p.x, p.y, p.z)
@@ -2965,7 +3172,12 @@ impl World {
                     // later. MC1's `pending_speed_base` mail is the
                     // same seam and needed no new machinery.
                     if spell == 3 {
-                        self.pending_speed_base = Some(if p.speed >= 0 { 80 } else { -80 });
+                        let dir_src = if no_mc2_speed_sign_cmd() {
+                            p.speed
+                        } else {
+                            self.mc2_cmd_speed
+                        };
+                        self.pending_speed_base = Some(if dir_src >= 0 { 80 } else { -80 });
                     }
                     self.mc2_cast_expire(spell, m);
                 }
@@ -3773,13 +3985,21 @@ impl World {
             // fixed 3.0/2.0) — docs/spell-audit/speed.md. MC2's one
             // spell doubles as MC1's Accelerate AND Accelerate
             // Backwards: the direction is the caster's CURRENT
-            // velocity sign (EF:56212-15 — `v2 = speed_0xc_12 >= 0 ?
-            // 1 : -1`, standstill counts as forward; retail re-derives
-            // it every effect tick, but the hard speed override makes
-            // the sign self-sustaining, so the cast-time latch is the
-            // same law).
+            // COMMAND sign (`v2 = speed_0xc_12 >= 0 ? 1 : -1`,
+            // standstill counts as forward) — the FLIGHT BLOCK's
+            // `+0xC`, NOT the entity's `actSpeed_0x82_130`
+            // (`NETHERW.EXE` 0x8E5F8-0x8E603; see
+            // [`no_mc2_speed_sign_cmd`]). Retail re-derives it every
+            // effect tick, but the hard speed override makes the sign
+            // self-sustaining, so the cast-time latch is the same
+            // law.
             3 => {
-                self.player.accel = if p.speed >= 0 { 1 } else { -1 };
+                let dir_src = if no_mc2_speed_sign_cmd() {
+                    p.speed
+                } else {
+                    self.mc2_cmd_speed
+                };
+                self.player.accel = if dir_src >= 0 { 1 } else { -1 };
                 self.player.accel_held = true;
                 self.player.accel_mc2_factor = sub.sub_spell.clamp(1, 8) as i8;
                 self.mc2_award_xp(PLAYER_TARGET, 3, 1);

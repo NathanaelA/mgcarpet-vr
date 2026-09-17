@@ -1179,6 +1179,21 @@ fn anchor_mc2(
     let report = world
         .retail_import_mc2(st)
         .map_err(|e| format!("t={t}: import: {e}"))?;
+    // ⚠⚠⚠ A ROW THAT DOES NOT DECODE IS A SILENT WHOLE-BEHAVIOUR
+    // SUBSTITUTION, AND THE WORLD-MODE BANNER NEVER SAID SO. The pair
+    // path has printed `behavior base … N bad rows` since the importer
+    // was written (verify.rs); this path printed neither, so
+    // `mc2l22-new`'s seed imported all 645 live records on the
+    // stand-in row 59 (`base160` = 0 in its record 0 — see
+    // `mgcr::mc2_base160`) and the only evidence was the divergence
+    // itself. stderr, so `--brief`'s stdout stays machine-readable.
+    if report.bad_rows > 0 {
+        eprintln!(
+            "   ⚠ t={t}: {} of {} imported records have an UNDECODABLE behaviour row \
+             (base {:#x}) — every one of them falls back to the stand-in row 59",
+            report.bad_rows, report.active, report.behavior_base
+        );
+    }
     let (fl, fr) = recover::mc1_fire(st.players[st.local_player as usize].move_bits);
     world.set_prev_fire(fl, fr);
     let row = world.mc2_carpet_row();
@@ -3449,6 +3464,7 @@ fn run_mc2(
                             } else {
                                 crate::verify::PairPose::PinN1
                             },
+                            rec.mc2_park,
                         ) {
                             Ok((pdp, _, _)) => {
                                 stats.class_tags.insert(tick.t, !pdp.clean());

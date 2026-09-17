@@ -379,7 +379,7 @@ fn for_each_pair_mc2(
                 // The recovered PANE SELECT (verify_mc2's fold): a
                 // recorded hand change across the pair replays as the
                 // equip — local to the pair, never the edge chain.
-                let pair_cmd = {
+                let (pair_cmd, pair_full_stop) = {
                     let mut c = cmd;
                     let rec = mgc_formats::recover::recover_pair_mc2(
                         &pst,
@@ -405,7 +405,10 @@ fn for_each_pair_mc2(
                     // (`MGC_NO_MC2_SUICIDE_WITNESS`) still governs it —
                     // the recovery returns `false` under it.
                     c.suicide = rec.suicide;
-                    c
+                    // …and the FULL STOP (`PlayerEvents_51BB0` case
+                    // 0x27), which the pair importer cannot see from
+                    // the state at N (`World::mc2_full_stop_import`).
+                    (c, rec.mc2_park)
                 };
                 let (pd, _, _) = crate::verify_mc2::exec_pair_mc2(
                     &mut world,
@@ -427,6 +430,7 @@ fn for_each_pair_mc2(
                     } else {
                         verify::PairPose::PinN
                     },
+                    pair_full_stop,
                 )
                 .map_err(|e| format!("t={pt}: {e}"))?;
                 f(pt, pd, &crate::verify_mc2::class_map_mc2(&obs))?;

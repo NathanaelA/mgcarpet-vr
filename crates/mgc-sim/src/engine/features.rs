@@ -942,6 +942,15 @@ pub(crate) struct Gen {
     /// the mailbox can and does survive the turn).
     /// Not on the wire, not hashed — a transient of the walk.
     pub(crate) ww_walk_published: HashSilent<bool>,
+    /// ⭐ A WITHIN-WALK REGISTER, the [`Gen::m27_v34_slot`] idiom: the
+    /// DWORD an m22 tail segment's handler (`sub_26CA0`, action 0xB4)
+    /// leaves at `W-52` below the entity walk's call site, tagged
+    /// with that segment's slot. The next worm head's `sub_26FF0`
+    /// reads it as its uninitialised probe position — see
+    /// [`no_mc2_m22_stale_probe`]. `(slot, None)` = the handler ran
+    /// but its residue is not modelled. Cleared at walk start; not on
+    /// the wire, not hashed.
+    pub(crate) m22_seg_residue: HashSilent<Option<(u16, Option<u32>)>>,
     /// The doomsday pyramid's HURL-AWAY BEAM on the human — the
     /// second `sub_21AB0` arm that is NOT a knock. Case 7 (EF:13427-56)
     /// ramps the GLOBAL `D41A0_0.word_0x36546` 1024 → −80/tick → floor
@@ -957,6 +966,23 @@ pub(crate) struct Gen {
     /// 128 and then kept shoving for twenty ticks after the burst.
     /// Same transport shape as [`Gen::player_whirl`].
     pub(crate) player_hurl: PlayerHurl,
+    /// ⭐⭐ THE (10,67) QUAKE/FLOOD'S **Z PULL-DOWN** ON THE HUMAN —
+    /// the half of `sub_39B60`'s shove that is NOT a knock, and the
+    /// last un-ported line of `mc2::flood`'s module-header APPROX
+    /// list ("the z pull and spin bank on the FlightVerb takeover
+    /// seam"). Retail's shove is a `CopyEntityPosition_57CF0` on the
+    /// victim RECORD, and its wizard arm (class 3 model 0 —
+    /// `NETHERW.EXE` 0x5e4ef `mov 0x3f(%ebx),%ah` / `cmp $0x3` /
+    /// 0x5e4fa `cmpb $0x0,0x40(%ebx)`) is `predicted.z -= 48 *
+    /// ((4096 - v5) << 8 >> 12) >> 8`, floored at the stepped point's
+    /// `getTerrainAlt` (0x5e4e7 / 0x5e585). The POOL victims have had
+    /// it since round 98; the human arm carried only the horizontal
+    /// leg on [`Gen::player_knock`], so a wizard caught in a Gravity
+    /// Well was dragged sideways at retail's exact rate and never
+    /// sank. Same transport shape as [`Gen::player_hurl`]: the world
+    /// arms it at the quake's own walk slot, the carpet's dispatch
+    /// drains it once, no decay.
+    pub(crate) player_flood_pull: PlayerFloodPull,
     /// The mana quarters the human's REBOUND deflections owe this
     /// tick — see [`DeflectDebit`]. Written by the projectile
     /// walkers' deflect arms, drained by the MC1 wizard pass
@@ -1553,11 +1579,21 @@ impl std::hash::Hash for Mc2Echo {
 /// moves it into `.0` for a body on those paths (round 128: the
 /// (10,45) building tick's `getTerrainAlt` leaves the walk's ESI
 /// there, `Gen::m27_v34_publish_building`).
+/// `.3` is the WALK SLOT of an ADJACENCY-SCOPED publication (dig W21,
+/// round 145: `Gen::m27_v34_publish_leviathan`). The (5,23) dweller's
+/// leaving survives only as far as the NEXT dispatched handler — every
+/// one of them writes something at that depth, and the seed stands in
+/// for a handler the port does not model — so `Gen::m27_v34_enter`
+/// drops the publication unless the body it is entering is the very
+/// next dispatched record. `None` = the round-127/128 publishers,
+/// which are documented as the last writers at that depth for the rest
+/// of the walk.
 #[derive(Default, Clone)]
 pub(crate) struct M27V34Slot(
     pub(crate) Option<u32>,
     pub(crate) bool,
     pub(crate) Option<u32>,
+    pub(crate) Option<u16>,
 );
 
 impl std::hash::Hash for M27V34Slot {
@@ -1635,6 +1671,393 @@ fn preclear_eq() -> i32 {
 pub(crate) fn no_mc2_weave_model_gate() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WEAVE_MODEL_GATE").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_GUARD_RESIDUE=1` silences the SIXTH hydra `v34`
+/// publisher: the **(5,15) guard's action-121 brain** `sub_23C40`
+/// (VA 0x23C40, NETHERW.EXE file **0x48440**, file = VA + 0x24800).
+///
+/// ⭐⭐⭐ ITS CLEAN ARM LEAVES A LITERAL **ZERO** ON THE 0xD9 DWORD.
+/// The prologue is `53 56 57 55 89 e5 83 ec 10` (ebp = W-20, esp =
+/// W-36). ESI is the arm selector: `31 f6 xor esi,esi` (0x48450), set
+/// to 1 by a mail/chain hit (0x48467 / 0x48495) and to 2 by the lethal
+/// test (0x484C2). The clean arm (`esi == 0`) is `53 push ebx` (W-40) /
+/// `e8 62 04 00 00 call 0x48990` (return W-44) — the wander
+/// `sub_24190`, whose prologue `53 56 57 55 89 e5 83 ec 18` pushes
+/// EBX on W-48 and **ESI = 0 on W-52** (the 0xD9 path's
+/// `[ebp-0x10]`), and whose `[ebp-4]` local IS **W-64** (the
+/// 0xD8/0xDA/0xDB dword): it takes only BYTE stores —
+/// `30 e4 / 88 65 fc` (0x48B05, the packmate flag cleared) and
+/// `b2 01 … 88 55 fc` (0x48B68 / 0x48B71, a packmate found) — and the
+/// `actionIndex = 124` bail (`jmp 0x48be9` at 0x489EB) skips both. Its
+/// callees run below W-84 and cannot reach either dword.
+/// The other arms, all past the same `cmpb $0x7a,0x45(%ebx)` tail
+/// (0x4863B) whose `call 0x48900` (the engage pose `sub_24100`:
+/// `53 55` then two pushes, `call 0x6e4d0` → return address on W-64,
+/// saved EBP on W-52 — both the seed's class):
+/// * the lethal arm (`esi == 2`, 0x484E5) stores `0x7c` and makes NO
+///   call — TRANSPARENT;
+/// * the hit arm (`esi == 1`) calls `sub_1EEE0` (file 0x436E0:
+///   `53 55`, then `movswl 0xe/0xa/0xc(row)` pushed on W-56/W-60/
+///   **W-64**) — the behaviour row's `+0xC` word, and a stack pointer
+///   on W-52;
+/// * the acquire walk (0x48581-0x48609), on any candidate that passes
+///   `id`, the squared range and `byte[0] & 0x20`, calls `sub_581E0`
+///   (file 0x7C9E0: `push ebx` = the guard pointer on W-52, then the
+///   `cwtl` dy on W-64) and `sub_582B0` (file 0x7CAB0: `push ebp` on
+///   W-52). The dy of the LAST tested candidate is not modelled.
+///
+/// Adjacency-scoped like the round-145 dweller. WITNESS mc2l21 body
+/// 101 (0xD9) behind guard slot 87, with only class-0 records and
+/// three `(10,79)` pieces between (see
+/// [`no_mc2_m27_v34_piece_transparent`]): retail reads **exactly 0** at
+/// t=14,856 / 14,862 / 14,868 — the `v34 == 0` wizard-scan arm. See
+/// [`Gen::m27_v34_publish_guard`].
+pub(crate) fn no_mc2_m27_v34_guard_residue() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_GUARD_RESIDUE").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_METEOR_RESIDUE=1` silences the SEVENTH hydra
+/// `v34` publisher: the **(10,17) meteor's acting tick** `sub_32880`
+/// (VA 0x32880, NETHERW.EXE file **0x57080**, file = VA + 0x24800).
+/// Prologue `53 56 57 55 89 e5 83 ec 10` (ebp = W-20, esp = W-36).
+/// The acting arm opens a ring iterator — `push eax / push eax /
+/// call 0x34880` (0x57143-45, `sub_10080`) whose result is kept in
+/// **EDI** (`89 c7`, 0x5714D) — and ends its cell loop on the
+/// iterator step `lea -4(%ebp) / push / lea -8(%ebp) / push /
+/// push edi / call 0x34930` (0x5722E-37, `sub_10130`: args on
+/// W-40..W-48, return address — linear 0x213A3C, even — on **W-52**)
+/// whose prologue `53 56 57 55` pushes ebx W-56, esi W-60 and
+/// **EDI = the iterator handle on W-64**. The loop's last iteration
+/// returns 2 and the tick closes on `push edi / call 0x34900`
+/// (`sub_10100`, `55 89 e5 … 5d c3`, deepest write W-48), so the
+/// handle SURVIVES on the 0xD8/0xDA/0xDB dword. `sub_10080` returns
+/// the LOWEST free row of a 100-row table (`cmpl $-1, 0x17ee8(,…)`,
+/// 0x34897) and every user frees its row before returning, so the
+/// handle is **1**: nonzero, NOT `> 4`, ODD — the branch keeps state 1
+/// and SKIPS the wander draw. The expiry arm (`life < 0`,
+/// `call 0x7c710` at 0x57098) is a leaf and publishes nothing.
+/// Adjacency-scoped. WITNESS mc2l21 t=15,320: body 101 on the 0xDA
+/// path behind meteor slot 87 (life 5), with class-0 records and three
+/// idle `(10,79)` pieces between — retail's branch 114 keeps its yaw
+/// and draws once (`heading` 1707, `rand` 22473) where the port's
+/// seed stamped `f71 = 4` and drew twice. See
+/// [`Gen::m27_v34_publish_meteor`].
+pub(crate) fn no_mc2_m27_v34_meteor_residue() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_METEOR_RESIDUE").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_TOKEN_TRANSPARENT=1` restores the pre-dig
+/// reading of an IDLE class-15 spell manifestation as a dispatched
+/// handler that breaks an adjacency-scoped hydra `v34` publication.
+/// Every manifestation body is the class-15 action `3·spell` row of
+/// `x_DWORD_D4C52ar_strF0` (EF:1951; linear = file + 0x1BC800), and
+/// every one of the 26 leaves on `word_0x2E_46 <= 0` (`cmpw
+/// $0x0,0x2e(%reg)` or `mov 0x2e,%dx / test / jle`) for a tail that is
+/// only the `word_0x36_54` cooldown decrement and the epilogue — no
+/// call, no push, no `[ebp-N]` store — and whose pre-gate code stores
+/// nothing at or below W-52 (`sub esp` frames of at most 0xC, the
+/// deepest pre-gate store spell 14's `[ebp-4]` = W-24). Checked in the
+/// shipped NETHERW.EXE for all 26 (e.g. spell 0 file 0x8DBF0 → tail
+/// 0x8DDE6, spell 9 `sub_6AB00` 0x8F311 `jle 0x8f4d9`, spell 10
+/// 0x8F578 `jle 0x8f967`, spell 11 0x8F9CE `jle 0x8fab5`, spell 14
+/// 0x8FE10 → 0x9000D, spell 22 0x91070 → 0x91268), with two
+/// exceptions: spell 2 (the castle, file 0x8E2B0) runs `sub_6D880`
+/// (file 0x92080) on its idle tail, which reaches W-52 through
+/// `call 0x91de0` only when a tier is pending (`word_0x2C_44`), and
+/// spell 7 (see [`no_mc2_m27_v34_lightning_token_residue`]).
+/// Human manifestations only — the port keeps a rival book's
+/// countdown at the caster's slot for level-load books. See
+/// [`World::mc2_v34_token_post`].
+pub(crate) fn no_mc2_m27_v34_token_transparent() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_TOKEN_TRANSPARENT").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_LIGHTNING_TOKEN_RESIDUE=1` silences the NINTH
+/// hydra `v34` publisher: the **Lightning (spell 7) manifestation**
+/// `sub_6A5C0` (VA 0x6A5C0, NETHERW.EXE file **0x8EDC0**, class-15
+/// action 21). Its prologue is `53 56 57 55 89 e5 83 ec 20` (ebp =
+/// W-20, 0x20 of locals ⇒ esp = W-52) and its FIRST statements, ahead
+/// of the idle gate, are `31 d2 xor edx,edx / 8b 45 14 / 89 55 e0
+/// mov %edx,-0x20(%ebp) / 89 55 e4 mov %edx,-0x1c(%ebp)` (0x8EDC9..
+/// 0x8EDD1): **`[ebp-0x20]` IS W-52**, zeroed on every tick. On the
+/// idle arm (`jle 0x8f19f` at 0x8EDD9, a call-free tail) that zero is
+/// what a following 0xD9 body reads — the `v34 == 0` wizard-scan arm
+/// — and W-64 is untouched. (The armed arm re-stores the local at
+/// 0x8F11D and calls from `esp = W-52`, so it is not modelled.)
+/// WITNESS mc2l19-taketwo t=13,280 and t=13,304: body 20 on the 0xD9
+/// path, the human's idle lightning token at slot 15 behind the three
+/// houses (whose own leaving there is a record POINTER), only idle
+/// manifestations between. Branch 27 heads the chain at 13,280 and
+/// retail scans and locks the human (`b46` 0 → 2, `target96` 0 → 318,
+/// its `word_0x26` untouched ⇒ not the draw-B arm); branch 419 at
+/// 13,304 scans and finds nobody (`b46` 0 → 1, two draws). Human
+/// tokens only. Unscoped when the slot holds an unscoped leaving (the
+/// house's), adjacency-scoped otherwise. See
+/// [`World::mc2_v34_token_post`].
+pub(crate) fn no_mc2_m27_v34_lightning_token_residue() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_LIGHTNING_TOKEN_RESIDUE").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_METEOR_CAST_RESIDUE=1` silences the EIGHTH
+/// hydra `v34` publisher: the human's **Meteor (spell 9) fire tick**,
+/// `sub_6AB00` (VA 0x6AB00, NETHERW.EXE file **0x8F300**, the class-15
+/// action-27 row). Prologue `53 56 57 55 89 e5 83 ec 04` (ebp = W-20,
+/// esp = W-24). On the FIRST afforded tick (`word_0x2E_46 ==
+/// word_0x30_48`, 0x8F356) it spawns the bolt (`call 0x924a0`,
+/// 0x8F398) and then calls the hand-muzzle `sub_68E50`
+/// (`push token / push bolt / push caster / call 0x8d650`, 0x8F3AE-B4:
+/// return address W-40) whose prologue `53 56 57 55 89 e5 83 ec 08`
+/// puts `ebp` at W-56 — so its **`[ebp-8]` IS W-64**, and that is the
+/// 6-byte position buffer it fills with `movsl / movsw` (0x8D668) and
+/// hands to `MoveEntity_57FA0` / `getTerrainAlt` before copying it back
+/// onto the bolt (`call 0x7c4f0`, 0x8D6F7 / 0x8D71E / 0x8D7DB). Every
+/// callee runs from `esp <= W-64`. After it the tick makes only
+/// shallow calls — `MoveEntity` on the aim axis (0x8F473: return W-44,
+/// deepest push W-56), `sub_68DE0` (0x8F4AE, file 0x8D5E0, a leaf,
+/// deepest W-44) and, when the window closes, `sub_6D880` (file
+/// 0x92080, deepest W-40 unless a tier is pending). So a 0xDA body
+/// walked after the fire reads **`muzzle.x | muzzle.y << 16`**: the
+/// parity of the muzzle x, and NEGATIVE whenever `muzzle.y >= 0x8000`.
+/// (W-52 holds `MoveEntity`'s saved ESI — not modelled; the seed's
+/// class.) Adjacency-scoped, with idle manifestations transparent
+/// ([`no_mc2_m27_v34_token_transparent`]).
+/// WITNESS mc2l19-taketwo t=12,906: body 20 (0xDA) behind the three
+/// (10,45) houses at slots 3-5 and the human's manifestations at
+/// 6..19; spell 9's token at slot 17 fires on this tick (mana
+/// 79,105 → 59,105) and is the ONLY one of the take's ten state-0
+/// gate openings behind the houses where a manifestation fires.
+/// Retail's branch 409 keeps state 1 (`b46` 0 → 1) and TAKES the
+/// wander draw (`rand` two steps) where the house's 29 — right on the
+/// other nine — stamped `f71 = 4` and skipped it. See
+/// [`World::mc2_v34_token_post`].
+pub(crate) fn no_mc2_m27_v34_meteor_cast_residue() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_METEOR_CAST_RESIDUE").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_SPHERE_RESIDUE=1` silences the TENTH hydra
+/// `v34` publisher: the **(10,39) mana ball's moving arm**,
+/// `TransformArcherToMana_35940` (VA 0x35940, NETHERW.EXE file
+/// **0x5A140**, file = VA + 0x24800). Prologue `53 56 57 55 89 e5 83
+/// ec 1c` (ebp = W-20, esp = W-48). The settle arm (`byte_0x39_57 ||
+/// v35`, i.e. a `+58` count or a kick) samples the ground at the
+/// stepped position — `push $0x1b398 / call 0x35440` (0x5A5E4-E9,
+/// `getTerrainAlt_10C40`) — and keeps the FULL 32-bit sampler result
+/// in **ESI** (`89 c6`, 0x5A5F8: the interpolator at file 0xDA460
+/// returns `32*h + interp` in EAX). ESI is not written again (the
+/// callees 0x35460 / 0x7C4F0 / 0x35250 / 0x5B550 / 0x7C830 all save
+/// it), and the arm ends, when `!(byte[1] & 0x20) || v36`
+/// (0x5A731-3B), on `53 push ebx / e8 dd 09 00 00 call 0x5b120`
+/// (0x5A73D-3E, `SetManaSphereColorAndRot_36920`): the sphere pointer
+/// on **W-52**, return W-56, and its prologue `53 56 57 55 89 e5 83
+/// ec 04` pushes EBX W-60 and **ESI on W-64** (0x5B121); its own
+/// callees (0x5B1F0, 0x6E490) run from `esp <= W-76`. The tail after
+/// it is a `life` decrement and at most the
+/// `DisableEntityDrawing04_57F10` leaf (0x5A796). So a 0xD8/0xDA/0xDB
+/// body walked after a moving sphere reads **the ground altitude the
+/// sphere just sampled** — positive, and EVEN or ODD with the terrain.
+/// The idle sphere (`+58 == 0`, no kick, no tether) makes no call and
+/// stays transparent, which is why the building's 29 survives settled
+/// spheres. Unscoped, like the building's leaving.
+/// WITNESS mc2l22-new t=49,984 and t=49,997: body 610 (0xDA) behind
+/// the (10,45) house at slot 565, with sphere 581 moving (kicked at
+/// 49,984: `b39` 0 → 16; counting at 49,997: `b39` 4 → 3) — the only
+/// record in the gap that differs from the take's twenty-odd
+/// house-parity openings where retail skips the wander draw; here
+/// retail stamps `f71 = 4` AND draws (branches 622 / 633: two LCG
+/// steps). See [`Gen::m27_v34_publish_sphere`].
+pub(crate) fn no_mc2_m27_v34_sphere_residue() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_SPHERE_RESIDUE").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_BLAST_SOUND_RESIDUE=1` silences the ELEVENTH
+/// hydra `v34` publisher: the **(10,23) blast's burst tick**,
+/// `sub_33D80` (VA 0x33D80, NETHERW.EXE file **0x58580**). Prologue
+/// `53 55 89 e5` — NO locals, ebp = W-12. The burst arm (`life >= 0`,
+/// `!(byte[0] & 2)`) calls `sub_10C80` and (on hits) `sub_6D8B0` with
+/// return addresses on W-28, then LAST `6a 18 / 6a ff / 50 / call
+/// 0x92c50` (0x585EE-F4, `PrepareEventSound_6E450(id, -1, 24)`:
+/// return W-28). Its prologue `53 56 57 55 89 e5 83 ec 24` puts
+/// `ebp` at **W-44**, so `[ebp-8]` IS **W-52** and `[ebp-0x14]` IS
+/// **W-64**. Past the sound-enabled bytes (0x13799 / 0x13798), the
+/// emitter's `testb $0x80,0xc` (0x92CA7) and the hearing range —
+/// `sub_584D0` (file 0x7CCD0: i16 deltas squared) against
+/// `cmp $0x9000000 / ja` (0x92CDF) — it stores `89 45 ec` (0x92D2C)
+/// the result of `call 0x7cc90` (`EuclideanDistXYZ_58490`, args
+/// `push esi` = the blast's position, `push edi` = the LISTENER's —
+/// the local player's carpet record via `0x2be8 + 0x84c*idx`) and
+/// `89 45 f8` (0x92D3A) the `sub_581E0` atan2 word. Neither local is
+/// written again, and every later call runs from `esp <= W-80`. So a
+/// 0xDA body walked after a bursting blast reads
+/// **`isqrt(dx² + dy²)` from the human to the blast** (the W-52 atan2
+/// word is not modelled). The later (10,23) ticks — `life` pinned to
+/// 1 with the latch set (`jne 0x5860c`, no call) and the reap
+/// (`DisableEntityDrawing04_57F10`, a leaf) — are transparent.
+/// Unscoped, like the building's leaving. Sound is assumed enabled in
+/// every recorded take.
+/// WITNESS mc2l22-new t=49,898: body 610 (0xDA) behind the house at
+/// 565; blast 587 bursts (`life` 8 → 1, `flags` 0x20005 → 0x20007)
+/// 2,818 units from the human (31, 21671) — nonzero, `> 4`, EVEN:
+/// retail's branch 660 stamps `f71 = 4` and draws twice. At t=49,901
+/// the same gap holds only latched/reaped blasts and retail reads the
+/// house's 29. See [`Gen::m27_v34_publish_blast_sound`].
+pub(crate) fn no_mc2_m27_v34_blast_sound_residue() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_BLAST_SOUND_RESIDUE").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_DOLMEN_RESIDUE=1` restores the pre-dig reading
+/// of the **(2,2) dolmen** as a handler that leaves an UNSCOPED hydra
+/// `v34` publication (the building's 29, a moving sphere's ground, a
+/// blast's listener distance, a pad's/switch's `y`) standing.
+/// `AddDolmen02_02_65080` (VA 0x65080, NETHERW.EXE file **0x89880**)
+/// is `53 56 57 55 89 e5` — four pushes, NO locals, ebp = esp = W-20
+/// — and ends EVERY tick, after its player sweep (`call 0x34ec0` from
+/// W-24/W-28), on `mov 0x14(%ebp),%eax / add $0x4c,%eax / push eax /
+/// mov 0x14(%ebp),%ebx / call 0x35440` (0x898D0-DA,
+/// `getTerrainAlt_10C40`: arg W-24, return W-28). `getTerrainAlt`
+/// pushes ebp W-32, y W-36, x W-40 and calls the interpolator
+/// (return W-44), whose prologue `55 8b ec 53 51 52 56 57` (file
+/// 0xDA460) pushes ebp W-48, **EBX = the dolmen's record pointer on
+/// W-52**, ecx W-56, edx W-60, **ESI on W-64** — and ESI is the
+/// sweep's player cursor, `[0x41a0] + 0x2bde + 0x84c * count`
+/// (0x89886-8E, stepped at 0x898BE): a POINTER. Both dwords are
+/// positive, even and far above 4 — the seed's class — on every tick.
+/// WITNESS mc2l24-crazy t=51,654: body 15 (0xDA) with the dolmen at
+/// slot 14 and a moving (10,39) at slot 9 (ground 997, odd) — retail
+/// stamps `f71 = 4` and takes the wander draw; without this law the
+/// sphere's odd word reached the body and cut the take's horizon
+/// 53,387 → 51,653. See [`crate::engine::world::World`]'s
+/// `dolmen_tick`.
+pub(crate) fn no_mc2_m27_v34_dolmen_residue() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_DOLMEN_RESIDUE").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_SPHERE_TRANSPARENT=1` restores the pre-dig
+/// reading of an IDLE `(10,39)` mana ball as a dispatched handler that
+/// breaks an adjacency-scoped hydra `v34` publication.
+/// `TransformArcherToMana_35940` (file 0x5A140, see
+/// [`no_mc2_m27_v34_sphere_residue`] for the frame) makes a call only
+/// on: the claim intake's `PrepareEventSound_6E450` (w68 set, not the
+/// owner, and `dword_0x64` or the lock clear), the kick
+/// (`word_0x7A_122`: `sub_581E0` + `MoveEntity_57FA0`), the tether
+/// (`byte[0] & 0x40` onto a (3,3)/(5,23)), the settle arm
+/// (`byte_0x39_57 || v35`) and the decay tail's
+/// `DisableEntityDrawing04_57F10` — a LEAF (file 0x7C710:
+/// `55 89 e5 8b 45 08 80 48 0d 04 5d c3`, deepest write W-36). The
+/// stall arm (`byte[1] & 8`, 0x5A157-64: clear and `jmp 0x5a79e`) makes
+/// none. So a settled, unclaimed, unkicked, untethered sphere — and a
+/// stalled one — leaves both dwords as it found them.
+/// WITNESS mc2l22-new t=49,409 / 49,413 / 51,146 / 50,488: body 610
+/// behind a (5,15) guard's wander tick (its `[ebp-4]` BYTE store over
+/// the house's 29 leaves exactly 0) with only idle spheres, a banished
+/// rival and (9,9) nodes between: retail reads **0** and runs the
+/// wizard scan (`b46` 0 → 2 / 0 → 1 with the wander draw).
+pub(crate) fn no_mc2_m27_v34_sphere_transparent() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_SPHERE_TRANSPARENT").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_NODE_TRANSPARENT=1` restores the pre-dig
+/// reading of a `(9,9)` lightning trail node (class 9 action 14) as a
+/// handler that breaks an adjacency-scoped hydra `v34` publication.
+/// Its handler (`x_DWORD_D4C52ar_str90[14]` = linear 0x248410, file
+/// **0x8BC10**) is `53 55 89 e5 / mov 0xc(%ebp),%edx / life-- /
+/// jge → pop/ret`, calling only `DisableEntityDrawing04_57F10` (a leaf)
+/// when the pre-decrement life is negative (0x8BC24-25): it never
+/// reaches W-52. See [`no_mc2_m27_v34_sphere_transparent`] for the
+/// witness.
+pub(crate) fn no_mc2_m27_v34_node_transparent() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_NODE_TRANSPARENT").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_CORPSE_TRANSPARENT=1` restores the pre-dig
+/// reading of a dead RIVAL wizard (class 3, action 3) as a handler that
+/// breaks an adjacency-scoped hydra `v34` publication. `sub_5E7C0`
+/// (`x_DWORD_D4C52ar_str30[3]` = linear 0x23F7C0, file **0x82FC0**,
+/// `53 56 57 55 89 e5`, no locals) tests the player row's
+/// `cmpb $0x1,0x2be7(…)` (0x82FEB; remc2's `IsAiPlayer`): on the AI
+/// arm, with a castle (`cmpw $0x0,0x3a(%eax)`, 0x82FFD) it either
+/// decrements `dword_0x10_16` (0x8301A-24, no call) or respawns
+/// (`call 0x81150`, deep); castle-less (BANISHED) it inlines the
+/// notice `strcpy` and stores two words (0x83025-65) — no call. Only
+/// the human arm (0x83066) calls `sub_5C800`/`sub_5E6C0`, whose
+/// `getTerrainAlt` leaves an odd return address on W-52 and
+/// `sext16(x)` on W-64 (0x82F62/0x82F78) — not modelled. See
+/// [`no_mc2_m27_v34_sphere_transparent`] for the witness (rival 584,
+/// banished, sits between the guard and the body on every one).
+pub(crate) fn no_mc2_m27_v34_corpse_transparent() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_CORPSE_TRANSPARENT").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_WYVERN_RESIDUE=1` silences the TWELFTH hydra
+/// `v34` publisher: the **(5,16) wyvern's attack brain** `sub_24510`
+/// (class-5 action 130, `x_DWORD_D4C52ar_str50[130]` = linear
+/// 0x205510, NETHERW.EXE file **0x48D10**). Prologue `53 56 57 55 89 e5
+/// 83 ec 0c` (ebp = W-20, esp = W-32); `31 f6 xor esi,esi` (0x48D2D)
+/// is the arm selector — set to 1 by a mail/chain hit (0x48D47 /
+/// 0x48D75) and 2 by the lethal test (0x48D9F).
+/// * The hit arm (`esi == 1`, 0x48DCB: copy the source into
+///   `word_0x96_150`, return) and the lethal arm (`esi == 2`, 0x48DC2:
+///   `movb $0x84,0x45`, jump to the epilogue) make NO call —
+///   TRANSPARENT.
+/// * The normal arm calls the move core (`push ebx / call 0x400c0`,
+///   return W-40 — its prologue leaves the brain's EDI on W-52) and
+///   then, ALWAYS, `push edi / push ebx / call 0x43530` (0x48DF6-F8,
+///   `sub_1ED30`: return W-44; prologue `53 56 57 55 89 e5 83 ec 08`
+///   pushes EBX W-48 and **ESI = 0 on W-52**; its callees run below
+///   W-68). The 8-tick aim (`call 0x7c9e0` at 0x48E3B, prologue
+///   `53 56 55` → ESI on W-52 again) keeps the 0. Every exit up to
+///   0x48F19 (bad pointer 0x48E0A, dead target 0x48E53, off-cadence
+///   0x48F19, out of range 0x48F44) therefore leaves **0** — UNLESS
+///   `dword_0x10_16` armed the bolt (0x48E5E-0x48EF9: `call 0x6e990`,
+///   then `sub_581E0` / `sub_58210` with the new record in ESI, a
+///   POINTER). On the in-range cadence tick `movzbl 0x3e(%ebx),%esi`
+///   (0x48F00) and the aim `call 0x7c9e0` (0x48F90) put the **phase
+///   byte** on W-52; `sub_582B0` (0x7CAB0) and `sub_62F70` (0x83770)
+///   are leaves (`55 89 e5 … 5d c3`), and the sound call at 0x48F80
+///   precedes the aim. The 0xDA dword (W-64: the move core's pushed
+///   row word, `sub_1ED30`'s `[ebp-4]`, the aim's `dx`) is NOT
+///   modelled. Adjacency-scoped.
+/// WITNESS mc2l22-new t=35,058: body 610 on the 0xD9 path, wyverns 603
+/// / 606 / 607 on their normal arm and 609 on the hit arm between the
+/// last publisher and the body — retail's branch 612 reads **0**: the
+/// wizard scan finds nobody (`b46` stays 1) and the wander draw is
+/// taken (two LCG steps), where the seed stamped `f71 = 4` (the take's
+/// 35,059 head). See [`Gen::m27_v34_publish_wyvern`].
+pub(crate) fn no_mc2_m27_v34_wyvern_residue() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_WYVERN_RESIDUE").is_some())
+}
+
+/// `MGC_NO_MC2_M27_V34_PIECE_TRANSPARENT=1` restores the pre-dig
+/// reading of a `(10,79)` castle defender piece as an ordinary
+/// dispatched handler that breaks an adjacency-scoped hydra `v34`
+/// publication. `sub_3AF00` (VA 0x3AF00, NETHERW.EXE file **0x5F700**)
+/// opens `53 56 57 55 89 e5 83 ec 30` — four pushes and **0x30 of
+/// locals** — so `ebp = W-20`, `esp = W-68`, and **`[ebp-0x20]` IS
+/// W-52 and `[ebp-0x2C]` IS W-64**: the piece owns both dwords as its
+/// own locals, and no callee (every call is made from `esp <= W-68`)
+/// can reach them. The only writes are on the case-3 arm (jump table
+/// `cs:0x2AEA8` = file 0x5F6A8, entry 3 → 0x5F7D1) past its
+/// `testb $0x3f,0x3e(%ebx)` gate: `89 45 e0` (0x5F7E9, the scan
+/// tile x) and `sub_10130`'s out-parameter `&[ebp-0x2c]` (0x5F8EF /
+/// `call 0x34930` at 0x5F8F4). So on every other tick — idle states,
+/// the dwell countdown, the wind-up, the volley, the dead/ownerless
+/// exits at 0x5F716 / 0x5F723 — the piece is TRANSPARENT and the
+/// publication survives it. See [`Gen::m27_v34_transparent`].
+pub(crate) fn no_mc2_m27_v34_piece_transparent() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_PIECE_TRANSPARENT").is_some())
 }
 
 /// `MGC_NO_MC2_MOB_CHAIN_PREDICATE=1` restores the pre-dig LIVE-POOL
@@ -2024,6 +2447,510 @@ pub(crate) fn no_mc1_mana_census_wrap() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_MANA_CENSUS_WRAP").is_some())
 }
 
+/// `MGC_NO_MC2_CENSUS_CREDIT_HOME=1` restores the pre-dig
+/// `e.f136` home for the MC2 mana census's RUNAWAY OWNER CREDIT in
+/// [`World::recompute_mana`].
+///
+/// MC2's census is `sub_60F00` (EF:62358 — the banner line
+/// `//----- (00060F00)`), and the credit itself is `sub_61000`
+/// (EF:62388), whose whole body is four instructions.
+/// `NETHERW.EXE` file **0x85800** (VA 0x61000 + 0x24800):
+///
+/// ```text
+///   85807: 66 8b 93 94 00 00 00   mov  0x94(%ebx),%dx   ; src @0x94 owner tag
+///   85810: 66 85 d2               test %dx,%dx
+///   85813: 74 16                  je   0x8582b          ; 0 -> world total only
+///   85818: 8b 04 85 e4 a3 01 00   mov  0x1a3e4(,%eax,4),%eax  ; &Entities[tag]
+///   8581f: 8b 93 90 00 00 00      mov  0x90(%ebx),%edx  ; src @0x90 mana
+///   85825: 01 90 8c 00 00 00      add  %edx,0x8c(%eax)  ; ** owner @0x8C += it **
+///   85837: 01 9a f6 00 00 00      add  %ebx,0xf6(%edx)  ; world total += it
+/// ```
+///
+/// There is NO class, model, life or reap test on the target: the
+/// tag word alone picks the record and the add lands on **@0x8C**.
+/// Both `e8` call sites (file 0x857c0 / 0x857e7) are inside
+/// `sub_60F00`, and the only reset walks the PLAYER TABLE
+/// (file 0x8572b `mov %ecx,0x8c(%edx)`), so a tag naming a
+/// non-wizard record accumulates forever — the MC2 twin of the MC1
+/// `(10,40)` grave documented on [`no_mc1_mana_census_wrap`].
+///
+/// ⭐⭐⭐ THE PORT'S `f136` IS ONLY @0x8C FOR THE UNIFORM RECORD.
+/// `import_ent_mc2`'s class-15 block moves the manifestation's homes
+/// (`e.f136 = r.d88` @0x88, `e.max_life = r.mana_max` @0x8C) and the
+/// m27 hydra keeps its bolt power in `f136` (@0x88) too. The census
+/// credit was written once, against the uniform map, so on a class-15
+/// target it added retail's @0x8C claim into the port's @0x88 lane —
+/// the graded `mana_max` never moved, and `f136` (the class-15 upkeep
+/// regen / the hydra's `m27_branch_bolt` power) was corrupted instead.
+///
+/// WITNESSES — two takes, both long contiguous runs, both a wizard's
+/// dormant `(15,0)` manifestation named by loose `(10,39)` mana
+/// spheres whose `@0x94` still points at a low slot:
+/// * mc2l17 slot 4 (owner 147), t=15,062..15,255 — spheres 491 and
+///   529 hold 1,100 each, so retail steps @0x8C by exactly +2,200 a
+///   tick from the ctor's 100 (t=15,059) on; 194 first-divergence
+///   rows, the take's single dominant lane.
+/// * mc2l18 slot 3 (owner 483), t=18,536..18,777 — eight spheres
+///   totalling 9,870, falling to 1,057 as they are collected, and the
+///   run ENDS on the tick the last one goes; 242 rows.
+/// The `mana_max` lane in both is the census credit, nothing else:
+/// `sum(mana of every @0x94==slot record admitted by the class
+/// filter)` reproduces retail's step to the unit on every tick.
+pub(crate) fn no_mc2_census_credit_home() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CENSUS_CREDIT_HOME").is_some())
+}
+
+/// ⭐⭐ `MGC_NO_MC2_FLOOD_HUMAN_SPIN=1` restores the pre-dig CLOSE BAND
+/// of the quake/flood's human visit (round 146, dig w146f), which
+/// rolled the 1-in-7 kill and wrote nothing else.
+///
+/// `sub_3A200` (EF:29429, `NETHERW.EXE` file 0x5EA00) is the close-band
+/// callback (`dist <= 32 || z - ref <= 96`), and on a class-3 model-0
+/// victim it is TWO DIRECT WORD STORES before the roll:
+///   `0x5ea49 80 7b 40 00`               `cmp byte [ebx+0x40],0` (model 0)
+///   `0x5ea4f 8b 93 a4 00 00 00`         `mov edx,[ebx+0xa4]`   (Type_164 player)
+///   `0x5ea55 66 c7 43 1e 00 02`         `mov word [ebx+0x1e],0x200` (record pitch)
+///   `0x5ea5b 66 c7 82 57 01 00 00 00 02` `mov word [edx+0x157],0x200` (pitch_acc)
+/// — the module doc called it "presentation-skipped"; it is the
+/// graded `aim_pitch` / `pitch_f` lanes. It lands at the QUAKE's slot,
+/// i.e. between the frame-head input pass (`PlayerEvents_51BB0`, which
+/// takes `pitchDelta` off the UN-seized accumulator, `0x774b2 movsx
+/// edx,[ecx+0x157]`) and `sub_5D530`'s `pitch += pitchDelta`
+/// (0x81d7e) — the whirlwind crank's phase, one lane over. It also
+/// sits ABOVE the mover's stop veto, so a vetoed tick keeps the 512.
+///
+/// WITNESS mc2l18 t=27,261..27,270: the human idles in a (10,67)'s
+/// close band and retail's `pitch_acc` reads `512 + pitchDelta` on
+/// every tick the band re-admits him — `-7 -> 512` (delta 0),
+/// `284 -> 439` (-73), `327 -> 428` (-84), `319 -> 430`, `320 -> 430` —
+/// and a plain filter step on the ticks between. Those were the take's
+/// last five free-run heads.
+pub(crate) fn no_mc2_flood_human_spin() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FLOOD_HUMAN_SPIN").is_some())
+}
+
+/// ⭐⭐ `MGC_NO_MC2_FLOOD_MAIL_SEAT=1` restores the pre-dig pose the MC2
+/// carpet dispatch hands its mailbox drain and its pre-move at-castle
+/// probe: the UN-shoved pose (round 146, dig w146f).
+///
+/// `sub_5EFA0` (EF:61013, `NETHERW.EXE` file 0x837A0) arms the knock as
+/// `moveBoost = amt/10` along `yaw_0x1E_30 = sub_581E0_maybe_tan2(
+/// &Entities[src]->position, &a1x->position)` — the victim is the
+/// wizard RECORD, read at the carpet's own dispatch. A (10,67) seated
+/// BELOW the carpet has already written its shove into that record
+/// (`sub_39B60`'s `CopyEntityPosition_57CF0`, 0x5e592), but the port
+/// carries the shove on [`Gen::player_flood_pull`] and spends it only
+/// inside the mover, AFTER the drain — so the bearing was taken off
+/// the pre-shove position. (The walk hook already republishes the
+/// shoved pose to every walker above the quake; the dispatch's own
+/// readers were the call path it missed.)
+///
+/// WITNESS mc2l18 t=27,163: a (5,18) at slot 6, (8576, 31872), mails
+/// the human 800. Shoved record (14418, 30963): `dy/dx·256 = 39`,
+/// `512 − ATAN[39] = 463` = retail's recorded `knock_dir`; the port's
+/// pre-shove (14519, 30932) gives index 40 → 462, and one unit of
+/// bearing on the 80-unit impulse was the take's `pose.y` head
+/// (retail 30976, port 30975).
+pub(crate) fn no_mc2_flood_mail_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FLOOD_MAIL_SEAT").is_some())
+}
+
+/// ⭐⭐⭐ `MGC_NO_MC2_FLOOD_HUMAN_SEAT=1` restores the pre-dig shape of
+/// the quake/flood's HUMAN arm (round 146, dig w146e): ONE shove per
+/// tick, run AFTER the whole 26x26 sweep, its horizontal leg on
+/// [`Gen::player_knock`] (clamped, decaying) and only its z pull on
+/// [`Gen::player_flood_pull`].
+///
+/// Retail has no human arm. `sub_39B60` (EF:29058, `NETHERW.EXE` file
+/// 0x5E360) walks each cell's chain and the human carpet is an
+/// ordinary linked class-3 model-0 record ON it, so he is shoved AT
+/// HIS SEAT, and his `CopyEntityPosition_57CF0` (0x5e592) re-heads him
+/// in the destination cell with the cursor re-read off HIM
+/// (0x5e5e6 `mov 0x16(%ebx),%ax`). A shove that carries him into a
+/// cell the sweep has not reached yet (rows are `HIBYTE` = y, outer)
+/// SHOVES HIM AGAIN from the moved position — the pool-victim law
+/// [`crate::mc2::flood`]'s `flood_chain_rewalk_law` already carries
+/// (mc2l6-rsg t=26,325). Neither the knock register (retail never
+/// writes `moveBoost_0x1E_30` here) nor a `(bearing, dist)` mailbox can
+/// add two shoves, so the arm now accumulates the resolved delta.
+///
+/// WITNESS mc2l23 t=6,940→6,941, quake slot 101 at (28800, 12160),
+/// refz 110: the human at (29841, 11775, 2279) sits in cell (116,45);
+/// the first shove (v6 85, pull 22) lands y 11,803 = cell (116,46), a
+/// row the sweep has not reached, and the second (v6 88, pull 22)
+/// is exactly retail's (−83, +31, −22) over the port's single shove.
+/// The knock's −4/tick residue after the well lets go was the take's
+/// t=6,962 and t=6,964 heads.
+pub(crate) fn no_mc2_flood_human_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FLOOD_HUMAN_SEAT").is_some())
+}
+
+/// `MGC_NO_MC2_HOUSE_CLAIM_RAW_COLOR=1` restores the pre-dig
+/// `177 + COLOR_ART[team]` flag row on a claimed `(10,45)` building.
+///
+/// `AddHouse0A_2D_38330`'s claim intake (remc2 EF:28063 / EF:28074,
+/// resolve by banner `//----- (00038330)`) reads
+/// `word_0x5A_90 += TransformPlayerColorIndex_616D0(...)`, and carries
+/// remc2's own note "this is fixed bug from original game!!!!!!". The
+/// SHIPPED EXE has no such call. `NETHERW.EXE` (file = VA + 0x24800),
+/// both arms, forced then weak:
+///   0x3846F `66 8b 43 68` / `8b 04 85 e4 a3 01 00` / `8b 80 a4 00 00 00`
+///   0x38480 `66 8b 7b 5a`   mov di,[ebx+0x5a]
+///   0x38484 `66 03 78 38`   add di,[eax+0x38]   ; RAW playerColorIndex
+///   0x3848B `66 89 7b 5a`   mov [ebx+0x5a],di
+///   0x384D6 `66 8b 53 5a` / 0x384DA `66 03 50 38` / 0x384E1 `66 89 53 5a`
+/// A binary-wide `e8 rel32` scan for `0x616D0` finds six callers
+/// (0x36A5F 0x5CB78 0x5FAE7 0x601B5 0x6216E 0x621CF) and none in
+/// 0x38330..0x385C0; the castle's own latch (0x5FAE7, `sub_5FA70`) DOES
+/// transform, so a house and a castle of the same rival fly DIFFERENT
+/// bands for players 2/4/6/7 in retail. `playerColorIndex_0x38_56` is
+/// the player's array index (EF:44062), i.e. [`World::owner_team`].
+///
+/// WITNESS mc2l22-new pair 2661→2662, slot 80 `(10,45)`: player 4
+/// (ent 530) claims it (`player_ent 0 → 530`, rival mana −1000);
+/// retail `f5a` 177 → **181** = 177 + 4, the port wrote 177 +
+/// COLOR_ART[4] = **179**. It was the take's horizon head.
+pub(crate) fn no_mc2_house_claim_raw_color() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HOUSE_CLAIM_RAW_COLOR").is_some())
+}
+
+/// `MGC_NO_MC2_CASTLE_PURGE_BEFORE_EJECT=1` restores the pre-dig order
+/// in which the castle's action-6 pass ran `sub_5FD00` (the ejector)
+/// BEFORE the World-side half of `sub_605E0` (ladder re-price, pin,
+/// level-0 rival token purge).
+///
+/// `sub_5FCA0_destroy_castle_level` (resolve by banner
+/// `//----- (0005FCA0)`) is straight-line: `sub_605E0(a1x)`, park
+/// action 4, `sub_5FD00(a1x)`, `sub_5FF50(a1x)`. `NETHERW.EXE`
+/// (file = VA + 0x24800):
+///   0x5FCB1 `e8 2a 09 00 00`  call 0x605E0   ; level off + book work
+///   0x5FCBA `c6 43 45 04`     mov byte [ebx+0x45],4
+///   0x5FCBE `e8 3d 00 00 00`  call 0x5FD00   ; eject
+///   0x5FCC7 `e8 84 02 00 00`  call 0x5FF50   ; roster
+/// and `sub_605E0` does the purge inline (0x60727 read / 0x6074C clear
+/// of `SpellsEnabled[2]`, after 0x6073E `call 0x57F10` DisableEntityDrawing
+/// stamps the token's reap bit). The port could not run the book work
+/// inside `Gen::mc2_castle_tick`, so it drained it after the WHOLE
+/// castle pass — after the eject. That is invisible unless the eject
+/// takes its DRY arm: `sub_5FD00`'s zero-headroom path calls
+/// `sub_49F90` (0x5FD80), whose first loop frees every `byte[1] & 4`
+/// record — so retail's GC frees the just-purged token and the burst
+/// re-uses its slot, where the port's GC saw a live token.
+///
+/// WITNESS mc2l22-new pair 3957→3958: rival 611's castle 637 falls to
+/// level 0 on an EMPTY free stack; its `(15,2)` manifestation, slot
+/// 614, is purged (`spell_ent[2] 614 → 0`), reaped by the GC and
+/// re-minted as a `(10,39)` of 3825 owned by 611. The port kept 614 a
+/// live `(15,2)` (29 rows on the slot).
+pub(crate) fn no_mc2_castle_purge_before_eject() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_PURGE_BEFORE_EJECT").is_some())
+}
+
+/// `MGC_NO_MC2_EJECT_OWNER_LIVE_READ=1` restores the pre-dig owner
+/// snapshot in [`Gen::mc2_castle_eject`]'s sphere loop.
+///
+/// `sub_5FD00` (resolve by banner `//----- (0005FD00)`) stores
+/// `v4x->playerEntityIndex_0x94_148 = a1x->id_0x1A_26` INSIDE the loop,
+/// and the shipped bytes re-read the castle record on every pass —
+/// `NETHERW.EXE` (file = VA + 0x24800):
+///   0x5FE2B `66 8b 43 1a`           mov ax,[ebx+0x1a]   ; castle->id
+///   0x5FE33 `66 89 86 94 00 00 00`  mov [esi+0x94],ax   ; sphere owner
+/// The port hoisted it into a pre-loop `own`. Equal, except when the
+/// dry-arm GC (`sub_49F90` at 0x5FD80) has freed the castle ITSELF —
+/// a level-0 castle carries `sub_605E0`'s 0x6076E DisableEntityDrawing
+/// reap bit — and `NewEvent_4A050` hands the castle's own record to a
+/// sphere: from then on `a1x` IS the sphere, its `id_0x1A_26` is its
+/// own slot (memset + index stamp), and `a1x->mana -= v11` zeroes the
+/// sphere it just filled. The port already reproduced the mana
+/// round-trip; only the owner was stale.
+///
+/// WITNESS mc2l22-new pair 3957→3958 slot 637 (castle of rival 611,
+/// level 1 → 0, empty free stack): the GC frees 614 and 637, the burst
+/// of 7650 mints 614 (3825, owner 611) then 637 (mana 0, owner
+/// **637**); the port wrote owner 611. (Needs
+/// `no_mc2_castle_purge_before_eject`'s law for the 614 half.)
+pub(crate) fn no_mc2_eject_owner_live_read() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_EJECT_OWNER_LIVE_READ").is_some())
+}
+
+/// `MGC_NO_MC2_DEPTH_REFUSAL_KEEPS_FLYER=1` restores the pre-dig
+/// behaviour of [`Gen::mc2_proj_impact`], where a DEPTH-GATED effect
+/// ctor's refusal (`free.len() < N` → `None`, `exhausted` unmoved) read
+/// as a deliberate `None` and the flyer was despawned anyway.
+///
+/// `AddFireSpheres_4F2A0` (resolve by banner `//----- (0004F2A0)`),
+/// `AddWind_4F040` (`//----- (0004F040)`) and the summon ring
+/// `sub_51800` (`//----- (00051800)`) refuse BEFORE their first
+/// `NewEvent_4A050` and return 0 exactly like a dry pool.
+/// `NETHERW.EXE` (file = VA + 0x24800):
+///   0x4F2AE `e8 5d b5 ff ff` call 0x4A810 / 0x4F2B3 `83 f8 1a` cmp eax,26
+///   0x4F2B6 `0f 8c ..`       jl  → the `return 0` tail (0x4F419)
+///   0x4F049 `e8 c2 b7 ff ff` call 0x4A810 / 0x4F04E `83 f8 0c` cmp eax,12
+///   0x4F051 `0f 8c ..`       jl  → the `return 0` tail (0x4F1B7)
+///   0x51821 `e8 ea 8f ff ff` call 0x4A810 / 0x51826 `39 d8` cmp eax,ebx
+///   0x51828 `0f 8c ..`       jl  0x519E8   (ebx = byteindex_224)
+/// and both flight workers keep the flyer alive on a null effect:
+/// `sub_65C20` (the fireball, action 29 via `sub_65B50`)
+///   0x65ED9 `e8 b2 42 fe ff` call 0x4A190 / 0x65EE4 `85 c0` test eax,eax
+///   0x65EE6 `74 6e`          je  0x65F56 (skip the whole effect block)
+///   `sub_65B50` 0x65B6C `85 c0` / 0x65B6E `0f 84 ..` je → past its
+///   `DisableEntityDrawing04_57F10(a1x)`;
+/// `sub_65820` (the generic core under the whirlwind's `sub_678E0`
+/// and the summon ring's `sub_67800`) `if (!v11x) return 0;` before
+/// its own Disable: 0x65A49 `call 0x4A190` / 0x65A53 `85 c0` /
+/// 0x65A55 `0f 84 ..` je 0x65B1A.
+///
+/// WITNESS mc2l19-taketwo t=14482 (pair-import `--start 14481`): the
+/// human's charged fireball (9,28) at slot 83 lands on terrain with
+/// the free stack 12 deep; retail allocates nothing and keeps the ball
+/// (life 7 held, flying on at 14483), the port raised `0x400`. The
+/// reap freed 83 early, the next cast popped 83 instead of 241 and the
+/// whole later (10,76)/(10,77) firestorm walk slid — the take's only
+/// head at t=14578, whose preceding boundaries were capture-skipped.
+pub(crate) fn no_mc2_depth_refusal_keeps_flyer() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DEPTH_REFUSAL_KEEPS_FLYER").is_some())
+}
+
+/// `MGC_NO_MC2_M15_SCAN_ROSTER=1` restores the pre-dig LIVE POOL walk
+/// (with `life >= 0` and `0x400` tests) in the `(5,15)` guard's acquire
+/// scan, `Gen::m15_scan`.
+///
+/// Round 137's class-3-roster law (`MGC_NO_MC2_CLASS3_SCAN_ROSTER`)
+/// named three retail sites and converted them; the guard brain
+/// `sub_23C40` (resolve by banner `//----- (00023C40)`) is a FOURTH
+/// walker of the same chain and kept its own pool copy. `NETHERW.EXE`
+/// (file = VA + 0x24800):
+///   0x23D67 `8b 35 a4 41 00 00` / 0x23D73 `8b b6 77 96 00 00`
+///                                 load `dword_38519` (wizext+0x9677)
+///   0x23D81 `66 8b 46 1a` / 0x23D85 `66 3b 43 1a`   id != own
+///   0x23DAD `3b 7d f8`                              range
+///   0x23DB2 `f6 46 0c 20`                           byte[0] & 0x20
+/// — no life test and no reap test: a wizard that DIES earlier in the
+/// same tick is still a member and still acquirable.
+///
+/// WITNESS mc2l22-new pair 4858→4859, slot 988 (the human's (5,15),
+/// `target96` 503): rival 503 dies this tick (life 599 → −1001) at a
+/// slot below the guard; retail's scan still engages it (action
+/// 121 → 122, the engage-pose draw, `f5a` 0 → 1, speed 30 → 0), the
+/// port's `act_life >= 0` rejected it.
+pub(crate) fn no_mc2_m15_scan_roster() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M15_SCAN_ROSTER").is_some())
+}
+
+/// `MGC_NO_MC2_M16_SWEEP_ROSTER=1` restores the pre-dig LIVE POOL walk
+/// (class 10 / model 45 / `0x400` tests) in the wyvern `(5,16)`'s idle
+/// building sweep.
+///
+/// `sub_24440` (resolve by banner `//----- (00024440)`) walks
+/// `dword_38527`, the tick-top `(10,45)` roster, and tests only range
+/// and nearest. `NETHERW.EXE` (file = VA + 0x24800):
+///   0x24491 `a1 a4 41 00 00` / 0x2449B `8b 80 7f 96 00 00`
+///                                 load `dword_38527` (wizext+0x967F)
+///   0x244C7 `3b 4d fc` / 0x244CA `77 08`   d² > range² → skip
+///   0x244CC `39 f1`    / 0x244CE `73 04`   d² >= best → skip
+///   0x244D4 `8b 00`                        next_0
+///   0x244FA `c6 43 45 82`                  action = 130
+/// No life, class or reap test — the same law as round 137's
+/// class-3 roster (`MGC_NO_MC2_CLASS3_SCAN_ROSTER`), on the building
+/// chain.
+///
+/// WITNESS mc2l22-new pair 20383→20384, wyvern slot 203: building 80
+/// (dead, action 53) takes its reap stamp at its own dispatch, BELOW
+/// the wyvern; retail's sweep still locks it (`target96` 80, action
+/// 129 → 130), the port's pool walk skipped it and locked 141. The
+/// lane is ungraded on the pair, so it surfaced a tick later as the
+/// INHERITED 20385 cluster (wyvern 203 action, 962 `(9,0)` bolt, the
+/// one-slot shift of the house-80 rubble 578..587).
+pub(crate) fn no_mc2_m16_sweep_roster() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M16_SWEEP_ROSTER").is_some())
+}
+
+/// `MGC_NO_MC2_BUILD_REPAINT_ROSTER=1` restores the pre-dig LIVE POOL
+/// walk (class 3, `0x400` clear, no life test) in the `(10,45)`
+/// completion tail's castle re-paint pass ([`Gen::mc2_building_tick`]).
+///
+/// `sub_377A0` (EF:27304 caller; resolve by banner
+/// `//----- (000377A0)`) walks `dword_38519`, which
+/// `UpdateEntities_57730` builds ONCE at the tick top from
+/// `class == 3 && life_0x8 >= 0` (EF:39972-85). The port's own comment
+/// on the pass already said so ("keeping every class-3 record with
+/// `life >= 0`") and then walked the pool with no life test. The two
+/// differ on any class-3 record at `life < 0` that is still in the
+/// pool. `NETHERW.EXE` (file = VA + 0x24800): 0x377A4 `8b 1d a4 41 00 00`
+/// / 0x377AA `8b 9b 77 96 00 00` (the chain head), 0x377C0
+/// `e8 8b 8f fd ff` (CompareAxisWithShift_10750), 0x377CD
+/// `e8 fe 83 02 00` (sub_5FBD0), 0x377D5 `8b 1b` (next_0) — no class,
+/// life or reap test in the walk: a corpse mid-fall, and — permanently — the IMMORTAL ORPHAN
+/// BALLOON (`mc2_orphan_balloon_reap`; its only reaper hangs off the
+/// castle's dispatch), which stays a live `(3,3)` at `life −1200`.
+///
+/// WITNESS mc2l22-new pair 33773→33774: building 966 completes
+/// (action 51 → 52, life 1 → 90000) over rival 611's orphan balloon
+/// 668 (`life −1200`, `target96` 637 — a `(5,27)` by then). Retail
+/// mints nothing; the port minted a `(10,42)` painter for 668 into
+/// slot 959 (`extra(10,42)slot959`).
+pub(crate) fn no_mc2_build_repaint_roster() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BUILD_REPAINT_ROSTER").is_some())
+}
+
+/// `MGC_NO_MC2_RIVAL_LADDER_PRICE_DYING_CASTLE=1` restores the pre-dig
+/// bare `rival_castle(own)` lookup in the RIVAL arm of
+/// [`World::mc2_drain_ladder_sync`].
+///
+/// Retail's `sub_60810` (EF:62092) hands the castle that just took a
+/// level to `sub_60780` (EF:62067), whose `locEvent2` arm runs
+/// `SetSpell_6D5E0(token, token->byte_0x46_70)`; `SetSpell_6D5E0` then
+/// prices through `GetSpellManaCost_6D710(Entities[token->
+/// parentId_0x28_40], …)`, which resolves the pricing castle as
+/// `Entities[owner->dword_0xA4_164x->CastleEntityIndex_0x3A_58]`
+/// (`NETHERW.EXE` 0x91f59-0x91f74) — **a REGISTER, with no class,
+/// model, owner or reap test**. Round 136's law again: A POOL SCAN
+/// RETURNS THE LOWEST-NUMBERED MATCH, A REGISTER THE CHOSEN ONE.
+/// Round 136 landed the register on the HUMAN column
+/// ([`World::player_castle_bound`] / `mc2_price_castle`) and round 141
+/// added the death-arm snapshot there; the RIVAL column still prices
+/// off [`World::rival_castle`], a pool scan that filters
+/// `flags & 0x400 == 0`.
+///
+/// A level-0 DESTRUCTION stamps that reap bit BEFORE the ladder drain,
+/// so the scan misses and the port takes `GetSpellManaCost`'s
+/// castle-less arm (the raw tier `manaCost_6`) where retail reads the
+/// rung off the very record it has just decremented to 0. This hunk
+/// hands the MAILING castle in as a fallback, which is exactly the
+/// record retail's register still names at that instant, and is a
+/// no-op on every mail whose scan already resolves.
+///
+/// WITNESS mc2l18 pair 6633→6634, slot 556 `(15,2)` owner 553 (a RIVAL
+/// wizard): its castle, slot 995, goes `scratch10` 1 → 0 and
+/// `mana_max` 8500 → 5000 (`sub_60810`'s rung-0 `number2`) while
+/// taking the 0x400 reap stamp on the same tick. Retail prices the
+/// token at `MC2_CASTLE_COST[0] * 384 >> 8` = **1500** / `mana` 14;
+/// the port published the castle-less **5000** / 148. It is the take's
+/// LAST `(15,x)` head.
+///
+/// ⚠ THIS IS A FALLBACK, NOT THE REGISTER. The faithful fix is to give
+/// [`World::rival_castle`] the rival's own `CastleEntityIndex_0x3A_58`
+/// (the port already keeps `Gen::castle_reg`) the way
+/// [`World::player_castle_bound`] has it — that is a separate,
+/// wider-blast-radius law, since ~20 rival-AI gates read the same
+/// scan.
+pub(crate) fn no_mc2_rival_ladder_price_dying_castle() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var_os("MGC_NO_MC2_RIVAL_LADDER_PRICE_DYING_CASTLE").is_some()
+    })
+}
+
+/// `MGC_NO_MC2_M22_STALE_PROBE=1` restores the pre-dig worm-head
+/// roughness probe (the HEAD's own position when no chain member
+/// stands above altitude 0).
+///
+/// `sub_26FF0` (`//----- (00026FF0)`, the m22 head's move + altitude
+/// step) seeds its whole-chain terrain maximum at **0**, not at the
+/// type minimum, and copies the winner's position into the 6-byte
+/// local `v9x` (`[ebp-0x10]`) only on a STRICT `>`:
+///   `27061 89 75 fc`  `mov [ebp-4],esi` (esi = 0 from `2705b 31 f6`)
+///   `27080 66 39 f8 / 27083 7e 0f`  `cmp ax,di ; jle` (skip the copy)
+///   `27088 8d 7d f0 … 27091 a5 / 27092 66 a5`  `lea edi,[ebp-0x10] ; movsd ; movsw`
+/// and then, on the rise arm, hands `&v9x` to `sub_1B7A0_tile_compare`
+/// unconditionally (`270cf 8d 45 f0 / 270d2 50 / 270d3 e8 …`) and adds
+/// `0x100` (`270e6 fe 43 51`, `inc byte [ebx+0x51]`) when the result
+/// beats the row's `word_160_0x10_16`, else `0x40` (`270df 66 83 43 50 40`).
+/// So a worm whose ENTIRE chain lies over altitude-0 ground (water)
+/// probes the roughness of whatever the stack held at `[ebp-0x10]` —
+/// the port probed the head's own (flat) tile and always took `+0x40`.
+///
+/// ⭐ WHAT THE STACK HOLDS. Let `W` be `esp` between the entity walk's
+/// `57a8a 53` (`push ebx`) and `57a8b ff 50 06` (`call [eax+6]`) — the
+/// same for every handler. Head handler
+/// 0xB0 `sub_26960` (`53 55 89 e5`, then `53 e8`) puts `sub_26FF0`'s
+/// `ebp` at `W-36` and `v9x` at **`W-52..W-47`** (x = W-52, y = W-50).
+/// The tail-segment handler 0xB4 `sub_26CA0` (`53 55 89 e5`, `53 e8` →
+/// `sub_271D0`, `53 56 57 55 89 e5`, no locals) ends with
+/// `272a5 e8 … CopyEntityPosition_57CF0` two args deep, whose prologue
+/// `57cf0 56` pushes **ESI = the segment's own record pointer** into
+/// W-52 (and the call's return address into W-48, the unread `z`).
+/// Its relay `sub_26D20` (`ebp` = W-36, one local) returns before any
+/// call unless `b39 != 0` and the head is in 0xB0/0xB2; its only calls
+/// are `26d97 e8 → sub_581E0` (two args, so its RETURN ADDRESS
+/// `0x26D9C` lands in W-52) and `26e9e`/`26ec7 e8 → sub_6E450` (three
+/// args; the third is `26e9c 98 / 26e9d 50`, `cwde ; push eax` = the
+/// sign-extended tag). An m22 tail segment is the slot directly below
+/// the next worm's head, so that record pointer is what the head reads.
+/// Record pointers are `0x35CEC6 + 168·slot` (the list terminator
+/// `Entities_EA3E4[0]` in the recorded `next_0` words of mc2l18,
+/// mc2l22 and mc2l24; mc2l18's head roster 662→677→692 agrees), so
+/// the probe is tile `(ptr>>8 & 0xFF, ptr>>24)`. Code runs at VA +
+/// 0x1E1000 (remc2's dump; the data object's +0x1D1000 matches the
+/// recorded `ptr_a0` words), so the relay-call residue is 0x207D9C.
+///
+/// ⚠ SCOPE: only the 0xB0 head frame is modelled. 0xB1 (`sub_26990`,
+/// `sub esp,0x1c`) and 0xB2 (`sub_26AA0`, `sub esp,8`) put `v9x` at
+/// W-88 / W-68, where the segment's frames leave STACK ADDRESSES
+/// (`57FA0`'s / `57D70`'s pushed `ebp`) or return addresses depending
+/// on the tile path; those, a non-segment predecessor, and a PLAYER
+/// tag keep the head's own position (the pre-dig probe).
+///
+/// WITNESS mc2l18 pair 5618→5619 (and 6053, 6246, 6439, 6632, 6825,
+/// 7018 — the 193-tick rise cycle `64 + 256/2 + 1`): head 677 (0xB0)
+/// over water, predecessor tail segment 676 → ptr 0x378A66 → tile
+/// (0x8A,0x00) roughness 233 > 50 → retail `z 382 → 638`; the port
+/// rose `+0x40` to 446 on all 15 chain slots. The same take's other
+/// water heads (647, 662, 710, 346, 631, 27 — predecessor tiles
+/// roughness 0…10) keep `+0x40`, matching retail.
+pub(crate) fn no_mc2_m22_stale_probe() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M22_STALE_PROBE").is_some())
+}
+
+/// `MGC_NO_MC2_STAGEVAR_REACT_ROSTER=1` restores the pre-dig
+/// StageVar per-entity reaction over every held binding.
+///
+/// Retail runs `sub_12500` (the per-creature StageVar reaction —
+/// release / re-leash / dead-watch scrub) ONLY from the tick-top
+/// class-5 roster walk in `UpdateEntities_57730` (EF, the
+/// `for (k = 0; k < 29; k++) for (lx = bytearray_38403x[k]; …)` loop
+/// after `sub_12780()`), NETHERW.EXE:
+///   `579b8 8b 9c b2 03 96 00 00`  `mov ebx,[edx+esi*4+0x9603]` (chain head)
+///   `579c1 80 7b 48 00 / 579c7 80 7b 49 00`  StageVar1 / StageVar2 tests
+///   `579cd 53 / 579ce e8 …`  `push ebx ; call sub_12500`
+///   `579d6 8b 1b`  `mov ebx,[ebx]` (`next_0`)
+///   `579e1 83 fe 1d / 579e4 7c cc`  29 chains
+/// and that roster was built a few instructions earlier with
+/// `life_0x8 < 0` and actions 0xB4/0xE8/0xEA EXCLUDED (see
+/// [`Gen::mc2_roster`]). So a creature that is DEAD at the tick top —
+/// killed during the previous walk, still in its pre-kill action
+/// because its own handler has not yet run — gets no StageVar
+/// reaction at all. The port walked `mc2_sv_held` with only a
+/// class / `site_z` / reap filter and the phase-4/5 gate, so it
+/// re-leashed the corpse of an aggro-broken (StageVar2 10) creature.
+///
+/// WITNESS mc2l18 pair 2454→2455 (the take's horizon), slot 614, a
+/// `(5,17)` on StageVar1 3 / StageVar2 10, action 137 (idle, phase 1),
+/// killed by the human (slot 411) during t=2454's walk (life 3200 → −1).
+/// Retail keeps `sv2 = 10` and its own handler goes 137 → 140; the
+/// port's tick-head pass ran `sub_12330` (sv2 10 → 2, as retail itself
+/// does at t=1215 and t=1647 while the creature is alive).
+pub(crate) fn no_mc2_stagevar_react_roster() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_STAGEVAR_REACT_ROSTER").is_some())
+}
+
+/// Retail record pointer of pool slot `slot` (see
+/// [`no_mc2_m22_stale_probe`]).
+pub(crate) const MC2_RETAIL_REC_PTR_0: u32 = 0x0035_CEC6;
+
 /// `MGC_NO_MC1_RIVAL_TOKEN_GATE_LIVE_PURSE=1` restores the pre-dig
 /// `RivalState::mana` MIRROR reads in the three MC1 rival class-12
 /// token gates. Retail has no separate rival purse: `sub_55DD0`
@@ -2383,6 +3310,44 @@ impl std::hash::Hash for PlayerHurl {
     /// (`verify-deltas`, the fixture runner) arms the one-shot and
     /// never spends it — hashing it there would move a fixture
     /// signature on a beam tick for a channel that tick cannot use.
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// See [`Gen::player_flood_pull`] — the quake/flood's vertical pull on
+/// the human. Hash-silent OUTRIGHT, for [`PlayerHurl`]'s reason: the
+/// drain site sits behind `drive`, so a PINNED pair tick arms the
+/// one-shot and never spends it.
+#[derive(Default, Clone, Copy, Debug)]
+pub(crate) struct PlayerFloodPull {
+    /// `sub_39B60`'s human arm shoved the wizard this tick.
+    pub armed: bool,
+    /// `48 * (((4096 - v5) << 8) >> 12) >> 8` — the downward step,
+    /// POSITIVE (subtracted from z).
+    pub pull: i32,
+    /// The HORIZONTAL leg's bearing, `tan2(player, quake)` — the same
+    /// value the shove posts on [`Gen::player_knock`], carried here
+    /// so the walk-pose reader can re-derive the displacement without
+    /// draining (or trusting) the shared knock lane. See
+    /// [`crate::engine::world::World::mc2_flood_walk_pose`].
+    pub bearing: u16,
+    /// The horizontal leg's distance (`v6`, clamped 4..=128).
+    pub dist: i16,
+    /// ⭐ [`no_mc2_flood_human_seat`]'s transport: the ACCUMULATED
+    /// horizontal displacement of every visit this walk made (x, y),
+    /// wrapping engine units. `pull` then carries the accumulated
+    /// (positive-down) z displacement, terrain floor included.
+    pub dx: i32,
+    pub dy: i32,
+    /// A publication the walk hook has not yet adopted into the
+    /// mid-walk pose.
+    pub fresh: bool,
+    /// `sub_3A200`'s pitch seizure (`pitch = pitch_acc = 512`) — see
+    /// [`no_mc2_flood_human_spin`]. Independent of `armed`: the close
+    /// band moves nothing, so the walk-pose hook has nothing to adopt.
+    pub spin: bool,
+}
+
+impl std::hash::Hash for PlayerFloodPull {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
@@ -2974,7 +3939,7 @@ impl Gen {
             paint_chain: TickChain::default(),
             mob_chains: MobChains::default(),
             mc2_recycle: Mc2Recycle::default(),
-            m27_v34_slot: M27V34Slot(None, false, None),
+            m27_v34_slot: M27V34Slot(None, false, None, None),
             mc2_pinned: Mc2Pinned(0),
             mc1_guard_reg: Mc1GuardReg::default(),
             mc1_balloon_reg: Mc1BalloonReg::default(),
@@ -2990,7 +3955,9 @@ impl Gen {
             player_spin: PlayerSpin::default(),
             player_whirl: PlayerWhirl::default(),
             ww_walk_published: HashSilent(false),
+            m22_seg_residue: HashSilent(None),
             player_hurl: PlayerHurl::default(),
+            player_flood_pull: PlayerFloodPull::default(),
             player_deflect_debit: DeflectDebit::default(),
             mc2_debuffs: Mc2PlayerDebuffs::default(),
             rival_ents: [0; 8],
@@ -3277,6 +4244,15 @@ impl Gen {
         // resets it with every other field (no stale claim may greet
         // the slot's next occupant).
         self.mc2_aura_claim.0.remove(&(idx as u16));
+        // …and so does the ALLIANCE PARENT. Retail keeps it in the
+        // victim's own `parentId_0x28_40`, which this ctor overwrites
+        // with everything else; the port's side-map seat has to be
+        // dropped here, and here ONLY (EF:11019-22 is retail's only
+        // other clear). See
+        // [`crate::mc2::mobs::no_mc2_ally_seat_recycle`].
+        if !crate::mc2::mobs::no_mc2_ally_seat_recycle() {
+            self.mc2_allied.0.remove(&(idx as u16));
+        }
         // ⭐ THE ALLOCATOR SEEDS THE BEHAVIOR ROW TOO, and it is the
         // engine's table BASE. MC2's `NewEvent_4A050` writes
         // `dword_0xA0_160x = &str_D7BD6[59]` in BOTH arms
@@ -9047,9 +10023,14 @@ impl Gen {
             player_whirl: _,
             // A within-walk register — see the field doc.
             ww_walk_published: _,
+            // A within-walk register — see the field doc.
+            m22_seg_residue: _,
             // A per-tick transient the carpet's walk slot drains — see
             // PlayerHurl.
             player_hurl: _,
+            // A per-tick transient the carpet's dispatch drains — see
+            // PlayerFloodPull.
+            player_flood_pull: _,
             // A per-tick transient the wizard pass drains — see
             // DeflectDebit.
             player_deflect_debit: _,

@@ -55,6 +55,92 @@ pub(crate) fn no_mc2_piece_human_raise() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PIECE_HUMAN_RAISE").is_some())
 }
 
+/// `MGC_NO_MC2_PIECE_SCAN_ALLY=1` restores the pre-dig (10,79) turret
+/// ring scan, which admitted an OWN-PARENT ALLIANCE SUMMON as a
+/// hostile — the exemption `mc2_piece_scan`'s own doc comment used to
+/// call "skipped (deliberate)".
+///
+/// ⭐⭐ THE CLASS-5 ARM HAS THREE CLAUSES, NOT TWO. `sub_3AF00`'s
+/// per-node predicate (EF:30331-38) is
+/// ```text
+/// else if (v7 == 5 && ix->model_0x40_64 != 22 && ix->id_0x1A_26 != a1x->id_0x1A_26)
+/// {
+///     if (ix->StageVar2_0x49_73 == 14)
+///     {
+///         v9 = ix->parentId_0x28_40 == a1x->id_0x1A_26;
+///         goto LABEL_26;          // v9 ⇒ NOT hostile
+///     }
+///     goto LABEL_27;              // hostile
+/// }
+/// ```
+/// — a charmed/allied creature (`StageVar2 == 14`) whose
+/// `parentId_0x28_40` is the turret's OWN owner is skipped, exactly
+/// as the class-3 arm skips a same-owner wizard. The port kept the
+/// `model != 22` and the `id_0x1A` clauses and dropped the third, so
+/// every castle whose owner had charmed something near its walls
+/// opened fire on its own ally.
+///
+/// The port cannot read `@0x28` off the record — the alliance
+/// parent rides the `mc2_allied` side map (see
+/// [`crate::mc2::mobs::no_mc2_alliance_parent_seat`]) and the class-5
+/// `StageVar2` rides `site_z` — so the test is spelled against those
+/// two seats; both are imported (`retail_import_mc2` seeds
+/// `mc2_allied` from `r.owner28` for every class-5 `sv2 == 14`
+/// record).
+///
+/// WITNESS mc2l17 t=12,084: the HUMAN-owned piece 128 (`id_0x1A` 91)
+/// on tile (209,90) scans its `(3, 12)` disc and reaches slot 8 at
+/// ring 4 — a `(5,16)` at action 130 with `StageVar2 = 14` and
+/// `parentId = 91`, the human's own charmed creature. Retail skips
+/// it and the turret stays in state 3; the port latched
+/// `word_0x96_150 = 8`, wound up and rode the `+160` boost, `z`
+/// 5,824 against retail's 5,678. That one slot heads FIVE of the
+/// take's `(10,79) z` segments (t=12,021 / 12,085 / 18,558 /
+/// 29,374 …), each exactly 64 ticks — one `byte_0x3E_62 & 0x3F`
+/// scan period — after the last.
+pub(crate) fn no_mc2_piece_scan_ally() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PIECE_SCAN_ALLY").is_some())
+}
+
+/// `MGC_NO_MC2_PIECE_SCAN_CHAIN_TILE=1` restores the pre-dig (10,79)
+/// turret ring scan, which resolved the OUT-OF-POOL HUMAN's cell with
+/// the SCAN-CENTRE rounding `(x + 128) >> 8` instead of the tile
+/// chain's own `x >> 8`.
+///
+/// ⭐⭐⭐ THE RING CENTRE AND THE CHAIN INDEX USE DIFFERENT TILE
+/// ARITHMETIC, AND THE HUMAN IS THE ONLY CANDIDATE THE PORT HAS TO
+/// PLACE BY HAND. `sub_3AF00`'s case 3 rounds its own centre —
+/// `v36 = (position.x + 128) >> 8`, `v35 = (position.y + 128) >> 8`
+/// (EF:30204-05) — but every candidate it can reach is found through
+/// `mapEntityIndex_15B4E0`, whose index is stamped by
+/// `AddEventToMap_57D70` with NO rounding at all: `NETHERW.EXE` file
+/// **0x7C570** (VA 0x57D70) does
+/// `8a 46 03  mov 0x3(%esi),%al` (the HIGH byte of `position.y`) /
+/// `c1 e2 08  shl $0x8,%edx` / `8d 46 01  lea 0x1(%esi),%eax` /
+/// `8a 00  mov (%eax),%al` (the HIGH byte of `position.x`) /
+/// `01 d0  add %edx,%eax` / `66 8b 04 45 e0 b4 08 00
+/// mov 0x8b4e0(,%eax,2),%ax` — i.e. `((y >> 8) << 8) | (x >> 8)`
+/// (EF:40626). Retail's carpet is an ordinary pool record linked by
+/// that same call, so the turret meets it at `x >> 8`; ours lives
+/// out of pool and the scan had to name its cell itself, and it
+/// named it with the CENTRE's rounding.
+///
+/// The two disagree on the half-tile `x & 0xFF >= 128`, and one tile
+/// of x is the difference between SEARCH.DAT ring 12 (scanned) and
+/// ring 13 (not). WITNESS mc2l17 t=6,710: piece 797 (owner 208) sits
+/// on tile (16,16) and the human is at x=2005, y=6686 — chain cell
+/// (7, 26), delta (−9, +10) = ring **13**, out of the `(3, 12)` disc,
+/// so retail's turret stays in state 3 and keeps bobbing; the rounded
+/// cell (8, 26) is delta (−8, +10) = ring **12**, and the port
+/// latched `word_0x96_150 = 91` (the human), wound up, and rode the
+/// `+160` windup z-boost — `z` 4,896 against retail's 4,756. That is
+/// the take's FIRST divergence and the whole `(10,79) z` family.
+pub(crate) fn no_mc2_piece_scan_chain_tile() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PIECE_SCAN_CHAIN_TILE").is_some())
+}
+
 /// `MGC_NO_MC2_BALL_PICK_MODEL_ONLY=1` restores the pre-dig MC2 balloon
 /// retarget filter, which carried two guards `sub_5F810` (EF:60994)
 /// does not have: a `class64 == 10` test and a `tick70 != 62` action
@@ -544,15 +630,30 @@ impl Gen {
     /// `mc2_castle_downgrade` rotated all seven by one.
     fn mc2_castle_destroy(&mut self, i: usize, patches: crate::patches::WorldPatches) {
         if !self.free.is_empty() {
-            self.mc2_castle_downgrade(i, patches);
-            self.ent[i].tick70 = 4;
-            self.mc2_castle_eject(i);
-            self.mc2_castle_roster(i);
-            self.ent[i].f59 = 0;
-            self.ent[i].f50 = 5;
+            self.mc2_castle_destroy_head(i, patches);
+            self.mc2_castle_destroy_tail(i);
         } else {
             self.ent[i].tick70 = 4;
         }
+    }
+
+    /// `sub_5FCA0`'s first two statements — `sub_605E0` (the level
+    /// off) and the action park. The World-side half of `sub_605E0`
+    /// (ladder re-price, pin, level-0 purge) must run BETWEEN this and
+    /// [`Self::mc2_castle_destroy_tail`]; see
+    /// `features::no_mc2_castle_purge_before_eject`.
+    pub(crate) fn mc2_castle_destroy_head(&mut self, i: usize, patches: crate::patches::WorldPatches) {
+        self.mc2_castle_downgrade(i, patches);
+        self.ent[i].tick70 = 4;
+    }
+
+    /// `sub_5FCA0`'s tail — `sub_5FD00` (eject, whose dry arm runs the
+    /// `sub_49F90` GC), `sub_5FF50` (roster) and the settle writes.
+    pub(crate) fn mc2_castle_destroy_tail(&mut self, i: usize) {
+        self.mc2_castle_eject(i);
+        self.mc2_castle_roster(i);
+        self.ent[i].f59 = 0;
+        self.ent[i].f50 = 5;
     }
 
     /// `sub_609E0` (EF:61733) — the damage intake: STRAIGHT subtract
@@ -1249,7 +1350,15 @@ impl Gen {
                 break;
             };
             self.ent[b].f140 = share;
-            self.ent[b].f144 = own;
+            // ⭐ `mov ax,[ebx+0x1a]` is re-read EVERY pass (0x5FE2B): a
+            // dry-arm GC can free the castle itself and hand ITS record
+            // to this very sphere, whose id is then its own slot. See
+            // `features::no_mc2_eject_owner_live_read`.
+            self.ent[b].f144 = if crate::engine::features::no_mc2_eject_owner_live_read() {
+                own
+            } else {
+                self.ent[i].id24
+            };
             let d = self.ent_rand(b);
             self.ent[b].f126 = (d % 0x30 + 16) as i16;
             self.ent[b].dest_x = 0;
@@ -1871,8 +1980,35 @@ impl Gen {
     /// altitude. `sub_60EA0` intake at the tail: straight subtract,
     /// owner balloon-alert, killer memory — the corpse is the
     /// roster pass's business (no despawn here).
-    pub(crate) fn mc2_balloon_tick(&mut self, i: usize) {
+    pub(crate) fn mc2_balloon_tick(&mut self, i: usize, ctx: &crate::mc1::mobs::MobCtx) {
         use super::behavior::BEHAVIOR;
+        // ⭐ PATCH OPTION `mc2_orphan_balloon_reap` (docs/DEVIATIONS.md,
+        // player-reported + player-recorded 2026-09-16,
+        // `recordings/mc2l22-new.mgcr`). Retail's ONLY reaper for a
+        // (3,3) is `sub_5FF50`'s dead-member arm (EF:61793-96), and
+        // that pass hangs off the CASTLE's dispatch. Lose the castle
+        // first and a dead balloon is never transformed, never freed
+        // and — `sub_60EA0` returns on `life < 0` — never damaged
+        // again, while this handler keeps flying it at whatever record
+        // has since been recycled into its home castle's pool slot.
+        // The patched arm runs retail's own arm from the balloon's own
+        // dispatch, and only when no (3,2) of its owner is left in the
+        // pool to run it: with a castle standing this is a no-op, so
+        // the fleet's sphere pop order is untouched.
+        if ctx.patches.mc2_orphan_balloon_reap
+            && !ctx.strict
+            && self.ent[i].act_life < 0
+            && self.ent[i].flags & 0x400 == 0
+        {
+            let own = self.ent[i].id24;
+            let homed = self.ent[1..].iter().any(|c| {
+                c.class64 == 3 && c.model65 == 2 && c.id24 == own && c.flags & 0x400 == 0
+            });
+            if !homed {
+                self.mc2_balloon_to_sphere(i);
+                return;
+            }
+        }
         let t = self.ent[i].f146 as usize;
         let row = &BEHAVIOR[self.ent[i].row156 as usize];
         // The target read is identity-blind (EF:61779): the only
@@ -2761,6 +2897,17 @@ impl Gen {
     /// the pooled wizard; ours lives outside — None while dead).
     /// Dead or ownerless → despawn (retail's first two gates).
     pub(crate) fn mc2_castle_piece_tick(&mut self, i: usize, player: Option<(u16, u16, i16)>) {
+        // `sub_3AF00` owns both hydra `v34` dwords as LOCALS and writes
+        // them only on its case-3 scan tick — see
+        // [`crate::engine::features::no_mc2_m27_v34_piece_transparent`].
+        if !crate::engine::features::no_mc2_m27_v34_piece_transparent()
+            && !(self.ent[i].act_life >= 0
+                && self.ent[i].id24 != 0
+                && self.ent[i].f71 == 3
+                && self.ent[i].f63 & 0x3F == 0)
+        {
+            self.m27_v34_transparent(i);
+        }
         if self.ent[i].act_life < 0 || self.ent[i].id24 == 0 {
             self.ent[i].flags |= 0x400;
             return;
@@ -2913,9 +3060,13 @@ impl Gen {
     /// (EF:30359-84): class 3 model {0,1,3} or class 5 model ≠22,
     /// owner ≠ ours. No invisibility test — retail turrets see
     /// through Invisibility (unlike the m15 guards' scan). The
-    /// class-5 `StageVar2==14` own-parent exemption (EF:30378-81) is
-    /// skipped (deliberate: the stage binding lives in side-vecs;
-    /// only shields own summons at own walls).
+    /// class-5 `StageVar2==14` own-parent exemption (EF:30331-38) IS
+    /// carried, spelled against `site_z` + the `mc2_allied` side map
+    /// (round 145 — see [`no_mc2_piece_scan_ally`]). It was skipped
+    /// here until then, on the reasoning that "the stage binding
+    /// lives in side-vecs"; ⭐ that is where the SEAT lives, not a
+    /// reason the CLAUSE is optional, and the port shot its owner's
+    /// own charmed creatures for it.
     ///
     /// ⭐⭐⭐ THE RING IS SEARCH.DAT'S, NOT A CHEBYSHEV BOX, AND THE
     /// WALK IS THE TILE MAP, NOT THE POOL. Retail's `AddE7EE0x_10080(3,
@@ -2963,10 +3114,19 @@ impl Gen {
             None
         } else {
             player.map(|(hx, hy, _)| {
-                (
-                    (hx.wrapping_add(128) >> 8) as u8,
-                    (hy.wrapping_add(128) >> 8) as u8,
-                )
+                // ⭐ THE CHAIN INDEX IS UNROUNDED. The centre above
+                // takes `sub_3AF00`'s own `+128` rounding; the
+                // human's CELL is the one `AddEventToMap_57D70`
+                // would have stamped for a pooled carpet — a plain
+                // `>> 8`. See [`no_mc2_piece_scan_chain_tile`].
+                if no_mc2_piece_scan_chain_tile() {
+                    (
+                        (hx.wrapping_add(128) >> 8) as u8,
+                        (hy.wrapping_add(128) >> 8) as u8,
+                    )
+                } else {
+                    ((hx >> 8) as u8, (hy >> 8) as u8)
+                }
             })
         };
         for (dx, dy) in self.ring_cells(3, 12) {
@@ -2984,7 +3144,16 @@ impl Gen {
                 if j != i && e.id24 != own {
                     let hostile = match e.class64 {
                         3 => e.model65 <= 1 || e.model65 == 3,
-                        5 => e.model65 != 22,
+                        // ⭐⭐ THE OWN-PARENT ALLIANCE EXEMPTION
+                        // (EF:30333-37). See
+                        // [`no_mc2_piece_scan_ally`].
+                        5 => {
+                            e.model65 != 22
+                                && (no_mc2_piece_scan_ally()
+                                    || !(e.site_z == 14
+                                        && self.mc2_allied.0.get(&(j as u16)).copied()
+                                            == Some(own)))
+                        }
                         _ => false,
                     };
                     if hostile {
@@ -3232,6 +3401,130 @@ mod tests {
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
     }
 
+    /// A (10,79) turret with a hand-placed ring: rings 3..11 all point
+    /// at the far corner (31,31) and ring 12 holds the single cell
+    /// (8,26), reached from the piece's tile (16,16) by delta
+    /// (-8,+10). `ring_cells` drops the LAST entry of the outermost
+    /// ring (retail's stop-code fetch), so ring 12 carries a trailing
+    /// filler.
+    fn chain_tile_gen() -> Gen {
+        let mut g = flat_gen();
+        let mut rings: Vec<Vec<(u8, u8)>> = (0..32).map(|_| vec![(15u8, 15u8)]).collect();
+        rings[12] = vec![(248, 10), (15, 15)];
+        g.assets.rings = rings;
+        g
+    }
+
+    /// Place the turret at tile (16,16) with owner id `own`.
+    fn piece_at_16_16(g: &mut Gen, own: u16) -> usize {
+        let i = g.new_event().expect("piece slot");
+        {
+            let e = &mut g.ent[i];
+            e.class64 = 10;
+            e.model65 = 79;
+            e.id24 = own;
+            e.act_life = 1;
+        }
+        g.link(i, 16 << 8, 16 << 8, 0);
+        i
+    }
+
+    /// ⭐⭐⭐ A TURRET MEETS THE HUMAN AT THE CHAIN'S TILE, NOT AT THE
+    /// SCAN CENTRE'S ROUNDING (round 145, dig W79;
+    /// [`no_mc2_piece_scan_chain_tile`]).
+    ///
+    /// `sub_3AF00` rounds its OWN ring centre (`(x + 128) >> 8`,
+    /// EF:30204-05) but every candidate it can reach is found through
+    /// `mapEntityIndex_15B4E0`, which `AddEventToMap_57D70` stamps with
+    /// a plain `x >> 8` and no rounding at all (`NETHERW.EXE` file
+    /// 0x7C570). Retail's carpet is an ordinary pool record linked by
+    /// that call — and so is every record the PORT links, since
+    /// [`Gen::link`] is `tile((x >> 8) as u8, (y >> 8) as u8)`. Only
+    /// the out-of-pool human had to have his cell named by hand, and
+    /// it was named with the centre's rounding.
+    ///
+    /// The two readings differ exactly on the half-tile
+    /// `x & 0xFF >= 128`, which is one tile of x — the difference
+    /// between SEARCH.DAT ring 12 (scanned) and ring 13 (not). The
+    /// human here sits at x=2005: `2005 >> 8` = 7, but
+    /// `(2005 + 128) >> 8` = 8, and only cell (8,26) is in the disc.
+    /// mc2l17 t=6,710 is this tick, and it is that take's FIRST
+    /// divergence.
+    #[test]
+    fn a_turret_meets_the_human_at_the_chains_tile_not_the_centres_rounding() {
+        let mut g = chain_tile_gen();
+        let i = piece_at_16_16(&mut g, 208);
+
+        // x=2005 -> chain cell 7 (retail), rounded cell 8 (the bug).
+        // y=6686 -> cell 26 under BOTH readings, so x is the only
+        // variable under test.
+        assert_eq!(
+            g.mc2_piece_scan(i, Some((2005, 6686, 0))),
+            None,
+            "the human's chain cell is (7,26), outside the (3,12) disc — \
+             the turret must not latch"
+        );
+
+        // POSITIVE CONTROL: x=2100 reads cell 8 under BOTH roundings,
+        // so the rig really can see the human and the assert above is
+        // about the TILE, not about the scan being dead.
+        assert_eq!(
+            g.mc2_piece_scan(i, Some((2100, 6686, 0))),
+            Some(crate::mc1::mobs::PLAYER_TARGET),
+            "cell (8,26) is in the disc under either reading"
+        );
+    }
+
+    /// ⭐⭐ A TURRET DOES NOT SHOOT ITS OWNER'S OWN CHARMED CREATURE
+    /// (round 145, dig W79; [`no_mc2_piece_scan_ally`]).
+    ///
+    /// `sub_3AF00`'s class-5 arm has THREE clauses, not two
+    /// (EF:30331-38; `NETHERW.EXE` 0x5F885 `cmpb $0xe,0x49(%ecx)` then
+    /// 0x5F891 `mov dx,0x28(%ecx)` / `cmp %eax,%edx` / `je`): a
+    /// creature with `StageVar2 == 14` whose `parentId_0x28_40` is the
+    /// turret's OWN owner is skipped, exactly as the class-3 arm skips
+    /// a same-owner wizard. The port carried the `model != 22` and
+    /// `id_0x1A` clauses and dropped the third — and its own doc
+    /// comment called the omission "skipped (deliberate)", which named
+    /// where the SEAT lives rather than a reason the CLAUSE is
+    /// optional. mc2l17 t=12,084: the human-owned piece 128 (`id_0x1A`
+    /// 91) latched slot 8, its owner's own charmed `(5,16)`, wound up
+    /// and rode the `+160` windup z-boost.
+    #[test]
+    fn a_turret_does_not_shoot_its_owners_own_charmed_creature() {
+        let mut g = chain_tile_gen();
+        let i = piece_at_16_16(&mut g, 91);
+
+        // A charmed (5,16) parked in the one scanned cell, (8,26).
+        let j = g.new_event().expect("ally slot");
+        {
+            let e = &mut g.ent[j];
+            e.class64 = 5;
+            e.model65 = 16;
+            e.id24 = 7; // not the turret's owner: the id_0x1A clause passes
+            e.site_z = 14; // StageVar2 == 14 — charmed/allied
+            e.act_life = 1;
+        }
+        g.link(j, 8 << 8, 26 << 8, 0);
+        g.mc2_allied.0.insert(j as u16, 91); // parentId_0x28_40 = the turret's owner
+
+        assert_eq!(
+            g.mc2_piece_scan(i, None),
+            None,
+            "a StageVar2==14 creature parented to the turret's own owner is not hostile"
+        );
+
+        // POSITIVE CONTROL: the same record with no alliance parent is
+        // an ordinary hostile, so the assert above is about the
+        // EXEMPTION and not about the record being unreachable.
+        g.mc2_allied.0.remove(&(j as u16));
+        assert_eq!(
+            g.mc2_piece_scan(i, None),
+            Some(j as u16),
+            "with no alliance parent the same (5,16) is hostile"
+        );
+    }
+
     /// Downgrading a castle whose capacity `f136` was pumped past the
     /// normal ladder (the level-0 over-level bug) must not overflow the
     /// 10% haircut `10 * f136` ("attempt to multiply with overflow").
@@ -3300,7 +3593,19 @@ mod tests {
         }
         let z0 = ground + 1024; // 4224: mid v_12..v_10 band
         g.link(bal, 100 << 8, 100 << 8, z0);
-        g.mc2_balloon_tick(bal);
+        g.mc2_balloon_tick(bal, &crate::mc1::mobs::MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        });
         // 2-branch: z > ground → z += v_14(−16). MC1's alt_clamp
         // would take the 25% band step (−4 → 4220) here.
         assert_eq!(
@@ -4201,4 +4506,107 @@ mod tests {
             "gfx_type bit 2 set ⇒ EXE 0x84f4c `mov word [eax+0x337],0`"
         );
     }
+
+    /// ⭐⭐⭐ THE ORPHANED MANA BALLOON (`recordings/mc2l22-new.mgcr`,
+    /// docs/DEVIATIONS.md `mc2_orphan_balloon_reap`). The ONLY reaper
+    /// of a dead (3,3) is `sub_5FF50`'s dead-member arm (EF:61793-96),
+    /// and that pass runs off the CASTLE's dispatch — so a balloon
+    /// whose castle fell first is never transformed, never freed, and
+    /// (`sub_60EA0` EF:62331 `if (life < 0) return;`) never hurt again.
+    #[test]
+    fn a_dead_balloon_with_no_castle_is_immortal_until_the_patch() {
+        let mut g = flat_gen();
+        let b = g.new_event().expect("a pool slot");
+        {
+            let e = &mut g.ent[b];
+            e.class64 = 3;
+            e.model65 = 3;
+            e.tick70 = 9;
+            e.row156 = 68;
+            e.f126 = 48;
+            e.max_life = 10000;
+            e.f136 = 10000;
+            e.f140 = 0;
+            e.id24 = 611; // Prish
+            e.f144 = 611;
+            e.f146 = 637; // the home castle's slot — now recycled
+            e.act_life = -1200; // killed by the human at t=4248
+        }
+        let gz = g.ground_z(69 << 8, 43 << 8) as i16;
+        g.link(b, 69 << 8, 43 << 8, gz + 512);
+        let retail = w6_ctx(crate::patches::WorldPatches::RETAIL, false);
+        for _ in 0..8 {
+            g.mc2_balloon_tick(b, &retail);
+        }
+        assert_eq!(g.ent[b].class64, 3, "still a (3,3) record");
+        assert_eq!(g.ent[b].flags & 0x400, 0, "never reap-marked: no castle ran sub_5FF50");
+        assert_eq!(g.ent[b].act_life, -1200, "life untouched");
+        // …and it cannot be hurt: sub_60EA0 returns on life < 0.
+        g.ent[b].mail[0] = (5000, 424);
+        g.mc2_balloon_tick(b, &retail);
+        assert_eq!(g.ent[b].act_life, -1200, "sub_60EA0's `if (life < 0) return`");
+        assert_eq!(g.ent[b].mail[0].1, 424, "the mail is not even consumed");
+        // THE PATCHED ARM: sub_5FF50's own dead-member arm, run from
+        // the balloon's dispatch because no castle is left to run it.
+        let patched = w6_ctx(
+            crate::patches::WorldPatches {
+                mc2_orphan_balloon_reap: true,
+                ..crate::patches::WorldPatches::RETAIL
+            },
+            false,
+        );
+        g.mc2_balloon_tick(b, &patched);
+        assert_ne!(g.ent[b].flags & 0x400, 0, "dissolved into its mana sphere");
+        // strict_retail (conformance replay) keeps retail's arm.
+        let mut strict = patched;
+        strict.strict = true;
+        let c = g.new_event().expect("a pool slot");
+        {
+            let e = &mut g.ent[c];
+            e.class64 = 3;
+            e.model65 = 3;
+            e.tick70 = 9;
+            e.row156 = 68;
+            e.f126 = 48;
+            e.max_life = 10000;
+            e.f136 = 10000;
+            e.id24 = 611;
+            e.f144 = 611;
+            e.f146 = 637;
+            e.act_life = -1200;
+        }
+        g.link(c, 69 << 8, 43 << 8, gz + 512);
+        g.mc2_balloon_tick(c, &strict);
+        assert_eq!(g.ent[c].flags & 0x400, 0, "strict_retail overrides the patch");
+        // …and with a castle of the owner's still standing the patched
+        // arm is a NO-OP: the fleet pass is alive and owns the reap,
+        // so the sphere pop order stays retail's.
+        let castle = g.new_event().expect("a pool slot");
+        {
+            let e = &mut g.ent[castle];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = 611;
+            e.act_life = 1;
+        }
+        g.mc2_balloon_tick(c, &patched);
+        assert_eq!(g.ent[c].flags & 0x400, 0, "a live castle owns the reap");
+    }
+
+    fn w6_ctx(patches: crate::patches::WorldPatches, strict: bool) -> crate::mc1::mobs::MobCtx {
+        crate::mc1::mobs::MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict,
+            patches,
+            mc2_turn: 0,
+        }
+    }
+
 }

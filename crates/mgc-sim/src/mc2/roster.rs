@@ -41,6 +41,7 @@
 //!   2026-08-24f.
 
 use super::behavior::BEHAVIOR;
+use super::multipart::GuardV34;
 use crate::engine::features::Gen;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 
@@ -355,6 +356,34 @@ fn m12_site_vetos() -> bool {
 fn m12_site_reap_blind() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_M12_SITE_REAP_BLIND").is_none())
+}
+/// A/B toggle for THE TOWNIE RALLY TARGET IS REAP-BLIND TOO — the
+/// villager brain `sub_23340` (EF:14599-601, NETHERW.EXE 0x47d9d
+/// `cmpb $0xa,0x3f(%esi)` / 0x47daf `cmpb $0x2d,0x40(%esi)`) and the
+/// trader brain `sub_237B0` (EF:14828-30, NETHERW.EXE 0x4822d /
+/// 0x48233) both validate `word_0x96_150` on **class 10 + model 45 and
+/// nothing else**; neither reads the reap bit. Set
+/// `MGC_NO_MC2_TOWNIE_TARGET_REAP_BLIND=1` to restore the pre-dig
+/// behaviour, where both ALSO required `flags & 0x400 == 0` and so
+/// dropped a dwelling the tick it was reap-flagged — the twin of
+/// [`m12_site_reap_blind`], one call path over.
+pub(crate) fn townie_target_reap_blind() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TOWNIE_TARGET_REAP_BLIND").is_none())
+}
+/// A/B toggle for THE TRADER'S INVALID TARGET RETURNS — `sub_237B0`
+/// tests `word_0x96_150` FIRST (NETHERW.EXE 0x480ee
+/// `mov 0x96(%ebx),%di; test %di,%di; jne 0x48221`) and the whole
+/// wander-turn + far-dwelling scan lives on the **zero-target** arm
+/// only. A non-zero target that fails validation clears the handle,
+/// sets `actSpeed = maxSpeed` and jumps straight to LABEL_44
+/// (0x48286-0x4829d) — no LCG draws, no rescan, this tick. Set
+/// `MGC_NO_MC2_TRADER_INVALID_TARGET_RETURN=1` to restore the pre-dig
+/// behaviour, where the port merged "target invalid" into "no target"
+/// and so spent two per-entity draws and re-acquired at `maxSpeed+12`.
+pub(crate) fn trader_invalid_target_return() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TRADER_INVALID_TARGET_RETURN").is_none())
 }
 /// A/B toggle for THE GROUNDED HIVE'S ENGAGE-POSE TAIL: set
 /// `MGC_NO_M9_GROUNDED_POSE_TAIL=1` to restore the pre-dig behaviour,
@@ -2033,11 +2062,23 @@ impl Gen {
                 let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u8;
                 if self.ent[i].f63 % period == 0 {
                     let t = self.ent[i].f146 as usize;
+                    // ⭐⭐ RETAIL'S TARGET TEST IS `class == 10 &&
+                    // model == 45` AND NOTHING ELSE (NETHERW.EXE
+                    // 0x4822d/0x48233) — the reap bit is invisible to
+                    // it, exactly as it is to the m12 site test
+                    // ([`m12_site_reap_blind`]).
                     let building = t != 0
                         && t < self.ent.len()
                         && self.ent[t].class64 == 10
                         && self.ent[t].model65 == 45
-                        && self.ent[t].flags & 0x400 == 0;
+                        && (townie_target_reap_blind() || self.ent[t].flags & 0x400 == 0);
+                    // ⭐⭐⭐ `word_0x96_150 != 0` IS THE OUTER TEST
+                    // (0x480ee `test %di,%di; jne 0x48221`): a
+                    // non-zero handle NEVER reaches the wander turn or
+                    // the far-dwelling scan, whatever it resolves to.
+                    // An invalid one clears, takes `maxSpeed` and
+                    // returns (0x48286-0x4829d).
+                    let had_target = t != 0 && trader_invalid_target_return();
                     if building {
                         let (sp, tp) = {
                             let e = &self.ent[i];
@@ -2055,6 +2096,9 @@ impl Gen {
                             self.ent[i].f146 = 0;
                             self.ent[i].f126 = self.ent[i].f130;
                         }
+                    } else if had_target {
+                        self.ent[i].f146 = 0;
+                        self.ent[i].f126 = self.ent[i].f130;
                     } else {
                         self.ent[i].f146 = 0;
                         self.mc2_wander_turn(i);
@@ -2178,13 +2222,16 @@ impl Gen {
     /// phase the move candidate snaps to the tile axis. Packmate
     /// separation writes the COMMITTED heading (roll) directly; the
     /// step happens when roll caught up with yaw or on the 55% roll.
-    fn m15_wander(&mut self, i: usize) {
+    /// Returns `sub_24190`'s `[ebp-4]` packmate byte (`None` = the
+    /// `actionIndex = 124` bail, which never stores it) — see
+    /// [`Gen::m27_v34_publish_guard`].
+    fn m15_wander(&mut self, i: usize) -> Option<bool> {
         let row = &BEHAVIOR[self.ent[i].row156 as usize];
         if self.ent[i].f63 % 8 == 0 {
             let (ex, ey) = (self.ent[i].x, self.ent[i].y);
             if self.cap_bit(ex, ey) & !row.v_20 != 0 {
                 self.ent[i].tick70 = M15_BASE + 4; // (:15248-56)
-                return;
+                return None;
             }
             const W: [u32; 4] = [0x1B58, 0x1B58, 0x000A, 0x1B58];
             let mut heading = self.ent[i].f30;
@@ -2263,6 +2310,7 @@ impl Gen {
             let e = &self.ent[i];
             (e.x, e.y, e.id24)
         };
+        let mut packmate = false;
         // ⭐⭐ RETAIL WALKS `bytearray_38403x[a1x->model]`, NOT THE POOL
         // (sub_24190, EF:15301-11): the ONLY body tests are `id !=
         // self` and the two 256 boxes. See [`Gen::mc2_roster`].
@@ -2279,6 +2327,7 @@ impl Gen {
                 {
                     let away = Self::angle_between(c.x, c.y, ex, ey);
                     self.ent[i].f34 = away;
+                    packmate = true;
                     break;
                 }
             }
@@ -2292,6 +2341,7 @@ impl Gen {
                 {
                     let away = Self::angle_between(c.x, c.y, ex, ey);
                     self.ent[i].f34 = away;
+                    packmate = true;
                     break;
                 }
             }
@@ -2302,6 +2352,7 @@ impl Gen {
             self.move_relink(i, pos.0, pos.1, pos.2);
         }
         self.mc2_alt_commit(i);
+        Some(packmate)
     }
 
     /// The brain's acquire scan (:15020-56): nearest CLASS-3 entity
@@ -2330,8 +2381,26 @@ impl Gen {
                 *best = Some((slot, d2));
             }
         };
-        if !self.player_invisible && own != PLAYER_TARGET {
+        // ⭐ `sub_23C40` walks `dword_38519` (the tick-top class-3
+        // roster), testing only `id != own`, the range and
+        // `byte[0] & 0x20` — see
+        // `features::no_mc2_m15_scan_roster`. The roster's ENTRY test
+        // (`life >= 0`) is the only mortality test, and the out-of-pool
+        // human must take it here (`ctx.pdead`), as in
+        // [`Gen::mc2_class3_scan`].
+        let roster = !crate::engine::features::no_mc2_m15_scan_roster();
+        if !self.player_invisible && own != PLAYER_TARGET && !(roster && ctx.pdead) {
             consider(ctx.px, ctx.py, PLAYER_TARGET, &mut best);
+        }
+        if roster {
+            for c in 0..self.wiz_chain.visible_len() {
+                let j = self.wiz_chain.list[c] as usize;
+                let w = &self.ent[j];
+                if j != i && w.id24 != own && w.flags & 0x20 == 0 {
+                    consider(w.x, w.y, j as u16, &mut best);
+                }
+            }
+            return best.map(|(s, _)| s);
         }
         for (j, c) in self.ent.iter().enumerate().skip(1) {
             if j != i
@@ -2352,7 +2421,11 @@ impl Gen {
     /// class-3 source. The engage pose fires whenever the tick ends
     /// in the chase state.
     fn m15_brain(&mut self, i: usize, ctx: &MobCtx) {
-        match self.mc2_state_head(i) {
+        let head = self.mc2_state_head(i);
+        // What the tick leaves on the hydra's `v34` dwords
+        // ([`Gen::m27_v34_publish_guard`]).
+        let mut guard = GuardV34::Hit;
+        match head {
             1 => {
                 // (:15060-70) — retarget ONLY on a class-3 source.
                 let src = self.ent[i].f40;
@@ -2388,22 +2461,67 @@ impl Gen {
                 }
                 self.mc2_alt_commit(i);
             }
-            2 => self.ent[i].tick70 = M15_BASE + 4,
+            2 => {
+                self.ent[i].tick70 = M15_BASE + 4;
+                guard = GuardV34::Silent;
+            }
             _ => {
-                self.m15_wander(i);
+                guard = GuardV34::Wander(self.m15_wander(i));
                 let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
-                if self.ent[i].f63 as i16 % period == 0
-                    && self.ent[i].f58 != 0
-                    && let Some(t) = self.m15_scan(i, ctx)
-                {
-                    self.ent[i].tick70 = M15_BASE + 2;
-                    self.ent[i].f146 = t;
+                if self.ent[i].f63 as i16 % period == 0 && self.ent[i].f58 != 0 {
+                    if self.m15_scan_tests_any(i, ctx) {
+                        guard = GuardV34::Scanned;
+                    }
+                    if let Some(t) = self.m15_scan(i, ctx) {
+                        self.ent[i].tick70 = M15_BASE + 2;
+                        self.ent[i].f146 = t;
+                    }
                 }
             }
         }
-        if self.ent[i].tick70 == M15_BASE + 2 {
+        let engaged = self.ent[i].tick70 == M15_BASE + 2;
+        if engaged {
             self.m15_engage_pose(i);
         }
+        self.m27_v34_publish_guard(i, guard, engaged);
+    }
+
+    /// Does `sub_23C40`'s acquire walk reach its `sub_581E0` bearing
+    /// call for ANY candidate (`id != own`, squared range `ja`,
+    /// `byte[0] & 0x20`, NETHERW.EXE 0x48581-0x485B6)? The same
+    /// candidate set as [`Gen::m15_scan`], before the cone test.
+    fn m15_scan_tests_any(&self, i: usize, ctx: &MobCtx) -> bool {
+        let e = &self.ent[i];
+        let row = &BEHAVIOR[e.row156 as usize];
+        let range = (row.v_28 as i32) * (row.v_28 as i32);
+        let (ex, ey, own) = (e.x, e.y, e.id24);
+        // Same membership as `m15_scan` (`no_mc2_m15_scan_roster`).
+        let roster = !crate::engine::features::no_mc2_m15_scan_roster();
+        if !self.player_invisible
+            && own != PLAYER_TARGET
+            && !(roster && ctx.pdead)
+            && Self::dist2_sq(ex, ey, ctx.px, ctx.py) <= range
+        {
+            return true;
+        }
+        if roster {
+            return (0..self.wiz_chain.visible_len()).any(|c| {
+                let j = self.wiz_chain.list[c] as usize;
+                let w = &self.ent[j];
+                j != i
+                    && w.id24 != own
+                    && w.flags & 0x20 == 0
+                    && Self::dist2_sq(ex, ey, w.x, w.y) <= range
+            });
+        }
+        self.ent.iter().enumerate().skip(1).any(|(j, c)| {
+            j != i
+                && c.class64 == 3
+                && c.id24 != own
+                && c.act_life >= 0
+                && c.flags & (0x400 | 0x20) == 0
+                && Self::dist2_sq(ex, ey, c.x, c.y) <= range
+        })
     }
 
     /// The (9,13) volley (:15154-66) — the archer's launch minus the
@@ -2875,8 +2993,24 @@ impl Gen {
                     let range = (row.v_28 as i32) * (row.v_28 as i32);
                     let (ex, ey) = (self.ent[i].x, self.ent[i].y);
                     let mut best: Option<(usize, i32)> = None;
-                    for (j, c) in self.ent.iter().enumerate().skip(1) {
-                        if c.class64 == 10 && c.model65 == 45 && c.flags & 0x400 == 0 {
+                    if crate::engine::features::no_mc2_m16_sweep_roster() {
+                        for (j, c) in self.ent.iter().enumerate().skip(1) {
+                            if c.class64 == 10 && c.model65 == 45 && c.flags & 0x400 == 0 {
+                                let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                                if d2 <= range && best_d2(&best, d2) {
+                                    best = Some((j, d2));
+                                }
+                            }
+                        }
+                    } else {
+                        // ⭐ `dword_38527`, the TICK-TOP building roster:
+                        // the walk tests range and nearest only — a
+                        // building reap-flagged earlier this tick is
+                        // still a candidate. See
+                        // `features::no_mc2_m16_sweep_roster`.
+                        for k in 0..self.bldg_chain.visible_len() {
+                            let j = self.bldg_chain.list[k] as usize;
+                            let c = &self.ent[j];
                             let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
                             if d2 <= range && best_d2(&best, d2) {
                                 best = Some((j, d2));
@@ -2892,8 +3026,14 @@ impl Gen {
             2 => {
                 // sub_24510 (:15389) — the burst-attack brain.
                 match self.mc2_state_head(i) {
-                    1 => self.ent[i].f146 = self.ent[i].f40,
-                    2 => self.ent[i].tick70 = M16_BASE + 4,
+                    1 => {
+                        self.ent[i].f146 = self.ent[i].f40;
+                        self.m27_v34_publish_wyvern(i, None, true);
+                    }
+                    2 => {
+                        self.ent[i].tick70 = M16_BASE + 4;
+                        self.m27_v34_publish_wyvern(i, None, true);
+                    }
                     _ => {
                         self.mc2_move_core(i);
                         // EF:15451 — `sub_1ED30(a1x, Entities[word_0x96_150])`:
@@ -2901,6 +3041,9 @@ impl Gen {
                         // can answer `Entities[0]` ([`Gen::mc2_ally_resolve`]).
                         let raw = self.ent[i].f146;
                         let slot = self.mc2_ally_resolve(i, raw).unwrap_or(0);
+                        // `sub_1ED30`'s saved ESI — the brain's arm
+                        // selector, 0 here — on W-52.
+                        self.m27_v34_publish_wyvern(i, Some(0), false);
                         // ⭐⭐⭐ RETAIL'S POINTER TEST AND ITS LIFE TEST
                         // ARE TWO DIFFERENT TESTS, AND THE AIM SITS
                         // BETWEEN THEM. `sub_24510` (EF:15450-66)
@@ -2995,6 +3138,9 @@ impl Gen {
                         if self.ent[i].f26 > 0 {
                             self.ent[i].f26 -= 1;
                             self.m16_bolt(i, slot, ctx);
+                            // The spawn's frame, then `sub_581E0` /
+                            // `sub_58210` with the new record in ESI.
+                            self.m27_v34_publish_wyvern(i, None, false);
                         }
                         let row = &BEHAVIOR[self.ent[i].row156 as usize];
                         let period = row.v_26.max(1);
@@ -3003,6 +3149,10 @@ impl Gen {
                             let d2 = Self::dist2_sq(e.x, e.y, tx, ty);
                             let range = (row.v_28 as i32) * (row.v_28 as i32);
                             if d2 < range {
+                                // 0x48F00 `movzbl 0x3e(%ebx),%esi`, then
+                                // `sub_581E0` (0x48F90) saves it on W-52.
+                                let phase = self.ent[i].f63 as u8 as u32;
+                                self.m27_v34_publish_wyvern(i, Some(phase), false);
                                 if self.ent[i].f63 as i16 % (2 * period) == 0 {
                                     self.snd(39, i);
                                 }
@@ -4712,7 +4862,12 @@ impl Gen {
     /// 3-D (`sub_583F0`), drops a held node and turns on it (186/0/0).
     /// mc2l22 slot 214 t=1912→1913: 184 → 186, `target96` 499 (its
     /// node) → 530 (rival wizard at 3-D 2947), no mail, f63 192.
-    fn m23_post(&mut self, i: usize, ctx: &MobCtx) {
+    /// Returns what this pass left on the `v34` dwords: 0 = it made
+    /// no call at all, 1 = it ended on the 4-argument mode setter
+    /// (`$0` on W-52, the record pointer on W-64), 2 = it ended on a
+    /// pointer-class call. See [`Gen::m27_v34_leviathan_law`].
+    fn m23_post(&mut self, i: usize, ctx: &MobCtx) -> u8 {
+        let mut left = 0u8;
         let mut v1 = 0u8;
         if self.ent[i].f58 != 0 {
             // :18465 — the awake gate.
@@ -4725,6 +4880,7 @@ impl Gen {
                 // stub; the operand is the mail SOURCE's class == 3.
                 if self.mc2_is_wizard(src) {
                     v1 = 1;
+                    left = 1;
                     self.m23_release_node(i); // :18475-81
                     self.ent[i].f146 = src; // :18485
                     self.m23_mode(i, M23_BASE + 2, 0, 0); // :18486
@@ -4735,21 +4891,25 @@ impl Gen {
         }
         if self.ent[i].act_life < 0 {
             v1 = 2;
+            left = 1;
             self.ent[i].f38 = self.ent[i].f40; // :18497
             self.m23_mode(i, M23_BASE + 4, 0, 0); // :18498
         }
         if v1 == 0 && self.ent[i].f63 & 0x1F == 0 {
             // :18500-21 — the castle-owner hunt.
+            left = 2;
             if let Some((t, tp)) = self.m23_owner_scan(i, ctx) {
                 let range = BEHAVIOR[self.ent[i].row156 as usize].v_28 as u32;
                 let e = &self.ent[i];
                 if Self::mc2_dist3((e.x, e.y, e.z), tp) < range {
+                    left = 1;
                     self.m23_release_node(i); // :18509-16
                     self.ent[i].f146 = t; // :18518
                     self.m23_mode(i, M23_BASE + 2, 0, 0); // :18519
                 }
             }
         }
+        left
     }
 
     /// :18475-81 / :18509-16 — before turning on a wizard, drop the
@@ -4920,9 +5080,20 @@ impl Gen {
         match self.ent[i].tick70 - M23_BASE {
             0 => {
                 // sub_27950 — the patrol/hunt loop.
-                self.mc2_move_core(i);
+                // ⭐ The `v34` seam: `+0x1C` as the move core is
+                // entered and its result code decide the 0xD9 dword,
+                // `+0x20` the 0xDA one — see
+                // [`Gen::m27_v34_leviathan_law`].
+                let yaw0 = self.ent[i].f30;
+                let code = self.mc2_move_core(i);
+                let mut deep = false;
                 self.mc2_avoid_packmate(i);
                 self.m23_altitude(i);
+                // Retail's `byte_0x46_70` switch is `0 / 1 / 2 /
+                // default`, and the DEFAULT arm (3 and up) jumps
+                // straight to the post pass with no call at all — the
+                // `_` arm below stands in for case 2 only.
+                let arm = self.ent[i].f71;
                 match self.ent[i].f71 {
                     0 => {
                         self.ent[i].f126 = self.ent[i].f130;
@@ -4936,6 +5107,9 @@ impl Gen {
                         }
                     }
                     1 => {
+                        // sub_28000 / the getTerrainAlt fallback: both
+                        // arms reach the v34 frames.
+                        deep = true;
                         if let Some(n) = self.m23_find_node(i) {
                             self.ent[i].f44 = 0x2000;
                             self.ent[i].f146 = n;
@@ -4955,6 +5129,9 @@ impl Gen {
                             // 3 ticks early (mc2l24 slot 230, the
                             // residual `action 184 vs 185` rows).
                             if self.ent[i].f63 & 3 == 0 {
+                                // sub_58490's isqrt parks &position on
+                                // W-64 and its own return on W-52.
+                                deep = arm == 2;
                                 let t = self.ent[i].f146 as usize;
                                 let (sp, tp) = {
                                     let e = &self.ent[i];
@@ -4977,7 +5154,8 @@ impl Gen {
                         }
                     }
                 }
-                self.m23_post(i, ctx);
+                let post = self.m23_post(i, ctx);
+                self.m27_v34_publish_leviathan(i, yaw0, code, deep, post);
             }
             1 => {
                 // sub_27B20 (:18250) — descend/land onto the node.
@@ -6316,4 +6494,149 @@ fn best_d2(best: &Option<(usize, i32)>, d2: i32) -> bool {
 fn m9_prey_roster_law() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_M9_PREY_ROSTER").is_none())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BEHAVIOR, M14_BASE};
+    use crate::engine::features::Gen;
+    use crate::mc1::mobs::MobCtx;
+
+    fn m14_flat_gen() -> Gen {
+        use crate::chassis::ChassisParams;
+        use crate::engine::features::{FeatureAssets, Planes};
+        use crate::verbs::VerbSet;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    fn m14_ctx() -> MobCtx {
+        MobCtx {
+            px: 0,
+            py: 0,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// ⭐⭐ THE TRADER'S HALF OF **THE TOWNIE RALLY TARGET IS
+    /// REAP-BLIND** — the third call path, and the reason the law is
+    /// not landed until all three carry it.
+    ///
+    /// `sub_237B0` (EF:14828-30; `NETHERW.EXE` 0x4822d
+    /// `cmpb $0xa,0x3f(%esi)` / 0x48233 `cmpb $0x2d,0x40(%esi)`)
+    /// validates `word_0x96_150` on class 10 + model 45 and NOTHING
+    /// else. The villager and archer halves are pinned by
+    /// `mc2::mobs::tests::a_townie_keeps_rallying_to_a_dwelling_reaped_this_tick`;
+    /// this is the same predicate on the trader brain, where the port
+    /// had added the same invented `flags & 0x400 == 0` term.
+    ///
+    /// The second assertion pins the OTHER law on this brain, the one
+    /// the mc2l19 fixture
+    /// `a-trader-s-invalid-target-returns-and-spends-no-draws` grades
+    /// on the corpus: `word_0x96_150 != 0` is the OUTER branch
+    /// (0x480ee `mov 0x96(%ebx),%di` / `test %di,%di` / `jne 0x48221`),
+    /// so an INVALID non-zero handle clears, takes `maxSpeed` and
+    /// RETURNS — it never reaches the wander turn's two per-entity LCG
+    /// draws or the far-dwelling rescan.
+    ///
+    /// `MGC_NO_MC2_TOWNIE_TARGET_REAP_BLIND=1` fails the first;
+    /// `MGC_NO_MC2_TRADER_INVALID_TARGET_RETURN=1` fails the second.
+    #[test]
+    fn the_trader_rally_target_is_reap_blind_and_an_invalid_one_returns() {
+        let trader = |g: &mut Gen, target: u16| -> usize {
+            let i = g.new_event().expect("trader slot");
+            {
+                let e = &mut g.ent[i];
+                e.class64 = 5;
+                e.model65 = 14;
+                e.tick70 = M14_BASE; // state 0 — the walk
+                e.max_life = 1_000;
+                e.act_life = 1_000;
+                e.f146 = target;
+                e.f63 = 0; // on the cadence
+                e.f34 = 0;
+                e.f126 = 0;
+                e.f130 = 40; // maxSpeed
+            }
+            let (x, y) = (100u16 << 8, 100u16 << 8);
+            let z = g.ground_z(x, y) as i16;
+            g.link(i, x, y, z);
+            i
+        };
+
+        // THE REAP-BLIND LAW: a dwelling flagged for the free pass
+        // this tick is still class 10 / model 45, so the rally stands.
+        let mut g = m14_flat_gen();
+        let ctx = m14_ctx();
+        let d = g.new_event().expect("dwelling slot");
+        {
+            let e = &mut g.ent[d];
+            e.class64 = 10;
+            e.model65 = 45;
+            e.act_life = 1_000;
+            e.f128 = 4;
+            e.flags |= 0x400; // reaped THIS tick
+        }
+        let (dx, dy) = (120u16 << 8, 100u16 << 8);
+        let dz = g.ground_z(dx, dy) as i16;
+        g.link(d, dx, dy, dz);
+        let t = trader(&mut g, d as u16);
+        g.m14_brain(t, &ctx);
+        assert_eq!(
+            g.ent[t].f146, d as u16,
+            "the trader's rally handle survives the reap stamp"
+        );
+        let (tx, ty) = (g.ent[t].x, g.ent[t].y);
+        assert_eq!(
+            g.ent[t].f34,
+            Gen::angle_between(tx, ty, dx, dy),
+            "…and it keeps walking there"
+        );
+
+        // THE INVALID-TARGET RETURN: a non-zero handle that is not a
+        // (10,45) clears, takes maxSpeed and spends NO draws.
+        let mut g = m14_flat_gen();
+        let junk = g.new_event().expect("junk slot");
+        g.ent[junk].class64 = 10;
+        g.ent[junk].model65 = 44; // not a dwelling
+        let t = trader(&mut g, junk as u16);
+        let rng_before = g.ent[t].rand;
+        assert!(
+            BEHAVIOR[g.ent[t].row156 as usize].v_26.max(1) == 1
+                || g.ent[t].f63 % BEHAVIOR[g.ent[t].row156 as usize].v_26.max(1) as u8 == 0,
+            "fixture: the trader is on its cadence tick"
+        );
+        g.m14_brain(t, &ctx);
+        assert_eq!(g.ent[t].f146, 0, "the invalid handle is cleared");
+        assert_eq!(
+            g.ent[t].f126, g.ent[t].f130,
+            "…actSpeed = maxSpeed, LABEL_44"
+        );
+        assert_eq!(
+            g.ent[t].rand, rng_before,
+            "…and the wander turn's two per-entity draws are NOT spent"
+        );
+    }
 }

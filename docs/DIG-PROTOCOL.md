@@ -110,6 +110,37 @@ measure freely. Then report to the main session:
 The value handed to you is the **witness shape** — which pair, which slot, which fields, which
 direction — not the guess. Refuting the brief in your first paragraph is a good result.
 
+## ⚠⚠⚠ STAY IN YOUR SLICE — THE FULL SWEEP IS THE MAIN SESSION'S, AT SESSION END (player, 2026-09-17)
+
+**Measure your own take(s), not the corpus.** Your A/B, your head census and your kill-switch
+reversion probe run on the take you were briefed on (and, if your law plainly touches a named
+sibling take, that one too). **Do not run a `--segmented --brief` sweep of the whole corpus.** The
+main session runs ONE full 60-take regression sweep at the END of the session, after every dig has
+landed; every row it finds moved then gets its own reversion probe, which is how cross-take
+fixture candidates are still caught.
+
+The player's reasoning, in their words: *"Just because the takes are now fast and the CPUs aren't
+going to get throttled doesn't mean we should blow the performance out the window … regressions
+haven't really been much of a thing, so it's completely sensible to only do a full regression sweep
+of everything at the end of a session, with all digs and implementations primarily minding their
+own business and slice of the world."*
+
+**There is no fixed dig cap any more.** The old "two concurrent digs" rule was set for the
+player's 35 W laptop, which round 143 made "completely unusable" (load 5.94, three `rustc` plus
+three replays). The project now lives on a 40-core development box. Size a wave to the work, not
+to the core count, and keep the habits that were never about CPU:
+
+- ⭐⭐⭐ **NICE IS NOT A LICENCE, AND NEITHER ARE 40 CORES.** Don't loop replays you don't need.
+  ⭐ `./conform slice` a head past ~5,000 ticks instead of replaying the whole take.
+- ⚠ A dig's cost is not one replay: each one BUILDS (rustc takes every core on its own) and then
+  replays, often in a loop. Build first, then measure; never replay during your own build.
+- ⚠ Never point two runs at one output file or directory, and namespace every temporary under
+  `$TMPDIR` with your dig id — `$TMPDIR` is shared.
+- ⚠ Each sandbox symlinks `reference/` (482 C/C++ files) back into the workspace; an editor
+  C/C++ indexer re-walks it per sandbox unless `.vscode/settings.json` excludes it.
+- 🔧 Toolchain: the repo pins rustc 1.96.1 through `rustup`. If `cargo` reports 1.85.1 you have
+  the distro binary — run `. ~/.cargo/env` first.
+
 ## ⚠⚠⚠ CLEAN UP WHEN THE ROUND CLOSES — THIS IS THE MAIN SESSION'S JOB
 
 `tools/mksandbox.sh --clean` removes every sandbox and its target dir. **Run it at the end of

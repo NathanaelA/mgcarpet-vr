@@ -31,16 +31,26 @@
 //! - `sub_6D8B0(id, 0x14, n)` spell-XP reports (EF:29367/:29436):
 //!   counts computed and dropped, and the global objects-hit counter
 //!   `x_DWORD_E9B90` (EF:28527) has no ported reader.
-//! - The HUMAN player rides the whirlwind precedent: retail shoves
-//!   the class-3 model-0 body toward the center with a z pull-down
-//!   and pitch-512 spin (EF:29108/:29421) — our player lives outside
-//!   the pool, so the pull rides the `player_knock` channel (the
-//!   doomsday tractor-beam seam), the z pull and spin bank on the
-//!   FlightVerb takeover seam, and the close-range 1-in-7 kill roll
-//!   mails a kill-scale 32000 (retail adds the victim's `life+1` —
-//!   the guaranteed kill — which Gen cannot read for the player).
-//! - The rival-wizard pitch-512 spin (presentation: the body flip)
-//!   is skipped; the damage roll is faithful.
+//! - The HUMAN player: **NARROWED round 146** (dig w146e,
+//!   `MGC_NO_MC2_FLOOD_HUMAN_SEAT`; dig w146f,
+//!   `MGC_NO_MC2_FLOOD_HUMAN_SPIN`). He is now visited AT HIS SEAT in
+//!   the cell walk (a repeat visit when a shove carries him into an
+//!   unvisited row), the horizontal shove, z pull and ground floor are
+//!   an accumulated record write drained at the carpet's dispatch (no
+//!   longer the `player_knock` channel), and the close band seizes
+//!   `pitch`/`pitch_acc` = 512. Still approximated: the close-range
+//!   1-in-7 kill roll mails a kill-scale 32000 (retail adds the
+//!   victim's `life+1` — the guaranteed kill — which Gen cannot read
+//!   for the player); the `|= 0x100001` flag write on the human
+//!   record; and a quake ABOVE the carpet's walk slot (its delta is
+//!   published after the carpet moved and is lost — no capture shows
+//!   one).
+//! - ~~The rival-wizard pitch-512 spin (presentation: the body flip)
+//!   is skipped; the damage roll is faithful.~~ **NOT presentation**
+//!   (round 146, dig w146f): it is the graded record pitch and the
+//!   wizard's `pitch_0x157_343` accumulator — landed on the human seat
+//!   and on the rival record behind `MGC_NO_MC2_FLOOD_HUMAN_SPIN`; the
+//!   rival accumulator half still has no home.
 //! - The action-74 release's local-player visibility juggle
 //!   (EF:29118-29127: byte[0] bit0 set for the local wizard body,
 //!   cleared for everyone else) is the draw latch — our release
@@ -81,6 +91,30 @@ pub(crate) fn flood_no_reap_gate_law() -> bool {
 pub(crate) fn flood_ground_snap_law() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_FLOOD_GROUND_SNAP").is_none())
+}
+
+/// ⭐⭐⭐ A/B kill switch for THE HUMAN ARM'S MISSING VERTICAL LEG:
+/// `MGC_NO_MC2_FLOOD_HUMAN_Z_PULL=1` restores the pre-round-143 shape,
+/// where the quake's special-cased human arm armed only the horizontal
+/// `player_knock` and the z pull-down was banked (module header,
+/// "the z pull and spin bank on the FlightVerb takeover seam").
+///
+/// Retail has no special case at all — the human wizard is an ordinary
+/// victim of `sub_39B60`, and its WIZARD arm (`NETHERW.EXE` 0x5e4ef
+/// `mov 0x3f(%ebx),%ah` / `cmp $0x3,%ah` / `jne 0x5e53c`, then 0x5e4fa
+/// `cmpb $0x0,0x40(%ebx)`) takes the pull-then-clamp leg that the pool
+/// half of [`Gen::flood_shove`] already ports.
+///
+/// WITNESS — mc2l23 t=6930..6961, the take's 32-deep reset run and its
+/// whole `pose:pose.z` signature. The player flies into his own
+/// Gravity Well's disc at t=6929 (quake slot 101, `refz` 110); retail
+/// sinks 26, 27, 27, 27, 28 … per tick and the port sank 8 — the row-
+/// 0xe buoyancy ALONE — from the same position, with `pose.x`/`pose.y`
+/// bit-exact for eleven more ticks because the horizontal leg WAS
+/// ported. 8 + the pull reproduces retail's step to the unit.
+pub(crate) fn no_mc2_flood_human_z_pull() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FLOOD_HUMAN_Z_PULL").is_some())
 }
 
 /// ⭐⭐⭐ A/B kill switch for THE CHAIN CURSOR THE SHOVE RE-READS
@@ -355,13 +389,19 @@ impl Gen {
     /// model 27) mail the victim its own `life + 1` — the
     /// near-guaranteed kill. Victim gate `byte_0x38_56 & 1` → f28
     /// bit 0 (the cross-column damage contract). The class-3 model-0
-    /// pitch-512 spin is presentation-skipped (module doc).
+    /// arm writes the record pitch 512 (`NETHERW.EXE` 0x5ea55) — see
+    /// `engine::features::no_mc2_flood_human_spin`; its twin store into
+    /// the wizard's `pitch_0x157_343` (0x5ea5b) has no per-rival home
+    /// (the corpse mover publishes that accumulator as a constant 0).
     fn flood_shove_hit(&mut self, i: usize, j: usize) {
         self.ent[j].flags |= F_TOSSED | F_QUAKE_GRAB;
         if !no_quake_toss_bit0() {
             self.ent[j].flags |= 1;
         }
         let (class, model) = (self.ent[j].class64, self.ent[j].model65);
+        if class == 3 && model == 0 && !crate::engine::features::no_mc2_flood_human_spin() {
+            self.ent[j].f32 = 512;
+        }
         let mut forced = false;
         let mut suppressed = false;
         if class == 5 {
@@ -426,6 +466,9 @@ impl Gen {
         let cx = (ex.wrapping_add(128) >> 8) as u8;
         let cy = (ey.wrapping_add(128) >> 8) as u8;
         let mut steps = 0usize;
+        let human_seat = !crate::engine::features::no_mc2_flood_human_seat();
+        let mut hp = (ctx.px, ctx.py, ctx.pz);
+        let mut hmoved = false;
         for row in 0..26u8 {
             let ty = cy.wrapping_sub(13).wrapping_add(row);
             for col in 0..26u8 {
@@ -435,7 +478,30 @@ impl Gen {
                     continue;
                 }
                 let mut j = self.map_entity[tile(tx, ty)] as usize;
+                // ⭐⭐⭐ THE HUMAN IS SHOVED AT HIS SEAT IN THIS WALK
+                // (`no_mc2_flood_human_seat`). `cur` is the tile whose
+                // chain the cursor is on — it changes when a relinked
+                // victim (pooled or the human) hands the walk its
+                // destination chain.
+                let mut cur = tile(tx, ty);
+                let mut seat_block = usize::MAX;
+                // He heads `cur` after his own relink, so its TAIL is
+                // not his seat until a pooled relink re-heads it.
+                let mut headed = false;
+                'cell: loop {
+                let mut resume = 0usize;
+                let mut seat_matched = false;
                 while j != 0 {
+                    if human_seat
+                        && seat_block != j
+                        && self.player_chain.next as usize == j
+                        && self.player_chain.cell == tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8)
+                    {
+                        resume = j;
+                        seat_matched = true;
+                        break;
+                    }
+                    seat_block = usize::MAX;
                     let next = self.ent[j].next20 as usize;
                     // ⭐⭐⭐ AN INVENTED GUARD: THE SHOVE LOOP HAS NO
                     // REAP TEST. `sub_39B60`'s chain walk is
@@ -535,7 +601,13 @@ impl Gen {
                                         pos.2 = ground as i16;
                                     }
                                 }
+                                let before = tile((self.ent[j].x >> 8) as u8, (self.ent[j].y >> 8) as u8);
                                 self.move_relink(j, pos.0, pos.1, pos.2);
+                                let after = tile((pos.0 >> 8) as u8, (pos.1 >> 8) as u8);
+                                if before != after && flood_chain_rewalk_law() {
+                                    cur = after;
+                                    headed = false;
+                                }
                             }
                         }
                         // The action-74 grab release (LABEL_25) runs
@@ -565,9 +637,59 @@ impl Gen {
                         break;
                     }
                 }
+                if !human_seat {
+                    break;
+                }
+                // ── THE HUMAN'S VISIT ── at his seat (`resume`), or as
+                // the TAIL of the chain the cursor is on when his seat
+                // is that tail (`next == 0`) or is not a live seat.
+                let htile = tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8);
+                let seat_live = self.player_chain.cell == htile;
+                if resume != 0
+                    || (!seat_matched
+                        && !headed
+                        && cur == htile
+                        && (!seat_live || self.player_chain.next == 0))
+                {
+                    self.flood_shove_human(i, &mut hp, &mut hmoved);
+                    // `CopyEntityPosition_57CF0` (0x5e592) relinks
+                    // HIM: a new tile makes him its chain head, and the
+                    // cursor (0x5e5e6) carries on down THAT chain from
+                    // the head he displaced.
+                    self.player_relink(hp.0, hp.1);
+                    let ntile = tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8);
+                    if ntile != htile && flood_chain_rewalk_law() {
+                        cur = ntile;
+                        headed = true;
+                        j = self.map_entity[ntile] as usize;
+                        seat_block = j;
+                        continue 'cell;
+                    }
+                }
+                if resume != 0 {
+                    seat_block = resume;
+                    j = resume;
+                    continue 'cell;
+                }
+                break;
+                }
             }
         }
         let _ = ez;
+        if human_seat {
+            // Publish the accumulated delta. Several quakes in one walk
+            // ADD (each one's `ctx` is the pose the previous ones left,
+            // via the walk hook's re-adoption).
+            if hmoved {
+                let f = &mut self.player_flood_pull;
+                f.armed = true;
+                f.fresh = true;
+                f.dx += hp.0.wrapping_sub(ctx.px) as i16 as i32;
+                f.dy += hp.1.wrapping_sub(ctx.py) as i16 as i32;
+                f.pull += ctx.pz as i32 - hp.2 as i32;
+            }
+            return;
+        }
         // The human player arm (module doc APPROX): the pull rides
         // the knock channel, the close band rolls the 1-in-7 kill.
         // Same-owner gate (`sub_39FA0` EF:29261 — the pool filter
@@ -578,6 +700,9 @@ impl Gen {
         let pv5 = ctx.pz as i32 - refz;
         if pd < 3328 && pv5 < 4096 && id != crate::mc1::mobs::PLAYER_TARGET {
             if pd <= 32 || pv5 <= 96 {
+                if !crate::engine::features::no_mc2_flood_human_spin() {
+                    self.player_flood_pull.spin = true;
+                }
                 if self.ent_rand(i) % 7 == 0 {
                     self.mail_write(MailTarget::Player, 0, 32000, id);
                 }
@@ -586,8 +711,77 @@ impl Gen {
                 v6 = v6.clamp(4, 128).min(pd);
                 let toward = Self::angle_between(ctx.px, ctx.py, ex, ey);
                 self.player_knock = (toward, v6 as i16);
+                // ⭐⭐ AND THE VERTICAL LEG, which the pool arm forty
+                // lines above has had since round 98. Retail runs ONE
+                // body for every victim (`sub_39B60`); its class-3
+                // model-0 arm is `predicted.z -= pull` + the stepped
+                // point's terrain floor. The human's out-of-pool seat
+                // means the horizontal rides `player_knock` and this
+                // rides its own one-shot, drained by the carpet's
+                // dispatch — the `player_hurl` transport.
+                //
+                // ⚠ The terrain floor is NOT carried here: the mover's
+                // own block-9 resolution raises anything below
+                // `ground + clearance` back to it, and that bound is
+                // STRICTLY ABOVE retail's bare `getTerrainAlt`, so the
+                // clamp is dominated on this seat.
+                if !no_mc2_flood_human_z_pull() {
+                    self.player_flood_pull = crate::engine::features::PlayerFloodPull {
+                        armed: true,
+                        pull: (48 * (((4096 - pv5) << 8) >> 12)) >> 8,
+                        bearing: toward,
+                        dist: v6 as i16,
+                        ..Default::default()
+                    };
+                }
             }
         }
+    }
+
+    /// ONE visit of `sub_39B60`'s body to the human wizard, at his
+    /// seat ([`crate::engine::features::no_mc2_flood_human_seat`]).
+    /// `sub_39FA0`'s class-3 model-0 filter is the same-owner test
+    /// alone; the close band rolls the 1-in-7 kill (the module-doc
+    /// APPROX `32000` scale), the shove band is the WIZARD arm verbatim
+    /// (`NETHERW.EXE` 0x5e4ef..0x5e592): `MoveEntity_57FA0` toward the
+    /// quake, `z -= pull`, floored at the stepped point's
+    /// `getTerrainAlt`, written to `predictedAxis` and the record.
+    fn flood_shove_human(&mut self, i: usize, hp: &mut (u16, u16, i16), moved: &mut bool) {
+        let (ex, ey, id, refz) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.id24, e.f44 as i32)
+        };
+        if id == crate::mc1::mobs::PLAYER_TARGET {
+            return;
+        }
+        let pd = dist2d(ex, ey, hp.0 as i32, hp.1 as i32);
+        let pv5 = hp.2 as i32 - refz;
+        if pd >= 3328 || pv5 >= 4096 {
+            return;
+        }
+        if pd <= 32 || pv5 <= 96 {
+            // `sub_3A200`'s class-3 model-0 arm (0x5ea49..0x5ea62),
+            // ahead of the roll: `pitch = pitch_acc = 512`.
+            if !crate::engine::features::no_mc2_flood_human_spin() {
+                self.player_flood_pull.spin = true;
+            }
+            if self.ent_rand(i) % 7 == 0 {
+                self.mail_write(MailTarget::Player, 0, 32000, id);
+            }
+            return;
+        }
+        let mut v6 = (((3328 - pd) << 8) / 3328) << 7 >> 8;
+        v6 = v6.clamp(4, 128).min(pd);
+        let toward = Self::angle_between(hp.0, hp.1, ex, ey);
+        let mut pos = *hp;
+        Self::polar_step(&mut pos, toward, 0, v6 as i16);
+        let ground = self.ground_z(pos.0, pos.1);
+        let pull = (48 * (((4096 - pv5) << 8) >> 12)) >> 8;
+        let z = (pos.2 as i32 - pull) as i16;
+        pos.2 = if (z as i32) < ground { ground as i16 } else { z };
+        self.mc2_pred_axis = crate::engine::features::Mc2PredAxis(pos);
+        *hp = pos;
+        *moved = true;
     }
 
     /// `CompareAxisWithShift_10750` (EF:3726/3733, helpers doc §8) —
@@ -1035,6 +1229,287 @@ impl Gen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Flat 100-height MC2 world — enough for the quake's own pass:
+    /// the human arm runs AFTER the 26x26 map-chain walk and reads
+    /// only the ctx, so an empty pool is the right fixture for it.
+    fn flood_gen() -> Gen {
+        let planes = crate::engine::features::Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![1; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![0; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = crate::engine::features::FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(
+            planes,
+            assets,
+            1,
+            crate::chassis::ChassisParams::MC2,
+            crate::verbs::VerbSet::MC2,
+        )
+    }
+
+    fn flood_ctx(px: u16, py: u16, pz: i16) -> MobCtx {
+        MobCtx {
+            px,
+            py,
+            pz,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// ⭐⭐⭐ THE QUAKE'S HUMAN ARM HAS A VERTICAL LEG — RETAIL HAS NO
+    /// SPECIAL CASE AT ALL.
+    ///
+    /// The human wizard is an ordinary victim of `sub_39B60`, and its
+    /// WIZARD arm (`NETHERW.EXE` 0x5e4ef `mov 0x3f(%ebx),%ah` /
+    /// `cmp $0x3,%ah` / `jne 0x5e53c`, then 0x5e4fa
+    /// `cmpb $0x0,0x40(%ebx)`) takes the pull-then-clamp leg that the
+    /// POOL half of [`Gen::flood_shove`] has ported since round 98.
+    /// The port's out-of-pool seat special-cased him and armed only
+    /// the horizontal `player_knock`; this module's own header banked
+    /// the rest in writing ("the z pull and spin bank on the
+    /// FlightVerb takeover seam") and it stayed banked for 45 rounds.
+    ///
+    /// WITNESS mc2l23 t=6,930..6,961 — the take's 32-deep reset run and
+    /// its WHOLE `pose:pose.z` signature. The player flies into his own
+    /// Gravity Well's disc at t=6,929 (quake slot 101, `refz` 110);
+    /// retail sinks 26, 27, 27, 27, 28 … per tick and the port sank 8,
+    /// the row-0xe buoyancy ALONE, from the same position — with
+    /// `pose.x`/`pose.y` bit-exact for eleven more ticks, because the
+    /// horizontal leg WAS ported. 8 + the pull reproduces retail's step
+    /// to the unit. mc2l23 35 -> 13 segments, mc2l18 97 -> 59.
+    ///
+    /// ⛔ NOT FIXTURABLE: `exec_pair_mc2` pins the pose, so no boundary
+    /// fixture can witness a `pose.z` the mover writes. Measured rather
+    /// than assumed — the reversion probe
+    /// (`MGC_NO_MC2_FLOOD_HUMAN_Z_PULL=1`, conforming-at-HEAD ∧
+    /// divergent-with-the-law-off) finds ZERO candidate pairs on either
+    /// mc2l23 or mc2l18, the two takes the law moves.
+    ///
+    /// `MGC_NO_MC2_FLOOD_HUMAN_Z_PULL=1` disarms the pull and this
+    /// test's `pull` assertion fails.
+    #[test]
+    fn the_quake_pulls_the_human_down_as_well_as_sideways() {
+        let mut g = flood_gen();
+        // Flat ground at 0, so the wizard arm's `getTerrainAlt` floor
+        // (carried since the seat law) cannot mask the pull.
+        g.t.height.fill(0);
+        // A (10,71) fissure at tile 50,50 with retail's `refz`
+        // (`word_0x44_68`) at 110 — the disc's reference altitude.
+        let q = g.new_event().expect("quake slot");
+        {
+            let e = &mut g.ent[q];
+            e.class64 = 10;
+            e.model65 = 71;
+            e.x = 50 << 8;
+            e.y = 50 << 8;
+            e.z = 110;
+            e.f44 = 110;
+            // NOT the human's own cast: retail's `sub_39FA0` same-owner
+            // gate means your own Gravity Well never pulls you in.
+            e.id24 = 7;
+        }
+        // Inside the 3328 disc and above the 96 near-band, so the
+        // graded arm is the SHOVE, not the 1-in-7 kill roll.
+        let ctx = flood_ctx((50 << 8) + 1000, 50 << 8, 110 + 500);
+        g.flood_shove(q, &ctx);
+
+        // The horizontal leg (ported since the quake landed): on the
+        // knock register before the seat law, in the record-write delta
+        // after it (`no_mc2_flood_human_seat`).
+        let bearing = Gen::angle_between(ctx.px, ctx.py, 50 << 8, 50 << 8);
+        if crate::engine::features::no_mc2_flood_human_seat() {
+            let (kb, dist) = g.player_knock;
+            assert_eq!(dist, 89, "((3328-1000)<<8)/3328 <<7 >>8, clamped 4..128");
+            assert_eq!(kb, bearing, "the knock bears TOWARD the fissure");
+        } else {
+            assert_eq!(g.player_knock, (0, 0), "retail never writes moveBoost here");
+            let mut q = (ctx.px, ctx.py, ctx.pz);
+            Gen::polar_step(&mut q, bearing, 0, 89);
+            let f = g.player_flood_pull;
+            assert_eq!(
+                (f.dx, f.dy),
+                (
+                    q.0.wrapping_sub(ctx.px) as i16 as i32,
+                    q.1.wrapping_sub(ctx.py) as i16 as i32
+                ),
+                "one 89-step TOWARD the fissure"
+            );
+        }
+
+        // THE LAW: the vertical leg, armed on the same victim.
+        // pv5 = 500, pull = (48 * (((4096 - 500) << 8) >> 12)) >> 8.
+        let pull = std::mem::take(&mut g.player_flood_pull);
+        assert!(pull.armed, "the human takes the quake's z pull");
+        assert_eq!(pull.pull, (48 * (((4096 - 500) << 8) >> 12)) >> 8);
+        assert_eq!(pull.pull, 42, "…and that is 42 at pv5 = 500");
+
+        // NON-VACUITY OF THE GATE, in the same test: your OWN Gravity
+        // Well arms neither leg (`sub_39FA0`'s same-owner filter).
+        let mut g = flood_gen();
+        let q = g.new_event().expect("quake slot");
+        {
+            let e = &mut g.ent[q];
+            e.class64 = 10;
+            e.model65 = 71;
+            e.x = 50 << 8;
+            e.y = 50 << 8;
+            e.z = 110;
+            e.f44 = 110;
+            e.id24 = crate::mc1::mobs::PLAYER_TARGET;
+        }
+        g.flood_shove(q, &ctx);
+        assert_eq!(g.player_knock, (0, 0), "your own well never shoves you");
+        assert!(
+            !g.player_flood_pull.armed,
+            "…and never pulls you down either"
+        );
+    }
+
+    /// ⭐⭐⭐ THE HUMAN IS SHOVED TWICE WHEN THE FIRST SHOVE CARRIES HIM
+    /// INTO A ROW THE SWEEP HAS NOT REACHED
+    /// ([`crate::engine::features::no_mc2_flood_human_seat`]).
+    ///
+    /// mc2l23 t=6,940→6,941's geometry verbatim: quake at (28800,
+    /// 12160) refz 110, the human at (29841, 11775, 2279) = cell
+    /// (116,45). Shove 1 lands y ≥ 46·256 = cell (116,46), which the
+    /// y-outer sweep visits later, and shove 2 runs from THERE. The
+    /// expected pose is re-derived here from the wizard arm's formula
+    /// applied twice; the POSITIVE CONTROL is the same formula applied
+    /// once, which is what the pre-law arm produced — and it differs.
+    ///
+    /// `MGC_NO_MC2_FLOOD_HUMAN_SEAT=1` fails this test.
+    #[test]
+    fn the_quake_shoves_the_human_again_in_his_destination_row() {
+        let mut g = flood_gen();
+        g.t.height.fill(0);
+        let q = g.new_event().expect("quake slot");
+        {
+            let e = &mut g.ent[q];
+            e.class64 = 10;
+            e.model65 = 67;
+            e.x = 28800;
+            e.y = 12160;
+            e.z = 0;
+            e.f44 = 110;
+            e.tick70 = 73;
+            e.id24 = 7;
+        }
+        let (px, py, pz) = (29841u16, 11775u16, 2279i16);
+        // His seat: the (empty) chain of his own tile, as the carpet's
+        // walk slot seeds it.
+        g.player_relink(px, py);
+        let ctx = flood_ctx(px, py, pz);
+        let shove = |g: &Gen, p: (u16, u16, i16)| {
+            let d = dist2d(28800, 12160, p.0 as i32, p.1 as i32);
+            let v5 = p.2 as i32 - 110;
+            let v6 = ((((3328 - d) << 8) / 3328) << 7 >> 8).clamp(4, 128).min(d);
+            let mut n = p;
+            Gen::polar_step(&mut n, Gen::angle_between(p.0, p.1, 28800, 12160), 0, v6 as i16);
+            let z = n.2 as i32 - ((48 * (((4096 - v5) << 8) >> 12)) >> 8);
+            n.2 = z.max(g.ground_z(n.0, n.1)) as i16;
+            n
+        };
+        let once = shove(&g, (px, py, pz));
+        assert_eq!((once.1 >> 8, py >> 8), (46, 45), "rig: shove 1 crosses into row 46");
+        let twice = shove(&g, once);
+        assert_eq!(twice.1 >> 8, 46, "rig: shove 2 stays in row 46 (no third visit)");
+        g.flood_shove(q, &ctx);
+        let f = g.player_flood_pull;
+        assert!(f.armed);
+        let got = (
+            px.wrapping_add(f.dx as u16),
+            py.wrapping_add(f.dy as u16),
+            (pz as i32 - f.pull) as i16,
+        );
+        assert_ne!(got, once, "POSITIVE CONTROL: not the single pre-law shove");
+        assert_eq!(got, twice, "two shoves, the second from the moved pose");
+        assert_eq!(g.player_chain.cell, tile((twice.0 >> 8) as u8, (twice.1 >> 8) as u8));
+    }
+
+    /// ⭐⭐ `sub_3A200`'s CLASS-3 MODEL-0 ARM IS TWO PITCH STORES, NOT
+    /// PRESENTATION (`engine::features::no_mc2_flood_human_spin`): the
+    /// human seat stages the `pitch_acc = 512` seizure for the mover,
+    /// and a pooled wizard's record pitch takes 512 on the spot.
+    /// POSITIVE CONTROLS: the shove band stages nothing, and a
+    /// close-band CREATURE keeps its pitch.
+    ///
+    /// `MGC_NO_MC2_FLOOD_HUMAN_SPIN=1` fails this test.
+    #[test]
+    fn the_quake_close_band_seizes_the_wizard_pitch() {
+        let quake = |g: &mut Gen| {
+            let q = g.new_event().expect("quake slot");
+            let e = &mut g.ent[q];
+            e.class64 = 10;
+            e.model65 = 67;
+            e.x = 28800;
+            e.y = 12160;
+            e.z = 0;
+            e.f44 = 110;
+            e.tick70 = 73;
+            e.id24 = 7;
+            q
+        };
+        // The human, 90 units above `refz`: the close band.
+        let mut g = flood_gen();
+        g.t.height.fill(0);
+        let q = quake(&mut g);
+        let (px, py) = (29000u16, 12160u16);
+        g.player_relink(px, py);
+        g.flood_shove(q, &flood_ctx(px, py, 200));
+        let f = g.player_flood_pull;
+        assert!(f.spin, "the close band seizes the pitch");
+        assert!(!f.armed, "…and moves nothing");
+        // POSITIVE CONTROL: the same seat 500 above `refz` is shoved.
+        let mut g = flood_gen();
+        g.t.height.fill(0);
+        let q = quake(&mut g);
+        g.player_relink(px, py);
+        g.flood_shove(q, &flood_ctx(px, py, 610));
+        let f = g.player_flood_pull;
+        assert!(f.armed && !f.spin, "the shove band never seizes");
+
+        // The pooled wizard (a rival) and a creature, both in the band.
+        let mut g = flood_gen();
+        g.t.height.fill(0);
+        let q = quake(&mut g);
+        let victim = |g: &mut Gen, class: u8, model: u8| {
+            let v = g.new_event().expect("victim slot");
+            {
+                let e = &mut g.ent[v];
+                e.class64 = class;
+                e.model65 = model;
+                e.id24 = 99;
+                e.f32 = 1234;
+            }
+            g.move_relink(v, px, py, 150);
+            v
+        };
+        let w = victim(&mut g, 3, 0);
+        let c = victim(&mut g, 5, 1);
+        g.flood_shove(q, &flood_ctx(0x8000, 0x8000, 5000));
+        assert_ne!(g.ent[w].flags & F_TOSSED, 0, "rig: the wizard took sub_3A200");
+        assert_ne!(g.ent[c].flags & F_TOSSED, 0, "rig: the creature took sub_3A200");
+        assert_eq!(g.ent[w].f32, 512, "the wizard's record pitch is stamped");
+        assert_eq!(g.ent[c].f32, 1234, "POSITIVE CONTROL: a creature keeps its pitch");
+    }
 
     #[test]
     fn burn_flags_matches_0x7f0000_table() {

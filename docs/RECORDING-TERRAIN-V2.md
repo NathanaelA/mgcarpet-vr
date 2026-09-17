@@ -57,6 +57,19 @@ corpus).** Landed shape:
   slots (8..24 across the corpus). Exit 1 on any differing plane;
   `terrain-diff [--settle n] [--out dir]` gives the cell-level view (its
   default settle stays 0; `terrain-check --settle n` overrides the read).
+- ⚠ **A PLANE THE PORT DOES NOT GENERATE IS AN UNGRADED LANE, NOT AN
+  ERROR** (round 143). Since the recorder began declaring a `ceiling` on
+  every MC2 take, cave or not (`e792c5b`), an off-cave take's measured
+  ceiling has no port counterpart — `Planes::ceiling` is empty. The
+  comparator used to fail the whole take on the size disagreement, which
+  threw away the verdict on the four planes that ARE comparable: eight of
+  round 143's eleven new takes first read `ERROR — ceiling: size mismatch`
+  and had no terrain verdict at all. An EMPTY port plane now reports as
+  `⚠ UNGRADED: ceiling (port generates none)` beside the verdict — the
+  same lane `replay` already drops with "measured CEILING dropped" — and
+  every other size disagreement is still an error. The tail is printed on
+  the IDENTICAL line too: a lane nobody looked at is not evidence of
+  agreement.
 
 Original plan below for the remaining steps' context.
 

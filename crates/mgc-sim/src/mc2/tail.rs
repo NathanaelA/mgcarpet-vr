@@ -2655,6 +2655,7 @@ impl Gen {
                     self.mc2_cast_xp.0.push((self.ent[i].id24, 7, hits as i32));
                 }
                 self.snd(24, i);
+                self.m27_v34_publish_blast_sound(i, ctx);
                 self.ent[i].act_life = 1;
                 self.ent[i].flags |= 2;
             }
@@ -2723,6 +2724,7 @@ impl Gen {
             }
         }
         self.ent[i].f26 = ((ring + 2) % 11) as i16;
+        self.m27_v34_publish_meteor(i);
     }
 
     /// `sub_32530` (EF:23694) — the (10,15) fire-trail tick: the

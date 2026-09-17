@@ -2291,6 +2291,31 @@ pub struct RetailMc2 {
     /// become a bound-entity guest POINTER (EF:4740) — consumers must
     /// range-guard before reading it as a value.
     pub stagevars: [[u8; 8]; 11],
+    /// The `&2`-CLEAR watch rows' union decoded THROUGH RETAIL'S OWN
+    /// POOL-RANGE GUARD: the pool slot when `StageVars2[i] + 4` holds a
+    /// live guest ENTITY POINTER, and `0` when it does not (an unbound
+    /// row, or one the in-level checkpoint autosave has SEVERED into a
+    /// `slot × 0xA8` offset — docs/traces/
+    /// mc2-level004-stagevar-ground-truth.md §6). `&2`-SET rows carry a
+    /// SUBTYPE in the same union (`InitStageVars_11EE0`, EF:4682-83),
+    /// never a pointer, so they decode 0 here and keep using the
+    /// word74 resolve.
+    ///
+    /// ⭐ THE GUARD IS RETAIL'S, NOT OURS. `sub_1D8C0`'s idle arm
+    /// (NETHERW.EXE **0x4221e-0x42232**) reads this dword and throws it
+    /// away unless it clears the pool base:
+    /// ```text
+    ///   4221e  8b b6 f8 65 03 00  mov  0x365f8(%esi),%esi  ; StageVars2[sv1]+4
+    ///   42224  85 f6              test %esi,%esi
+    ///   42226  0f 84 78 01 00 00  je   0x423a4             ; NULL    -> GRAZE
+    ///   4222c  3b 35 e4 a3 01 00  cmp  0x1a3e4,%esi        ; Entities_EA3E4[0]
+    ///   42232  0f 86 6c 01 00 00  jbe  0x423a4             ; <= base -> GRAZE
+    /// ```
+    /// Measured payloads, `&2`-clear rows only: mc2l21 row 5 = 24696
+    /// (= 147 × 168), row 6 = 336 (= 2 × 168), mc2l4 row 2 = 29232
+    /// (= 174 × 168) — every one a bare slot offset against a pool base
+    /// of ~3.5 M, i.e. SEVERED, i.e. no watch.
+    pub stagevar_watch: [u16; 11],
 }
 
 pub fn decode_retail_ent_mc2(d: &[u8], slot: u16) -> RetailEntMc2 {
@@ -2575,7 +2600,7 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
         free_stack: mc2_stack(d, 0x35, 0x246, pool_base),
         recycle_stack: mc2_stack(d, 0x11E6, 0x11EA, pool_base),
         level: u16_(d, m2::POOL + m2::ENT_COUNT * m2::ENT_STRIDE + 2),
-        base160: u32_(d, 0x36DF6),
+        base160: mc2_base160(d, pool_base),
         things: (0..1200)
             .map(|i| {
                 let b = 0x30311 + i * 20;
@@ -2623,6 +2648,30 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
                 row.copy_from_slice(&d[0x365F4 + i * 8..0x365F4 + i * 8 + 8]);
             }
             sv
+        },
+        stagevar_watch: {
+            let mut w = [0u16; 11];
+            for (i, cell) in w.iter_mut().enumerate() {
+                let row = 0x365F4 + i * 8;
+                // Only the kinds that BIND a pointer (pass 3 of
+                // `sub_12100`, EF:4743-59), and only with `&2` clear —
+                // a `&2` row's union is a subtype, not a pointer.
+                if !matches!(d[row] & 0xF, 3 | 4 | 5 | 8 | 9) || d[row + 1] & 2 != 0 {
+                    continue;
+                }
+                let p = u32_(d, row + 4);
+                let Some(base) = pool_base else { continue };
+                // `v12x > Entities_EA3E4[0]` — retail's own guard, plus
+                // the pool ceiling `sub_12780` spells out (EF:5198).
+                if p <= base || p >= base + (m2::ENT_COUNT * m2::ENT_STRIDE) as u32 {
+                    continue;
+                }
+                let off = p - base;
+                if off % m2::ENT_STRIDE as u32 == 0 {
+                    *cell = (off / m2::ENT_STRIDE as u32) as u16;
+                }
+            }
+            w
         },
     })
 }
@@ -2774,6 +2823,104 @@ fn mc2_pool_base(d: &[u8]) -> Option<u32> {
 fn mc2_full_pool_victims() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SAC_BIT").is_none())
+}
+
+/// The distance between the two statics `dword_0x36DF6` (the saved
+/// `&str_D7BD6[59]`) and the entity pool `D41A0_0`, measured on the
+/// GOG build: `pool_base − base160`. It is a BUILD constant, not a
+/// run constant — DOS/4GW's load delta moves both together — and
+/// [`mc2_pool_base`]'s doc already records it as the cross-check that
+/// holds on all 104,824 sampled MC2 snapshots. Here it is the
+/// RECOVERY, guarded by a validation pass over the pool's own row
+/// pointers.
+const MC2_BASE160_TO_POOL: u32 = 736_026;
+
+/// ⭐⭐⭐ **`dword_0x36DF6` IS WRITTEN ONLY BY RETAIL'S TWO SAVE
+/// PATHS, SO IT IS ZERO IN A CAPTURE TAKEN BEFORE THE FIRST SAVE —
+/// AND A ZERO BASE SILENTLY STAMPS THE STAND-IN ROW 59 ON THE WHOLE
+/// POOL.**
+///
+/// Every `ptr_a0 → absolute behaviour row` decode runs through
+/// retail's own load fixup `(ptr − base160)/34 + 59`
+/// (`conformance::decode_row156`; remc2 Level.cpp:1264-65 — resolve
+/// by the EXE, below). With `base160 = 0` the quotient is ~82,000
+/// steps, so the decode returns `None` for EVERY live record and the
+/// importer falls back to the stand-in row 59 — `str_D7BD6[59]` =
+/// `(v_2 56, v_12 0, v_14 −4, v_16 256, v_22 3072, v_26 50)` — for
+/// the entire pool.
+///
+/// ⚠ IT IS NOT A RUNTIME GLOBAL. The shipped `NETHERW.EXE` has
+/// exactly THREE references to `+0x36df6` (file = VA + 0x24800), and
+/// two of them are the identical store `c7 80 f6 6d 03 00 ac 83 00
+/// 00` = `movl $0x83ac,0x36df6(%eax)` with `eax = [0x41a0]` =
+/// `&D41A0_0` — at VA **0x54F4E** inside `SaveSMAPSLEVmovie2_54F00`
+/// and VA **0x552A1** inside `SaveLevelSLEV_55250`, retail's two
+/// in-game SAVE routines (remc2 EventsFunctions.cpp `//----- \
+/// (00054F00)`, Level.cpp `SaveLevelSLEV_55250`). The immediate
+/// `0x83ac` IS `&str_D7BD6[59]`: `0x83ac − 34·59 = 0x7BD6`. The third
+/// reference is the LOAD fixup's read, `8b 98 f6 6d 03 00` =
+/// `mov 0x36df6(%eax),%ebx` at VA **0x576CB**. Nothing in the tick
+/// loop touches it, so a capture whose process has not yet saved the
+/// level reads whatever was there — zero.
+///
+/// WITNESS (`mc2l22-new.mgcr`, the ONLY take in the corpus whose
+/// record 0 carries a zero here — all 39 other MC2 takes read
+/// 2,790,316 at t=0, and this one reads 2,790,316 from record 1 on):
+/// the seed anchor imported **645 of 645** live records on row 59 and
+/// the very first graded boundary broke with 146 field rows, 0
+/// missing/extra, 0 rng, 0 pose. The signature is the stand-in row's
+/// own constants: every live `(5,2)` (really row 73, `v_12 51`,
+/// `v_14 −32`) stepped `z −= 4` with NO hover clamp instead of
+/// settling to `ground + 51` — slot 17 sat at
+/// `ground(53438,45426) + 51 = 4019` in retail for t=0..3 while the
+/// port sank it to 4015, and slots 15..46 each moved EXACTLY
+/// `z0 − 4`. The `heading` rows are the same row's `v_2` turn cap
+/// (56 instead of 113) and the `rand`/`action45` rows its decision
+/// constants. Record 1 already carries the true base, which is why
+/// the take then runs 2,660 boundaries bit-exact from the re-anchor
+/// at t=1, and why the certified sibling `mc2l22.mgcr` — the same
+/// level, the same opening, captured 7 ticks later — never saw it.
+///
+/// The recovery is [`mc2_pool_base`]'s own cross-check run backwards:
+/// both globals are statics in one image, so their distance is a
+/// build constant ([`MC2_BASE160_TO_POOL`]), and the pool base is
+/// itself recovered per snapshot and VALIDATED against the pool
+/// image. The candidate is then validated a second time here against
+/// the very pointers it is about to decode: every live record's
+/// `ptr_a0` must be an exact 34-byte step from it inside
+/// `str_D7BD6`'s 157 rows. A capture that fails that check keeps the
+/// recorded zero and the old fallback.
+///
+/// `MGC_NO_MC2_BASE160_RECOVER=1` restores the pre-dig decode.
+fn mc2_base160(d: &[u8], pool_base: Option<u32>) -> u32 {
+    let saved = u32_(d, 0x36DF6);
+    if saved != 0 || !mc2_base160_recover() {
+        return saved;
+    }
+    let Some(cand) = pool_base.and_then(|p| p.checked_sub(MC2_BASE160_TO_POOL)) else {
+        return saved;
+    };
+    // The same predicate `decode_row156` applies, over every LIVE
+    // record: an exact 34-byte step landing inside `str_D7BD6[157]`.
+    let mut live = 0usize;
+    for slot in 1..m2::ENT_COUNT {
+        let o = m2::POOL + slot * m2::ENT_STRIDE;
+        if u8_(d, o + m2::ENT_CLASS) == 0 {
+            continue;
+        }
+        let dlt = u32_(d, o + 0xA0).wrapping_sub(cand) as i32;
+        if dlt % 34 != 0 || !(-59..98).contains(&(dlt / 34)) {
+            return saved;
+        }
+        live += 1;
+    }
+    if live == 0 { saved } else { cand }
+}
+
+/// A/B kill switch for the zero-`base160` recovery above.
+fn mc2_base160_recover() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BASE160_RECOVER").is_none())
 }
 
 /// Decode an MC2 entity stack (top dword + guest-pointer cells into
@@ -3328,6 +3475,104 @@ mod tests {
         assert_eq!(
             st.stage_binds[2].2, None,
             "a misaligned pointer never mints a slot"
+        );
+    }
+
+    /// ⭐⭐⭐ ROUND 143 — **A CAPTURE CAN BE MISSING A GLOBAL THE PORT
+    /// NEEDS, AND A ZERO `base160` SILENTLY STAMPS THE STAND-IN ROW 59
+    /// ON THE WHOLE POOL.** `dword_0x36DF6` is not a runtime global:
+    /// the shipped `NETHERW.EXE` has exactly THREE references to it,
+    /// two of which are the same store inside retail's two SAVE
+    /// routines (VA 0x54F4E / 0x552A1, `movl $0x83ac,0x36df6(%eax)` —
+    /// and `0x83ac − 34·59 = 0x7BD6` IS `&str_D7BD6[59]`), the third
+    /// the load fixup's read at VA 0x576CB. Nothing in the tick loop
+    /// touches it, so a take captured before its process ever saved
+    /// the level reads ZERO — and with a zero base every
+    /// `(ptr − base160)/34 + 59` decode is ~82,000 steps out of range,
+    /// returns `None`, and the importer falls back to the stand-in row
+    /// for EVERY live record.
+    ///
+    /// The recovery is [`mc2_pool_base`]'s own cross-check run
+    /// backwards — both are statics in one image, so their distance is
+    /// the build constant [`MC2_BASE160_TO_POOL`] — and the candidate
+    /// is VALIDATED a second time against the very pointers it is
+    /// about to decode. This test pins all four arms of that
+    /// validation; the corpus witness is `mc2l22-new.mgcr`, the only
+    /// take whose record 0 carries the zero (its seed imported 645 of
+    /// 645 live records on row 59 and the first graded boundary broke
+    /// with 146 `z`/`heading`/`rand` rows, 0 missing, 0 extra, 0 rng).
+    ///
+    /// `MGC_NO_MC2_BASE160_RECOVER=1` turns the recovery off and this
+    /// test fails on its first assertion — the kill-switch proof.
+    #[test]
+    fn a_zero_base160_is_recovered_from_the_pool_base_and_validated() {
+        const BASE: u32 = 0x0012_0000;
+        let want = BASE - MC2_BASE160_TO_POOL;
+        // Every live record's `ptr_a0` must be an exact 34-byte step
+        // from the candidate, landing inside `str_D7BD6`'s 157 rows
+        // (the decode's own `-59..98` window around row 59).
+        let pool = |rows: &dyn Fn(usize) -> i32| -> Vec<u8> {
+            let mut d = mc2_snapshot(BASE, &[5, 100, 101, 700], &[700, 101, 100, 5], &[]);
+            for slot in 1..m2::ENT_COUNT {
+                let o = m2::POOL + slot * m2::ENT_STRIDE;
+                if d[o + m2::ENT_CLASS] == 0 {
+                    continue;
+                }
+                let p = (want as i32 + 34 * rows(slot)) as u32;
+                d[o + 0xA0..o + 0xA4].copy_from_slice(&p.to_le_bytes());
+            }
+            d
+        };
+
+        // A capture whose process never saved: the zero is recovered.
+        let d = pool(&|slot| (slot % 157) as i32 - 59);
+        assert_eq!(u32_(&d, 0x36DF6), 0, "the capture carries no base160");
+        assert_eq!(
+            mc2_base160(&d, Some(BASE)),
+            want,
+            "a zero base160 recovers from the pool base"
+        );
+
+        // A capture that DID save is authoritative — the recovery must
+        // never second-guess a recorded value.
+        let mut saved = pool(&|slot| (slot % 157) as i32 - 59);
+        saved[0x36DF6..0x36DFA].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        assert_eq!(
+            mc2_base160(&saved, Some(BASE)),
+            0x1234_5678,
+            "a recorded base160 is taken verbatim"
+        );
+
+        // ONE record whose pointer is not an exact 34-step refuses the
+        // whole candidate: a base that cannot decode the pool it is
+        // about to be used on is not a base.
+        let mut off_step = pool(&|slot| (slot % 157) as i32 - 59);
+        let o = m2::POOL + 42 * m2::ENT_STRIDE;
+        let bad = want.wrapping_add(34 * 3 + 1);
+        off_step[o + 0xA0..o + 0xA4].copy_from_slice(&bad.to_le_bytes());
+        assert_eq!(
+            mc2_base160(&off_step, Some(BASE)),
+            0,
+            "an off-step pointer refuses the candidate"
+        );
+
+        // …and so does one that steps cleanly but lands outside the
+        // 157-row table.
+        let mut out_of_range = pool(&|slot| (slot % 157) as i32 - 59);
+        let far = want.wrapping_add(34 * 200);
+        out_of_range[o + 0xA0..o + 0xA4].copy_from_slice(&far.to_le_bytes());
+        assert_eq!(
+            mc2_base160(&out_of_range, Some(BASE)),
+            0,
+            "a pointer outside str_D7BD6's 157 rows refuses the candidate"
+        );
+
+        // No pool base to run the cross-check backwards from — the old
+        // fallback stands.
+        assert_eq!(
+            mc2_base160(&d, None),
+            0,
+            "without a pool base there is nothing to recover from"
         );
     }
 

@@ -1,0 +1,36 @@
+{
+ "dir": "fixtures/mc2l18",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 6633,
+   "file": "a-rival-ladder-mail-prices-off-the-castle-it-just-lost.mgcr",
+   "source": "mc2l18",
+   "note": "A RIVAL LADDER MAIL PRICES OFF THE CASTLE REGISTER, NOT A POOL SCAN - SO A CASTLE REAPED ON THE DRAIN'S OWN TICK STILL SETS THE RUNG: `sub_60810` (EF:62092) hands the castle that just took a level to `sub_60780` (EF:62067), whose `locEvent2` arm runs `SetSpell_6D5E0(token, token->byte_0x46_70)`, and `SetSpell_6D5E0` prices through `GetSpellManaCost_6D710(Entities[token->parentId_0x28_40], ...)`, which resolves the pricing castle as `Entities[owner->dword_0xA4_164x->CastleEntityIndex_0x3A_58]` (NETHERW.EXE 0x91f59-0x91f74) - a REGISTER, with no class, model, owner or reap test. Round 136's law again: A POOL SCAN RETURNS THE LOWEST-NUMBERED MATCH, A REGISTER THE CHOSEN ONE. Round 136 landed the register on the HUMAN column (`player_castle_bound` / `mc2_price_castle`); the RIVAL column still read `World::rival_castle`, a pool scan filtering `flags & 0x400 == 0`, and a level-0 DESTRUCTION stamps that reap bit BEFORE the ladder drain - so the scan missed and the port took `GetSpellManaCost`'s castle-less arm (the raw tier `manaCost_6`). WITNESS mc2l18 pair 6633->6634 (the take's LAST (15,x) head), read straight out of retail's own changelog: castle slot 995 (3,2) goes `scratch10` 1 -> 0 and `mana_max` 8500 -> 5000 (`sub_60810`'s rung-0 `number2`) while taking the 0x400 reap stamp on the SAME tick, and its owner's register drops with it (player 6 / ent 553: `castle_ent` 995 -> 0). Retail prices the (15,2) token at slot 556 at `MC2_CASTLE_COST[0] * 384 >> 8` = `mana_max` 1500 / `mana` 14; the port published the castle-less 5000 / 49. A/B: `MGC_NO_MC2_RIVAL_LADDER_PRICE_DYING_CASTLE=1` re-reds exactly this pair and nothing else on the take. *** THIS PINS A FALLBACK, NOT THE REGISTER *** - the landed hunk hands the MAILING castle in as the fallback, which is the record retail's register still names at that instant and a no-op on every mail whose scan already resolves. The faithful fix gives `World::rival_castle` the rival's own `CastleEntityIndex_0x3A_58`; ~20 rival-AI gates read that scan, so it is a separate, wider law and it is OWED."
+  },
+  {
+   "t": 27158,
+   "file": "a-quake-shove-reaches-every-reader-walked-behind-it.mgcr",
+   "source": "mc2l18",
+   "note": "THE SAME QUAKE REPUBLICATION, WITH THREE SIMULTANEOUS READERS ON A SECOND LEVEL - the cross-level guard for `a-quake-shove-is-published-at-the-quakes-own-walk-slot`. Where mc2l23 witnesses ONE meteor reading the shoved position, mc2l18 t=27,158 has a whole band of records dispatched between the quake and the carpet, so the republished `ctx.px/py/pz` reaches all of them at once and a single missing publication moves every one: slot 57 retail x/y/z/heading/pitch 40.75/122.668/1738/445/10 where the port has 40.746/122.641/1741/439/7; slot 69 retail 46.602/121.031/1750/458/17 vs port 46.594/120.988/1755/448/13; slot 71 retail 40.773/123.047 vs port 40.766/123.020. ⭐ The displacement here is an order of magnitude SMALLER than mc2l23's and still resolves to the unit, which is what makes this pair worth its own file: it discriminates the re-derived `(bearing, dist)` + pull arithmetic, not merely the presence of a republication. Same citation as the mc2l23 exemplar (`sub_39B60`'s `CopyEntityPosition_57CF0`, `NETHERW.EXE` 0x5E592). A/B: `MGC_NO_MC2_FLOOD_WALK_POSE=1` re-reds it; mc2l18 goes 59 -> 56 segments, 58 -> 55 devs, clean 55,367 -> 55,370, horizon unchanged at 2,454 (its head is a different family)."
+  },
+  {
+   "t": 2454,
+   "file": "a-creature-dead-at-the-tick-top-gets-no-stagevar-reaction.mgcr",
+   "source": "mc2l18",
+   "note": "A CREATURE DEAD AT THE TICK TOP GETS NO STAGEVAR REACTION: retail reaches `sub_12500` (the per-creature StageVar reaction) ONLY from `UpdateEntities_57730`'s tick-top class-5 roster walk (NETHERW.EXE 0x579b8 chain head, 0x579cd `push ebx` / 0x579ce `call sub_12500`, 0x579d6 `next_0`), and that roster excludes `life_0x8 < 0` and actions 0xB4/0xE8/0xEA. The port walked `mc2_sv_held` with only a class / site_z / reap filter. WITNESS mc2l18 pair 2454->2455 (the take's old horizon): slot 614, a (5,17) on StageVar1 3 / StageVar2 10 in action 137, killed by the human during t=2454's walk (life 3200 -> -1); retail keeps sv2 10 (its own handler goes 137 -> 140), the port re-leashed the corpse (sv2 10 -> 2). A/B: `MGC_NO_MC2_STAGEVAR_REACT_ROSTER=1` re-reds it (lane field:5,17:sv2). Round 146, dig w146b."
+  },
+  {
+   "t": 5618,
+   "file": "a-worm-head-over-water-probes-the-stale-stack-word.mgcr",
+   "source": "mc2l18",
+   "note": "A WORM HEAD OVER WATER PROBES THE STALE STACK WORD: `sub_26FF0` (the m22 head's move + altitude step) seeds its whole-chain terrain maximum at 0 and copies the winner's position into its local `v9x` ([ebp-0x10]) only on a strict `>` (NETHERW.EXE 0x27061, 0x27080-83, 0x27088-92), then hands `&v9x` to `sub_1B7A0_tile_compare` on the rise arm unconditionally (0x270cf-d3) and rises 0x100 when roughness beats the row's `v_16`, else 0x40. Over altitude-0 water the probe position is whatever the previous handler left at W-52: for the 0xB0 head behind a 0xB4 tail segment, `CopyEntityPosition_57CF0`'s `push esi` = that segment's record pointer (0x35CEC6 + 168*slot). WITNESS mc2l18 pair 5618->5619 (the 193-tick rise cycle, 15 slots 677..691): head 677 behind segment 676, ptr 0x378A66 -> tile (0x8A,0x00) roughness 233 > 50 -> retail z +0x100 (382 -> 638) where the port rose +0x40 (446). A/B: `MGC_NO_MC2_M22_STALE_PROBE=1` re-reds it (lane field:5,22:z). Round 146, dig w146b."
+  },
+  {
+   "t": 27160,
+   "file": "the-quake-shoves-the-human-at-his-chain-seat.mgcr",
+   "source": "mc2l18",
+   "note": "THE QUAKE SHOVES THE HUMAN AT HIS CHAIN SEAT, INSIDE THE CELL WALK: `sub_39B60` (EF banner 00039B60) has no human arm - the carpet is an ordinary class-3 model-0 record on its tile chain, shoved when the 26x26 walk reaches it, re-headed in its destination cell by `CopyEntityPosition_57CF0` (NETHERW.EXE 0x5e592) with the cursor re-read off it (0x5e5e6), so a shove into a row the sweep has not reached yet shoves him AGAIN. The port shoved the human once, after the sweep, through the clamped/decaying knock register retail never writes here. Every reader walked after the carpet sees the accumulated pose. WITNESS mc2l18 pair 27160->27161: 76 field diffs (heading/pitch/x/y/z on the (9,0) slots 57, 69, 71, 72, ...) with the law off. The pose-only twin is mc2l23 t=6,941 (unit test `the_quake_shoves_the_human_again_in_his_destination_row`). A/B: `MGC_NO_MC2_FLOOD_HUMAN_SEAT=1` re-reds it. Round 146, dig w146e."
+  }
+ ]
+}

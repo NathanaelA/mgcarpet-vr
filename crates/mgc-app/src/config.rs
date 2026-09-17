@@ -1026,6 +1026,22 @@ pub struct GameplayPatches {
     /// (default): it drops to idle like every other species and the
     /// charm resolves normally.
     pub mc2_wyvern_alliance_brain: PatchArm,
+    /// THE ORPHANED MANA BALLOON (MC2). `retail`: the only thing
+    /// that ever clears a dead mana balloon is its castle's own
+    /// fleet pass, so a balloon whose castle is destroyed first
+    /// becomes permanent litter — it cannot be hurt, cannot be
+    /// killed, drifts after whatever record has taken over its dead
+    /// castle's pool slot, and keeps its old owner's colours for the
+    /// rest of the level. `patched` (default): a dead balloon with
+    /// no castle left dissolves into its mana sphere, exactly as the
+    /// castle pass would have done.
+    pub mc2_orphan_balloon_reap: PatchArm,
+    /// THE MISMATCHED HOUSE FLAG (MC2). `retail`: a claimed house
+    /// flies its owner's raw player-slot colour while that owner's
+    /// castle flies the proper team colour, so for four of the eight
+    /// wizards a rival's houses and castle show different colours.
+    /// `patched` (default): houses fly the castle's colour.
+    pub mc2_house_flag_color: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -1046,6 +1062,8 @@ impl Default for GameplayPatches {
             dual_wield_muzzle: PatchArm::Patched,
             one_castle_per_wizard: PatchArm::Patched,
             mc2_wyvern_alliance_brain: PatchArm::Patched,
+            mc2_orphan_balloon_reap: PatchArm::Patched,
+            mc2_house_flag_color: PatchArm::Patched,
         }
     }
 }
@@ -1070,6 +1088,8 @@ impl GameplayPatches {
             dual_wield_muzzle: PatchArm::Retail,
             one_castle_per_wizard: PatchArm::Retail,
             mc2_wyvern_alliance_brain: PatchArm::Retail,
+            mc2_orphan_balloon_reap: PatchArm::Retail,
+            mc2_house_flag_color: PatchArm::Retail,
         }
     }
 
@@ -1111,6 +1131,8 @@ impl GameplayPatches {
             dual_wield_muzzle: PatchArm::Retail,
             one_castle_per_wizard: PatchArm::Retail,
             mc2_wyvern_alliance_brain: PatchArm::Retail,
+            mc2_orphan_balloon_reap: PatchArm::Retail,
+            mc2_house_flag_color: PatchArm::Retail,
             ..Self::default()
         }
     }
@@ -1353,7 +1375,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 31;
+const DEFAULTS_VERSION: u64 = 33;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

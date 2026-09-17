@@ -381,7 +381,7 @@ law (the part that gates behavior) is faithful.
 
 ---
 
-## MC2 rival dead-target drop — GAP (retail drop not implemented, measures zero)
+## MC2 rival dead-target drop — ✅ CLOSED 2026-09-17 (round 143; the "measures zero" claim was FALSE)
 
 **Original.** `sub_5EFA0`'s second block is the ONE liveness/reap test
 retail applies to a wizard's target, and it resolves that target
@@ -402,30 +402,47 @@ It is reached only down the UNDOCKED arm (`sub_12A70` reaches
 `sub_5EFA0` only when `word_0x159_345 == 0`); the port's `grace` gate
 at the call site is that same fork.
 
-**Port.** `mgc-sim mc2/rivals.rs::mc2_rival_intake` drops a dead
-target for every POOL target but **excludes `PLAYER_TARGET`**, so a
-rival never drops a dead HUMAN target on the undocked arm. Until round
-141 a liveness predicate wrongly parked in `mc2_target_alive` was
-standing in for it — in the wrong function, ungated by the dock, and
-never clearing the word. That predicate was a real defect (it made the
-rival skip its whole attack handler the instant the human died, the
-mc2l16 t=16472 head) and was removed; the correct drop was **built,
-measured, and deliberately NOT landed**.
+**Port.** `mgc-sim mc2/rivals.rs::mc2_rival_intake` now drops a dead
+target for EVERY target, `PLAYER_TARGET` included, reading
+`World::player.life` — the same field retail reads at `0x8(%eax)`.
+Kill switch `MGC_NO_MC2_INTAKE_DROPS_DEAD_HUMAN=1` restores the parked
+shape.
 
-**Verified.** Measured across the whole 49-take corpus: the correct
-drop changes **exactly nothing** — reports byte-identical on both
-arms. mc2l16's rival 389 is DOCKED (`invuln` 1) across the only window
-that would exercise it, which is also why retail keeps acting on the
-corpse there.
+Until round 141 a liveness predicate wrongly parked in
+`mc2_target_alive` was standing in for it — in the wrong function,
+ungated by the dock, and never clearing the word. That predicate was a
+real defect (it made the rival skip its whole attack handler the
+instant the human died, the mc2l16 t=16472 head) and removing it was
+right; **what round 141 got wrong was not landing the write that
+replaces it.**
 
-**Deviations & interims.** Deliberate gap under the player's standing
-rule that the port carries **zero unwitnessed change** (ruling
-2026-09-16, round 141). The selector re-elects on its own life test,
-so a stale corpse target self-corrects and no runaway behavior is
-expected. ⚠ Do NOT "fix" this toward retail without a measured
-witness — and if a witness turns up, land it as a normal law. If the
-retail behavior is ever found to be *worse* for play, it goes behind a
-default-enabled patch rather than being silently omitted.
+**⚠⚠⚠ THE "MEASURES EXACTLY ZERO ACROSS THE 49-TAKE CORPUS" CLAIM THAT
+PARKED THIS WAS FALSE, AND IT DE-CERTIFIED A TAKE FOR TWO ROUNDS.**
+mc2l22 was one of those 49 and it is the witness: it went `8 seg /
+0 dev / horizon END` -> `11 / 3 / horizon 10,019
+sig extra(10,23)slot745x83` at round 141's own commit (`e463002`), rode
+through round 142 unnoticed, and was found in round 143 only because
+three digs tripped over it independently and the intake then re-swept
+the whole corpus. At **t=10,020** the human (pool slot 424) dies and
+rival 530 — undocked, holding `PLAYER_TARGET` inside `sub_13890` —
+fires ONE more lightning at the corpse: 1 `(10,23)` + 82 `(9,9)` chain
+nodes retail never mints (retail's tick mints NOTHING there; slot 530's
+`pitch` stays frozen at 2021 and its cast-charge climbs 1->2 instead of
+resetting). mc2l16 hides it because ITS rival 389 is DOCKED (`invuln`
+1) across the only window that would show it — **the dock is the
+discriminator, which is how one take could look like proof of what the
+other refutes.**
+
+⭐⭐⭐ **A MEASURED ZERO IS ONLY EVIDENCE IF IT WAS MEASURED ON THE TREE
+THE CHANGE PRODUCES.** The round-141 measurement cannot have been taken
+against the post-removal tree.
+
+**Verified (round 143).** Law ON restores mc2l22 character-for-character
+to its certified baseline row (`8 seg / 0 dev / horizon END`) and
+mc2l18 improves 342 -> 340 segments; mc2l16 stays certified (turning
+the round-141 predicate removal back off de-certifies IT, so both
+halves are load-bearing). 39 of 40 MC2 rows byte-identical, fixtures
+560/560, gate green.
 
 ---
 

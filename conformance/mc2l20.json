@@ -1,0 +1,12 @@
+{
+  "dir": "fixtures/mc2l20",
+  "pin_pose": "n1",
+  "fixtures": [
+    {
+      "t": 31826,
+      "file": "the-full-stop-kills-the-accelerate-window-so-the-regen-is-paid.mgcr",
+      "source": "mc2l20",
+      "note": "THE FULL STOP KILLS THE ACCELERATE WINDOW IN THE INPUT PASS, SO THE TICK IT LANDS ON PAYS A FULL MANA REGEN. `PlayerEvents_51BB0` case 0x27 (\"Full stop player\", EF:38260-72) zeroes the command's roll/pitch and, when its byte1 argument is set, THREE registers: the carpet's `actSpeed_0x82_130`, the flight block's `speed_0xc_12` AND `Entities[SpellEnabled[3]]->word_0x2E_46` - the Accelerate manifestation's burst counter. NETHERW.EXE file 0x773DC (VA 0x52BDC): 773f1 `66 c7 80 82 00 00 00 00 00` movw $0,0x82(%eax) / 77400 `66 c7 40 0c 00 00` movw $0,0xc(%eax) / 7740f `66 8b b8 39 03 00 00` mov 0x339(%eax),%di (SpellEnabled[3]) / 77425 `66 c7 40 2e 00 00` movw $0,0x2e(%eax). The port carried the two speed zeros (`Mc1Input::mc2_park`, applied in `flight::mc2_move`) and not the third. The PHASE is the law: retail's input pass runs ahead of the frame function, so `GetScroll_69DB0`'s own `word_0x2E_46 > 0` guard skips the body whole on the very same tick - `sub_68DE0` never runs, nothing pins the wizard's regen, and the freshly recomputed quantum is paid. WITNESS mc2l20 pair 31826->31827, the take's ONLY divergent tick: Speed (spell 3, token slot 127) armed at t=31726 with `word_0x2E_46 == word_0x30_48 == 301` (-1000 off the purse) and its mid-burst pin held the human's purse FLAT at 742,721 for 99 ticks against a recomputed regen of 763984/2000 = 381. At 31827 the stop lands: retail's record reads carpet `speed` 160->0, `cmd_speed` 160->0, token 127 `f2e` 201->0 (not 200 - the countdown never ran) and `mana` 742721->743102, exactly +381. The port kept `f2e` at 200, pinned again, and paid nothing. TWO CALL PATHS: the free run at the tick head (`World::tick_inner`, beside the respawn/cheat/demolish cases) and the pair importer (`World::mc2_full_stop_import` + `mc2_applied_mana_delta`'s `full_stop` arm), which reconstructs the pin from the recorded pre-tick counter and had the identical bug. A/B: `MGC_NO_MC2_FULL_STOP_KILLS_SPEED=1` re-reds this pair on BOTH paths; mc2l20 goes 0 devs / horizon END -> 1 dev / horizon 31826 under it."
+    }
+  ]
+}

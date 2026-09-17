@@ -451,6 +451,54 @@
    "source": "mc2l22",
    "file": "the-lightning-beam-s-trail-node-writes-no-flag-w.mgcr",
    "note": "THE LIGHTNING BEAM'S TRAIL NODE WRITES NO FLAG WORD, SO EVERY BILLBOARD STAYS COLLIDABLE: sub_66750 (EF:58336-45) writes exactly six fields per node - actionIndex 14, class 9, model 9, id_0x1A_26, maxLife = (node >= beam) - 1, SetEntityIndexAndRot_49CD0(216) - and NO flag word at all, so the node keeps NewEvent_4A050's default dword = 8 plus AddEventToMap_57D70's bit 2 (the recorded flags 12) and IS a legal sub_10780 victim (EF:3765 tests byte[0] & 8). Every REAL class-9 bolt ctor spells `event->struct_byte_0xc_12_15.byte[0] &= 0xF7` (sub_4D860 EF:34952, sub_4DC40, sub_4DCC0, the meteor shot) - THE ASYMMETRY IS RETAIL'S. The port carried the sibling ctors' clear into mc2_spawn_lightning_node AND cleared bit 3 on every class-9 record at every import seat, on a lane the grader publishes as None for proj9 - AN UNGRADED LANE HID IT FOR THE WHOLE TAKE. mc2l22 pair 54919->54920: a (9,3) meteor shot at slot 904 homing on the (5,27) hydra 318 crosses trail node 886 at (39722, 53682, 5645, box half-height ayaw 25); retail's sub_10780 returns 886, sub_65820 freezes life at 17, raises the reap bit and does sub_65580 / CopyEntityPosition_57CF0 / sub_655A0 (EF:62942-44) so the shot SNAPS ONTO THE NODE'S RAISED BOX CENTRE (5645+25 = 5670) and mints its (10,17) meteor payload there at slot 472, then lays its final (10,0) spark at 471. The port's probe skipped 886 and flew on to (39778, 53544, 5521) with no payload - the spark took 472 instead of 471 and the meteor's 51-cell fire ring slid one slot down the whole pop list: 121 field rows plus `missing in port: slot 505`. ⚠ THE 'ONE-SLOT SHIFT' WAS NOT AN ALLOCATOR BUG: retail and the port pop the IDENTICAL slot sequence and retail simply makes ONE EXTRA allocation (136 pops vs 135) inside it. rand (= global_rand + slot) and phase3e (= slot & 0xFF) matched on every shifted record, which is what proved the allocator bit-exact. Heads 52933, 54014, 54920, and 53976 falls back to the registered (5,27) hydra rows. Ledger ROUND 104 law 9."
+  },
+  {
+   "t": 10019,
+   "file": "the-rival-intake-drop-has-no-human-exemption.mgcr",
+   "source": "mc2l22",
+   "note": "THE RIVAL INTAKE'S DEAD-TARGET DROP HAS NO HUMAN EXEMPTION - IT IS A BARE `Entities[...]` RESOLVE: `sub_5EFA0`'s second block (shipped NETHERW.EXE file 0x837b2-0x837e9) resolves the rival's held target through `Entities[word_0x96_150]` with NO class, model or human test and zeroes the word, so the human's carpet is just a pool record to it. Round 141's `e463002` correctly removed the port's `player.state == Alive` predicate from `mc2_target_alive` (`sub_14C60` IS a pure identity compare) and NEVER LANDED THE WRITE THAT REPLACES IT: the drop had been parked as a docs/FIDELITY.md gap that `measures exactly zero across the whole 49-take corpus`, and mc2l22 was one of those 49. *** A MEASURED ZERO IS ONLY EVIDENCE IF IT WAS MEASURED ON THE TREE THE CHANGE PRODUCES *** - this take SILENTLY DE-CERTIFIED (8 seg / 0 dev / horizon END -> 11 / 3 / horizon 10,019) and stayed that way for two rounds until an intake sweep re-measured all 60 takes. And when two takes disagree about whether a law matters, find the state that differs: mc2l16's rival is DOCKED (`invuln` 1) and `sub_12A70` reaches `sub_5EFA0` only down the UNDOCKED arm, so one take looked like proof of what the other refutes. WITNESS mc2l22 pair 10019->10020: the human (slot 424) dies and rival 530 - undocked, holding him in `sub_13890` - fires one more lightning (spell 7) at the corpse. 166 records retail never mints (2 (10,23) + 164 (9,9)) stand EXTRA in the port, plus `slot 530 pitch` retail 2021 / port 2018. A/B: `MGC_NO_MC2_INTAKE_DROPS_DEAD_HUMAN=1` re-reds this pair and t=10,020."
+  },
+  {
+   "t": 2661,
+   "file": "a-claimed-house-flies-the-owners-raw-player-index.mgcr",
+   "source": "mc2l22-new",
+   "note": "A CLAIMED HOUSE FLIES THE OWNER'S RAW PLAYER INDEX, NOT THE TRANSFORMED COLOUR: `AddHouse0A_2D_38330`'s claim intake in the SHIPPED EXE adds `[player+0x38]` bare (NETHERW.EXE 0x38484 `66 03 78 38`, weak arm 0x384DA `66 03 50 38`); remc2 EF:28063/28074 insert a `TransformPlayerColorIndex_616D0` call it labels its own 'fixed bug from original game', and a binary-wide e8 scan finds no caller of 0x616D0 inside 0x38330..0x385C0 (the castle latch at 0x5FAE7 does transform, so a house and a castle of the same rival fly different bands for players 2/4/6/7). WITNESS mc2l22-new pair 2661->2662, slot 80: player 4 claims it; retail f5a 177 -> 181 (177+4), the port wrote 177+COLOR_ART[4] = 179. A/B: `MGC_NO_MC2_HOUSE_CLAIM_RAW_COLOR=1` re-reds it. Round 146, dig w146c."
+  },
+  {
+   "t": 4858,
+   "file": "the-guard-scan-walks-the-tick-top-wizard-roster.mgcr",
+   "source": "mc2l22-new",
+   "note": "THE (5,15) GUARD'S TARGET SCAN WALKS THE TICK-TOP WIZARD ROSTER: `sub_23C40` loads `dword_38519` (NETHERW.EXE 0x23D73 `8b b6 77 96 00 00`) and tests only id != own (0x23D81/85), range (0x23DAD) and byte[0] & 0x20 (0x23DB2) - no life, no reap test - a fourth walker of round 137's class-3 roster. WITNESS mc2l22-new pair 4858->4859: the human's guard 988 (target96 503) re-engages rival 503, which died earlier the same tick below the guard (life 599 -> -1001): retail action 121 -> 122 with the engage-pose draw, the port's `act_life >= 0` pool walk stayed in 121. A/B: `MGC_NO_MC2_M15_SCAN_ROSTER=1` re-reds it. Round 146, dig w146c."
+  },
+  {
+   "t": 20627,
+   "file": "the-wyvern-sweep-walks-the-tick-top-building-roster.mgcr",
+   "source": "mc2l22-new",
+   "note": "THE WYVERN'S IDLE BUILDING SWEEP WALKS THE TICK-TOP (10,45) ROSTER: `sub_24440` loads `dword_38527` (NETHERW.EXE 0x2449B `8b 80 7f 96 00 00`) and tests range (0x244C7) and nearest (0x244CC) only, so a house reap-stamped earlier in the tick is still a candidate (0x244FA action = 130). The port walked the pool with class/model/reap tests. WITNESS mc2l22-new pair 20627->20628, wyvern slot 603: retail action 130, the port 129 (its sibling pair 20383->20384, wyvern 203 -> house 80, is ungraded and surfaced as the INHERITED 20385 cluster; unit test `the_wyvern_sweep_locks_a_house_reaped_earlier_this_tick`). A/B: `MGC_NO_MC2_M16_SWEEP_ROSTER=1` re-reds it. Round 146, dig w146c."
+  },
+  {
+   "t": 33773,
+   "file": "a-finished-house-repaints-only-tick-top-roster-wizards.mgcr",
+   "source": "mc2l22-new",
+   "note": "A FINISHED HOUSE RE-PAINTS ONLY THE TICK-TOP WIZARD ROSTER: `sub_377A0` walks `dword_38519` (NETHERW.EXE 0x377AA `8b 9b 77 96 00 00`, 0x377C0 overlap, 0x377CD call sub_5FBD0, 0x377D5 next_0), whose only membership test is `life >= 0` at the tick top; the port walked the pool with no life test, so a live class-3 record at life < 0 (the immortal orphan balloon at -1200) was re-painted. WITNESS mc2l22-new pair 33773->33774: house 966 completes over rival 611's orphan balloon 668; retail mints nothing, the port minted an extra (10,42) painter into slot 959. A/B: `MGC_NO_MC2_BUILD_REPAINT_ROSTER=1` re-reds it. Round 146, dig w146c."
+  },
+  {
+   "t": 3957,
+   "file": "a-dying-castle-purges-its-tokens-before-the-mana-spill.mgcr",
+   "source": "mc2l22-new",
+   "note": "A DYING CASTLE PURGES ITS TOKENS BEFORE ITS MANA SPILL: `sub_5FCA0` is straight-line `sub_605E0` (level off + book work: re-price, pin, level-0 rival token purge with its reap stamp; NETHERW.EXE 0x5FCB1) then `sub_5FD00` (eject, 0x5FCBE) then `sub_5FF50` (0x5FCC7). The port drained the book work after the whole castle pass. Visible when the eject takes its DRY arm: `sub_49F90` (0x5FD80) frees every reap-flagged record, including the just-purged token. WITNESS mc2l22-new pair 3957->3958: rival 611's castle 637 falls to level 0 on an empty free stack; its (15,2) at slot 614 is purged, collected and re-minted as a (10,39) worth 3825, where the port kept a live (15,2) (29 rows). SAME PAIR, SECOND LAW: `sub_5FD00` re-reads the castle owner `[ebx+0x1a]` for EVERY sphere (0x5FE2B `66 8b 43 1a`, stored at 0x5FE33); the port hoisted it, and when the dry-arm GC frees the castle itself and hands its record to a sphere, that sphere's owner is its own slot - retail owner 637 on slot 637 where the port wrote 611 (this also clears the (3,3) balloon 668 x/y rows). A/B: `MGC_NO_MC2_CASTLE_PURGE_BEFORE_EJECT=1` and `MGC_NO_MC2_EJECT_OWNER_LIVE_READ=1` each re-red it. Round 146, dig w146c."
+  },
+  {
+   "t": 49983,
+   "file": "a-settling-sphere-leaves-its-ground-height-on-the-hydra-slot.mgcr",
+   "source": "mc2l22-new",
+   "note": "A (10,39) SPHERE ON ITS SETTLE ARM LEAVES THE GROUND HEIGHT IT SAMPLED ON THE HYDRA'S W-64: `TransformArcherToMana_35940` (NETHERW.EXE file 0x5A140, `83 ec 1c`, ebp = W-20) calls getTerrainAlt at 0x5A5E9 and keeps the full 32-bit result in ESI (0x5A5F8 `89 c6`); the arm ends at 0x5A73D `call 0x5b120`, whose prologue `53 56 57 55` pushes that ESI onto W-64 (the 0xDA dword). WITNESS mc2l22-new pair 49983->49984: sphere 581 in its hit-wobble arm sits between house 565 and hydra body 610, which reads an even ground height where the port read the house's 29 (also pair 49996->49997). A/B: `MGC_NO_MC2_M27_V34_SPHERE_RESIDUE=1` re-reds it. Round 146, dig w146h."
+  },
+  {
+   "t": 49897,
+   "file": "a-bursting-blast-leaves-the-listener-distance-on-the-hydra-slot.mgcr",
+   "source": "mc2l22-new",
+   "note": "A (10,23) BLAST'S BURST TICK LEAVES THE LISTENER DISTANCE ON THE HYDRA'S W-64: `sub_33D80` (NETHERW.EXE file 0x58580, no locals) ends with `PrepareEventSound_6E450` (0x92C50, `83 ec 24`, ebp = W-44), whose `[ebp-0x14]` = W-64 is stored at 0x92D2C from EuclideanDist(listener, blast) past the silent-emitter (0x80) and hearing-range (0x9000000) exits. Assumes sound was enabled in the recorded take. WITNESS mc2l22-new pair 49897->49898: blast 587 bursts 2,818 units from the human in front of hydra body 610 - even, > 4 - so retail stamps f71 = 4 and draws twice, where the port read the house's 29. A/B: `MGC_NO_MC2_M27_V34_BLAST_SOUND_RESIDUE=1` re-reds it. Round 146, dig w146h."
   }
  ]
 }

@@ -198,6 +198,35 @@ pub struct WorldPatches {
     /// until it dies, never shooting, re-targeting or waking
     /// (`recordings/mc2l17.mgcr`, seven witnesses).
     pub mc2_wyvern_alliance_brain: bool,
+    /// A dead MC2 mana balloon whose castle is gone dissolves into
+    /// its mana sphere on its own dispatch, instead of haunting the
+    /// pool for the rest of the level. Retail's ONLY reaper for a
+    /// (3,3) balloon is `sub_5FF50` (EF:61740, `NETHERW.EXE`
+    /// 0x84750), the castle's own fleet pass — `if (v3x->life_0x8 >=
+    /// 0) break; TransformEntityToManaSphere_36BA0(v3x, false);
+    /// DisableEntityDrawing04_57F10(v3x); array_0x3C_60[v1] = 0;` —
+    /// so when the owner's castle falls first, nothing is left to run
+    /// it. The balloon's own handler `AddBallon_60AB0` (EF:62160, EXE
+    /// 0x852B0) carries NO life test and its damage tail `sub_60EA0`
+    /// (EF:62330, EXE 0x856A0) opens `if (life < 0) return;`, so the
+    /// corpse is immortal, undamageable and still dispatched every
+    /// tick: it flies at whatever record now occupies its home
+    /// castle's recycled pool slot (`word_0x96_150` is read by index
+    /// with no identity test, EF:62180) and the owner's register
+    /// `array_0x3C_60` keeps naming it forever
+    /// (`recordings/mc2l22-new.mgcr`: Prish's balloon 668, killed by
+    /// the human at t=4248, still there at t=59100).
+    pub mc2_orphan_balloon_reap: bool,
+    /// A claimed MC2 dwelling flies its owner's CASTLE colour band.
+    /// The shipped EXE's claim intake (`AddHouse0A_2D_38330`,
+    /// `NETHERW.EXE` 0x38484 / 0x384DA `add di,[eax+0x38]`) adds the
+    /// owner's RAW player index to the flag row, while the castle's
+    /// latch (0x5FAE7) runs `TransformPlayerColorIndex_616D0` — so for
+    /// players 2/4/6/7 a rival's houses and its castle fly different
+    /// colours (a known MC2 bug; remc2 patches it in its decompile,
+    /// EF:28063/28074). Patched: `177 + COLOR_ART[team]`, the castle's
+    /// band. Retail (conformance): `177 + team`.
+    pub mc2_house_flag_color: bool,
 }
 
 impl WorldPatches {
@@ -217,6 +246,8 @@ impl WorldPatches {
         dual_wield_muzzle: false,
         one_castle_per_wizard: false,
         mc2_wyvern_alliance_brain: false,
+        mc2_orphan_balloon_reap: false,
+        mc2_house_flag_color: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -241,5 +272,7 @@ impl WorldPatches {
         dual_wield_muzzle: false,
         one_castle_per_wizard: false,
         mc2_wyvern_alliance_brain: false,
+        mc2_orphan_balloon_reap: false,
+        mc2_house_flag_color: false,
     };
 }

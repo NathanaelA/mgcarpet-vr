@@ -1090,6 +1090,26 @@ impl Simulation {
                         )
                     }
                 };
+                // ⭐⭐⭐ THE ENHANCED TIER HAS NO RETAIL COMMAND
+                // REGISTER, SO THE POSE IS ITS COMMAND AUTHORITY.
+                // `GetScroll_69DB0` derives the Speed token's
+                // direction from the caster's `speed_0xc_12` (the
+                // flight block's COMMAND word, not `actSpeed`) — see
+                // `mc2::cast::no_mc2_speed_sign_cmd`. The faithful
+                // column seeds `mc2_cmd_speed` from the drive and the
+                // conformance pair from the imported `cmd_speed`, but
+                // THIS path has no drive at all: the float flyer is
+                // the motion authority and `carpet.tgt_speed` stays 0
+                // for the whole enhanced session (measured: 0 after
+                // 30 reverse-thrust steps that genuinely drift the
+                // flyer backward). Left unseeded, every enhanced cast
+                // would read `0 >= 0` and boost FORWARD while flying
+                // backward. The pose's own `speed` is the flyer's
+                // forward velocity in retail units — the same
+                // quantity the model-switch handler converts with
+                // above — so it is the honest stand-in here, and it
+                // is exactly what this law's predecessor read.
+                w.mc2_cmd_speed = pose.speed;
                 w.tick(pose, pcmd);
             }
             // ⭐⭐ THE SPEED TOKEN'S REGISTER WRITE when its walk slot
@@ -1794,6 +1814,14 @@ impl Simulation {
                 let d = dist as f32 / 256.0;
                 f.x += d * a.sin();
                 f.z -= d * a.cos();
+            }
+            // The quake/flood's shove (`Gen::player_flood_pull`) —
+            // under the seat law its horizontal leg left `player_knock`
+            // for this delta. Horizontal only: this mover never took
+            // the z pull, and still does not.
+            if let Some(fl) = w.take_player_flood_pull() {
+                f.x += fl.dx as f32 / 256.0;
+                f.z += fl.dy as f32 / 256.0;
             }
         }
 

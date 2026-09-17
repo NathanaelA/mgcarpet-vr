@@ -298,6 +298,70 @@ fn no_mc2_aim_charm_filter() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AIM_CHARM_FILTER").is_some())
 }
 
+/// `MGC_NO_MC2_AIM_ALLY=1` restores the pre-dig `sub_67CB0` creature
+/// walk, which locked a projectile onto a creature its OWN CASTER had
+/// charmed.
+///
+/// ⭐⭐ THE CREATURE-WALK PREDICATE HAS THREE CLAUSES, NOT TWO — AND
+/// THIS IS THE SAME THIRD CLAUSE ROUND 145 ALREADY LANDED ON THE
+/// TURRET RING SCAN ([`crate::mc2::castle::no_mc2_piece_scan_ally`]),
+/// ON THE OTHER OF ITS TWO HOMES. `sub_67CB0`'s per-model roster walk
+/// (EF:55265-69 `case 9`, EF:55159-63 the big case, EF:55312-16
+/// `case 0x10`) is
+/// ```text
+/// if (kkx->id_0x1A_26 != a1x->id_0x1A_26
+///     && kkx->byte_0x39_57
+///     && (kkx->StageVar2_0x49_73 != 14 || kkx->parentId_0x28_40 != a1x->id_0x1A_26))
+/// ```
+/// — a charmed creature (`StageVar2 == 14`) whose `parentId_0x28_40`
+/// is the SHOT'S OWN owner is not a candidate. The port kept the
+/// `id_0x1A` and awake clauses and dropped the third, so a wizard's
+/// own lightning locked onto the creature he had just charmed.
+/// `case 0x19` (the (9,25) alliance carrier) keeps its own
+/// `sub_3A7F0` filter instead and takes NO charm clause (EF:55334-46)
+/// — hence the `charm_eligible` guard at the read site.
+///
+/// SHIPPED EXE, `NETHERW.EXE` file **0x8c570** (VA 0x67D70), the
+/// `case 9` arm — keyed by `minSpeed * maxLife` at 0x8c4fc, the
+/// `cmpl $0x1d` bucket loop at 0x8c5bb and the `push $0x200` pitch
+/// cone at 0x8c594, so it is this case and no sibling:
+/// ```text
+/// 8c570: 66 8b 46 1a   mov    0x1a(%esi),%ax     ; cand->id_0x1A
+/// 8c574: 66 3b 43 1a   cmp    0x1a(%ebx),%ax     ; vs shot->id_0x1A
+/// 8c578: 74 34         je     0x8c5ae            ; same id -> skip
+/// 8c57a: 80 7e 39 00   cmpb   $0x0,0x39(%esi)    ; awake byte
+/// 8c57e: 74 2e         je     0x8c5ae
+/// 8c580: 80 7e 49 0e   cmpb   $0xe,0x49(%esi)    ; StageVar2 == 14 ?
+/// 8c584: 75 0e         jne    0x8c594            ; not charmed -> score
+/// 8c586: 31 d2         xor    %edx,%edx
+/// 8c588: 0f bf 43 1a   movswl 0x1a(%ebx),%eax    ; shot->id_0x1A
+/// 8c58c: 66 8b 56 28   mov    0x28(%esi),%dx     ; cand->parentId @0x28
+/// 8c590: 39 c2         cmp    %eax,%edx
+/// 8c592: 74 1a         je     0x8c5ae            ; MY OWN ALLY -> skip
+/// 8c594: 68 00 02 00 00 push  $0x200             ; pitch cone (case 9)
+/// ```
+/// The port cannot read `@0x28` off the record — the alliance parent
+/// rides the `mc2_allied` side map and the class-5 `StageVar2` rides
+/// `site_z` — so the test is spelled against those two seats, exactly
+/// as the turret scan spells it; both are imported (`retail_import_mc2`
+/// seeds `mc2_allied` from `r.owner28` for every class-5 `sv2 == 14`).
+///
+/// WITNESS mc2l17 t=27,218: the human fires tier-0 Lightning; the beam
+/// lands at slot 289 with `id_0x1A` 91 and `minSpeed * maxLife` reach
+/// 3,456. Slot 5 is a `(5,16)` at (49135, 1741, 3558) with
+/// `StageVar2 = 14` and `parentId = 91` — the human's own charmed
+/// creature, 2,783 away and inside both cones. Retail's scan finds
+/// NOTHING (`word_0x96_150` 0) and the beam keeps the caster's
+/// 1745/1957; the port locked slot 5 and snapped to 1798/1938. The
+/// walk then ran 8 steps where retail ran 10, and `sub_66750` laid a
+/// whole 81-node trail down the wrong ray — 15 `(9,9)` nodes missing,
+/// the `(10,23)` blast in the wrong slot, and 108 `(9,9)` heads over
+/// the 130-tick RAPID burst t=27,218..27,345.
+pub(crate) fn no_mc2_aim_ally() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AIM_ALLY").is_some())
+}
+
 /// A/B toggle for THE ACQUISITION SCORER'S HUMAN RAISE: set
 /// `MGC_NO_MC2_AIM_HUMAN_RAISE` to restore the pre-dig behaviour,
 /// where [`Gen::mc2_aim_scan`] scored the out-of-pool human at his RAW
@@ -1257,6 +1321,12 @@ impl Gen {
             return;
         }
         let alloc_watermark = self.exhausted;
+        // A DEPTH-GATED ctor (`AddFireSpheres_4F2A0` >= 26,
+        // `AddWind_4F040` >= 12, `sub_51800` >= the ring count)
+        // refuses before `NewEvent_4A050` and
+        // returns 0 like a dry pool without moving `exhausted` — see
+        // [`crate::engine::features::no_mc2_depth_refusal_keeps_flyer`].
+        let mut refused = false;
         let spawned = match (fc, fm) {
             (10, 0) => self.mc2_spawn_fire(x, y, z),
             (10, 1) => self.mc2_spawn_big_explosion(x, y, z),
@@ -1500,6 +1570,7 @@ impl Gen {
             (10, 22) => {
                 let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_whirlwind(x, y, z);
+                refused = s.is_none();
                 if let Some(s) = s {
                     let ml = 8 * charge as u32;
                     self.ent[s].max_life = ml;
@@ -1526,6 +1597,7 @@ impl Gen {
             // `sub_52ED0_53210` really does carry a struck-write).
             (10, 76) => {
                 let s = self.mc2_spawn_fire_orb(x, y, z);
+                refused = s.is_none();
                 if let Some(s) = s {
                     self.ent[s].max_life = 30;
                     self.ent[s].act_life = 30;
@@ -1629,6 +1701,7 @@ impl Gen {
             (10, 72) => {
                 let model = self.ent[i].f71;
                 let head = self.mc2_spawn_summon_ring(x, y, model, id);
+                refused = head.is_none() && !super::roster::no_summon_nodes();
                 // ⭐⭐⭐ …BUT THE ARM RETURNING `None` DOES NOT MEAN
                 // RETAIL STAMPED NOTHING. `sub_65820`'s tail writes
                 // the record `_4A190` returned — `sub_51800`'s HEAD —
@@ -1787,7 +1860,8 @@ impl Gen {
         // aura, summon-ring and alliance arms deliberately return None
         // after minting their own children; only a failed allocation
         // moves `exhausted`.)
-        if spawned.is_none() && self.exhausted != alloc_watermark {
+        let refused = refused && !crate::engine::features::no_mc2_depth_refusal_keeps_flyer();
+        if spawned.is_none() && (self.exhausted != alloc_watermark || refused) {
             // ⭐⭐⭐ …EXCEPT THE LEVELED POSSESSION, WHICH DIES ON CONTACT
             // WHATEVER THE POOL SAYS. `sub_674C0` (action 18) gates its
             // two CHILDREN on their own allocations — `if (v12x) {…}`
@@ -2491,6 +2565,11 @@ impl Gen {
         self.ent[i].act_life = life - 1;
         if life < 0 {
             self.ent[i].flags |= 0x400;
+        }
+        // A leaf-only handler: see
+        // [`crate::engine::features::no_mc2_m27_v34_node_transparent`].
+        if !crate::engine::features::no_mc2_m27_v34_node_transparent() {
+            self.m27_v34_transparent(i);
         }
     }
 
@@ -3725,6 +3804,19 @@ impl Gen {
                     if (e.f58 & 0xFF) == 0 || e.id24 == own {
                         continue;
                     }
+                    // ⭐⭐ THE OWN-PARENT ALLIANCE EXEMPTION — the THIRD
+                    // clause of the roster predicate (EF:55265-69 /
+                    // EXE 0x8c580-0x8c592). `case 0x19` is the one arm
+                    // that does NOT carry it (EF:55334-46); it screens
+                    // with `sub_3A7F0` below instead. See
+                    // [`no_mc2_aim_ally`].
+                    if !charm_eligible
+                        && !no_mc2_aim_ally()
+                        && e.site_z == 14
+                        && self.mc2_allied.0.get(&(v as u16)).copied() == Some(own)
+                    {
+                        continue;
+                    }
                     // ⭐⭐⭐ `case 0x19`'s THIRD FILTER IS `sub_3A7F0`
                     // ITSELF (EF:54991) — the very charm-eligibility
                     // predicate `sub_3A650` asks before converting, not
@@ -4620,6 +4712,60 @@ mod debuff_knock_tests {
              (EF:59055) — a surviving bolt is the generic worker's \
              law, not this one's"
         );
+    }
+
+    /// ⭐⭐ A DEPTH-GATED CTOR'S REFUSAL IS A NULL EFFECT, AND THE
+    /// FLYER SURVIVES IT. `AddFireSpheres_4F2A0` (>= 26),
+    /// `AddWind_4F040` (>= 12) and `sub_51800` (>= ring count) return 0 before `NewEvent_4A050` when
+    /// the free stack is too shallow — `exhausted` never moves — and
+    /// `sub_65C20` / `sub_65820` keep the projectile on a null effect.
+    /// Witness mc2l19-taketwo t=14482: the human's charged fireball
+    /// (9,28) at slot 83 lands with the stack 12 deep; retail keeps it
+    /// (life 7 held), the port reaped it. ⚠ NO FIXTURE HOME: the pair's
+    /// only dirty lane is the ungraded reap bit.
+    /// `MGC_NO_MC2_DEPTH_REFUSAL_KEEPS_FLYER` — run this test with it
+    /// set and both asserts on `0x400` fail (positive control).
+    #[test]
+    fn a_depth_refused_firestorm_or_tornado_keeps_the_flyer() {
+        // (payload model, action, free depth, byte_0x46_70): the
+        // firestorm (>= 26), the tornado (>= 12), the firefly summon
+        // ring (>= 8).
+        for (fm, act, depth, b46) in [(76u8, 29u8, 12usize, 0u8), (22, 27, 5, 1), (72, 26, 5, 19)] {
+            let mut g = flat_gen();
+            let ball = g.new_event().expect("ball slot");
+            {
+                let e = &mut g.ent[ball];
+                e.class64 = 9;
+                e.model65 = 28;
+                e.tick70 = act;
+                e.id24 = PLAYER_TARGET;
+                e.x = 40 * 256;
+                e.y = 40 * 256;
+                e.z = 400;
+                e.act_life = 7;
+                e.f68 = 10;
+                e.f69 = fm;
+                e.f71 = b46;
+                e.flags = 6;
+            }
+            while g.free.len() > depth {
+                g.new_event().expect("drain");
+            }
+            let (free_before, exhausted_before) = (g.free.len(), g.exhausted);
+
+            g.mc2_proj_impact(ball, 0, &ctx(), None);
+
+            assert_eq!(g.free.len(), free_before, "(10,{fm}): nothing allocated");
+            assert_eq!(g.exhausted, exhausted_before, "(10,{fm}): a depth refusal, not a dry pop");
+            assert_eq!(
+                g.ent[ball].flags & 0x400,
+                0,
+                "(10,{fm}) refused at depth {depth}: the flyer must SURVIVE \
+                 (sub_65C20 0x65EE6 je past the effect block / sub_65820 \
+                 `if (!v11x) return 0`)"
+            );
+            assert_eq!(g.ent[ball].act_life, 7, "(10,{fm}): life untouched");
+        }
     }
 
     /// ⭐⭐⭐ THE MAGIC MINE SWALLOWS ITS OWNER'S SPELL, AND THE WHOLE
