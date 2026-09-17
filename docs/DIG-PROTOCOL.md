@@ -105,6 +105,26 @@ measure freely. Then report to the main session:
   SAY SO EXPLICITLY and name every anchor.** That is an expected, fully acceptable outcome.
   ⚠⚠ `Gen` is `#[derive(Hash)]` — a bare new field moves EVERY golden; wrap it `HashSilent<T>`.
 
+- ⚠⚠ **THE PATCH IS A DIFF AGAINST YOUR OWN HAND-OUT SNAPSHOT, NEVER AGAINST THE LIVE MAIN TREE.**
+  Other digs land in the main tree while you work; a `diff` of your sandbox against it bakes the
+  INVERSE of their landings into your patch (round 148: one dig's patch silently deleted another's
+  freshly landed harness method and its test, and the build broke two landings later). Before
+  editing anything: `cp -a crates $TMPDIR/<digid>-base-crates && cp -a docs $TMPDIR/<digid>-base-docs`;
+  at the end `diff -ruN` those snapshots against your edited trees, paths normalised to
+  `a/crates/…` / `b/crates/…`. The main session applies with `git apply --3way`-style care and
+  reads every `-` line of a patch before trusting it.
+
+- ⚠ **A DIG THAT TOUCHES THE HARNESS'S GRADING (a gate, an importer seat, a recovery row) RUNS THE FIXTURE
+  SUITE, NOT JUST ITS BRIEFS.** Round 149: the tear-gate cadence law read byte-identical on both briefed
+  takes and then un-hid a real row inside an unrelated fixture's pair on a third (mc2l16 t=7903). `./conform
+  fixtures conformance/<level>.json` per manifest (the glob catches `known-deviations.json`).
+
+- ⚠ **REAP YOUR OWN BACKGROUND CHILDREN BEFORE YOU HAND BACK.** A replay or a polling loop you
+  started in the background outlives your report: round 148 left one `mgc-conform replay` spinning
+  at 100% CPU for 49 minutes on a slice (from a sandbox already deleted) and one `until … sleep 5`
+  loop waiting for a file that would never appear. Before the final message: `ps -eo pid,args |
+  grep <digid>`, kill by PID, and put temporaries under the scratchpad, never bare `/tmp`.
+
 ## WRITE YOUR BRIEF'S HYPOTHESIS OFF IF IT IS WRONG
 **All three of the main session's round-137 hypotheses were refuted by the digs, correctly.**
 The value handed to you is the **witness shape** — which pair, which slot, which fields, which

@@ -399,6 +399,51 @@ by an all-2 pair — ~30% of mc2l0's pairs. The runner applies this
 gate from the raw states (`mgc-conform`'s `capture_clean_mc2`);
 recorder-side emit gating for MC2 is still open work.
 
+### The PER-SLOT gate's cadence law (round 149)
+
+`capture_clean_mc2` gates whole PAIRS; `verify_mc2::torn_slots` then
+drops individual slots inside an accepted pair. Until round 149 the
+per-slot test was the bare `phase3e delta == 1`, which contradicted
+the pair-level test above in two ways and hid **82%** of mc2l24's
+exclusions on ONE species:
+
+1. **A null-dispatch row never bumps.** `UpdateEntities_57730`
+   (NETHERW.EXE file 0x7BF30) bumps `byte_0x3E_62` only inside the arm
+   that ran a handler (`cmp %cx,%dx` on `row.word_4`, `cmpl $0,0xa(%eax)`
+   on `row.dword_10`, then `call *0x6(%eax)` and `inc`). A record parked
+   in a row with `address_6 == 0 && dword_10 == 0` HOLDS its phase byte
+   for life. Measured on mc2l24: `(5,27)` act 0xEA held on 1,591,335 of
+   1,591,470 consecutive-tick pairs, `(10,75)` act 0x52 on 28,006 of
+   28,006, `(10,77)` act 0x54 on 49,875 of 49,883.
+2. **A birth re-seeds it.** `byte_0x3E_62 = D41A0_0.array_0x10[model]++`
+   (the per-model spawn ordinal — it is in the recording, as
+   `RetailMc2::spawn_ord`). This is the same "ambient spawn CHURN" the
+   MC1/HW paragraph above already names; the MC2 per-slot gate simply
+   never got it. A capture tear shifts a slot by at most one dispatch
+   per side, so `{-1, 0, +1, +2}` is the whole tear-reachable set;
+   mc2l24's `(10,0)` `-10 x51,753 / -9 x15,966` family is a re-seed.
+   The DIRECT witness of a re-allocation is retail's own `life_0x8`:
+   it counts DOWN under the handler (class 9 action 0x0E is
+   `sub_67410`//248410, literally `life--; if (old < 0) retire`), so a
+   life that ROSE cannot be the same instance. Cross-tabulated on the
+   whole mc2l24 take for the `(9,9)` spark: all 278,523 `+1` pairs
+   have life falling, and 179,457 of the 180,248 non-`+1` pairs have
+   life rising.
+
+Both narrowings are on by default. `MGC_TEAR_LEGACY=1` restores the
+bare `!= 1` test, `MGC_TEAR_NO_RESEED=1` disarms (2) alone.
+
+Measured round 149 (whole takes, raw shadow):
+
+| take   | arm                | tear-gate hidden | RAW SHADOW           | graded |
+|--------|--------------------|------------------|----------------------|--------|
+| mc2l24 | `MGC_TEAR_LEGACY`  |        1,936,794 | 980 (4 lanes)        | 10 seg |
+| mc2l24 | cadence law        |        **3,309** | 980 (same 4 lanes)   | 10 seg |
+| mc2l22 | `MGC_TEAR_LEGACY`  |        2,298,158 | 1,307 (3 lanes)      |  4 seg |
+| mc2l22 | cadence law        |       **12,472** | 1,308 (+1, old lane) |  4 seg |
+
+`--segmented --brief` is byte-identical on both takes in both arms.
+
 The FIRST record has no pair to gate it, so recorders MUST NOT write
 it unvetted (a mid-tick anchor rejects every later pair against it and
 starves the stream): hold the candidate and flush it only once the

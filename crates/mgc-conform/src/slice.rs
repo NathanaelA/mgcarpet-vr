@@ -26,6 +26,31 @@
 //! PERF-CONFORM.md): a run seeded at its first record cannot see a
 //! divergence born before it. Cut from the free-run horizon, not from
 //! the head — and if a dig needs earlier context, cut a wider one.
+//!
+//! ⛔ **"THE RE-BASE PUTS THE SLICE ON A DIFFERENT TERRAIN BASELINE" —
+//! REFUTED, round 149.** The worry was that a take whose terrain is
+//! MEASURED from record 0 would replay a slice against record 0's
+//! planes, so a terrain-gated head could appear or vanish. It cannot:
+//! [`TerrainImage::base_blob`] returns `self.planes.concat()`, the
+//! LIVE accumulated image — every delta up to AND INCLUDING the cut
+//! record is folded in above before it is read — so the slice's first
+//! record carries exactly the planes the full take's reader holds at
+//! that tick. If no base has been seen the cutter REFUSES rather than
+//! writing an unanchored blob.
+//!
+//! Measured, not asserted (mc2l24, certified, `--from 30000 --to
+//! 32000`): `dump-state --port 32000 1 2 3 4 5 6 --start 30000` on the
+//! SLICE and on the FULL TAKE are byte-identical over 557 lines — a
+//! 2,000-tick free run, so any plane difference at the anchor would
+//! have shown — and `replay --segmented --brief` on the slice reads
+//! `devs=0 graded=2000 clean=2000`.
+//!
+//! What a slice really changes is the **ANCHOR**, not the terrain: the
+//! port free-runs from retail's state at `t0` instead of from its own
+//! accumulated state there, and `--segmented` has fewer re-anchors to
+//! spend. Same take, same window, measured: whole-take `mc2l24` is
+//! `devs=0 horizon=END`, while `--start 30000` is `devs=2
+//! horizon=35680`. Attribute that to the anchor, never to the planes.
 use crate::Args;
 use mgc_formats::mgcr::{Recording, RecordingWriter, TerrainImage, TickRecord, b64_encode};
 

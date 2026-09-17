@@ -82,6 +82,48 @@ pub(crate) fn no_mc2_fall_puff_pred_axis() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FALL_PUFF_PRED_AXIS").is_some())
 }
 
+/// ⭐⭐⭐ **THE DEATH-FALL PUFF'S ALTITUDE IS THE MOVER'S OUTPUT, AND A
+/// PINNED PAIR MUST RECONSTRUCT IT — `settled − word_0x2C_44`.**
+///
+/// `sub_5E310` (shipped `NETHERW.EXE` file 0x82B10 = VA 0x5E310 +
+/// 0x24800) runs the mover, then the gravity leg, then the ctor:
+/// ```text
+///   82b1d: e8 0e f2 ff ff  call 0x81d30   ; sub_5D530 -> predictedAxis = position
+///   82b6e: 66 8b 43 2c     mov  ax,[ebx+0x2c]   ; the accumulator, PRE
+///   82b72: 66 8b 53 50     mov  dx,[ebx+0x50]   ; z  (= position+4)
+///   82b76: 66 8b 4b 2c     mov  cx,[ebx+0x2c]
+///   82b7a: 01 c2           add  edx,eax         ; ⭐ z += the PRE accumulator
+///   82b7c: 83 e9 02        sub  ecx,0x2         ; …and only THEN -2
+///   82b7f: 66 89 53 50     mov  [ebx+0x50],dx   ; the settled z
+///   82b86: 66 89 4b 2c     mov  [ebx+0x2c],cx
+///   82b8a: 3d 00 ff ff ff / 7d 06 / 66 c7 43 2c 00 ff   ; clamp low -256
+///   82b97: 66 83 7b 2c 00 / 7e 06 / 66 c7 43 2c 00 00   ; clamp high 0
+///   82bc9: …             ; floor: z = getTerrainAlt(position) + row clearance
+///   82bd9: 6a 01 / 6a 0a / 68 98 b3 01 00 / e8 …        ; ctor AT predictedAxis
+/// ```
+/// So the puff's z is the position `sub_5D530` published — the
+/// carpet's POST-MOVE, PRE-GRAVITY z — and the record's own z is that
+/// value plus the PRE accumulator (`add` reads `[ebx+0x2c]` BEFORE the
+/// `sub $0x2`). The port captures it off the mover in
+/// [`crate::engine::world::World::fall_pre_z`]; on the CONFORMANCE
+/// PINNED-PAIR path the mover never runs, the capture is `None`, and
+/// the arm fell back to the settled pose — one gravity step low, and
+/// growing by 2 every tick of the fall.
+///
+/// MC1's twin already reconstructed it (`mc1_mortality_pass`,
+/// `player.z.wrapping_sub(applied)`); MC2's never did. ⭐⭐⭐ ONE
+/// LADDER, TWO COPIES, ONE WRONG.
+///
+/// WITNESS mc2l16, the human's final crash dive t=7890..7919: retail's
+/// (10,1)/(10,0) newborns are minted at `settled + |f2c|` on EVERY
+/// pair — 98, 100, 102 … 130, an exact +2 ladder that is `word_0x2C_44`
+/// read straight off the recorded carpet. `MGC_NO_MC2_FALL_PUFF_PINNED_PRE_Z=1`
+/// restores the pre-dig fallback (the settled pose).
+pub(crate) fn no_mc2_fall_puff_pinned_pre_z() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FALL_PUFF_PINNED_PRE_Z").is_some())
+}
+
 /// ⭐⭐⭐ A/B toggle for **THE m15 WANDER'S UNCONDITIONAL AXIS SEED**:
 /// set `MGC_NO_MC2_M15_WANDER_PRED_AXIS` to restore the pre-dig port,
 /// which published [`Gen::mc2_pred_axis`] only when the wander
@@ -89,6 +131,48 @@ pub(crate) fn no_mc2_fall_puff_pred_axis() -> bool {
 pub(crate) fn no_mc2_m15_wander_pred_axis() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M15_WANDER_PRED_AXIS").is_some())
+}
+
+/// ⭐⭐⭐ A/B toggle for **THE m15 GUARD'S AIM-BEFORE-LIFE-TEST**: set
+/// `MGC_NO_MC2_M15_AIM_BEFORE_LIFE_TEST=1` to restore the pre-dig port,
+/// which resolved the target through [`Gen::mc2_target`] and took the
+/// `None` (dead / reap-flagged) early return BEFORE the aim.
+///
+/// ⭐ "AN `if let Some` THAT RETAIL'S LOOP SIMPLY DOES NOT HAVE" —
+/// `sub_23E60` (banner `//----- (00023E60)`) resolves the target slot
+/// RAW and writes the committed heading first, and only then asks
+/// whether the target is still alive:
+///
+/// ```c
+///   v6x = Entities_EA3E4[a1x->word_0x96_150];
+///   if (!(a1x->byte_0x3E_62 & 3))
+///       a1x->roll_0x20_32 = sub_581E0_maybe_tan2(&a1x->position, &v6x->position);
+///   if (v6x->life_0x8 < 0 || v6x->struct_byte_0xc_12_15.byte[1] & 4)
+///   {
+///       a1x->actionIndex_0x45_69 = 121;
+///       goto LABEL_26;
+///   }
+/// ```
+///
+/// There is no `> Entities_EA3E4[0]` guard on the aim either, so slot 0
+/// aims at the null record — [`Gen::mc2_target_raw`] reproduces that.
+/// The port took `mc2_target`'s baked-in life test as the gate for BOTH
+/// and so skipped the last bearing on the tick a guard's target dies.
+///
+/// WITNESS mc2l12 t=1579 → 1580: a (3,1) at slot 178 dies (life 1424 →
+/// −276) and three (9,x) targets convert to (10,0) in the same tick.
+/// Seven (5,15) guards leave state 122 for 121; the three whose
+/// `byte_0x3E_62 & 3 == 0` (slots 706 phase 116, 785 phase 124, 975
+/// phase 24) take retail's parting aim — `roll` 968 → 959, 877 → 881,
+/// 437 → 544 — and the four whose phase is 1/2 (339, 349, 370, 858) do
+/// not, exactly as the `& 3` gate says. The port left all seven
+/// unchanged, and free run then carries the three stale bearings to the
+/// end of the take: `(5,15) roll` 34,306 rows on mc2l12 alone, 66,236
+/// over seven takes (mc2l4-new 18,428 from t=7250, mc2l17 4,480,
+/// mc2l22 3,681, mc2l8 2,820, mc2l22-new 2,449, mc2l16 72).
+pub(crate) fn no_mc2_m15_aim_before_life_test() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M15_AIM_BEFORE_LIFE_TEST").is_some())
 }
 
 const M2_BASE: u8 = 16;
@@ -224,6 +308,19 @@ pub(crate) fn no_summon_nodes() -> bool {
 pub(crate) fn no_summon_head_bearing() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_SUMMON_HEAD_BEARING").is_some())
+}
+/// A/B toggle for the SUMMON-RING HEAD **VICTIM LOCK** law: set
+/// `MGC_NO_SUMMON_HEAD_VICTIM` to restore the pre-dig behaviour, where
+/// the `(10,72)` ring head kept `word_0x96_150 = 0`. It is the line
+/// two statements below the bearing pair in the very same tail, and it
+/// is the one stamp of that tail that is CONDITIONAL:
+/// `if (v5x) v11x->word_0x96_150 = v5x - D41A0_0.struct_0x6E8E;`
+/// (`sub_65820`, banner `00065820`) — `v5x` is `sub_10780`'s
+/// collision victim, so a landing on TERRAIN leaves the lane at zero.
+/// See [`World::mc2_summon_head_bearing`] for the witness.
+pub(crate) fn no_summon_head_victim() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_SUMMON_HEAD_VICTIM").is_some())
 }
 /// `MGC_NO_MC2_M23_LOCK_TESTS=1` restores the pre-dig m23 (dweller)
 /// mana-node LOCK re-check, which carried an INVENTED action test
@@ -416,6 +513,25 @@ pub(crate) fn wanted_any_wizard() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_WANTED_ANY_WIZARD").is_none())
 }
+
+/// A/B toggle for THE TOWNIE HEAD'S ARM BEING THE HIT ARM ONLY: set
+/// `MGC_NO_MC2_HEAD_WANTED_HIT_ONLY=1` to restore the pre-dig port,
+/// which armed on a LETHAL head too, off `word_0x24_36`.
+///
+/// Retail's five copies of this head all nest the arm one level deep:
+/// `if (v1 >= 1) { if (v1 <= 1) { v6x = Entities_EA3E4[a1x->
+/// word_0x26_38]; if (v6x > Entities_EA3E4[0] && (!v6x->model_0x40_64
+/// || v6x->model_0x40_64 == 1)) …word_0x248_584 = 200; …} else if
+/// (v1 == 2) {…} }` — `sub_22C80` (banner `//----- (00022C80)`,
+/// EF:14180-91) and its siblings `sub_22E60` / `sub_23020` /
+/// `sub_23340` / `sub_237B0`. The lethal fork's own credit comes one
+/// state later, from `sub_23200` (EF:14459) / `sub_23B30` (EF:14933),
+/// which the port already models.
+pub(crate) fn no_mc2_head_wanted_hit_only() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HEAD_WANTED_HIT_ONLY").is_some())
+}
+
 /// A/B toggle for THE TANK'S HIT LATCHES ITS ATTACKER AS ITS TARGET:
 /// set `MGC_NO_M18_HIT_TARGET_LATCH=1` to restore the pre-dig
 /// behaviour, where a damaged m18 kept whatever `word_0x96_150` it
@@ -511,9 +627,32 @@ const M28_BASE: u8 = 224;
 /// landed on the citation, not on a moved number.
 ///
 /// `MGC_NO_MC2_CLASS5_W36=1` restores the old behaviour.
+/// A/B toggle for RETAIL ASKS THE SPHERE CHAIN, THE PORT ASKED THE
+/// POOL: set `MGC_NO_MC2_M23_NODE_CHAIN` to restore the pre-dig pool
+/// scan (plus its two invented guards) in [`Gen::m23_find_node`].
+/// `sub_28000` (EF:18401) walks `dword_38523` with `model == 39` as
+/// its only test, so a chain SEVERED by a mid-tick allocation hides
+/// every member past the seized slot. Ledger ROUND 149 dig w149f.
+fn no_mc2_m23_node_chain() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M23_NODE_CHAIN").is_some())
+}
+
 pub(crate) fn mc2_class5_w36_legacy() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CLASS5_W36").is_some())
+}
+
+/// A/B toggle for THE m20 COMMIT TEST READS THE TICK-TOP LOCK: set
+/// `MGC_NO_MC2_M20_TARGET_HOIST` to restore the pre-dig behaviour,
+/// where [`Gen::m20_tick`]'s state-162 arm re-read `word_0x96_150`
+/// AFTER `sub_1C310` and so decided the melee commit against the
+/// target the damaged arm had just retargeted it onto. Retail keeps
+/// `v1x` in `%esi` across the call (`NETHERW.EXE` 0x4a64d/0x4a65c →
+/// 0x4a6c2, EF:16677/16691-94). Ledger ROUND 149 dig w149f.
+fn no_mc2_m20_target_hoist() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M20_TARGET_HOIST").is_some())
 }
 
 impl Gen {
@@ -1448,8 +1587,23 @@ impl Gen {
     /// head code.
     fn mc2_head_wanted(&mut self, i: usize) -> u8 {
         let v = self.mc2_state_head(i);
-        if v != 0 {
-            let src = if v == 2 {
+        // ⭐⭐ THE ARM IS THE **HIT** ARM ONLY. All five siblings that
+        // carry this head nest it `if (v1 >= 1) { if (v1 <= 1) { …arm…;
+        // word_0x96_150 = word_0x26_38; action = 102 } else if (v1 == 2)
+        // { action = 100 } }` — `sub_22C80` EF:14180-91, `sub_22E60`
+        // EF:14283-94, `sub_23020` EF:14388-99, `sub_23340` EF:14573-84,
+        // `sub_237B0` EF:14800-11 — so a LETHAL head (v == 2) arms
+        // NOTHING here; the kill credit is the death action's own
+        // `word_0x24_36` arm one state later (`sub_23200` EF:14459,
+        // `sub_23B30` EF:14933), which the port already carries. And
+        // the source is always `word_0x26_38` (port `f40`), never the
+        // `word_0x24_36` (`f38`) the lethal fork had just stamped. See
+        // [`no_mc2_head_wanted_hit_only`]. Witness: mc2l19 t=13663, the
+        // port re-arms the human's 196 to 200 on an m12's fatal head
+        // where retail leaves the countdown alone.
+        let hit_only = !no_mc2_head_wanted_hit_only();
+        if if hit_only { v == 1 } else { v != 0 } {
+            let src = if v == 2 && !hit_only {
                 self.ent[i].f38
             } else {
                 self.ent[i].f40
@@ -2563,10 +2717,22 @@ impl Gen {
             2 => self.ent[i].tick70 = M15_BASE + 4,
             _ => {
                 let slot = self.ent[i].f146;
+                // ⭐⭐⭐ RETAIL AIMS FIRST AND TESTS THE TARGET SECOND
+                // — see [`no_mc2_m15_aim_before_life_test`] for the
+                // decompile and the mc2l12 t=1580 witness. The raw
+                // resolve is retail's own `Entities_EA3E4[word_0x96]`
+                // with no life test and no `> Entities[0]` guard.
+                let aim_tick = self.ent[i].f63 & 3 == 0;
+                if aim_tick && !no_mc2_m15_aim_before_life_test() {
+                    if let Some((tx, ty, _)) = self.mc2_target_raw(slot, ctx) {
+                        let e = &self.ent[i];
+                        self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+                    }
+                }
                 match self.mc2_target(slot, ctx) {
                     None => self.ent[i].tick70 = M15_BASE + 1, // dead/draw-off (:15138-42)
                     Some((tx, ty, tz)) => {
-                        if self.ent[i].f63 & 3 == 0 {
+                        if aim_tick && no_mc2_m15_aim_before_life_test() {
                             let e = &self.ent[i];
                             // ⚠ EF:15135-36 writes `roll_0x20_32` —
                             // the COMMITTED heading (`f34`), NOT yaw.
@@ -2717,7 +2883,40 @@ impl Gen {
     /// life. Free-run witness (`dump-state --port --start 20563`,
     /// mc2l6-rsg t=20564 slot 81): the ONLY two `!=` lanes in the
     /// whole record are `yaw` and `pitch`.
-    pub(crate) fn mc2_summon_head_bearing(&mut self, head: Option<usize>, yaw: u16, pitch: u16) {
+    /// ⭐⭐⭐ …AND THE STAMP TWO LINES DOWN IS THE VICTIM LOCK.
+    /// `sub_65820`'s tail (banner `00065820`) is, verbatim and in
+    /// order:
+    /// ```text
+    ///   v11x->id_0x1A_26    = a1x->id_0x1A_26;
+    ///   v11x->yaw_0x1C_28   = a1x->yaw_0x1C_28;
+    ///   v11x->pitch_0x1E_30 = a1x->pitch_0x1E_30;
+    ///   if (v5x)
+    ///       v11x->word_0x96_150 = v5x - D41A0_0.struct_0x6E8E;
+    ///   v11x->subSpellIndex_0x2A_42 = a1x->subSpellIndex_0x2A_42;
+    ///   v11x->byte_0x46_70          = a1x->byte_0x46_70;
+    /// ```
+    /// `v5x` is `sub_10780(a1x)` — THE COLLISION VICTIM, not the
+    /// caster and not the flyer's own `word_0x96_150`; a landing on
+    /// terrain or a life expiry leaves `v5x` NULL and the lane
+    /// untouched, which is why the port's zero was right on most
+    /// summons and wrong on a creature hit.
+    ///
+    /// WITNESS mc2l0-spells-galore t=36894 (`explain … 36894 629 85`):
+    /// the human at slot 152 lands a summon on the (5,3) at slot 85
+    /// and retail borns TWO `(10,72)` nodes in the one tick — head 629
+    /// (`word_0x34_52 = 622`) and node 622 (`word_0x32_50 = 629`).
+    /// Head 629 takes `target96 595 → 85`; node 622, a `qmemcpy` of
+    /// the head made INSIDE `sub_51800` before the tail ran, takes
+    /// `target96 439 → 0`. Exactly the head, exactly the victim.
+    /// Census: `(10,72) target96` 18 rows t=36894..36911 slot 629,
+    /// retail 85 / port 0. Kill switch `MGC_NO_SUMMON_HEAD_VICTIM`.
+    pub(crate) fn mc2_summon_head_bearing(
+        &mut self,
+        head: Option<usize>,
+        yaw: u16,
+        pitch: u16,
+        victim: u16,
+    ) {
         if no_summon_head_bearing() {
             return;
         }
@@ -2725,6 +2924,12 @@ impl Gen {
             let e = &mut self.ent[h];
             e.f30 = yaw; // yaw_0x1C_28   (EF:62989)
             e.f32 = pitch; // pitch_0x1E_30 (EF:62990)
+            // `if (v5x)` — the victim probe's result, NOT a slot-0 test
+            // on a field: with no entity struck the lane keeps whatever
+            // `NewEvent_4A050`'s memset left, which is zero.
+            if victim != 0 && !no_summon_head_victim() {
+                e.f146 = victim; // word_0x96_150
+            }
         }
     }
 
@@ -4121,7 +4326,10 @@ impl Gen {
                 // damaged path and never looks at the target. The
                 // port bailed to 161 with speed 32, and left the 160
                 // damage sitting unconsumed in the inbox.
-                if !self.mc2_target_ptr(self.ent[i].f146) {
+                // `v1x`, latched ONCE on sub_25E40's first line and
+                // used by both the head test and the commit test.
+                let t0 = self.ent[i].f146;
+                if !self.mc2_target_ptr(t0) {
                     self.ent[i].tick70 = M20_BASE + 1;
                     self.ent[i].f126 = self.ent[i].f128;
                     return;
@@ -4147,7 +4355,49 @@ impl Gen {
                         // held 0 through the whole window, and the
                         // rush doubled slot 145's speed to 64 at 1295.
                         let hit = self.mc2_chase_attack(i, M20_BASE, ctx, Self::mc2_atk_lob21);
-                        let t = self.ent[i].f146;
+                        // ⭐⭐⭐ THE COMMIT TEST READS THE TARGET RETAIL
+                        // LATCHED AT THE TOP OF THE TICK, NOT THE ONE
+                        // THE CHASE JUST RE-AIMED AT. `sub_25E40`
+                        // hoists `v1x = Entities_EA3E4[word_0x96_150]`
+                        // into a CALLEE-SAVED register on its first
+                        // lines (EF:16677). Shipped `NETHERW.EXE`
+                        // (sub_25E40 = file 0x4a640):
+                        //   4a64d  mov 0x96(%ebx),%si      ; the lock
+                        //   4a65c  mov 0x1a3e4(,%esi,4),%esi ; v1x
+                        //   4a6bd  call 0x40b10            ; sub_1C310
+                        //   4a6c2  mov 0x3f(%esi),%dl      ; SAME %esi
+                        //   4a6c8  cmp $0x3,%dl
+                        //   4a6cd  cmpb $0x0,0x40(%esi)
+                        //   4a6d3  mov 0xa4(%esi),%eax
+                        //   4a6d9  cmpb $0x0,0x14e(%eax)   ; mobilize
+                        // — %esi is never reloaded across the call
+                        // — `sub_1C310` has meanwhile written
+                        // `word_0x96_150 = word_0x26_38` on its DAMAGED
+                        // arm (EF:9347), so a creature that is being
+                        // hit re-aims at its attacker and retail still
+                        // decides the commit against the OLD lock.
+                        // The port re-read `f146` after the call and so
+                        // took the wizard arm — `mobilizeCounter != 0`,
+                        // which is almost always true — on the very
+                        // tick the damaged arm had just retargeted it
+                        // ONTO the human. WITNESS mc2l10 t=688 slot 166
+                        // (`(5,20)`, dying under the human's fire): the
+                        // tick-top lock is slot 53, a `(10,0)` burst,
+                        // so retail's arm is `v3 == 0` and `sub_1C310`
+                        // returned 0 without ever reaching the attack
+                        // (damaged ⇒ `v4 = 1`); it leaves
+                        // `byte_0x46_70` at 0. The port saw the
+                        // freshly-written 169 — the human — committed
+                        // the melee rush a tick early and carried
+                        // `byte_0x46_70` 1/2 and `dword_0x10_16` 31
+                        // against retail's 0/0 for the record's last
+                        // five ticks. `MGC_NO_MC2_M20_TARGET_HOIST=1`
+                        // restores the post-call read.
+                        let t = if no_mc2_m20_target_hoist() {
+                            self.ent[i].f146
+                        } else {
+                            t0
+                        };
                         let wizard = t == PLAYER_TARGET
                             || (t != 0
                                 && (t as usize) < self.ent.len()
@@ -4790,15 +5040,62 @@ impl Gen {
     /// excess reset** (7537 → 7538 segments). ⇒ **THE FIX IS THE LIST,
     /// NOT THE GUARDS: port the class-10 live chain first.** Round 68's
     /// banked form — RETAIL ASKS THE CHAIN, THE PORT ASKED THE POOL.
+    ///
+    /// ⭐⭐⭐ **THE BANKED FORM IS NOW LANDED — THE LIST WAS THE FIX.**
+    /// `sub_28000` (EF:18401-18427) is
+    /// ```text
+    ///   v1 = -1; v2x = 0;
+    ///   v3x = dword_38523;               // the SPHERE chain head
+    ///   if (v3x <= Entities[0]) return 0;
+    ///   do { if (v3x->model_0x40_64 == 39) {
+    ///            v5 = EuclideanDistXY_584D0(a1x, v3x);   // raw dist2
+    ///            if (v5 < v1) { v2x = v3x; v1 = v5; } }
+    ///        v3x = v3x->next_0;
+    ///   } while (v3x > Entities[0]);
+    /// ```
+    /// — `model == 39` is its ONLY test. No class, no life, no reap,
+    /// no action: membership of the tick-top chain IS the filter, and
+    /// so is the SEVERANCE. `next_0` is the allocator's own field, so
+    /// `NewEvent_4A050`'s `memset` of a seized record zeroes the link
+    /// and every member past it is unreachable for the rest of the
+    /// frame ([`Gen::new_event`]'s `ball_chain.cut`, already modelled).
+    /// WITNESS mc2l24-crazy t=52359 slot 302, a `(5,23)` leviathan
+    /// minted at 52358 and dead on its second tick. Reconstructing
+    /// retail's own `next_0` pointers out of the capture (base
+    /// `Entities[0]` = 3526342, stride 168) the 192-member sphere
+    /// chain reads as THREE runs — 5..189, 194..246, 247..758 — because
+    /// slots 189 and 246 were both seized during t=52359 and their
+    /// `next_0` reads a literal **0**, not `Entities[0]`. At 302's
+    /// dispatch only 246 had been taken, so retail's walk is
+    /// 5..=246: the nearest model-39 inside it is **238** (d² =
+    /// 3,439,705) and retail locks that. The port's pool scan saw the
+    /// whole map and locked **357** (d² = 2,092,313, 40 members past
+    /// the cut) — four rows of `(5,23) target96` until the slot
+    /// recycled at t=52363.
+    /// `MGC_NO_MC2_M23_NODE_CHAIN=1` restores the pool scan.
     fn m23_find_node(&self, i: usize) -> Option<u16> {
         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
         let mut best: Option<(usize, i32)> = None;
-        for (j, c) in self.ent.iter().enumerate().skip(1) {
-            if c.class64 == 10 && c.model65 == 39 && c.tick70 != 62 && c.flags & 0x400 == 0 {
-                let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
-                if best_d2(&best, d2) {
-                    best = Some((j, d2));
+        if no_mc2_m23_node_chain() {
+            for (j, c) in self.ent.iter().enumerate().skip(1) {
+                if c.class64 == 10 && c.model65 == 39 && c.tick70 != 62 && c.flags & 0x400 == 0 {
+                    let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                    if best_d2(&best, d2) {
+                        best = Some((j, d2));
+                    }
                 }
+            }
+            return best.map(|(j, _)| j as u16);
+        }
+        for k in 0..self.ball_chain.visible_len() {
+            let j = self.ball_chain.list[k] as usize;
+            if self.ent[j].model65 != 39 {
+                continue;
+            }
+            let (cx, cy) = (self.ent[j].x, self.ent[j].y);
+            let d2 = Self::dist2_sq(ex, ey, cx, cy);
+            if best_d2(&best, d2) {
+                best = Some((j, d2));
             }
         }
         best.map(|(j, _)| j as u16)
@@ -5852,8 +6149,34 @@ impl Gen {
             }
             _ => {}
         }
-        if v2 == 1 {
-            // Damage retarget: the brain hunts the ATTACKER's castle.
+        // ⭐⭐⭐ THERE IS NO DAMAGE RETARGET HERE — IT WAS A REUSED
+        // LOCAL READ AS THE DAMAGE VERDICT. The port carried
+        // `if v2 == 1 { f38 = f40 }` ("the brain hunts the ATTACKER's
+        // castle") off remc2's `if (v2 == 1)` at EF:19039 — but the
+        // statement one line ABOVE it is
+        // `v2 = sub_104D0_terrain_tile_is_water(&a1x->position)`
+        // (EF:19038), so that `v2` is the WATER-TILE verdict feeding
+        // the sprite swap, not `mc2_state_head`'s hit/dead code. The
+        // whole of `sub_28860` (EF:18839-19073) contains exactly ONE
+        // `word_0x24_36 =`, at EF:18904, inside `if (life_0x8 < 0)` —
+        // the death latch the port already runs in
+        // [`Gen::mc2_state_head`].
+        // BYTE-VERIFIED: scanning `sub_28860`'s whole body in the
+        // shipped `NETHERW.EXE` (file 0x4D060 onward) for every
+        // `mov [reg+0x24],r16` / `movw [reg+0x24],imm16` finds ONE, at
+        // file 0x4D0FD, and its three preceding instructions are
+        // `83 7b 08 00  cmpl $0x0,0x8(%ebx)` / `7d 0d  jge` /
+        // `66 8b 43 26  mov ax,[ebx+0x26]` — the death arm, nothing
+        // else. `@0x24` is otherwise READ-ONLY in this brain (case 3's
+        // castle-owner test at EF:18943-18951).
+        // WITNESS mc2l22 slot 934: retail holds `f24` at **530** for
+        // the whole flight while the port stamped the attacker 584 on
+        // every mailed tick from t=4738 — 1,952 rows over 4 slots, and
+        // 1,962 corpus-wide on `(5,25) f24`. The two records agree on
+        // 530 right up to the invented write, so dropping it restores
+        // the match rather than trading one stale value for another.
+        // `MGC_NO_M25_HIT_RETARGET_ABSENCE=1` restores the stamp.
+        if v2 == 1 && crate::mc2::effects::no_m25_hit_retarget_absence() {
             self.ent[i].f38 = self.ent[i].f40;
         }
         // Wander + move (:19018-25).
@@ -6524,6 +6847,128 @@ mod tests {
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
     }
 
+    fn w149f_gen() -> Gen {
+        m14_flat_gen()
+    }
+
+    /// ⭐⭐⭐ **THE m20 COMMIT TEST READS THE TICK-TOP LOCK.**
+    /// `sub_25E40` latches `v1x = Entities_EA3E4[word_0x96_150]` into
+    /// `%esi` on its first lines and still tests THAT pointer after
+    /// `sub_1C310` has returned (`NETHERW.EXE` 0x4a64d / 0x4a65c ->
+    /// 0x4a6c2 `mov 0x3f(%esi),%dl`, 0x4a6cd `cmpb $0x0,0x40(%esi)`,
+    /// EF:16677/16691-94). `sub_1C310`'s DAMAGED arm meanwhile writes
+    /// `word_0x96_150 = word_0x26_38` (EF:9347), so a creature under
+    /// fire re-aims at its attacker and retail STILL decides the melee
+    /// commit against the lock it entered the tick with.
+    ///
+    /// Fixture: the m20 holds a `(10,0)` lock and takes a letter from
+    /// the human in the same tick. Retail's arm is `v3 == 0` — and
+    /// `sub_1C310` returned 0 without reaching the attack at all — so
+    /// `byte_0x46_70` stays 0. Reading `f146` after the call instead
+    /// finds the human, takes the `mobilizeCounter` arm and commits.
+    /// WITNESS mc2l10 t=688 slot 166 (`b46` retail 0 / port 1, and
+    /// `dword_0x10_16` 0 / 31 behind it, five ticks).
+    /// `MGC_NO_MC2_M20_TARGET_HOIST=1` reverts and this test fails.
+    #[test]
+    fn a_damaged_m20_commits_against_the_lock_it_entered_the_tick_with() {
+        let mut g = w149f_gen();
+        let old = g.new_event().expect("old lock");
+        {
+            let e = &mut g.ent[old];
+            e.class64 = 10;
+            e.model65 = 0;
+            e.act_life = 8;
+        }
+        let m = g.new_event().expect("m20");
+        {
+            let e = &mut g.ent[m];
+            e.class64 = 5;
+            e.model65 = 20;
+            e.tick70 = super::M20_BASE + 2;
+            e.f71 = 0;
+            e.f126 = 32;
+            e.f128 = 32;
+            e.act_life = 5000;
+            e.max_life = 5500;
+            e.row156 = 89;
+            e.f146 = old as u16;
+            // The letter that sends `sub_1C310` down its damaged arm:
+            // zero damage, so `v4` is 1 and not 2.
+            e.mail[0] = (0, crate::mc1::mobs::PLAYER_TARGET);
+        }
+        // A non-zero mobilize counter is what the WIZARD arm would
+        // commit on — it must never be consulted here.
+        g.mc2_mobilize.0 = 1;
+        g.m20_tick(m, &m14_ctx());
+        assert_eq!(
+            g.ent[m].f146,
+            crate::mc1::mobs::PLAYER_TARGET,
+            "the damaged arm DID retarget onto the attacker"
+        );
+        assert_eq!(
+            g.ent[m].f71, 0,
+            "…and the commit still reads the (10,0) it entered with"
+        );
+    }
+
+    /// ⭐⭐⭐ **RETAIL ASKS THE SPHERE CHAIN, THE PORT ASKED THE POOL.**
+    /// `sub_28000` (EF:18401-27) walks `dword_38523` from its tick-top
+    /// head through `next_0` and tests `model_0x40_64 == 39` and
+    /// nothing else. `next_0` is the allocator's own link, so a slot
+    /// seized mid-tick has it memset to 0 and the walk STOPS there —
+    /// [`crate::engine::features::Gen::new_event`] already models that
+    /// as `ball_chain.cut`.
+    ///
+    /// Fixture: the nearest sphere sits PAST the cut, a farther one
+    /// before it. Retail locks the farther one.
+    /// WITNESS mc2l24-crazy t=52359 slot 302: retail 238 (d² 3,439,705),
+    /// the port 357 (d² 2,092,313, 40 members past the severance).
+    /// `MGC_NO_MC2_M23_NODE_CHAIN=1` reverts and this test fails.
+    #[test]
+    fn the_leviathan_node_pick_stops_at_a_severed_sphere_chain() {
+        let mut g = w149f_gen();
+        let lev = g.new_event().expect("leviathan");
+        {
+            let e = &mut g.ent[lev];
+            e.class64 = 5;
+            e.model65 = 23;
+            e.x = 40 << 8;
+            e.y = 40 << 8;
+        }
+        let far = g.new_event().expect("far sphere");
+        {
+            let e = &mut g.ent[far];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.x = 50 << 8;
+            e.y = 40 << 8;
+        }
+        let near = g.new_event().expect("near sphere");
+        {
+            let e = &mut g.ent[near];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.x = 41 << 8;
+            e.y = 40 << 8;
+        }
+        g.ball_chain.list = vec![far as u16, near as u16];
+        g.ball_chain.cut = usize::MAX;
+        assert_eq!(
+            g.m23_find_node(lev),
+            Some(near as u16),
+            "with the chain whole the nearer sphere wins"
+        );
+        // The severance: the slot that used to sit at position 1 was
+        // seized this tick, so its `next_0` — and everything the walk
+        // would reach through it — is gone.
+        g.ball_chain.cut = 1;
+        assert_eq!(
+            g.m23_find_node(lev),
+            Some(far as u16),
+            "past the cut the near sphere is unreachable"
+        );
+    }
+
     fn m14_ctx() -> MobCtx {
         MobCtx {
             px: 0,
@@ -6637,6 +7082,70 @@ mod tests {
         assert_eq!(
             g.ent[t].rand, rng_before,
             "…and the wander turn's two per-entity draws are NOT spent"
+        );
+    }
+
+    /// ⭐⭐⭐ THE SUMMON-RING HEAD TAKES THE COLLISION VICTIM IN
+    /// `word_0x96_150` (round 149, dig w149e;
+    /// [`super::no_summon_head_victim`]).
+    ///
+    /// `sub_65820`'s tail (banner `00065820`) stamps the record
+    /// `_4A190` returned — `sub_51800`'s HEAD, the `qmemcpy` tails
+    /// having already been minted — with `id_0x1A_26`, the bearing
+    /// pair, and then `if (v5x) v11x->word_0x96_150 = v5x -
+    /// D41A0_0.struct_0x6E8E;`. `v5x` is `sub_10780`'s COLLISION
+    /// VICTIM, so a landing on terrain leaves the lane at zero — which
+    /// is why the port's hard 0 looked right on most summons.
+    ///
+    /// WITNESS mc2l0-spells-galore t=36894: two `(10,72)` nodes born
+    /// in the one tick, head 629 takes `target96 595 → 85` (the struck
+    /// (5,3)) and node 622, the head's `qmemcpy`, takes `595 → 0`.
+    /// Census: 18 rows t=36894..36911 slot 629, retail 85 / port 0.
+    ///
+    /// ⛔ UNIT TEST, NOT A FIXTURE: `(10,72) @0x96` is in no graded
+    /// lane, and replay re-imports the record at the anchor.
+    ///
+    /// POSITIVE CONTROL: the bearing pair landed by the same call, and
+    /// the TERRAIN landing (`victim == 0`) that must leave the lane
+    /// alone — an unconditional stamp would fail that half.
+    /// REVERSION PROOF: fails with `MGC_NO_SUMMON_HEAD_VICTIM=1`,
+    /// where the head keeps `NewEvent_4A050`'s zero.
+    #[test]
+    fn the_summon_ring_head_takes_the_struck_victim_at_0x96() {
+        let mut w = m14_flat_gen();
+
+        let head = w.new_event().expect("head slot");
+        {
+            let e = &mut w.ent[head];
+            e.class64 = 10;
+            e.model65 = 72;
+            e.f30 = 0;
+            e.f32 = 0;
+            e.f146 = 0;
+        }
+        w.mc2_summon_head_bearing(Some(head), 1461, 163, 85);
+        // POSITIVE CONTROL: the two stamps above the conditional one.
+        assert_eq!(w.ent[head].f30, 1461, "yaw_0x1C_28");
+        assert_eq!(w.ent[head].f32, 163, "pitch_0x1E_30");
+        assert_eq!(
+            w.ent[head].f146, 85,
+            "`if (v5x) v11x->word_0x96_150 = v5x - …` — the STRUCK record \
+             (mc2l0-spells-galore t=36894 slot 629: retail 85)"
+        );
+
+        // POSITIVE CONTROL: a TERRAIN landing leaves @0x96 alone.
+        let terrain_head = w.new_event().expect("second head slot");
+        {
+            let e = &mut w.ent[terrain_head];
+            e.class64 = 10;
+            e.model65 = 72;
+            e.f146 = 0;
+        }
+        w.mc2_summon_head_bearing(Some(terrain_head), 7, 9, 0);
+        assert_eq!(w.ent[terrain_head].f30, 7, "the bearing still lands");
+        assert_eq!(
+            w.ent[terrain_head].f146, 0,
+            "no victim, no stamp — `sub_10780` returned NULL"
         );
     }
 }

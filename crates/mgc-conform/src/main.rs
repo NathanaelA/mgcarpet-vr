@@ -63,7 +63,11 @@ fn usage() -> ! {
                              take's seed, or --start <t0>; --start t-1 =\n\
                              the pair-import view) and print every lane\n\
                              side by side with retail's, ≠-marked — the\n\
-                             instrument that says what the PORT holds\n\
+                             instrument that says what the PORT holds.\n\
+                             A slot retail holds FREE (class byte 0) is\n\
+                             RESIDUE, never graded, and its lanes are\n\
+                             homed by the CLEARED class: those rows are\n\
+                             marked with a middle dot instead\n\
              --at-slot <n>   sample MID-WALK: snapshot the pool as the\n\
                              tick INTO t reaches slot n, before n\n\
                              dispatches (\"what did slot A hold when\n\
@@ -1112,6 +1116,19 @@ fn retail_record0_human_book(first: &mgc_formats::mgcr::TickRecord) -> Option<Ve
     )
 }
 
+/// The human's book PROGRESS at record 0 (`levels`, `xp_bank`, `ring`)
+/// — the carried save's half of [`retail_record0_human_book`].
+fn retail_record0_human_progress(
+    first: &mgc_formats::mgcr::TickRecord,
+) -> Option<([u8; 26], [i32; 26], [u8; 26])> {
+    let st = mgc_formats::mgcr::decode_retail_mc2(first.state.as_ref()?).ok()?;
+    let p = st
+        .players
+        .get(st.local_player as usize)
+        .or_else(|| st.players.first())?;
+    Some((p.levels, p.xp_bank, p.ring))
+}
+
 /// One take's generated-vs-measured terrain comparison.
 struct TerrainReport {
     game: String,
@@ -1148,6 +1165,7 @@ impl TerrainReport {
 /// against the take's first closure), so the two instruments can
 /// never settle differently.
 pub(crate) fn native_settled_world(
+    path: &std::path::Path,
     first: &mgc_formats::mgcr::TickRecord,
     family: mgc_formats::mgcr::Family,
     game: &str,
@@ -1157,16 +1175,36 @@ pub(crate) fn native_settled_world(
 ) -> Result<(mgc_sim::engine::world::World, mgc_sim::engine::features::Planes), String> {
     let (mut w, pristine) = match family {
         mgc_formats::mgcr::Family::Mc1 => verify::build_world(&args.baked, game, level)?,
-        mgc_formats::mgcr::Family::Mc2 =>
-        // planes only — no entity dispatch, so the replay gate cannot apply
-        {
+        mgc_formats::mgcr::Family::Mc2 => {
             // The human's carried book, read off record 0: the class-15
             // tokens owned by the (3,0) carpet record, in slot order.
             // Granted between the ctor and the rival spawn so the
             // native pool lays out like retail's (round 112).
             let book = retail_record0_human_book(first);
-            let (w, p, _) =
-                verify_mc2::build_world_mc2_with_book(&args.baked, level, false, book.as_deref())?;
+            // ⭐ THE CAMPAIGN REPLAY GATE IS A LOAD-TIME INPUT
+            // (`setting_38545 & 4`, MenusAndIntros.cpp:3347-48 — the
+            // world map raises it for a MAIN portal this save has
+            // already completed). The scroll ctor `sub_51610`
+            // (EF:37416-37426) and `UpdateScroll_59C80`'s opening
+            // (EF:41161-65) both read it, so a native build that
+            // hard-codes `false` mints and KEEPS the level's dis-0
+            // `(14,5)` XP scrolls that retail hides and reap-flags in
+            // their first dispatch. `terrain-check` never noticed
+            // (the gated arm writes no terrain); `init-check` sees it
+            // as port-only pool rows (mc2l15: retail 0, port 3).
+            let replayed = verify_mc2::mc2_take_replayed(path)?;
+            let (mut w, p, _) = verify_mc2::build_world_mc2_with_book(
+                &args.baked,
+                level,
+                replayed,
+                book.as_deref(),
+            )?;
+            // …and the carried save's PROGRESS in it, which no native
+            // build can know (round 148: the three wiz-0 lanes that
+            // fired on nearly every take were this seat, not the port).
+            if let Some((levels, xp_bank, ring)) = retail_record0_human_progress(first) {
+                w.mc2_seed_book_progress(levels, xp_bank, ring);
+            }
             (w, p)
         }
     };
@@ -1183,7 +1221,66 @@ pub(crate) fn native_settled_world(
         // `tick_paused`), the carpet idle at the level start.
         let (px, pz) = mc2_player_start(&args.baked, &family, level).unwrap_or((128.5, 128.5));
         let idle = mgc_sim::engine::world::PlayerCommand::default();
-        for _ in 0..settle {
+        // ⭐ `MGC_INIT_AUTOSAVE_AT=<n>|none` — the frame retail's
+        // one-shot level-start checkpoint autosave landed on FOR THIS
+        // TAKE. `sub_57640`'s only caller is the level-start palette
+        // fade-in, so the frame is a property of the recording session
+        // (frame rate, disk), not of the level, and the corpus proves
+        // the variance: mc2l30 holds a canonical free stack at record 0
+        // and mc2l30-new — same level, same frame, same human record,
+        // same three freed transients — holds the raw LIFO residue. See
+        // `World::mc2_arm_checkpoint_autosave`. This is the SAME EVENT
+        // `MGC_INIT_SEVER_AT` models through the StageVar lane; feed
+        // both from one number per take.
+        // Unset, the build's own `AUTOSAVE_DEFAULT_FRAME` stands.
+        let mut autosave_at: Option<u8> =
+            Some(mgc_sim::engine::world::World::AUTOSAVE_DEFAULT_FRAME);
+        if family == mgc_formats::mgcr::Family::Mc2
+            && let Ok(v) = std::env::var("MGC_INIT_AUTOSAVE_AT")
+        {
+            let v = v.trim();
+            let n = if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("off") {
+                None
+            } else {
+                v.parse::<u8>().ok()
+            };
+            w.mc2_arm_checkpoint_autosave(n);
+            autosave_at = n;
+        }
+        // `MGC_INIT_SEVER_AT=<n>|none` — apply retail's OWN
+        // autosave-severed StageVar closure after n settle ticks (the
+        // registered `&2`-clear death-watch deviation; see
+        // `World::mc2_debug_sever_stagevar_watches`). ⚖ Player-ruled
+        // 2026-09-18 (round 149): DEFAULT ON, at the autosave frame —
+        // the severance IS the checkpoint autosave's other half, so
+        // one number per take drives both and a bare `init-check`
+        // reads the standard recording session (38/40 MC2 takes
+        // IDENTICAL). `none`/`off` restores the plain native settle.
+        let sever_at: Option<u32> = match std::env::var("MGC_INIT_SEVER_AT") {
+            Ok(v) => {
+                let v = v.trim();
+                if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("off") {
+                    None
+                } else {
+                    v.parse().ok()
+                }
+            }
+            Err(_) => autosave_at.map(u32::from),
+        };
+        for k in 0..settle {
+            if sever_at == Some(k)
+                && family == mgc_formats::mgcr::Family::Mc2
+                && let Some(state) = first.state.as_ref()
+                && let Ok(st) = mgc_formats::mgcr::decode_retail_mc2(state)
+            {
+                let mask = st
+                    .stagevars
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r[1] & 0x04 != 0)
+                    .fold(0u16, |m, (i, _)| m | 1 << i);
+                w.mc2_debug_sever_stagevar_watches(&st.stagevar_watch, mask);
+            }
             let alt = w.ground_height_tiles(px, pz) + 2.0;
             let pose = mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
             w.tick(pose, idle);
@@ -1248,7 +1345,7 @@ fn terrain_compare(
         base: Some(base),
         delta: None,
     })?;
-    let (_, planes) = native_settled_world(&first, family, &game, level, args, settle)?;
+    let (_, planes) = native_settled_world(path, &first, family, &game, level, args, settle)?;
     if let Some(dir) = &args.out {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }

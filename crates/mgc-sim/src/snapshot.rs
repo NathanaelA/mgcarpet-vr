@@ -132,7 +132,15 @@ const MAGIC: u32 = 0x5343_474D;
 ///     cheats (ghost mode, inert mode), carried like
 ///     `invincible` so a resume keeps the mode it was taken in. Join
 ///     the World stream after `dev_minted`.
-pub const SNAPSHOT_VERSION: u32 = 23;
+/// 24: `Mc2Rival::duel` — the MC2 rival's DUEL LOCK
+///     (`word_0x146_326` / `dword_0x142_322` / `word_0x14A_330`),
+///     joined to the rival record after `knock_mag`. Retail persists
+///     the same three words (`engine_support.cpp:678`), and they are
+///     the whole input to the death-fall tether
+///     ([`crate::mc2::rivals::no_mc2_rival_duel_death_tether`]): a
+///     resume that dropped them would land a dueled corpse with its
+///     opponent un-billed.
+pub const SNAPSHOT_VERSION: u32 = 24;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -658,6 +658,16 @@ fn mc2_cave_behaviors_and_goldens() {
     // condition at its three scan sites) move NOTHING here —
     // reverting the table push alone reproduces the previous pin
     // exactly with all three still in.
+    // Re-pinned (ALL FOUR; the OBSERVABLE array below HOLDS) 2026-09-17
+    // for ROUND 147's NATIVE-INIT laws — the first round to grade the
+    // world CONSTRUCTOR (`mgc-conform init-check`), so a fresh-boot
+    // golden is exactly what should move. A/B-attributed by the digs,
+    // each law alone: the level-start book (`MGC_NO_MC2_PICKUP_ONLY_
+    // STEAL_LOCK`, `_SPELL_DEFAULTS_PATCH`, `_NATIVE_HUMAN_START_POSE`,
+    // `_TOKEN_CTOR_CLEARS_2C`) and the authored seats (`_PILLAR_NO_
+    // SPRITE`, `_AURA_MANA_ZERO`, `_PORTAL_LAUNCH_AXIS`). COMBINED
+    // REVERSION PROBE: all 25 round-147 switches set reproduces the
+    // previous pins exactly, here and in `mc2_slice.rs`.
     assert_eq!(
         got,
         // Checkpoint D re-pinned 2026-08-29 (A/B/C hold) for the
@@ -815,7 +825,7 @@ fn mc2_cave_behaviors_and_goldens() {
             // both: mc2:15's terrain, phase-aligned at t=120, matches
             // retail on all five planes, 65,536/65,536
             // (`terrain-diff --settle`, ROUND 109).
-            0xfb6ad33f8d454bf6_u64,
+            0x780e23a675dd20b7_u64,
             // ⭐ CHECKPOINTS B, C AND D RE-PINNED (A HOLDS BYTE-FOR-
             // BYTE) FOR THE MANA AURA'S PULL STAMP. `sub_38D80`
             // (EF:28353-83, shipped `NETHERW.EXE` 0x5d5bd-0x5d610)
@@ -834,7 +844,18 @@ fn mc2_cave_behaviors_and_goldens() {
             // seam law still in — measured on one binary, both arms.
             // A caves world mints and magnets spheres from its first
             // castle on, so every checkpoint that has pulled one moves.
-            0x1278c0cbabdad12b,
+            // Re-pinned (CHECKPOINT B ALONE; A/C/D and the whole
+            // OBSERVABLE array below HOLD) 2026-09-18 for ROUND 149's
+            // AURA CLASS-GATE law — `sub_38D80` has no class test, so a
+            // chain node recycled out of class 10 mid-tick takes the
+            // `@0x76`/`@0x7A` stamp and the hashed `mc2_aura_claim`
+            // side map gains its entry. A/B-ATTRIBUTED, this binary,
+            // both arms: `MGC_NO_MC2_AURA_CLASS_GATE=1` reproduces
+            // 0xae0a114269b7ad69 exactly with the round's other two
+            // laws (`MGC_NO_SUMMON_HEAD_VICTIM`,
+            // `MGC_NO_MC2_PAINTER_OOB_RESIDUE`) still in, and neither
+            // of those moves any checkpoint on its own.
+            0xcac9292aa6e25cb6,
             // ⭐⭐⭐ CHECKPOINTS C AND D RE-PINNED 2026-09-06 (ROUND 108),
             // A/B HOLD — TWO SEPARATE, SEPARATELY ATTRIBUTED CAUSES.
             //
@@ -881,7 +902,7 @@ fn mc2_cave_behaviors_and_goldens() {
             // reproduces the previous C and D pins exactly, and the
             // OBSERVABLE digests below hold — the world is unchanged,
             // only the mirror is.
-            0x3c60599369f65891, // was 0x57237f7c82d36989
+            0x3e50300ef9c6aabf, // was 0x57237f7c82d36989
             // Checkpoint D re-pinned 2026-09-10 (A/B/C hold BYTE-FOR-
             // BYTE) for THE (10,77) FIRE-ORB SATELLITE'S CLONED @0x2C —
             // the SAME CLASS as checkpoint A's 2026-09-02 fire-ctor
@@ -919,7 +940,21 @@ fn mc2_cave_behaviors_and_goldens() {
             // previous pin (0x0a717b6bbb39a15f) exactly with this
             // session's other seven laws still in — verified in the
             // main session, not merely reported.
-            0x809b7066b17b7c08, // was 0x7387656e3a5ccc62 (2026-09-15, see C)
+            // RE-PINNED 2026-09-17 (round 148), checkpoint D ONLY, two
+            // state-only laws, OBSERVABLE array unmoved:
+            // `MGC_NO_MC2_NULL_DISPATCH_PHASE` (a null dispatch row —
+            // the (10,75)/(10,77) swarm nodes — does not clock the
+            // hashed `f63`) and `MGC_NO_MC2_CLASS14_MARKER_HIDE_BIT`
+            // (the ending markers hide on byte[0] bit 0, not 0x20).
+            // Setting BOTH switches reproduces 0xb81708d1a4f89892.
+            // …and a THIRD law the same day: `MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch
+            // (dig w148m — the native reap is retail's tick-top sweep); it
+            // moves OBSERVABLE D too. With it set the pin is 0x06f940b92d340c8b.
+            // …and a FOURTH: `MGC_NO_MC2_ADMIT_MASK_BOTH_HOMES` (dig w148p — a
+            // natively spawned whirlwind / fire-orb record writes the admit
+            // mask into BOTH of its port homes; state-only, OBSERVABLE holds).
+            // With that switch alone the pin is 0x5f504759165dbf93.
+            0xc61496350e7b205b, // was 0x5f504759165dbf93 / 0x06f940b92d340c8b / 0xb81708d1a4f89892 (2026-09-17); 0x7387656e3a5ccc62 (2026-09-15, see C)
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -1095,7 +1130,7 @@ fn mc2_cave_behaviors_and_goldens() {
         0x536144e2ca06878d,
         0x4cfe444e3d74d9d1,
         0x674d00718d9a0d5b,
-        0xe733f7c078ba072c,
+        0xc8d9d776de5c8373, // was 0xe733f7c078ba072c — 2026-09-17, `MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch (round 148)
     ];
     assert_eq!(
         obs, OBSERVABLE,

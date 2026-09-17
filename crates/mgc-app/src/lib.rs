@@ -9417,6 +9417,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         mc2_wyvern_alliance_brain: p.mc2_wyvern_alliance_brain.on(),
         mc2_orphan_balloon_reap: p.mc2_orphan_balloon_reap.on(),
         mc2_house_flag_color: p.mc2_house_flag_color.on(),
+        mc2_immediate_reap: p.mc2_immediate_reap.on(),
     }
 }
 

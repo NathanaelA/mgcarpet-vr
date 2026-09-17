@@ -1042,6 +1042,15 @@ pub struct GameplayPatches {
     /// wizards a rival's houses and castle show different colours.
     /// `patched` (default): houses fly the castle's colour.
     pub mc2_house_flag_color: PatchArm,
+    /// THE IMMEDIATE FREE (MC2). `retail`: a record that dies is
+    /// freed by the NEXT frame's opening sweep, so its slot stays
+    /// occupied for the rest of its own tick — and any stale index
+    /// that still names it sees a live record for one more frame
+    /// (retail's own stale-index hazard). `patched` (default): the
+    /// port's original arm — a dying record's slot returns at the
+    /// end of its own dispatch, within the tick. Player-ruled
+    /// 2026-09-18 as the explicit opt-out of retail's sweep.
+    pub mc2_immediate_reap: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -1064,6 +1073,7 @@ impl Default for GameplayPatches {
             mc2_wyvern_alliance_brain: PatchArm::Patched,
             mc2_orphan_balloon_reap: PatchArm::Patched,
             mc2_house_flag_color: PatchArm::Patched,
+            mc2_immediate_reap: PatchArm::Patched,
         }
     }
 }
@@ -1090,6 +1100,7 @@ impl GameplayPatches {
             mc2_wyvern_alliance_brain: PatchArm::Retail,
             mc2_orphan_balloon_reap: PatchArm::Retail,
             mc2_house_flag_color: PatchArm::Retail,
+            mc2_immediate_reap: PatchArm::Retail,
         }
     }
 
@@ -1133,6 +1144,9 @@ impl GameplayPatches {
             mc2_wyvern_alliance_brain: PatchArm::Retail,
             mc2_orphan_balloon_reap: PatchArm::Retail,
             mc2_house_flag_color: PatchArm::Retail,
+            // Native MC2 freed in-walk from the first port (the sweep
+            // landed 2026-09-17), so a legacy take ran the PATCHED arm
+            // — `..Self::default()` supplies it.
             ..Self::default()
         }
     }

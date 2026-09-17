@@ -2523,10 +2523,9 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
 /// correctly and which `for_each_pair` could not set at all (it sees the
 /// FIXTURE path, not the take).
 ///
-/// Scans until the first (14,5) and stops; takes with no scroll return false,
-/// which is correct because the gate has no other in-sim consumer here (the
-/// XP half is unreachable on this corpus — every spell is already at its
-/// level cap with `xp_vol` imported as 0).
+/// Scans until the first (14,5) and stops. A take with NO scroll falls back
+/// to the gate's other consumer — a replayed level accrues no spell XP, so
+/// the local human's `xp_vol` never moves (see the tail of the function).
 ///
 /// ⚠ SIMPLIFICATION, deliberate: retail also CLEARS bit 2 in-sim at
 /// EF:60541 (`sub_5E8C0_endGameSeq` case 0xC, `actionIndex == 11`), i.e. at
@@ -2548,6 +2547,7 @@ pub fn mc2_take_replayed(path: &std::path::Path) -> Result<bool, String> {
     // entity structs + 1,200 thing rows + the stacks, per row, thrown
     // away): same slot order, same three lanes, same length check.
     let mut image: Vec<u8> = Vec::new();
+    let (mut prev_xp, mut xp_moved): (Option<[i32; 26]>, bool) = (None, false);
     while let Some(r) = rec.next_state_image(&mut image) {
         if !r? {
             continue;
@@ -2564,8 +2564,34 @@ pub fn mc2_take_replayed(path: &std::path::Path) -> Result<bool, String> {
                 return Ok(u32_(&image, o + 0x0C) & 1 != 0);
             }
         }
+        // THE SECOND WITNESS (round 148), for a take that never mints a
+        // scroll: the gate's OTHER consumer. `sub_6D8B0`'s first line
+        // (`testb $4, setting_38545`, NETHERW.EXE 0x920C1 — round 147's
+        // `MGC_NO_MC2_REPLAY_XP_GATE`) means a replayed level accrues NO
+        // spell XP, so the local human's 26 `xp_vol` accumulators
+        // (player block +0x6B1) never move for the whole take.
+        let local = u16_(&image, m2::LOCAL_PLAYER) as usize;
+        let b = m2::PLAYERS + local * m2::PLAYER_STRIDE;
+        let mut xp = [0i32; 26];
+        for (s, v) in xp.iter_mut().enumerate() {
+            *v = i32_(&image, b + 0x6B1 + s * 4);
+        }
+        xp_moved |= prev_xp.is_some_and(|p| p != xp);
+        prev_xp = Some(xp);
     }
-    Ok(false)
+    // No scroll anywhere in the take. "Returns false, the gate has no
+    // other in-sim consumer" stood here until round 147 landed the XP
+    // half of the gate and made it false: measured over the 40-take
+    // corpus, retail's `xp_vol` moves on 597..8,323 boundaries of every
+    // take the scroll witness calls un-replayed and on ZERO of the six
+    // it calls replayed — and on zero of exactly three scroll-less
+    // takes, mc2l19-taketwo, mc2l22 and mc2l6-rival-spells-galore
+    // (second visits all), where the ungated port credited XP retail
+    // never did: 12,267 pair-mode `xp_vol` rows, 1.1M in free run. A
+    // take whose human never earns XP reads "replayed" here too, which
+    // is harmless: with no scroll and no award the gate has nothing
+    // left to decide.
+    Ok(prev_xp.is_some() && !xp_moved)
 }
 
 /// Decode the full MC2 retail closure from a raw struct image.

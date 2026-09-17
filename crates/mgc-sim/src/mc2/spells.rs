@@ -92,6 +92,44 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Mc2SpellRow>, String> {
         .collect())
 }
 
+/// `SetDefaultSpells_5C0A0` (`Spells.cpp:109`) — the BOOT-time rewrite
+/// of the freshly loaded SPELLS table, run once before any level init.
+/// Four arms; measured against the shipped `SPELLS.DAT` only ONE moves
+/// a byte:
+///
+/// - `isEnabled_1` is recomputed from the tier-1/tier-2 `maxManaLimit_A`
+///   / `manaCost_6` pair (plus bit 2 for rows 3/4/6/8/11/12/14) — the
+///   shipped DAT already carries exactly those values (16, 8, 12);
+/// - `fontType_0x1B & 0xFE` on all three tiers, then bit 0 back on for
+///   row 0 tier 1 and row 7 tier 0 — again already on disk, and bit 0
+///   is clear everywhere else;
+/// - **row 23's `maxManaLimit_A` triplet is overwritten**:
+///   300000/350000/400000 → **50000/70000/90000**. Shipped bytes, VA
+///   0x5C129/0x5C130/0x5C137 = `NETHERW.EXE` 0x80929/0x80930/0x80937
+///   `c7 43 0a 50 c3 00 00` / `c7 43 24 70 11 01 00` /
+///   `c7 43 3e 90 5f 01 00` (row stride 80; `2 + 26*k + 8` = 0x0A /
+///   0x24 / 0x3E).
+///
+/// `SetSpell_6D5E0` (`Level.cpp:1531`) copies the column into a
+/// manifestation's `manaRegen_0x88_136`, which is the per-tick castle
+/// upkeep gate — so an un-patched table makes spell 23 six times as
+/// expensive to hold as retail's.
+///
+/// Only the row-23 arm is reproduced here (the rest is a no-op by
+/// measurement, and reproducing the `isEnabled` derivation would put a
+/// division by `manaCost_6` on the load path for no observable change).
+/// [`crate::engine::features::no_mc2_spell_defaults_patch`].
+pub fn set_default_spells(rows: &mut [Mc2SpellRow]) {
+    if crate::engine::features::no_mc2_spell_defaults_patch() {
+        return;
+    }
+    if let Some(r) = rows.get_mut(23) {
+        r.tiers[0].max_mana_limit = 50_000;
+        r.tiers[1].max_mana_limit = 70_000;
+        r.tiers[2].max_mana_limit = 90_000;
+    }
+}
+
 /// `LevelInit_56C00`'s SPELLS patch (LevelInit.cpp:12-21, verbatim):
 /// every level init re-writes rows 4 and 19, tier 0 only — life +
 /// hintText — keyed to MapType. Non-Day (Night/Cave) is the default

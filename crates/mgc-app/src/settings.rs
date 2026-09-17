@@ -2149,6 +2149,34 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc2_immediate_reap",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_immediate_reap",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_immediate_reap.on(),
+                faithful: false,
+            },
+            desc: "A dying MC2 record's pool slot returns within its own \
+                   tick. Retail frees dead records in the NEXT frame's \
+                   opening sweep, so a stale index can still reach a \
+                   corpse for one more frame and the slot is re-popped by \
+                   whatever spawns first. Patched, the slot is freed at the \
+                   end of the record's own dispatch.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_immediate_reap = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Dead records are freed at the next frame's top, as retail.",
+                    "Dead records are freed within their own tick (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2414,8 +2442,8 @@ mod tests {
         // mc2_phantom_castle 2026-09-10, dual_wield_muzzle and
         // one_castle_per_wizard 2026-09-15, mc2_wyvern_alliance_brain
         // and mc2_orphan_balloon_reap 2026-09-16, mc2_house_flag_color
-        // 2026-09-17.
-        assert_eq!(patches, 17, "all seventeen patches ship on");
+        // 2026-09-17, mc2_immediate_reap 2026-09-18.
+        assert_eq!(patches, 18, "all eighteen patches ship on");
     }
 
     #[test]

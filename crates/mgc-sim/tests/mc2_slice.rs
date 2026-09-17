@@ -649,16 +649,30 @@ fn mc2_slice_behaviors_and_goldens() {
     // Corpus-corroborated: `replay --segmented --brief` 28/28 takes
     // byte-identical, `terrain-check` mc2l4 height 1,357 → 9 (the
     // (10,11) rings' slot-seeded `f63 % 3` cadence), mc2l22 2,941 → 11.
+    // Re-pinned (ALL SIX; OBSERVABLE holds) 2026-09-17 for ROUND 147's
+    // NATIVE-INIT laws (attribution + the 25-switch combined reversion
+    // probe in mc2_cave.rs): the level-start book family moves every
+    // checkpoint, `MGC_NO_MC2_C5_XTYPE3` the creature ctors, and
+    // `MGC_NO_MC2_WANTED_WALK_SEAT` ALONE moves E (`Gen::player_aggro`
+    // is hashed; the decay moved from the tick tail to the carpet's
+    // own walk slot).
     const GOLDEN: [u64; 6] = [
-        0xc290b979499815fe, // post-init (GenerateEvents + dis 0)
-        0x6a65bff653524322, // A: 64 idle ticks afield
-        0xa26f20f367936b7c, // B: the type-5 fly-to latched
+        0x9a40b581eec40b84, // post-init (GenerateEvents + dis 0)
+        // ⚠ RE-PINNED 2026-09-17 (round 148, dig w148m), A..E + OBSERVABLE
+        // 1..5 (post-init / OBSERVABLE 0 HOLD): THE MC2 NATIVE REAP IS
+        // RETAIL'S TICK-TOP SWEEP (`MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch,
+        // `UpdateEntities_57730` NETHERW.EXE 0x7bf4e-0x7bf77) — a record
+        // that dies at walk slot n is no longer poppable by a spawner at
+        // slot > n in the same tick, so every later mint's slot (and its
+        // private LCG) shifts. That switch alone restores every old pin.
+        0x4dd51bcaaf6fcccb, // A: 64 idle ticks afield (was 0x45a9d7b71191da3c)
+        0x683fc306c36c655e, // (was 0x2e4c5a51cfb9c680) B: the type-5 fly-to latched
         // C-E re-pinned for the mc2l0 on-ramp batch (2026-08-21f;
         // attribution in mc2_cave.rs): the fireball's terrain-contact
         // move REVERT (sub_65C20 v16x) + the universal token-mana
         // copy + the impact pitch stamp move the combat checkpoints;
         // the D fireball window is the first consumer.
-        0xcdddf3b60dc15639, // C: goat awake/flee window
+        0x3cc9804b1b0c0a00, // (was 0x3ec630e077c6cc8a) C: goat awake/flee window
         // D re-pinned for the MC2 CAST-CHARGE BANK (`mc2_launch`;
         // EF:55869-70 — every MC2 cast site copies the wizext
         // `byte_0x154` meter into the projectile's @0x10 and zeroes
@@ -712,7 +726,7 @@ fn mc2_slice_behaviors_and_goldens() {
         // (`player.left/right`, hashed); the overlay leaves it alone.
         // A/B-ATTRIBUTED: restoring the wipe alone reproduces the
         // previous D and E exactly; OBSERVABLE holds.
-        0x9ab46ee724229d83, // D — was 0x2410773a72d4f3d0, re-pinned 2026-09-04 (ROUND 98) for THE
+        0x83dc70d04fcd499d, // (was 0x3642251fa7d3b930, 2026-09-17 tick-top reap) D — was 0x2410773a72d4f3d0, re-pinned 2026-09-04 (ROUND 98) for THE
         // LAUNCH AIM POINT `axis_0x9A_154x` EXTENDED TO THE WHOLE
         // class-15 fire table (`MGC_NO_MC2_LAUNCH_AXIS_BAND=1`
         // reverts). Retail stamps the flyer's @0x9A with the caster's
@@ -820,7 +834,11 @@ fn mc2_slice_behaviors_and_goldens() {
         //     a 0 moves the pin by itself.
         //   * mc2l22 stays CERTIFIED (`segments=27 devs=0 horizon=END`) and
         //     the graded corpus is unmoved.
-        0xea3207cb01b8e98e, // E: census + villager/archer provocation (was 0xa463e62ac91d6c3b, 2026-09-15 — see D)
+        // RE-PINNED 2026-09-17 (round 148), checkpoint E ONLY, OBSERVABLE
+        // array unmoved: `MGC_NO_MC2_CLASS14_MARKER_HIDE_BIT` (the ending
+        // markers hide on byte[0] bit 0, not the invisibility bit 0x20);
+        // that switch alone reproduces 0x75c66d0a65b520a7.
+        0xdef64d50348352d1, // E: census + villager/archer provocation (was 0x46c9c6f10efc23f8 before the tick-top reap, 0x75c66d0a65b520a7 before the marker hide bit, both 2026-09-17; 0xa463e62ac91d6c3b, 2026-09-15 — see D)
     ];
     // Checkpoints 4-6 re-pinned for the DISPOSITION-FIRE stack
     // rebuild (see mc2_cave.rs — sub_49F90 at sub_4A1E0's top,
@@ -955,10 +973,10 @@ fn mc2_slice_behaviors_and_goldens() {
     // OBSERVABLE 0x44274f3c4dbef3d9 / 0x3ddb6f8df6a06e7e / …).
     const OBSERVABLE: [u64; 6] = [
         0x44274f3c4dbef3d9,
-        0x642f38272512562a,
-        0x8c1623423f03220b,
-        0x8dc4abde633df7e6,
-        0xb69129093a8476d0,
+        0xf1d7a349a86b0381, // was 0x642f38272512562a — 2026-09-17, `MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch (round 148)
+        0x73434cc805296b0d, // was 0x8c1623423f03220b — 2026-09-17, `MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch (round 148)
+        0x247d9e8e210f9855, // was 0x8dc4abde633df7e6 — 2026-09-17, `MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch (round 148)
+        0x44766d4459712837, // was 0xb69129093a8476d0 — 2026-09-17, `MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch (round 148)
         // E re-pinned with the ARROW FLIGHT LAWS (see the GOLDEN note)
         // — and the OBSERVABLE moving is the point: an arrow now
         // strikes the body it is LEVEL WITH instead of the one it is
@@ -967,7 +985,7 @@ fn mc2_slice_behaviors_and_goldens() {
         // not layout. E ONLY; post-init..D hold. ⚠ this A/B is only
         // valid with the layout assert above disabled for the run —
         // it panics first otherwise and the observable never runs.
-        0xcacbd5246da011ef,
+        0xde874768ab118f37, // was 0xcacbd5246da011ef — 2026-09-17, `MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch (round 148)
     ];
     assert_eq!(
         obs, OBSERVABLE,

@@ -23,6 +23,7 @@
 
 use crate::Args;
 use mgc_formats::mgcr::{Family, Recording, decode_retail_mc1, decode_retail_mc2};
+use mgc_sim::engine::world::conformance::retail_ent_lanes_mc2;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// `(class, model)` per live retail slot (slot 0 is the scratch).
@@ -108,7 +109,7 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
         None => crate::retail_record0_phase(&first, family)
             .ok_or("record 0 carries no decodable phase — pass --settle <n>")?,
     };
-    let (world, _) = crate::native_settled_world(&first, family, &game, level, args, settle)?;
+    let (world, _) = crate::native_settled_world(path, &first, family, &game, level, args, settle)?;
     let mut port: Occupancy = world
         .debug_pool_rows()
         .into_iter()
@@ -158,6 +159,31 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
                 shadow.compare_wiz_mc2(&world, &st, t);
                 shadow.compare_board_mc2(&world, &st, t);
                 shadow.compare_free_mc2(&world, &st, human, t);
+                // ⭐ `MGC_INIT_STACKS=<n>` — the allocator microscope for
+                // the CONSTRUCTOR (`MGC_ALLOC_TRACE`'s twin: that one
+                // only reaches graded boundaries, and a native build has
+                // none). Prints the top n of both free stacks, next-pop
+                // first, so a slot-order divergence with clean occupancy
+                // names the transient that was born and freed in one
+                // side only.
+                if let Some(n) = std::env::var("MGC_INIT_STACKS")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                {
+                    let (pf, _) = world.free_stacks_mc2();
+                    let pool = st.ents.len();
+                    let cut = |v: &[u16]| {
+                        v.iter()
+                            .filter(|s| (**s as usize) < pool && **s != human)
+                            .rev()
+                            .take(n)
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    };
+                    println!("  FREE retail top{n}: {}", cut(&st.free_stack));
+                    println!("  FREE port   top{n}: {}", cut(&pf));
+                }
                 let occ = st
                     .ents
                     .iter()
@@ -267,6 +293,41 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
         }
     }
     print!("{}", shadow.render(false));
+
+    // `MGC_INIT_DUMP=<slot>[,<slot>…]` — the native world's lanes beside
+    // retail's for a named slot list, ≠-marked. `dump-state --port`
+    // free-runs from an IMPORT, so it cannot show a constructor row.
+    if let Ok(list) = std::env::var("MGC_INIT_DUMP")
+        && family == Family::Mc2
+    {
+        let st = decode_retail_mc2(state)?;
+        for (i, row) in st.stagevars.iter().enumerate() {
+            if row[0] & 0xF == 0 {
+                continue;
+            }
+            println!(
+                "  -- stagevar[{i}] kind {} flags {:#04x} chain {} cadence {} payload {}                  (watch_ent decoded {})",
+                row[0] & 0xF, row[1], row[2], row[3],
+                u32::from_le_bytes([row[4], row[5], row[6], row[7]]),
+                st.stagevar_watch[i],
+            );
+        }
+        for s in list.split(',').filter_map(|s| s.trim().parse::<u16>().ok()) {
+            let Some(re) = st.ents.get(s as usize) else { continue };
+            let port: BTreeMap<&'static str, Option<i64>> = world
+                .port_ent_lanes_mc2(s, human_slot, false)
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            println!("  -- slot {s} (class {}, model {})", re.class3f, re.model40);
+            for (name, rv) in retail_ent_lanes_mc2(re) {
+                let pv = port.get(name).copied().flatten();
+                let mark = if pv == Some(rv) { " " } else { "≠" };
+                println!("     {mark} {name:>10}: retail {rv:>8}  port {}",
+                    pv.map_or("—".to_string(), |v| v.to_string()));
+            }
+        }
+    }
 
     let lane_rows: u64 = shadow.lanes.values().map(|l| l.rows).sum();
     let wiz_rows: u64 = shadow.wiz_lanes.values().map(|l| l.rows).sum();

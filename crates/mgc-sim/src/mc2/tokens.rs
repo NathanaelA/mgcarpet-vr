@@ -36,6 +36,13 @@ impl Gen {
             e.max_life = 0;
             e.tick70 = model.wrapping_mul(3);
             e.flags &= !0x8;
+            // `word_0x2C_44` — the allocator's `100` belongs at @0x2A
+            // (`NewEvent_4A050`, Events.cpp:569); on class 15 the port's
+            // `f44` IS @0x2C, and retail's stays at the memset's 0.
+            // [`crate::engine::features::no_mc2_token_ctor_clears_2c`].
+            if !crate::engine::features::no_mc2_token_ctor_clears_2c() {
+                e.f44 = 0;
+            }
         }
         self.link(i, x, y, z);
         self.mc2_set_sprite(i, 77);

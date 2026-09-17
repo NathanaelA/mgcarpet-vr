@@ -24,7 +24,7 @@
 //!   the press with the recentre witness ([`Mc2RespawnWitness`]), MC1
 //!   has no latch and keeps the ±1-tick caveat (docs/RECORDING.md).
 
-use crate::mgcr::{Notify, ObsMc1, RetailEntMc2, RetailMc1, RetailMc2};
+use crate::mgcr::{Notify, ObsMc1, RetailEntMc2, RetailMc1, RetailMc2, RetailPlayerMc2};
 
 /// A retail CHEAT fired by the recorded player — control opcode 30
 /// (`0x1E`), `param1` = the discriminant below. Both engines bind the
@@ -528,6 +528,12 @@ pub struct RecoveredPair {
     /// MC2: the cycle-ring cast bit (`move_bits & 0x40`) resolved to
     /// the spell index under the ring cursor — see [`mc2_ring_cast`].
     pub mc2_ring_cast: Option<u8>,
+    /// MC2: the CYCLE-RING BIND command (`PlayerAction 0x26`, SHIFT +
+    /// click on the spell pane) as `(spell index, 0 = none / 1 = left
+    /// ring / 2 = right)` — recovered from the one cell of
+    /// `array_0x3B5` that moved across the pair, which is retail's
+    /// only mid-level writer of it. See [`mc2_ring_bind`].
+    pub spell_ring: Option<(u8, u8)>,
     /// Both MC2 hands changed in one pair — one select per tick, the
     /// left wins, the right is DROPPED (counted by consumers).
     pub rebind_dropped: bool,
@@ -778,6 +784,60 @@ pub fn mc2_pair_cmd_speed(
 fn mc2_steal_not_a_rebind_off() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_STEAL_NOT_A_REBIND").is_some())
+}
+
+/// `MGC_NO_MC2_RING_BIND=1` — the A/B arm for THE RING-BIND COMMAND
+/// (`PlayerAction 0x26`) HAD NO RECOVERY LANE. Set it to restore the
+/// pre-dig behaviour, where a recorded SHIFT+click on the spell pane
+/// was invisible to the replay and the port's `mc2_book.ring` sat
+/// frozen at whatever the anchor imported. See [`mc2_ring_bind`].
+fn mc2_ring_bind_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RING_BIND").is_some())
+}
+
+/// ⭐ THE CYCLE-RING BIND IS AN INPUT COMMAND, AND IT IS THE ONLY
+/// WRITER OF `array_0x3B5` MID-LEVEL. Retail's `PlayerAction 0x26`
+/// (SHIFT + click on the spell pane, sender PlayerInput.cpp:856-78)
+/// reaches EventsFunctions.cpp:38257 and does exactly two things:
+///
+/// ```text
+/// NETHERW.EXE VA 0x52B5D (file 0x7735D)   ; the case 0x26 arm
+///   8b 55 e8              mov  edx,[ebp-0x18]        ; actEvent
+///   8b 45 ec              mov  eax,[ebp-0x14]        ; &playerInputs_0x6E3E[i]
+///   8b 92 a4 00 00 00     mov  edx,[edx+0xa4]        ; ->dword_0xA4_164x (str_611)
+///   0f be 40 01           movsx eax,byte [eax+1]     ; str_0x6E3E_byte1 = spell index
+///   01 c2                 add  edx,eax
+///   8b 45 ec              mov  eax,[ebp-0x14]
+///   8a 40 02              mov  al,[eax+2]            ; str_0x6E3E_byte2 = 0/1/2
+///   88 82 b5 03 00 00     mov  [edx+0x3b5],al        ; array_0x3B5[spell] = value
+///   6a 0e                 push 0xe                   ; PrepareEventSound(.., 14)
+/// ```
+///
+/// Nothing else in either engine writes that array while a level runs
+/// (the only other store is `Level.cpp:1275`'s cross-level carry), so
+/// a cell that MOVES across a recorded pair dates the command exactly
+/// — which is precisely how remc2's own harness recovers it
+/// (`MgcrReplay.cpp`, "Ring bind (0x26 …)", `fed(0x26, k, m1)`).
+/// mgcarpet's recovery simply never grew the row: `PortInput`'s
+/// `spell_ring` is written by port takes only, `World::spell_ring_set`
+/// / `mc2_ring_set` have owned the sim arm since the cheat-row work,
+/// and every retail MC2 pair carried `None`. On mc2l31 the human
+/// shift-binds TELEPORT into the left ring at t=25656 and then works
+/// the `[3]` cell four more times; the free run never saw one of them,
+/// which is the take's whole 4,038-row `wiz 0 ring` residue.
+///
+/// Retail's index is a SIGNED byte with no bound test and the value is
+/// stored raw — the port's `mc2_ring_set` clamps both, which is only
+/// reachable from a hand-authored command (the pane sender emits
+/// 0..=25 / 0..=2).
+fn mc2_ring_bind(pp: &RetailPlayerMc2, cp: &RetailPlayerMc2) -> Option<(u8, u8)> {
+    if mc2_ring_bind_off() {
+        return None;
+    }
+    // Retail can only store ONE cell per command, so the first moved
+    // index IS the command (remc2's harness breaks on it too).
+    (0..26).find(|&s| pp.ring[s] != cp.ring[s]).map(|s| (s as u8, cp.ring[s]))
 }
 
 /// `MGC_NO_MC2_PENDING_COMMIT=1` — the A/B arm for THE PANE COMMIT IS
@@ -1365,6 +1425,7 @@ pub fn recover_pair_mc2_kw(
         fire_right,
         mc2_select,
         mc2_ring_cast,
+        spell_ring: mc2_ring_bind(pp, cp),
         rebind_dropped,
         respawn,
         demolish,
@@ -2222,5 +2283,67 @@ mod mc2_respawn_witness_tests {
         let mut w = Mc2RespawnWitness::default();
         w.observe(Some(&rec(&[], (100, 100), (50, 50))));
         assert!(!w.observe(Some(&rec(&[57], (131, 99), (130, 100)))));
+    }
+}
+
+#[cfg(test)]
+mod ring_bind_tests {
+    use super::*;
+
+    fn ply(ring: [u8; 26]) -> RetailPlayerMc2 {
+        RetailPlayerMc2 {
+            ring,
+            ..Default::default()
+        }
+    }
+
+    /// ⭐ THE RING BIND IS THE ONLY MID-LEVEL WRITER OF `array_0x3B5`,
+    /// SO A MOVED CELL *IS* THE COMMAND (NETHERW.EXE VA 0x52B75,
+    /// `mov [edx+0x3b5],al`; EventsFunctions.cpp:38257's `case 0x26`).
+    /// mc2l31 t=25656 verbatim: the human shift-binds spell 7 into the
+    /// LEFT ring and the free run never saw it, freezing `ring[7]` at
+    /// the anchor's 0 for 3,810 boundaries.
+    #[test]
+    fn a_moved_ring_cell_is_the_0x26_command() {
+        let mut a = [0u8; 26];
+        a[3] = 2;
+        // mc2l31 t=25656: ring[7] 0 -> 1.
+        let mut b = a;
+        b[7] = 1;
+        assert_eq!(mc2_ring_bind(&ply(a), &ply(b)), Some((7, 1)));
+        // …and t=26162's `ring[3] 2 -> 0`, the CLEAR, which a
+        // "nonzero means bound" reading would have dropped.
+        let mut c = b;
+        c[3] = 0;
+        assert_eq!(mc2_ring_bind(&ply(b), &ply(c)), Some((3, 0)));
+        // t=26390's move to the RIGHT ring.
+        let mut d = c;
+        d[3] = 2;
+        assert_eq!(mc2_ring_bind(&ply(c), &ply(d)), Some((3, 2)));
+        // POSITIVE CONTROL — an idle pair manufactures nothing, which
+        // is what keeps the lane silent on the 29,000 boundaries of
+        // mc2l31 that carry no click.
+        assert_eq!(mc2_ring_bind(&ply(d), &ply(d)), None);
+        // Retail stores ONE cell per command: the first moved index is
+        // the command, never a synthesized batch (remc2's own harness
+        // breaks on it too, `MgcrReplay.cpp` "Ring bind (0x26 …)").
+        let mut e = d;
+        e[1] = 1;
+        e[9] = 2;
+        assert_eq!(mc2_ring_bind(&ply(d), &ply(e)), Some((1, 1)));
+    }
+
+    /// The kill switch is a pre-fix binary: with `MGC_NO_MC2_RING_BIND`
+    /// set, every one of the rows above must go silent (the reversion
+    /// probe run this test twice — unset it PASSES, set it FAILS the
+    /// assertion above, which is the proof the lane is the switch's).
+    #[test]
+    fn the_switch_is_the_whole_lane() {
+        let mut b = [0u8; 26];
+        b[7] = 1;
+        assert_eq!(
+            mc2_ring_bind(&ply([0u8; 26]), &ply(b)).is_some(),
+            !mc2_ring_bind_off(),
+        );
     }
 }

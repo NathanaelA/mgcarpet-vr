@@ -241,3 +241,145 @@ fn mc2_level_022_authored_rival_roster_is_seeded_at_full_strength() {
         ],
     );
 }
+
+// ---------------------------------------------------------------- round 147
+// THE NATIVE RIVAL BOOK SEAT (`InitialiseSpells_54A50`).
+//
+// Round 147's `init-check` opened the native-construction channel and
+// found three registers the port's `mc2_spawn_rival` never seated the
+// way retail's level init does. Same ungraded class as the life
+// handicap above: `reanchor_mc2_rival_ai` restores the whole player
+// block at every anchor, so NO recording can fail these rows and this
+// file is the only thing standing under them.
+//
+//  1. `SpellLevels_0x41D` — the AI arm of `InitialiseSpells_54A50` is
+//     a bare `if (IsAiPlayer == 1)` reached BEFORE the
+//     StartingSpells/BlockedSpells test (EF:39025-29; NETHERW.EXE
+//     0x792e5 `cmpb $0x1,0x9(%edx)` / `je 0x7938f`, arm 0x793a8-0x793af).
+//     The authored `byte_0x360FBx` level therefore lands on ALL 26
+//     slots, blocked and un-granted ones included; the port wrote it
+//     only inside the grant.
+//  2. `SpellIndexLeft/Right_0x451/0x453` — cleared to -1 (EF:38998-99)
+//     and then seated with the FIRST and SECOND granted spell in the
+//     same 26-iteration walk (EF:39089-96; NETHERW.EXE 0x794d9-0x79500).
+//     The port left both at `Mc2Spellbook::default()`'s -1.
+//  3. `str_611_byte_0x45C_1116` (the weave direction) — memset 0 and
+//     written ONLY by `sub_13890`'s tick-0 arm (EF:6022/6027). The
+//     port's ctor invented 1.
+//
+// The expected numbers below are RETAIL's own record-0 player blocks,
+// read off the takes with `mgc-conform init-check` — provenance, not
+// identity (no test reads `recordings/`).
+
+/// Pull one wizard's shadow lanes out of the public projection.
+fn lane(w: &World, wiz: u8, name: &str) -> Vec<i64> {
+    let sh = w.wiz_shadow_mc2();
+    let row = sh
+        .iter()
+        .find(|r| r.wiz == wiz)
+        .unwrap_or_else(|| panic!("wizard {wiz} has no shadow row"));
+    if let Some((_, v)) = row.arrays.iter().find(|(n, _)| *n == name) {
+        return v.clone();
+    }
+    let (_, v) = row
+        .scalars
+        .iter()
+        .find(|(n, _)| *n == name)
+        .unwrap_or_else(|| panic!("wizard {wiz} has no lane {name}"));
+    vec![*v]
+}
+
+/// `(color, authored level, hand_left, hand_right)` as RETAIL recorded
+/// them in the player block at record 0.
+type BookSeat = (u8, u8, i64, i64);
+
+fn check_book(level: &str, bank: &str, want: &[BookSeat]) {
+    let Some((w, pkg)) = load(level, bank) else {
+        common::golden_skip("baked mc2 data not present");
+        return;
+    };
+    let wiz = pkg.wizards.as_ref().expect("level authors a wizard block");
+    for &(slot, lvl, left, right) in want {
+        let cfg = &wiz.wizards[slot as usize];
+        // The baked table must actually carry the level this row
+        // pins, or the assertion below is vacuous.
+        for s in 0..26usize {
+            assert_eq!(
+                cfg.starting_spell_levels.get(s).copied().unwrap_or(0).min(2),
+                lvl,
+                "{level} p{slot}: baked byte_0x360FBx[{s}] != the pinned authored level",
+            );
+        }
+        // 1. EVERY slot carries it, not just the granted ones — and
+        //    the level must be authored NON-ZERO or this says nothing.
+        assert_ne!(lvl, 0, "{level} p{slot}: a 0 level cannot witness the law");
+        assert_eq!(
+            lane(&w, slot, "levels"),
+            vec![lvl as i64; 26],
+            "{level} p{slot}: SpellLevels_0x41D is written for all 26 spells",
+        );
+        // …and at least one of those slots is NOT granted, or the
+        // pre-fix port would pass too.
+        let ungranted = (0..26usize)
+            .filter(|&s| {
+                cfg.starting_spells.get(s).copied().unwrap_or(0) == 0
+                    || cfg.blocked_spells.get(s).copied().unwrap_or(0) != 0
+            })
+            .count();
+        assert!(
+            ungranted > 0,
+            "{level} p{slot}: every spell is granted — this row cannot witness the law",
+        );
+        // 2. The quick slots: first granted in the left hand, second
+        //    in the right.
+        let granted: Vec<i64> = (0..26usize)
+            .filter(|&s| {
+                cfg.starting_spells.get(s).copied().unwrap_or(0) != 0
+                    && cfg.blocked_spells.get(s).copied().unwrap_or(0) == 0
+            })
+            .map(|s| s as i64)
+            .collect();
+        assert_eq!(granted.first().copied(), Some(left), "{level} p{slot}: left");
+        assert_eq!(granted.get(1).copied(), Some(right), "{level} p{slot}: right");
+        assert_eq!(lane(&w, slot, "hand_left"), vec![left], "{level} p{slot}");
+        assert_eq!(lane(&w, slot, "hand_right"), vec![right], "{level} p{slot}");
+        // 3. The weave direction starts at the memset 0.
+        assert_eq!(
+            lane(&w, slot, "weave_dir"),
+            vec![0],
+            "{level} p{slot}: str_611_byte_0x45C_1116 is 0 until the first weave",
+        );
+    }
+}
+
+/// mc2l17: six rivals, every one authored `starting_spell_levels =
+/// [1; 26]` with between 14 and 24 spells actually granted — so the
+/// 12 / 11 / 10 / 5 / 5 / 2 un-granted slots that retail still levels
+/// are the whole witness.
+#[test]
+fn mc2_level_017_native_rivals_carry_retails_book_seat() {
+    check_book(
+        "level-017",
+        "mc2-day",
+        &[
+            (1, 1, 0, 1),
+            (2, 1, 0, 1),
+            (3, 1, 0, 1),
+            (4, 1, 0, 1),
+            (5, 1, 0, 1),
+            (6, 1, 0, 1),
+        ],
+    );
+}
+
+/// mc2l18: the TIER-2 contrast — p1/p5/p6 are authored `[2; 26]`, so
+/// a port that wrote a flat 1 (or clamped to the granted set) fails
+/// here even though level 17 would pass.
+#[test]
+fn mc2_level_018_native_rivals_carry_the_tier_two_book_seat() {
+    check_book(
+        "level-018",
+        "mc2-day",
+        &[(1, 2, 0, 1), (5, 2, 0, 1), (6, 2, 0, 1)],
+    );
+}

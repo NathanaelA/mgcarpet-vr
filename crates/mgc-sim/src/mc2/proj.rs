@@ -175,13 +175,69 @@ pub(crate) fn mc2_mine_ladder(model: u8) -> bool {
     )
 }
 
+/// A/B toggle for the POSSESSION workers' missing targetless aim
+/// snapshot (`CastPosses_65F60` action 1, `sub_674C0` action 18 — see
+/// the citation at the `mc2_flyer_tick` one-shot): set
+/// `MGC_NO_MC2_POSSES_AIM_ABSENCE` to restore the pre-dig behaviour,
+/// where every flyer entry snapshotted `roll/fov <- yaw/pitch` when
+/// the one-shot acquisition found nothing.
+fn no_posses_aim_absence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_POSSES_AIM_ABSENCE").is_some())
+}
+
 /// A/B toggle for `sub_674C0`'s claim-victim gate: set
 /// `MGC_NO_A18_VICTIM_GATE` to restore the pre-dig behaviour, where an
 /// action-18 (leveled possession) bolt minted its impact payload on a
 /// victimless expiry.
+/// ⭐⭐⭐ A THIRD MEMBER OF THE "NO ONE-SHOT ACQUISITION" LIST — THE
+/// MAGIC-MINE CARRIER. [`no_posses_aim_absence`] found actions 1 and
+/// 18 carrying only the SUCCESS half of the flyer one-shot; action
+/// **30** (`sub_67960`, EF:59635, the `(9,29)` carrier) does not call
+/// `sub_67CB0` AT ALL. Its acquisition is its own: a walk of the live
+/// chain for a `model == 78` mine that is not the caster's, inside the
+/// owner's `dword_0xA0_160x->word_160_0x1c_28` reach, which on success
+/// calls `sub_655C0` (and that writes roll/fov). With no mine in
+/// range it writes nothing — no `roll_0x20_32`, no `fov_0x22_34`, and
+/// **not the `byte[0] & 2` aim latch** either, which the port's folded
+/// one-shot sets unconditionally.
+///
+/// BYTE-VERIFIED in the shipped `NETHERW.EXE`: `sub_67960` spans file
+/// 0x8C160-0x8C429 (`c3` ret) and its complete `e8 rel32` call list is
+/// 0x7CBF0 (`sub_583F0` dist3d), 0x89DC0 (`sub_655C0`), 0x89E10
+/// (`sub_65610`), 0x34EC0 (`sub_106C0`), 0x7C7A0 (`MoveEntity_57FA0`),
+/// 0x7C4F0 (`CopyEntityPosition_57CF0`), 0x35440 (`getTerrainAlt`),
+/// 0x35460 (`sub_10C60`), 0x6E990 (`sub_4A190`), 0x89D80 (`sub_65580`),
+/// 0x89DA0 (`sub_655A0`), 0x7C710 (`DisableEntityDrawing04_57F10`).
+/// **0x8C4B0 = `sub_67CB0` is not on it**, and the whole body contains
+/// no store to `0x20(%reg)`, `0x22(%reg)` or the flag byte at
+/// `0xc(%reg)`.
+///
+/// WITNESS mc2l6-rsg slot 737 (the human's mine carrier, born t=13046
+/// off the `(15,23)` token at slot 367): retail holds `roll` 0 and
+/// `flags.b0_done2` 0 for the carrier's whole flight where the port
+/// wrote 810 and 1 on the birth tick and latched them — 105 rows on
+/// each of the two lanes over 14 slots, plus mc2l4's 11 and mc2l23's
+/// 11. Set `MGC_NO_MC2_CARRIER_AIM_ABSENCE` to restore the folded
+/// one-shot.
+fn no_carrier_aim_absence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CARRIER_AIM_ABSENCE").is_some())
+}
+
 fn no_a18_victim_gate() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_A18_VICTIM_GATE").is_some())
+}
+
+/// A/B toggle for the action-12 BEACON BOUNTY: set
+/// `MGC_NO_MC2_M12_BEACON_BOOST` to restore the pre-dig behaviour,
+/// where a Lightning L1/L2 carrier that bent onto its owner's Magic
+/// Mine took the plain sibling arm — aim only, no life bounty and no
+/// twin despawn. See [`Gen::mc2_m12_beacon_boost`] for the citation.
+fn no_m12_beacon_boost() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M12_BEACON_BOOST").is_some())
 }
 
 // A/B toggle for the action-30 MAGIC-MINE CARRIER shape (`sub_67960`,
@@ -193,6 +249,7 @@ fn no_a18_victim_gate() -> bool {
 use super::effects::no_mc2_mine as no_mine_carrier;
 use super::mobs::no_mine_beacon;
 use crate::engine::features::no_mc2_castle_ball_speed_step;
+use crate::engine::features::no_mc2_castle_ball_step_commit;
 
 /// A/B toggle for the action-18 ceiling pre-clamp removal
 /// (`sub_674C0` EF:58993-96 has no cave arm before its commit, unlike
@@ -202,6 +259,65 @@ use crate::engine::features::no_mc2_castle_ball_speed_step;
 fn no_a18_ceiling_preclamp() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_A18_CEILING_PRECLAMP").is_some())
+}
+
+/// A/B toggle for THE MID-STEP POSITION COMMIT: set
+/// `MGC_NO_MC2_PROJ_STEP_COMMIT` to restore the pre-dig behaviour,
+/// where the class-9 flight core computed its step, probed, and
+/// committed ONCE at the landing.
+///
+/// ⭐⭐⭐ RETAIL COMMITS THE MOVE **BEFORE** THE PROBE, AND THE COMMIT
+/// IS A TILE-CHAIN OPERATION. `sub_65C20`'s body is
+///     v16x = a1x->position_0x4C_76;                      EF:63121
+///     predictedAxis_EB398ar = v16x;
+///     MoveEntity_57FA0(&predictedAxis, yaw, pitch, actSpeed);
+///     CopyEntityPosition_57CF0(a1x, &predictedAxis);     EF:63127
+///     v8x = sub_10780(a1x);                              EF:63128
+/// and its terrain arm then commits the SAVED pre-move axis with only
+/// the clamped z (`v16x.z = predictedAxis.z;
+/// CopyEntityPosition_57CF0(a1x, &v16x)`, EF:63139-40). VERIFIED in the
+/// shipped NETHERW.EXE (`sub_65C20` = file **0x8A420**, VA + 0x24800):
+///   8a54b  8d 7d ec / 8d 73 4c / a5 / 66 a5   v16x = ent->+0x4C
+///   8a554  8d 75 ec / bf 98 b3 01 00 / a5 66 a5   predicted = v16x
+///   8a57a  e8 21 22 ff ff      call 0x7c7a0   MoveEntity_57FA0
+///   8a588  e8 63 1f ff ff      call 0x7c4f0   CopyEntityPosition_57CF0
+///   8a591  e8 ea a9 fa ff      call 0x34f80   sub_10780  (the probe)
+///   8a64c  66 a1 9c b3 01 00   mov 0x1b39c,%ax        v16x.z = predicted.z
+///   8a652  66 89 45 f0         mov %ax,-0x10(%ebp)
+///   8a65b  e8 90 1e ff ff      call 0x7c4f0   CopyEntityPosition_57CF0(&v16x)
+/// `CopyEntityPosition_57CF0` (EF:40588) is the CELL-GUARDED commit —
+/// same tile ⇒ a bare position write, different tile ⇒
+/// `SetMapEntity_57E50` (unlink) + `AddEventToMap_57D70` (HEAD insert).
+/// So a flyer whose step crosses a tile boundary and then terrain-
+/// contacts is unlinked from its entry tile, linked at the head of the
+/// tile it flew INTO, and then unlinked again and **head-inserted back
+/// into its entry tile** — it ends the tick as that tile's chain head.
+/// The port folded the two commits into one, saw entry-cell ==
+/// final-cell, and left the record wherever it already sat in the
+/// chain. Tile chains are walked head→tail and the FIRST admissible
+/// member wins every probe (`victim_scan`/`sub_10780`) — and the sprite
+/// pass is a pure painter with no z-buffer — so the order is
+/// behavioural, not cosmetic ("A POOL SCAN RETURNS THE LOWEST-NUMBERED
+/// MATCH, A REGISTER THE CHOSEN ONE").
+///
+/// WITNESS mc2l9 pair 2073→2074 (`MGC_RAW_SHADOW=1 verify-deltas`):
+/// the human's Rapid Fire (9,0)s at slots 7 and 356 both terrain-
+/// contact in tile (95,81) after a step that took them into (95,79).
+/// Retail's chain that tick is 357 → 347 → 356 → 338 → 7 (each
+/// contacting fireball re-headed itself, then head-inserted the (10,0)
+/// burst it minted); the port's is 357 → 347 → 338 → 356 → 7. Same
+/// members, same positions — only the link order parts. The lane is
+/// `(9,0)`/`(10,0) next16`/`prev18`, 19,183 + 16,679 + 16,802 + 14,699
+/// free-run rows over 38-39 of the corpus's 40 MC2 takes.
+///
+/// ⚠ THE LIGHTNING BEAM IS EXEMPT. Its per-step worker `sub_66610` is a
+/// RAW field write (`a1x->position_0x4C_76 = predictedAxis_EB398ar;`,
+/// EF:63601) and never `CopyEntityPosition_57CF0` — the port models
+/// that with `mc2_beam_defer` (see [`Gen::move_relink`]), so the march
+/// window keeps its unlinked record and takes no commit here.
+fn no_mc2_proj_step_commit() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PROJ_STEP_COMMIT").is_some())
 }
 
 /// A/B toggle for `sub_65C20`'s REFUSED-DEFLECTION NO-OP: set
@@ -265,22 +381,56 @@ fn no_mc2_strike_subspell_1() -> bool {
 /// (`:10050 if (v4 == 0xae02) return;`) — see `docs/DEVIATIONS.md`
 /// "MC2 RETAIL READS OUT OF BOUNDS".
 ///
-/// ⚠ **OPT-IN, DEFAULT OFF** — the value is not derivable from the
-/// shipped assets, which is the campaign's REGISTERED-DEVIATION class
-/// (same footing as `MGC_MC2_IVT_GHOST`). It is also INERT on this
-/// corpus: nothing in retail or the port reads a (10,23) or (10,38)
-/// `@0x96` (`sub_33D80` EF:24787 and `sub_10C80` EF:3953-4155 never
-/// touch it), so turning it on only makes the ungraded-lane census
-/// honest. Set `MGC_MC2_NULL_VICTIM_GHOST=1` to reproduce it.
-/// A PLAYER RULING IS OWED on whether it should be the default.
+/// ⚠ **OPT-IN IN THE SIM, DEFAULT ON IN THE INSTRUMENT** (player-ruled
+/// 2026-09-18, round 149). The value is not derivable from the shipped
+/// assets, which is the campaign's REGISTERED-DEVIATION class (same
+/// footing `mc2_ivt_ghost` stood on until round 150), so native play and the graded
+/// runners never stamp it. It is also INERT on this corpus: nothing in
+/// retail or the port reads a (10,23) or (10,38) `@0x96` (`sub_33D80`
+/// EF:24787 and `sub_10C80` EF:3953-4155 never touch it), so turning
+/// it on only makes the ungraded-lane census honest — which is why the
+/// raw-shadow census (`MGC_RAW_SHADOW`, mgc-conform) turns it on
+/// through [`set_null_victim_ghost_instrument`] unless the env var says
+/// otherwise. `MGC_MC2_NULL_VICTIM_GHOST=1` forces it on anywhere,
+/// `=0` forces it off even under the census.
 pub(crate) fn mc2_null_victim_ghost() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var_os("MGC_MC2_NULL_VICTIM_GHOST").is_some())
+    *V.get_or_init(|| match std::env::var("MGC_MC2_NULL_VICTIM_GHOST") {
+        Ok(v) if v == "0" || v.is_empty() => false,
+        Ok(_) => true,
+        Err(_) => NULL_VICTIM_GHOST_INSTRUMENT.load(std::sync::atomic::Ordering::Relaxed),
+    })
+}
+
+/// The instrument default for [`mc2_null_victim_ghost`]: an ungraded-
+/// lane census sets it before the first tick so the (10,23)/(10,38)
+/// `target96` lane counts real divergences instead of 193k copies of
+/// one heap constant. Read once, at the first stamp — call it before
+/// any world ticks.
+static NULL_VICTIM_GHOST_INSTRUMENT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// See [`NULL_VICTIM_GHOST_INSTRUMENT`].
+pub fn set_null_victim_ghost_instrument(on: bool) {
+    NULL_VICTIM_GHOST_INSTRUMENT.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The observed `-(EntitiesBase / 168) & 0xFFFF` of the shipped DOS
 /// build (see [`mc2_null_victim_ghost`]).
 pub(crate) const MC2_NULL_VICTIM_GHOST: u16 = 44546;
+
+/// A/B toggle for the PER-WORKER IMPACT-XP SPELL: set
+/// `MGC_NO_MC2_IMPACT_XP_SPELL` to restore the pre-dig behaviour,
+/// where [`Gen::mc2_proj_impact`] credited
+/// `Entities[word_0x26_38]->model` for EVERY folded worker and awarded
+/// spell 0 whenever that back-ref was zero. Retail hard-codes the
+/// spell in five of the seven workers and refuses the award outright
+/// in the two that read the back-ref when it is zero — see the read
+/// site for the shipped-byte table.
+fn no_mc2_impact_xp_spell() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_IMPACT_XP_SPELL").is_some())
+}
 
 /// A/B toggle for `sub_65C20`'s MISS-CLEARS-THE-LOCK tail: set
 /// `MGC_NO_FIREBALL_LOCK_CLEAR` to restore the pre-dig behaviour,
@@ -1710,8 +1860,11 @@ impl Gen {
                 // [`World::mc2_summon_head_bearing`] (mc2/roster.rs)
                 // for the citation, the qmemcpy/head split and the
                 // free-run witness. Kill switch
-                // `MGC_NO_SUMMON_HEAD_BEARING`.
-                self.mc2_summon_head_bearing(head, yaw, pitch);
+                // `MGC_NO_SUMMON_HEAD_BEARING`. The `word_0x96_150`
+                // stamp two statements down the SAME tail — the
+                // COLLISION VICTIM, conditional on `if (v5x)` — rides
+                // the same call (`MGC_NO_SUMMON_HEAD_VICTIM`).
+                self.mc2_summon_head_bearing(head, yaw, pitch, victim);
                 None
             }
             // Alliance (spell 24): the (10,74) conversion executor
@@ -2142,14 +2295,49 @@ impl Gen {
         // `class == 3 && model == 0`, the HUMAN wizard only
         // (EF:58240-41); retail rivals have no spell-XP progression.
         if victim != 0 && id == PLAYER_TARGET && self.ent[i].flags & F_MC2PROJ != 0 {
-            // `sub_6D8B0(id, Entities[a1x->word_0x26_38]->model, 1)`
-            // (EF:62985): the lane is the TOKEN'S SLOT. The
-            // `unwrap_or` keeps every pre-slot stamp (0 = no
-            // back-ref, the castle turrets) reading exactly as before.
-            let raw = self.ent[i].f40;
-            let spell = self.mc2_token_model(raw).unwrap_or(raw);
-            if spell < 26 {
-                self.mc2_cast_xp.0.push((id, spell, 1));
+            // ⭐⭐⭐ THE IMPACT-XP LANE IS THE WORKER'S, NOT THE FLYER'S.
+            // This tail folds SEVEN retail impact workers into one and
+            // they do NOT agree about which spell the hit credits —
+            // four hard-code an immediate, two read the token back-ref
+            // and one of those two REFUSES the award when the back-ref
+            // is zero. Shipped `NETHERW.EXE` (file = VA + 0x24800),
+            // every `call 0x6d8b0` in the impact tails:
+            //   0x65F0A `push $0x1` / **`push $0x0`**  sub_65C20 (act 0/29)
+            //   0x66125 `push $0x1` / **`push $0x1`**  sub_65F60 (act 1)
+            //   0x676A5 `push $0x1` / **`push $0x1`**  sub_674C0 (act 18)
+            //   0x66A46 `push $0x1` / **`push $0x7`**  sub_66750 (act 9)
+            //   0x67254 `push $0x1` / **`push $0x7`**  sub_66FD0 (act 12)
+            //   0x65A7D **`cmpw $0x0,0x26(%ebx)` / `je`** then
+            //           `mov 0x26(%ebx),%ax` / `mov 0x1a3e4(,%eax,4)` /
+            //           `movsbl 0x40(%eax)`                sub_65820
+            //   0x6654D the same guard + form                sub_662E0
+            // (EF:63587 / 63712 / 59448 / 58772 / 59222 / 63383 /
+            // 63949.) The port used the sub_65820 form for ALL of
+            // them AND dropped its zero guard, so a lightning bolt —
+            // whose launcher never stamps `word_0x26_38` — credited
+            // FIREBALL instead of Lightning on every strike.
+            // mc2l10-secondtake pair 625: retail `xp_vol[7]` 5 /
+            // `xp_vol[0]` 0, the port 4 / 1, and the same single
+            // misdirected credit repeats 131 times.
+            // See [`no_mc2_impact_xp_spell`].
+            let xp_spell = if no_mc2_impact_xp_spell() {
+                let raw = self.ent[i].f40;
+                Some(self.mc2_token_model(raw).unwrap_or(raw))
+            } else {
+                match act {
+                    0 | 29 => Some(0u16),
+                    1 | 18 => Some(1),
+                    9 | 12 => Some(7),
+                    _ => {
+                        let raw = self.ent[i].f40;
+                        (raw != 0).then(|| self.mc2_token_model(raw).unwrap_or(raw))
+                    }
+                }
+            };
+            if let Some(spell) = xp_spell {
+                if spell < 26 {
+                    self.mc2_cast_xp.0.push((id, spell, 1));
+                }
             }
         }
         // ⭐ THE IMPACT RE-POINTS THE OWNER WIZARD AT WHAT IT STRUCK —
@@ -2711,6 +2899,33 @@ impl Gen {
         };
         let mut pos = (px, py, pz);
         Self::polar_step(&mut pos, yaw, pitch, speed);
+        // ⭐⭐⭐ THE FLIGHT STEP COMMITS TO THE MAP BEFORE THE PROBES,
+        // AND A REFUSED BALL THEREFORE COMMITS TWICE. `sub_66D00`
+        // calls `CopyEntityPosition_57CF0(a1x, &predictedAxis)` on the
+        // line after `MoveEntity_57FA0` (EF:59018-19) and AGAIN on the
+        // 180° retreat step (EF:59060-63); the terrain arm in between
+        // writes `position.z` bare, with no commit at all (EF:59040).
+        // The port folded the whole tick into ONE `move_relink` of the
+        // final pose, so a step that leaves the tile and a retreat
+        // that comes straight back looked like "same tile, no relink"
+        // and the record kept its old seat in the chain — where
+        // retail, having unlinked and re-added it twice, leaves it at
+        // the HEAD. Same class as round 148's
+        // `MGC_NO_MC2_PROJ_STEP_COMMIT`.
+        // WITNESS mc2l24-crazy t=15604 slot 78: the castle ball steps
+        // ~340 units horizontally (speed 392, pitch 169) out of tile
+        // (118,99), `sub_11CB0` refuses the site, and the retreat puts
+        // it back at (30374,25372) — one unit of rounding residue from
+        // where it started, and 388 = 2×194 of z below it, the SAME
+        // pitch applied twice, which is the receipt for the two steps.
+        // Retail's chain for that tile reads head 78 → 193; the port's
+        // still read 193 → 78 (`(9,10) map_head/next16/prev18` on 78
+        // and `(5,9) next16/prev18` on 193, five rows, one tick).
+        // `MGC_NO_MC2_CASTLE_BALL_STEP_COMMIT=1` restores the single
+        // end-of-tick commit.
+        if !no_mc2_castle_ball_step_commit() {
+            self.move_relink(i, pos.0, pos.1, pos.2);
+        }
         let mut land = false;
         let mut refused = false;
         // Upgrade arrival: plain overlap with the target snaps the
@@ -2849,6 +3064,117 @@ impl Gen {
         Some((t.x, t.y, t.z))
     }
 
+    /// ⭐⭐⭐ THE SEVENTH FLYER ENTRY PAYS THE BEACON A BOUNTY — AND
+    /// IT IS THE ONLY RETAIL READER OF THE LIGHTNING TWINS'
+    /// CROSS-LINK.
+    ///
+    /// Round 149's `M12_HANDLE_HOME` moved the Lightning T3 twin
+    /// handle to its true home `word_0x34_52` = `@0x34` = [`Ent::f54`]
+    /// (`sub_6A5C0` writes the pair at file 0x8F15B/0x8F16B
+    /// `66 89 42 34`) and banked the CONSUMER, which is here. Six of
+    /// the seven flyer entries the port folds into
+    /// [`Gen::mc2_flyer_tick`] spell the targetless one-shot as the
+    /// bare `if (sub_68940(a1x) || sub_67CB0(a1x)) { yaw = roll;
+    /// pitch = fov; } else { roll = yaw; fov = pitch; }`
+    /// (`sub_65820` banner `(00065820)`, its `if (sub_68940(a1x) ||
+    /// sub_67CB0(a1x))` at EF:63443; likewise `sub_65C20`
+    /// `(00065C20)`, `sub_662E0` `(000662E0)`, `sub_66610`
+    /// `(00066610)`, and the two possession workers that carry only
+    /// the success half). The
+    /// **action-12** entry `sub_66FD0` — the Lightning L1/L2 carrier
+    /// whose expiry mints the (10,38) storm cloud — does not: it
+    /// splits the `||` into a leading `if (sub_68940(a1x))` arm that
+    /// pays a bounty first — banner `//----- (00066FD0)`, and at the
+    /// submodule revision this was written against the arm is
+    /// EF:59241-51 (⚠ RESOLVE BY ADDRESS; the file moved 122 lines
+    /// under this dig mid-session):
+    /// ```text
+    ///   v3 = a1x->life_0x8 + 32;
+    ///   a1x->yaw_0x1C_28   = a1x->roll_0x20_32;
+    ///   a1x->life_0x8      = v3;
+    ///   a1x->maxLife_0x4   = v3;
+    ///   v4 = a1x->word_0x34_52;
+    ///   a1x->pitch_0x1E_30 = a1x->fov_0x22_34;
+    ///   if (v4) { sub_57F20(Entities_EA3E4[v4]); a1x->word_0x34_52 = 0; }
+    /// ```
+    /// BYTE-VERIFIED in the shipped `NETHERW.EXE` (file = VA +
+    /// 0x24800, so `sub_66FD0` = file 0x8B7D0). The `sub_68940` call
+    /// and its taken branch are at 0x8B822-0x8B82C, and the arm is the
+    /// block the sibling entries do not have:
+    /// ```text
+    ///   8b822  e8 19 19 00 00  call 0x8d140        ; sub_68940 (VA 0x68940)
+    ///   8b82a  84 c0           test %al,%al
+    ///   8b82c  75 31           jne  0x8b85f        ; BEACON HIT
+    ///   8b82e  e8 7c 0c 00 00  call 0x8c4b0        ; else sub_67CB0 (the
+    ///   8b83b  66 8b 43 20 …                       ;   EXACT sibling arm)
+    ///   8b85f  8b 73 08        mov  0x8(%ebx),%esi ; life
+    ///   8b862  66 8b 43 20     mov  0x20(%ebx),%ax ; roll
+    ///   8b866  83 c6 20        add  $0x20,%esi     ; life + 32
+    ///   8b869  66 89 43 1c     mov  %ax,0x1c(%ebx) ; yaw   = roll
+    ///   8b86d  89 73 08        mov  %esi,0x8(%ebx) ; life
+    ///   8b870  89 73 04        mov  %esi,0x4(%ebx) ; maxLife
+    ///   8b873  66 8b 43 22     mov  0x22(%ebx),%ax ; fov
+    ///   8b877  66 8b 53 34     mov  0x34(%ebx),%dx ; the TWIN handle
+    ///   8b87b  66 89 43 1e     mov  %ax,0x1e(%ebx) ; pitch = fov
+    ///   8b87f  66 85 d2        test %dx,%dx
+    ///   8b882  74 1b           je   0x8b89f
+    ///   8b889  8b 3c 85 e4 a3 01 00  mov 0x1a3e4(,%eax,4),%edi
+    ///   8b891  e8 8a 0e ff ff  call 0x7c720        ; VA 0x57F20 — the FREE
+    ///   8b899  66 c7 43 34 00 00  movw $0x0,0x34(%ebx)
+    /// ```
+    /// `0x7C720` is `sub_57F20` (Events.cpp:5209-39), the HARD free —
+    /// unlink, leave the recycle stack, `class = 0`, push the slot —
+    /// not `DisableEntityDrawing04_57F10` at 0x7C710 one call slot
+    /// below it. So a charged (T3) Lightning cast at your own armed
+    /// Magic Mine collapses to ONE bolt: whichever twin ticks first
+    /// bends onto the mine, takes +32 life **and** +32 maxLife, and
+    /// FREES its partner outright.
+    ///
+    /// Only the beacon arm pays it — a lock won by `sub_67CB0` takes
+    /// the bare `yaw = roll; pitch = fov` at 0x8B83B, which the port
+    /// already had byte-for-byte. The gates are all
+    /// [`Gen::mc2_mine_beacon`]'s (model ladder — 0xC, the Lightning
+    /// carrier's model, is IN it; a class-3 owner; HIS OWN `(10,78)`
+    /// still armed; inside his behaviour-row reach and a ±0xAA cone).
+    ///
+    /// ⚠ **UNWITNESSED — this lands on the bytes.** Over the 40-take
+    /// MC2 corpus not one recorded boundary shows an action-12 carrier
+    /// whose `word_0x96_150` points at a `(10,78)`: 2,032 action-12
+    /// rows on 23 takes, `on_mine` = **0**. Only three takes hold an
+    /// armed mine at all (mc2l0-spells-galore 10,360 ticks,
+    /// mc2l6-rival-spells-galore 11,788, mc2l24 897) and only
+    /// mc2l6-rsg ever flies an action-12 bolt for that mine's owner
+    /// (106 rows, 343's) — every one of them outside the cone or the
+    /// reach, `target96` 0 or a creature. The twin half needs a T3
+    /// cast on top of that. Reachable in play, never recorded.
+    ///
+    /// `MGC_NO_MC2_M12_BEACON_BOOST=1` restores the sibling arm.
+    fn mc2_m12_beacon_boost(&mut self, i: usize) {
+        if no_m12_beacon_boost() {
+            return;
+        }
+        let (life, twin) = {
+            let e = &self.ent[i];
+            (e.act_life, e.f54)
+        };
+        // `v3 = life + 32` is a plain 32-bit add with no floor and no
+        // clamp, and BOTH words take it (`mov %esi,0x8` / `mov
+        // %esi,0x4`): a bolt already past its expiry is revived.
+        let v3 = life.wrapping_add(32);
+        {
+            let e = &mut self.ent[i];
+            e.act_life = v3;
+            e.max_life = v3 as u32;
+            e.f54 = 0;
+        }
+        // `sub_57F20(Entities_EA3E4[v4])` — retail indexes the pool
+        // raw, with no liveness or class test; the port bounds-checks
+        // only because its pool is a Rust slice.
+        if twin != 0 && (twin as usize) < self.ent.len() {
+            self.free_entity(twin as usize);
+        }
+    }
+
     pub(crate) fn mc2_flyer_tick(&mut self, i: usize, ctx: &MobCtx) {
         // Homing / acquisition (EF:62902-21).
         match self.mc2_flyer_target(self.ent[i].f146, ctx) {
@@ -2901,7 +3227,14 @@ impl Gen {
                 // `word_0x96_150 == 0` and so never fires for a beam
                 // that arrived with a target; the port must not let the
                 // stashed lock read as "targetless" and re-aim.
-                if self.ent[i].flags & F_AIMED == 0 && !self.mc2_beam_defer.armed {
+                // ⚠ …AND THE MAGIC-MINE CARRIER (action 30) HAS NO
+                // ONE-SHOT AT ALL — `sub_67960` never calls
+                // `sub_67CB0`, so it takes neither arm and never sets
+                // the latch. See [`no_carrier_aim_absence`].
+                if self.ent[i].flags & F_AIMED == 0
+                    && !self.mc2_beam_defer.armed
+                    && (self.ent[i].tick70 != 30 || no_carrier_aim_absence())
+                {
                     self.ent[i].flags |= F_AIMED;
                     // One-shot acquisition (`sub_67CB0`): the
                     // FIREBALL states nudge yaw ≤34 units toward the
@@ -2927,11 +3260,18 @@ impl Gen {
                     // point of the Magic Mine spell and why the beacon
                     // wins locks the generic scan cannot even see.
                     // [`Gen::mc2_mine_beacon`] carries the gates.
-                    if self.mc2_mine_beacon(i, ctx) || self.mc2_autoaim(i, ctx) {
+                    let beacon = self.mc2_mine_beacon(i, ctx);
+                    if beacon || self.mc2_autoaim(i, ctx) {
                         let (yaw, dy, dp, act) = {
                             let e = &self.ent[i];
                             (e.f30, e.f34, e.f36, e.tick70)
                         };
+                        // ⭐⭐⭐ ACTION 12 PAYS THE BEACON A BOUNTY THAT
+                        // ITS SIX SIBLINGS DO NOT — see
+                        // [`Gen::mc2_m12_beacon_boost`].
+                        if beacon && act == 12 {
+                            self.mc2_m12_beacon_boost(i);
+                        }
                         let e = &mut self.ent[i];
                         if matches!(act, 0 | 29) {
                             // NO 11-bit mask here. `sub_65610`'s servo
@@ -2959,9 +3299,47 @@ impl Gen {
                         }
                         e.f32 = dp;
                     } else {
+                        // ⭐⭐⭐ AN ABSENCE IN AN ENUMERATED LIST — THE TWO
+                        // POSSESSION WORKERS HAVE NO TARGETLESS SNAPSHOT.
+                        // Five of the seven flyer entries spell the
+                        // one-shot as `if (beacon || sub_67CB0) { yaw =
+                        // roll; pitch = fov; } else { roll = yaw; fov =
+                        // pitch; }` — `sub_65820` (EF:63302-13),
+                        // `sub_662E0` (EF:63847-58), `sub_66610`
+                        // (EF:63987-98) and `sub_65C20` (EF:63500-05, its
+                        // `if (!sub_67CB0(a1x))` early-out). But
+                        // `CastPosses_65F60` (action 1, EF:63640-50) and
+                        // `sub_674C0` (action 18, EF:59372-80) carry ONLY
+                        // the success half — no `else`, and no beacon call
+                        // either — so a possession bolt that acquires
+                        // nothing keeps `roll_0x20_32`/`fov_0x22_34` at
+                        // `NewEvent_4A050`'s memset **0** for its whole
+                        // flight.
+                        // BYTE-VERIFIED in the shipped `NETHERW.EXE`:
+                        //   0x65F60 (file 0x8A760) — ONE call,
+                        //     `e8 00 1d 00 00` → 0x67CB0; `74 10` je skips
+                        //     straight to the move. The only 0x20/0x22
+                        //     touch in the block is the success pair
+                        //     `66 8b 43 20 / 66 89 43 1c` +
+                        //     `66 8b 43 22 / 66 89 43 1e` (yaw=roll,
+                        //     pitch=fov). There is no `66 89 43 20`.
+                        //   0x674C0 (file 0x8BCC0) — byte-for-byte the
+                        //     same shape (`e8 a0 07 00 00` → 0x67CB0,
+                        //     `74 10`).
+                        //   0x65820 (file 0x8A020) — TWO calls (0x68940
+                        //     then 0x67CB0) and the else-arm is right
+                        //     there: `66 8b 43 1c / 66 89 43 20` +
+                        //     `66 8b 43 1e / 66 89 43 22`.
+                        // The beacon half needs no guard: `mc2_mine_ladder`
+                        // already refuses models 1 and 0x11, which are the
+                        // only two models that ever run actions 1/18.
+                        // `MGC_NO_MC2_POSSES_AIM_ABSENCE=1` restores the
+                        // uniform snapshot.
                         let e = &mut self.ent[i];
-                        e.f34 = e.f30;
-                        e.f36 = e.f32;
+                        if !matches!(e.tick70, 1 | 18) || no_posses_aim_absence() {
+                            e.f34 = e.f30;
+                            e.f36 = e.f32;
+                        }
                     }
                 }
             }
@@ -3090,6 +3468,13 @@ impl Gen {
                     pos.2 = c;
                 }
             }
+            // Retail's order is clamp → COMMIT → `sub_108B0`
+            // (EF:63262-88 / :58993-96, both possession workers spell
+            // `CopyEntityPosition_57CF0(a1x, &predictedAxis)` before
+            // the claim probe). See [`no_mc2_proj_step_commit`].
+            if !no_mc2_proj_step_commit() && !self.mc2_beam_defer.armed {
+                self.move_relink(i, pos.0, pos.1, pos.2);
+            }
             let hit = self.claim_victim_scan_at(i, pos);
             return self.mc2_proj_land(i, ctx, start, pos, hit);
         }
@@ -3111,6 +3496,15 @@ impl Gen {
         // latent class — a projectile born co-located with a
         // targetable entity it does not own detonating on tick 1.
         let admit_muzzle = !no_muzzle_admission();
+        // ⭐ THE STEP'S OWN COMMIT — retail's `MoveEntity_57FA0` →
+        // `CopyEntityPosition_57CF0` → `sub_10780` (EF:63126-29 /
+        // :62935-37), i.e. the record is ALREADY at the endpoint, and
+        // already re-linked into the endpoint's tile chain, when the
+        // probe runs. See [`no_mc2_proj_step_commit`] for the shipped
+        // bytes and the mc2l9 witness.
+        if !no_mc2_proj_step_commit() && !self.mc2_beam_defer.armed {
+            self.move_relink(i, pos.0, pos.1, pos.2);
+        }
         let mut scanned = None;
         for k in 1..=n {
             let sub = (
@@ -4914,6 +5308,136 @@ mod debuff_knock_tests {
         assert_eq!(g.ent[mine1].f36, 0, "…and that mine is still armed");
     }
 
+    /// ⭐⭐⭐ THE ACTION-12 BEACON BOUNTY — THE RETAIL CONSUMER OF THE
+    /// LIGHTNING TWINS' `@0x34` CROSS-LINK (round 149's banked
+    /// `M12_HANDLE_HOME` half).
+    ///
+    /// `sub_66FD0` alone splits the flyer one-shot's `sub_68940 ||
+    /// sub_67CB0` into a leading beacon arm that pays `life += 32`
+    /// into BOTH `life_0x8` and `maxLife_0x4` and then hands the twin
+    /// named by `word_0x34_52` to `sub_57F20` — the hard FREE.
+    /// Shipped `NETHERW.EXE` file 0x8B85F-0x8B89F; the full
+    /// disassembly and the UNWITNESSED verdict are at
+    /// [`Gen::mc2_m12_beacon_boost`].
+    ///
+    /// Two halves. The FIRST drives the payload directly, as the
+    /// ladder test above drives [`Gen::mc2_mine_swallow`], so the
+    /// beacon's own five gates cannot mask it. The SECOND drives the
+    /// WIRING through [`Gen::mc2_flyer_tick`] with a real armed mine
+    /// on the paint chain, and pairs the action-12 carrier with an
+    /// action-0 fireball that wins the SAME beacon — the sibling arm
+    /// pays nothing, which is the whole point of the split.
+    ///
+    /// NON-VACUITY: with `MGC_NO_MC2_M12_BEACON_BOOST=1` the first
+    /// half fails at "+32 rides both words" and the second at "the
+    /// twin is freed".
+    #[test]
+    fn the_action_12_beacon_pays_32_and_frees_the_twin() {
+        let mut g = flat_gen();
+        // ── half 1: the payload, driven directly ──────────────────
+        let a = g.new_event().expect("bolt slot");
+        let b = g.new_event().expect("twin slot");
+        for (s, other) in [(a, b), (b, a)] {
+            let e = &mut g.ent[s];
+            e.class64 = 9;
+            e.model65 = 12;
+            e.tick70 = 12;
+            e.id24 = PLAYER_TARGET;
+            e.act_life = 7;
+            e.max_life = 7;
+            e.f54 = other as u16; // `word_0x34_52` — the T3 cross-link
+            e.x = 40 * 256;
+            e.y = 40 * 256;
+            e.z = 400;
+        }
+        g.mc2_m12_beacon_boost(a);
+        assert_eq!(g.ent[a].act_life, 39, "+32 rides both words (life)");
+        assert_eq!(g.ent[a].max_life, 39, "+32 rides both words (maxLife)");
+        assert_eq!(g.ent[a].f54, 0, "`word_0x34_52` is cleared");
+        assert_eq!(
+            g.ent[b].class64, 0,
+            "the twin went through sub_57F20 — a hard FREE, not a draw-off"
+        );
+
+        // ── half 2: the wiring, through the folded flyer tick ─────
+        // ⚠ The beacon's reach is measured from the OWNER, and the
+        // owner here is the human — so the geometry has to sit next
+        // to `ctx`, and the action-12 carrier and its action-0
+        // control each get their own world rather than two mines one
+        // player-reach apart (the nearest armed mine wins for both).
+        // `lit` = (bolt f146, twin class, bolt f54, bolt life).
+        let lit = |act: u8, model: u8| -> (u16, u8, u16, i32) {
+            let mut g = flat_gen();
+            let (px, py) = (ctx().px, ctx().py);
+            let mine = g.new_event().expect("mine slot");
+            {
+                let e = &mut g.ent[mine];
+                e.class64 = 10;
+                e.model65 = 78;
+                e.tick70 = 85;
+                e.f52 = PLAYER_TARGET; // `word_0x32_50` — HIS OWN mine
+                e.f36 = 0; // armed (retail's -1)
+                e.flags |= 8;
+                e.x = px + 2048;
+                e.y = py;
+                e.z = 400;
+            }
+            g.paint_chain.list.push(mine as u16);
+            g.paint_chain.cut = usize::MAX;
+            let s = g.new_event().expect("bolt slot");
+            let t = g.new_event().expect("twin slot");
+            for (a, b) in [(s, t), (t, s)] {
+                let e = &mut g.ent[a];
+                e.class64 = 9;
+                e.model65 = model;
+                e.tick70 = act;
+                e.id24 = PLAYER_TARGET;
+                e.act_life = 7;
+                e.max_life = 7;
+                e.f54 = b as u16; // the T3 cross-link
+                e.x = px;
+                e.y = py;
+                e.z = 400;
+                // Point the muzzle at the mine: the beacon cone is
+                // ±0xAA about `yaw_0x1C_28`.
+                e.f30 = Gen::angle_between(px, py, px + 2048, py);
+            }
+            g.mc2_flyer_tick(s, &ctx());
+            let e = &g.ent[s];
+            (e.f146, g.ent[t].class64, e.f54, e.act_life)
+        };
+        // The action-12 Lightning carrier (model 0xC).
+        let (tgt12, twin12_class, link12, life12) = lit(12, 12);
+        // The control: the SAME record on the SHARED core's action 2,
+        // which wins the SAME beacon through the SAME `sub_68940`
+        // (`sub_65820`, banner `(00065820)`) — only the action
+        // differs.
+        let (tgt2, twin2_class, link2, life2) = lit(2, 12);
+        assert_ne!(tgt12, 0, "the action-12 carrier bent onto its owner's mine");
+        assert_ne!(tgt2, 0, "…and so did the action-2 control (same sub_68940)");
+        assert_eq!(
+            life12,
+            7 + 32,
+            "the bounty rode the WIRING, not just the helper"
+        );
+        assert_eq!(life2, 7, "…and the shared core pays none of it");
+        // ⚠ The freed slot does not stay empty for the caller to
+        // read: this same tick's tail mints the (10,38) storm cloud,
+        // and `new_event` seizes the slot `sub_57F20` just released —
+        // which is itself the proof that it was a FREE and not a
+        // draw-off. Half 1 above reads the bare `class = 0`.
+        assert_ne!(
+            twin12_class, 9,
+            "the twin left the pool — sub_66FD0's arm, and only its"
+        );
+        assert_eq!(link12, 0, "…and the link word went with it");
+        assert_eq!(
+            twin2_class, 9,
+            "the shared core frees nothing: the control's twin lives"
+        );
+        assert_ne!(link2, 0, "…and its link word is untouched");
+    }
+
     /// ⭐⭐ THE BEAM'S RAW-ORIGIN EXEMPTION IS NOT A POOL-VICTIM
     /// EXEMPTION — IT IS THE WHOLE BLOCKER ARM'S, THE PLAYER
     /// INCLUDED.
@@ -4975,5 +5499,308 @@ mod debuff_knock_tests {
             "sub_66610's blocker arm is a bare position copy \
              (EF:63605-08) — a beam parks at the player's RAW origin"
         );
+    }
+}
+
+#[cfg(test)]
+mod impact_xp_spell_tests {
+    //! ⭐⭐⭐ THE IMPACT-XP LANE IS THE WORKER'S, NOT THE FLYER'S
+    //! (round 147, dig w147g; [`super::no_mc2_impact_xp_spell`]).
+    //!
+    //! [`Gen::mc2_proj_impact`] folds SEVEN retail impact workers into
+    //! one tail and they do NOT agree about which spell a hit credits:
+    //! five hard-code an immediate and two read the token back-ref —
+    //! and those two REFUSE the award outright when the back-ref is
+    //! zero. Shipped `NETHERW.EXE` (file = VA + 0x24800), every
+    //! `call 0x6d8b0` in the impact tails:
+    //!
+    //! ```text
+    //!   0x65F0A  push $0x1 / push $0x0   sub_65C20 (act 0/29)
+    //!   0x66125  push $0x1 / push $0x1   sub_65F60 (act 1)
+    //!   0x676A5  push $0x1 / push $0x1   sub_674C0 (act 18)
+    //!   0x66A46  push $0x1 / push $0x7   sub_66750 (act 9)
+    //!   0x67254  push $0x1 / push $0x7   sub_66FD0 (act 12)
+    //!   0x65A7D  cmpw $0x0,0x26(%ebx) / je  then the back-ref form
+    //!   0x6654D  the same guard + form
+    //! ```
+    //!
+    //! (EF:63587 / 63712 / 59448 / 58772 / 59222 / 63383 / 63949.) The
+    //! port used the back-ref form for ALL of them AND dropped its
+    //! zero guard, so a lightning bolt — whose launcher never stamps
+    //! `word_0x26_38` — credited FIREBALL on every strike
+    //! (mc2l10-secondtake pair 625: retail `xp_vol[7]` 5 /
+    //! `xp_vol[0]` 0, the port 4 / 1, 131 times over).
+    //!
+    //! ⛔ The XP book is re-imported at every anchor, so the mail is
+    //! the only thing a test can read. All five arms are driven here —
+    //! §"A LAW ON ONE CALL PATH IS NOT LANDED".
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
+    use crate::verbs::VerbSet;
+
+    fn flat_gen() -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    fn ctx() -> MobCtx {
+        MobCtx {
+            px: 40 * 256,
+            py: 40 * 256,
+            pz: 400,
+            pyaw: 0,
+            pmana: 1000,
+            pmana_max: 1000,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// A human-owned class-9 flyer in action `act` carrying back-ref
+    /// `f40`, landed on a live creature. Returns the XP mail the
+    /// impact tail posted.
+    fn impact(act: u8, token_model: Option<u8>) -> Vec<(u16, u16, i32)> {
+        let mut g = flat_gen();
+        let victim = g.new_event().expect("victim slot");
+        {
+            let e = &mut g.ent[victim];
+            e.class64 = 5;
+            e.model65 = 1;
+            e.id24 = victim as u16;
+            e.max_life = 1000;
+            e.act_life = 1000;
+        }
+        g.link(victim, 40 << 8, 40 << 8, 100);
+        // The (15,x) manifestation the launcher's `word_0x26_38`
+        // points at — `mc2_token_model`'s only accepted shape. ⚠ It
+        // must come out of `new_event`, or the impact's own effect
+        // spawn recycles the slot out from under it.
+        let f40 = match token_model {
+            Some(m) => {
+                let t = g.new_event().expect("token slot");
+                let e = &mut g.ent[t];
+                e.class64 = 15;
+                e.model65 = m;
+                t as u16
+            }
+            None => 0,
+        };
+        let bolt = g.new_event().expect("bolt slot");
+        {
+            let e = &mut g.ent[bolt];
+            e.class64 = 9;
+            e.model65 = 0;
+            e.tick70 = act;
+            e.f40 = f40;
+            e.id24 = PLAYER_TARGET; // a HUMAN cast — rivals never accrue
+            e.max_life = 100;
+            e.act_life = 100;
+            e.flags |= super::F_MC2PROJ;
+        }
+        g.link(bolt, 40 << 8, 40 << 8, 100);
+        g.mc2_proj_impact(bolt, victim as u16, &ctx(), None);
+        g.mc2_cast_xp.0.clone()
+    }
+
+    /// Each worker's own hard-coded spell, and the two back-ref
+    /// readers' zero guard.
+    ///
+    /// Non-vacuous by construction: the five arms return five
+    /// DIFFERENT answers from one rig whose only variables are `act`
+    /// and `f40`, so no single constant — and no dead award path —
+    /// satisfies the set. With `MGC_NO_MC2_IMPACT_XP_SPELL=1` the
+    /// lightning arms read spell 0 and the empty back-ref mails
+    /// spell 0 instead of nothing.
+    #[test]
+    fn each_impact_worker_credits_its_own_spell() {
+        // The two LIGHTNING carriers hard-code spell 7 and never read
+        // the back-ref — the launcher does not stamp one.
+        for act in [9u8, 12] {
+            assert_eq!(
+                impact(act, None),
+                vec![(PLAYER_TARGET, 7, 1)],
+                "action {act} (`push $0x7`) credits Lightning with an EMPTY back-ref"
+            );
+        }
+        // The fireball hub hard-codes spell 0…
+        assert_eq!(
+            impact(0, None),
+            vec![(PLAYER_TARGET, 0, 1)],
+            "action 0 (`push $0x0`) credits Fireball"
+        );
+        // …and the basic possession bolt spell 1.
+        assert_eq!(
+            impact(1, None),
+            vec![(PLAYER_TARGET, 1, 1)],
+            "action 1 (`push $0x1`) credits Possession"
+        );
+        // A worker that DOES read the back-ref refuses the award when
+        // it is zero (`cmpw $0x0,0x26(%ebx) / je`).
+        assert_eq!(
+            impact(2, None),
+            vec![],
+            "an empty back-ref awards NOTHING, it does not award spell 0"
+        );
+        // …and credits the token's own model when there is one.
+        assert_eq!(
+            impact(2, Some(21)),
+            vec![(PLAYER_TARGET, 21, 1)],
+            "a live (15,21) back-ref credits spell 21"
+        );
+    }
+}
+
+#[cfg(test)]
+mod step_commit_tests {
+    //! ⭐⭐⭐ THE FLIGHT STEP'S COMMIT IS A TILE-CHAIN OPERATION
+    //! (round 148, dig w148k; [`super::no_mc2_proj_step_commit`]).
+    //!
+    //! `sub_65C20` commits the moved axis with the CELL-GUARDED
+    //! `CopyEntityPosition_57CF0` BEFORE `sub_10780` probes
+    //! (EF:63126-29; shipped `NETHERW.EXE` file 0x8A57A/0x8A588/
+    //! 0x8A591 = `call 0x7c7a0` / `call 0x7c4f0` / `call 0x34f80`),
+    //! and its terrain arm then commits the SAVED pre-move axis with
+    //! only the clamped z (EF:63139-40, file 0x8A64C-0x8A65B). A step
+    //! that leaves the entry tile and then contacts therefore unlinks
+    //! twice and HEAD-INSERTS back into the entry tile: the record
+    //! ends the tick as that tile's chain head. The port folded the
+    //! two commits into one, saw entry cell == final cell, and never
+    //! relinked.
+    //!
+    //! The final POSITION is identical in both arms — that is the
+    //! positive control below. Only the chain order parts, which is
+    //! why no graded lane could ever see this.
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::mc1::mobs::MobCtx;
+    use crate::verbs::VerbSet;
+
+    fn flat_gen() -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    fn ctx() -> MobCtx {
+        MobCtx {
+            px: 10 * 256,
+            py: 10 * 256,
+            pz: 400,
+            pyaw: 0,
+            pmana: 1000,
+            pmana_max: 1000,
+            pdead: false,
+            pdead_top: false,
+            // retail's single end-of-step probe, no anti-tunnel march
+            strict: true,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        }
+    }
+
+    /// A (9,0) fireball sitting at the TAIL of tile (40,40)'s chain,
+    /// flying +x hard enough to leave the tile, with its z already
+    /// under the ground so the step terrain-contacts and retail's
+    /// arm reverts x/y.
+    #[test]
+    fn a_contacting_fireball_reheads_its_entry_tile() {
+        let mut g = flat_gen();
+        let cell = 40u8;
+        let (x0, y0) = ((cell as u16) << 8 | 0x80, (cell as u16) << 8 | 0x80);
+
+        let fly = g.new_event().expect("flyer slot");
+        {
+            let e = &mut g.ent[fly];
+            e.class64 = 9;
+            e.model65 = 0;
+            e.tick70 = 0; // action 0 — the `sub_65C20` fireball body
+            e.f146 = 0; // no target: fly straight
+            e.flags |= super::F_AIMED; // the aim latch is already set
+            e.id24 = 1;
+            e.act_life = 500;
+            e.f30 = 512; // yaw: +x
+            e.f32 = 0; // pitch: level
+            e.f126 = 600; // > one tile of travel
+            e.f44 = 0;
+        }
+        g.link(fly, x0, y0, -20_000); // far below the floor: contact
+        let a = g.new_event().expect("a slot");
+        g.ent[a].class64 = 10;
+        g.ent[a].model65 = 39;
+        g.link(a, x0, y0, 0);
+        let b = g.new_event().expect("b slot");
+        g.ent[b].class64 = 10;
+        g.ent[b].model65 = 39;
+        g.link(b, x0, y0, 0);
+
+        let t = crate::engine::features::tile(cell, cell);
+        assert_eq!(g.map_entity[t] as usize, b, "chain starts b -> a -> flyer");
+        assert_eq!(g.ent[b].next20 as usize, a);
+        assert_eq!(g.ent[a].next20 as usize, fly);
+
+        g.mc2_flyer_tick(fly, &ctx());
+
+        // POSITIVE CONTROL — the contact arm really ran and reverted
+        // the dying step, in BOTH arms of the switch.
+        assert_eq!(
+            (g.ent[fly].x, g.ent[fly].y),
+            (x0, y0),
+            "the terrain arm commits the SAVED pre-move x/y (EF:63139-40)"
+        );
+        assert_eq!(
+            g.ent[fly].z as i32,
+            g.ground_z(x0 + 600, y0),
+            "z is the terrain read at the cell it flew INTO"
+        );
+
+        // THE LAW — the two commits took it out of (40,40) and head-
+        // inserted it back, so it jumps AHEAD of both older members.
+        // (The (10,0) burst the impact mints then head-inserts on top
+        // of it, exactly as retail's mc2l9 t=2074 chain does:
+        // 357 -> 347 -> 356 -> 338 -> 7.)
+        let mut walk = Vec::new();
+        let mut cur = g.map_entity[t] as usize;
+        while cur != 0 {
+            walk.push(cur);
+            cur = g.ent[cur].next20 as usize;
+        }
+        let at = |s: usize| walk.iter().position(|&w| w == s).expect("still linked");
+        assert!(
+            at(fly) < at(b) && at(fly) < at(a),
+            "the contacting fireball re-heads its entry tile's chain \
+             (walk {walk:?}, flyer {fly}, b {b}, a {a})"
+        );
+        assert_eq!(g.ent[fly].next20 as usize, b, "head insert: the old head follows");
     }
 }

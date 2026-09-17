@@ -336,6 +336,10 @@ impl FeatureAssets {
     /// level's environment ([`crate::mc2::spells::level_init_patch`]).
     pub fn with_spells(mut self, bytes: &[u8]) -> Result<Self, String> {
         self.spells = crate::mc2::spells::parse(bytes)?;
+        // `SetDefaultSpells_5C0A0` — the boot-time table rewrite that
+        // runs once over the freshly loaded DAT, before any level init
+        // ([`crate::mc2::spells::set_default_spells`]).
+        crate::mc2::spells::set_default_spells(&mut self.spells);
         Ok(self)
     }
 
@@ -380,6 +384,48 @@ fn step(t: usize, dx: i32, dy: i32) -> usize {
 /// plane to recover the u16 `pseudoRand` state at GenerateFeatures
 /// time (the pass reset the stream to 0, then drew once per flat cell
 /// — `sub_329C0`, mirrored by mc1_terrain's `shading_pass`).
+/// A/B toggle for THE (10,30) WATERPATH POINT'S DEFERRED STAMP: set
+/// `MGC_NO_MC2_PATH_POINT_DEFERRED_STAMP` to restore the pre-dig
+/// port, where a waterpath leg's two runs were stamped SYNCHRONOUSLY
+/// inside the authoring pass (`World::mc2_stamp_path_leg`) instead of
+/// at the records' own dispatch.
+///
+/// `sub_48690` (Events.cpp:5492) writes NO terrain: it mints two
+/// (10,30) records — one per run — carrying `dword_0x10_16` (the run
+/// length), `yaw_0x1C_28` / `pitch_0x1E_30` (the unit step) and the
+/// run's start position. `PrepareEvents` puts model 0x1E in the
+/// settle-TICK band, so `ApplyEvents_498A0` reaches each record on
+/// the first sweep AFTER the whole pass finished authoring, and
+/// `ApplyPointToPath_343F0` (EventsFunctions.cpp:25050) lays the run
+/// there — angle nibble := 1 then `sub_462A0(cell, cell)` per cell —
+/// before `DisableEntityDrawing04_57F10` frees the record.
+///
+/// ⭐⭐⭐ **THE COLLAPSE WAS A DRAW-ORDER DEFECT, NOT A COSMETIC ONE.**
+/// `sub_462A0`'s blend pass draws the shared `pseudoRand` retile
+/// stream (`rand2_17B4E0 = 9377 * rand2_17B4E0 + 9439`) for every
+/// type-1 cell it retiles, and that draw is what picks the cell's
+/// angle high nibble (`+ 16 * (rand2 % 7)`). Stamping the run at
+/// AUTHORING time moves those draws ahead of every settle-band
+/// sculptor of the same pass, so each one lands on a different cell:
+///
+/// - **mc2l9**: ONE path draw, at (115,27). Moving it from the
+///   authoring pass to the record's slot shifted the whole
+///   `pseudoRand` stream by one draw across the pass's scorch-ring /
+///   hill discs — eight angle cells survived to record 0 with the
+///   PREVIOUS draw's nibble ((147,16), (147,17), (180,89), (38,98),
+///   (39,99), (56,116), (56,117), (67,176)).
+/// - **mc2l11**: the (10,67) → (10,75) leg's 8-cell run makes three
+///   draws; deferring them re-orders the two that survive, which is
+///   why retail's (10,73)/(10,74) angles read 17/33 where the port
+///   had 33/17.
+///
+/// Both takes are `terrain-check` IDENTICAL with the stamp deferred
+/// and DIFFERENT (angle 8 / angle 2) with this switch set.
+pub(crate) fn no_mc2_path_point_deferred_stamp() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PATH_POINT_DEFERRED_STAMP").is_some())
+}
+
 pub fn post_generation_pseudo_rand(height: &[u8]) -> u16 {
     let mut s = 0u16;
     for i in 0..=0xFFFFu16 {
@@ -521,6 +567,13 @@ pub(crate) struct Ent {
     /// [`Mc2Pinned`]. Verified, not asserted: the golden suites are
     /// byte-identical with the law on.
     pub(crate) lease2e: Lease2e,
+    /// THE METAMORPH PUPPET'S CRY CADENCE — the port's own 24-tick
+    /// sound loop for StageVar2 12, which has no retail counterpart
+    /// at all. It lived in [`Ent::lease2e`] (retail's `word_0x2E_46`)
+    /// until round 148 measured it as a permanent `retail 0 / port
+    /// 24` across eight class-5 models. See [`no_mc2_morph_cry_off_2e`].
+    /// Hash-silent and off the snapshot wire — see [`MorphCry`].
+    pub(crate) morph_cry: MorphCry,
     /// ⭐ RETAIL'S `+48`, CARRIED RAW FOR **EVERY** CLASS — the lane
     /// [`Ent::f26`] only homes while the record is a class-12
     /// manifestation (`import_ent`: `if class64 == 12 { r.f48 }`).
@@ -542,6 +595,18 @@ pub(crate) struct Ent {
     /// wholesale, so a plain `u16` here would move every golden with
     /// zero behaviour change.
     pub(crate) raw48: Raw48,
+    /// ⭐ THE SUMMIT CONTROLLERS' 32-BIT `dword_0x10_16`. The (10,18)
+    /// eruption vortex and its (10,91) apocalypse-rain sibling are the
+    /// only two records in MC2 whose @0x10 arc counter is allowed to
+    /// run past an `i16`: nothing ever resets it (the self-latched
+    /// controller's restart roll is gated on the vortex register it
+    /// holds itself), so it just keeps counting until the endgame
+    /// teardown — **79,064** on mc2l24-crazy. [`Ent::f26`], the port's
+    /// class-wide home for @0x10, is an `i16` and parked at 32,767.
+    /// See [`no_mc2_summit_arc_wide`] for the citation and the
+    /// inertness proof. Hash-silent and off the snapshot wire for the
+    /// same reasons [`Raw48`] is.
+    pub(crate) summit10: Summit10,
     pub(crate) f28: u16,
     /// Wall step dx/dy (offsets 30/32); canyon/ridge heading (30).
     pub(crate) f30: u16,
@@ -1043,6 +1108,39 @@ pub(crate) struct Gen {
     /// a cloak (castle turrets, the m27 branch scan). Per-tick echo
     /// of World state — not on the wire, not hashed.
     pub(crate) player_ghost: HashSilent<bool>,
+    /// ⭐ THE OUT-OF-POOL HUMAN'S `roll_0x20_32` — retail's TARGET-YAW
+    /// word on the human carpet record, which the port has nowhere
+    /// else to put (the conformance carpet is out of pool and
+    /// [`crate::engine::world::PlayerPose`] carries the live facing
+    /// only). It is NOT the flight model's `roll_f`/`roll_acc`: on a
+    /// WIZARD record @0x20 is the TARGET-YAW channel and its ONLY
+    /// writer is the DEATH-SPIN arm (`action45 == 3`, `life < 0`),
+    /// which drives @0x20/@0x22 as a look-at (bearing, pitch) pair
+    /// while the spin adds a flat +22 to `yaw` every tick. So a live
+    /// human's @0x20 is the RESIDUE of his last death, or 0 if he has
+    /// never died, and it sits frozen for tens of thousands of ticks.
+    /// Measured on the human carpet of `mc2l24` (slot 116): 0 from
+    /// t=1 to t=2681; live for the 42 ticks t=2682..2723, then frozen
+    /// at 1135; next moved at t=3524 (`action45` 3, life −3040), then
+    /// at t=28512 (`action45` 3, life −1370) — EVERY transition in the
+    /// take is a death tick, and the value never tracks `yaw` (which
+    /// walks 148, 170, 192 ... past a roll of 381, 383, 386).
+    /// ⚠⚠ NO SYMBOL IS CITED FOR THAT WRITER: the +22 matches
+    /// `sub_33B20` (EF:24678-24691) but that leg also does
+    /// `pitch += 16` while the recorded pitch is a flat 0 through the
+    /// spin, so it is a near-identical sibling and is left un-named
+    /// rather than mis-cited. The READ side IS byte-cited, at the
+    /// copy in [`Gen::mc2_metamorph_creature_tick`].
+    /// Its ONE consumer is `sub_1E4D0`'s metamorph-puppet copy (see
+    /// [`crate::engine::features::no_mc2_morph_puppet_roll`] and
+    /// [`no_mc2_human_puppet_roll`]), which is why a value nothing in
+    /// the port writes is still observable in a graded lane.
+    /// Storage of record (no per-tick republish): seeded outright by
+    /// [`crate::engine::world::World::retail_import_mc2`] from the
+    /// recorded carpet's @0x20 at every anchor, 0 on a fresh level
+    /// like retail's ctor. Hash- and save-silent: it is a shim for a
+    /// record the port does not keep.
+    pub(crate) human_roll_0x20: HashSilent<u16>,
     /// The player's Rebound deflection bit (spell 14; +17 0x80,
     /// :65774) — incoming class-9 projectiles bounce back.
     pub(crate) player_rebound: bool,
@@ -1965,6 +2063,19 @@ pub(crate) fn no_mc2_m27_v34_sphere_transparent() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_V34_SPHERE_TRANSPARENT").is_some())
 }
 
+/// `MGC_NO_MC2_BALL_TETHER_DECAY=1` restores the pre-dig ball tick,
+/// whose COLLECTOR-TETHER arm returned before
+/// [`crate::engine::features::Gen::ball_decay_tail`] instead of
+/// falling into it. `TransformArcherToMana_35940`'s decay tail is
+/// OUTSIDE the mode branch and all three arms jump to it
+/// (`NETHERW.EXE` 0x5A2BB / 0x5A312 / 0x5A3D8 -> 0x5A746); see the
+/// call site in mc1/combat.rs for the bytes and the mc2l24-crazy
+/// t=73775 witness.
+pub(crate) fn no_mc2_ball_tether_decay() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BALL_TETHER_DECAY").is_some())
+}
+
 /// `MGC_NO_MC2_M27_V34_NODE_TRANSPARENT=1` restores the pre-dig
 /// reading of a `(9,9)` lightning trail node (class 9 action 14) as a
 /// handler that breaks an adjacency-scoped hydra `v34` publication.
@@ -2089,6 +2200,20 @@ pub(crate) fn no_mc2_mob_chain_predicate() -> bool {
 pub(crate) fn no_mc2_castle_ball_speed_step() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_BALL_SPEED_STEP").is_some())
+}
+
+/// A/B toggle for THE CASTLE BALL'S FLIGHT STEP COMMITS BEFORE THE
+/// PROBES: set `MGC_NO_MC2_CASTLE_BALL_STEP_COMMIT` to restore the
+/// pre-dig single end-of-tick `move_relink` in
+/// [`Gen::mc2_castle_ball_tick`]. `sub_66D00` commits the step with
+/// `CopyEntityPosition_57CF0` immediately after `MoveEntity_57FA0`
+/// (EF:59018-19) and commits the refused 180° retreat with a SECOND
+/// call (EF:59060-63), so a ball that leaves its tile and comes back
+/// is unlinked and re-added twice and ends the tick at the HEAD of
+/// its own tile chain. Ledger ROUND 149 dig w149f.
+pub(crate) fn no_mc2_castle_ball_step_commit() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_BALL_STEP_COMMIT").is_some())
 }
 
 /// `MGC_NO_CASTLE_EJECT_GC=1` restores the pre-dig castle ejector:
@@ -2744,6 +2869,309 @@ pub(crate) fn no_mc2_depth_refusal_keeps_flyer() -> bool {
 pub(crate) fn no_mc2_m15_scan_roster() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M15_SCAN_ROSTER").is_some())
+}
+
+/// `MGC_NO_MC2_PICKUP_ONLY_STEAL_LOCK=1` restores the pre-dig
+/// unconditional `word_0x36_54 = 64` on EVERY owned class-15 token
+/// mint (the human's level-start book, the rival spawn book and the
+/// rival respawn re-mint as well as the jar pickup).
+///
+/// `word_0x36_54` is the 64-tick RE-STEAL LOCK, and retail arms it in
+/// exactly one place: `sub_68FF0`'s collect block
+/// (`EventsFunctions.cpp:56076`, `a1x->word_0x36_54 = 64`), shipped
+/// `NETHERW.EXE` 0x8D93C `66 c7 43 36 40 00` = `movw $0x40,0x36(%ebx)`
+/// (VA 0x6913C). A scan of the whole shipped image for
+/// `movw $imm16, 0x36(reg)` finds fourteen sites and **that is the only
+/// one whose immediate is 64** (the others store 0, 1, 68, 96, 100,
+/// 0xFFFF). The REIFY that hands a wizard its book — `sub_55AB0`
+/// (`Level.cpp:1313`), the `IfSubtypeCallCreatingManaSphere_4A190` +
+/// `parentId_0x28_40` + `byte[0] |= 1` + `SetSpell_6D5E0` quartet —
+/// touches @0x36 not at all, so a level-start or respawn token is born
+/// with the lock CLEAR.
+///
+/// The port ran the pickup's `mc2_adopt_manifestation` for the grant
+/// too, and both rival mints copied the store, so every freshly minted
+/// owned token carried a 64-tick lock retail does not have. It is
+/// load-bearing, not cosmetic: the lock's only reader on a class-15
+/// token is `World::mc2_spell_steal`'s gate (`sub_69300`, EF:55800),
+/// so a native MC2 level opened with EVERY book — the human's and each
+/// rival's — immune to an m26 wraith's spell theft for its first 64
+/// ticks, and again for 64 ticks after any rival respawn. The %63 roll
+/// is spent before the gate either way, so only the outcome moves.
+///
+/// WITNESSES — init-check record 0, class-15 `f36`: 1,625 rows over
+/// 40/40 MC2 takes, retail 0 / port `64 − settle` (mc2l4 56, mc2l17 57,
+/// mc2l0 55). LIVE (the graded run's raw shadow, `pair-wide`): 936 more
+/// rows, e.g. mc2l12 t=2796 slots 14/18/39/54/61/62 — one rival's
+/// respawn re-mint, retail 0 / port 64 on every spell at once.
+pub(crate) fn no_mc2_pickup_only_steal_lock() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PICKUP_ONLY_STEAL_LOCK").is_some())
+}
+
+/// `MGC_NO_MC2_SPELL_DEFAULTS_PATCH=1` restores the raw SPELLS.DAT
+/// `maxManaLimit_A` column for row 23 (300000 / 350000 / 400000).
+///
+/// `SetDefaultSpells_5C0A0` (`Spells.cpp:109`) runs over the freshly
+/// loaded SPELLS table and rewrites it. Three of its four arms are
+/// no-ops against the shipped `SPELLS.DAT` (the `isEnabled_1`
+/// derivation and the `fontType_0x1B` bit-0 pair for rows 0/7 reproduce
+/// the bytes already on disk), but the `case 23:` arm does not:
+///
+///   0x808A9 `c7 43 0a 50 c3 00 00`  movl $50000,0x0a(%ebx)  tier 0
+///   0x80930 `c7 43 24 70 11 01 00`  movl $70000,0x24(%ebx)  tier 1
+///   0x80937 `c7 43 3e 90 5f 01 00`  movl $90000,0x3e(%ebx)  tier 2
+///
+/// (VA 0x5C129/0x5C130/0x5C137; row stride 80, `2 + 26*k + 8` = 0x0A /
+/// 0x24 / 0x3E). `SetSpell_6D5E0` (`Level.cpp:1531`) copies that column
+/// into `manaRegen_0x88_136` on every (re)tier, so the port's token for
+/// spell 23 was born with the un-patched 300000.
+///
+/// WITNESSES — init-check class-15 `d88`, one row per take on 24/40
+/// takes, always `(15,23)`, retail 50000 / port 300000 (mc2l4 slot 289;
+/// mc2l17 slots 115 + two rival copies). LIVE: 120 more `(15,23) d88`
+/// rows in the graded run's raw shadow, every one 50000 vs 300000.
+pub fn no_mc2_spell_defaults_patch() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SPELL_DEFAULTS_PATCH").is_some())
+}
+
+/// `MGC_NO_MC2_NATIVE_HUMAN_START_POSE=1` restores the pre-dig
+/// pose-less native human record (and with it the `human_pose`
+/// register's `(0,0,0)` through the whole world constructor).
+///
+/// Retail's `sub_5C950` gives player 0 the same treatment as a rival:
+/// the (3,0) carpet is placed at its `array_0x2362[color]` start marker
+/// (`(mx << 8) | 128`, ground + 0x100) BEFORE `sub_55AB0` reifies the
+/// carried book, and the reify mints each token at
+/// `&Entities[playerIndex]->position_0x4C_76` (`Level.cpp:1319`) — the
+/// carpet's own pose. The port's `mc2_spawn_human_record` only RESERVES
+/// the slot, so `World::human_pose` was still the constructor's
+/// `(0,0,0)` when `mc2_seed_default_spells` / `mc2_grant_start_book`
+/// ran, and every level-start token was born — and tile-linked — at the
+/// map origin.
+///
+/// WITNESSES — init-check class-15 `x`/`y`/`z`: 810 rows each over
+/// 40/40 takes, one per human book spell (mc2l4 slots 266..291 retail
+/// 64896/16000/2256 = marker (253,62) at ground+256, port 0/0/0;
+/// mc2l0 slots 153..164 retail 19840/56960/5024). The same cell error
+/// shows structurally as the 77 class-15 `map_head` rows (a stray port
+/// chain head in cell 0) and the 3 `prev18` rows. NATIVE-ONLY: the
+/// replay importer restores every token's pose from record 0, so there
+/// is not one class-15 `x`/`y`/`z` row anywhere in the paired census.
+pub(crate) fn no_mc2_native_human_start_pose() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_NATIVE_HUMAN_START_POSE").is_some())
+}
+
+/// `MGC_NO_MC2_TOKEN_CTOR_CLEARS_2C=1` restores the allocator's `100`
+/// in a fresh class-15 token's `@0x2C`.
+///
+/// MC2's `NewEvent_4A050` (`Events.cpp:569`/:596, both arms) seeds
+/// `subSpellIndex_0x2A_42 = 100` and leaves `word_0x2C_44` at the
+/// memset's 0; the port's SHARED [`Gen::new_event`] writes `f44 = 100`,
+/// and `f44` is the port's home for @0x2A on most classes but for
+/// **@0x2C** on class 15 (`port_ent_lanes_mc2`'s `c == 15` arm). So a
+/// token that is never adopted — an authored ground jar — publishes
+/// retail's @0x2C as 100. `AddSpellXX_XX_51120` itself never writes
+/// @0x2C, and `SetSpell_6D5E0`'s long arm does not either.
+///
+/// This is the class-15 slice of a wider allocator law (see the report:
+/// the `(5,0) f2a` 85-row family on mc2l4 is its other half) and is
+/// deliberately scoped to the token constructor, which is also the
+/// missing prerequisite the `mc2_adopt_manifestation` doc comment names
+/// for dropping its invented `f44 = 0` scrub.
+///
+/// WITNESSES — init-check class-15 `f2c`, 34 rows over 12 takes, retail
+/// 0 / port 100 (mc2l5 8 rows, mc2l15 7). LIVE: the same shape in the
+/// graded run's raw shadow, e.g. mc2l0 t=1007 slot 113 `(15,2)`.
+pub(crate) fn no_mc2_token_ctor_clears_2c() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TOKEN_CTOR_CLEARS_2C").is_some())
+}
+
+/// `MGC_NO_MC2_BALL_UPGRADE_AXIS_ABSENCE=1` restores the pre-dig
+/// human castle-ball mint, which stamped `axis_0x9A_154x` on the
+/// UPGRADE arm too. Citation at the call site in
+/// [`World::cast_castle`].
+pub(crate) fn no_mc2_ball_upgrade_axis_absence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BALL_UPGRADE_AXIS_ABSENCE").is_some())
+}
+
+/// `MGC_NO_MC2_BALL_TOKEN_2A_HOME=1` restores the pre-dig human
+/// castle-ball mint, which copied the class-15 token's `f44`
+/// (`word_0x2C_44`) into the ball's `@0x2A` instead of its `f30`
+/// (`subSpellIndex_0x2A_42`). Citation at the call site in
+/// [`World::cast_castle`].
+pub(crate) fn no_mc2_ball_token_2a_home() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_BALL_TOKEN_2A_HOME").is_some())
+}
+
+/// `MGC_NO_UPGRADE_TOKEN_FOV=1` restores the pre-dig `(10,43)` castle
+/// UPGRADE TOKEN extents, where the ctor transcribed only two of the
+/// three `SetEntityShiftRot` lines and `array_0x52_82.fov` kept the
+/// sprite-41 row's value. Citation at the call site in
+/// [`Gen::spawn_creator`]. Shared MC1 + MC2 path — both retail ctors
+/// pass `(512, 512)`.
+pub(crate) fn no_upgrade_token_fov() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_UPGRADE_TOKEN_FOV").is_some())
+}
+
+/// `MGC_NO_UPGRADE_TOKEN_ANIM=1` restores the pre-dig `(10,43)` castle
+/// UPGRADE TOKEN tick, which never stepped `animationFrame_0x5C_92`.
+/// Citation at the call site in [`Gen::tick_upgrade_token`]. Shared
+/// MC1 + MC2 path — `sub_389F0` and `sub_293D0` both open their live
+/// arm with the step.
+pub(crate) fn no_upgrade_token_anim() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_UPGRADE_TOKEN_ANIM").is_some())
+}
+
+/// `MGC_NO_MC2_JAR_HAND_HINT_SEAT=1` drops the class-15 import of the
+/// STOLEN-JAR HAND HINT `word_0x4A_74` (@0x4A) and the lane that
+/// publishes it — i.e. it reverts this law.
+///
+/// ⭐ A FIELD-HOMING GAP, NOT A SIM LAW. `sub_69300` (the m26 wraith's
+/// spell steal, EF:55814-24) remembers which hand the jar was yanked
+/// out of in the jar's own `word_0x4A_74`: 1 = right, 2 = left. The
+/// re-collect, `sub_68FF0`, reads it back BEFORE the quick-slot
+/// fallback and puts the spell back in the SAME hand. Shipped bytes,
+/// `NETHERW.EXE` file **0x8D96B** (VA 0x68FF0 + 0x24800 region):
+/// ```text
+///   8d96b: 66 8b 43 4a     mov    0x4a(%ebx),%ax     ; the hint
+///   8d96f: 66 85 c0        test   %ax,%ax
+///   8d972: 75 24           jne    0x8d998            ; hint != 0
+///   8d974: 8b 86 a4..      mov    0xa4(%esi),%eax    ; …else the fallback
+///   8d97a: 0f bf 90 51 04  movswl 0x451(%eax),%edx   ;   SpellIndexLeft
+///   8d981: 83 fa ff        cmp    $-1,%edx
+///   8d984: 74 0c           je     0x8d992            ;   Left  == -1 → LEFT
+///   8d986: 0f bf 80 53 04  movswl 0x453(%eax),%eax   ;   SpellIndexRight
+///   8d98d: 83 f8 ff        cmp    $-1,%eax
+///   8d990: 74 16           je     0x8d9a8            ;   Right == -1 → RIGHT
+///   8d992: c6 45 fc 01     movb   $0x1,-0x4(%ebp)    ;   both taken → LEFT
+///   8d998: 66 3d 02 00     cmp    $0x2,%ax           ; hint == 2 → LEFT
+///   8d99e: c6 45 fc 01     movb   $0x1,-0x4(%ebp)
+///   8d9a2: 66 c7 43 4a 00  movw   $0x0,0x4a(%ebx)    ; …and clear it
+/// ```
+/// The port models the hint in `Ent::f36` ([`Gen::mc2_spell_steal`] /
+/// [`World::mc2_adopt_manifestation`]) and gets it right natively — but
+/// **`import_ent_mc2`'s class-15 arm never seated it**, and
+/// `port_ent_lanes_mc2` published class-15 `sv_timer` (@0x4A) from the
+/// StageVar-hold side table, which a jar is never a member of, so the
+/// lane read `None` and the raw shadow could not see the hole either.
+/// An imported mid-theft jar therefore re-equipped by the quick-slot
+/// fallback instead of the remembered hand.
+///
+/// WITNESS — mc2l5 pair mode (`verify-deltas`, `MGC_RAW_SHADOW=1`),
+/// WIZEXT lane `hand_left`/`hand_right`: t=2018 and t=2714, retail
+/// `hand_left -1 / hand_right 1`, port `hand_left 1 / hand_right -1`.
+/// Slot 79 is a (15,1) the wraith stole (`action45` 78 at t=2005) and
+/// the human walks back into at t=2019; its @0x4A is **1** the whole
+/// way down, and retail's own changelog at t=2019 is
+/// `hand_right -1 -> 1, spell_ent[1] 0 -> 79` with @0x4A 1 -> 0.
+pub(crate) fn no_mc2_jar_hand_hint_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_JAR_HAND_HINT_SEAT").is_some())
+}
+
+/// `MGC_NO_MC2_ALLOC_2C_SEED=1` restores the shared allocator's `100`
+/// in the `word_0x2C_44` of every MC2 record whose port `f44` is the
+/// `@0x2C` home — i.e. it reverts this law.
+///
+/// ⭐⭐⭐ THE ALLOCATOR HALF OF THE @0x2A / @0x2C FAMILY. The two
+/// shipped `NewEvent`s seed **different words**, and the port has one
+/// field for both. Disassembled, not decompiled:
+///
+/// MC1 `NewEvent_372C0` (VA 0x372C0, `CARPET.EXE` file **0x4FAB8**),
+/// stride 0xA4 = 164, class @+64, model @+65:
+/// ```text
+///   4fb5b: 68 a4 00 00 00     push $0xa4          ; memset(rec, 0, 164)
+///   4fb84: c7 43 08 2c 01..   movl $0x12c,0x8     ; +8   max_life = 300
+///   4fb8b: c7 43 10 08 00..   movl $0x8,0x10      ; +16  flags    = 8
+///   4fb92: 66 c7 43 7e 10 00  movw $0x10,0x7e     ; +126           = 16
+///   4fb98: 66 c7 43 2c 64 00  movw $0x64,0x2c     ; +44 (@0x2C)    = 100
+///   4fb9e: 66 89 43 18        mov  %ax,0x18       ; +24  id24 = slot
+///   4fba5: c6 43 42 ff        movb $0xff,0x42     ; +66            = 0xFF
+///   4fba9: c6 43 43 ff        movb $0xff,0x43     ; +67            = 0xFF
+///   4fbad: c7 83 9c.. 38 8f.. movl $0x8f38,0x9c   ; +156 row base (index 0)
+///   4fbb7: c7 83 a0.. 30 73.. movl $0x27330,0xa0  ; +160 guest ptr (unmodelled)
+///   4fbc1: c6 43 44 0a        movb $0xa,0x44      ; +68            = 10
+///   4fbc5: c6 43 3a fa        movb $0xfa,0x3a     ; +58            = 0xFA
+///   4fbcc: 89 4b 04           mov  %ecx,0x4       ; +4  rand = slot + global (DWORD)
+///   4fbd2: 88 43 3f           mov  %al,0x3f       ; +63            = slot (byte)
+/// ```
+/// MC2 `NewEvent_4A050` (VA 0x4A050, `NETHERW.EXE` file **0x6E850**),
+/// stride 0xA8 = 168, class @+63, model @+64 — ⚠ the free arm and the
+/// sacrifice arm MERGE at 0x6E900, so the shipped code has ONE defaults
+/// block, not the decompile's two (`Events.cpp:569` / :596):
+/// ```text
+///   6e900: 68 a8 00 00 00     push $0xa8          ; memset(rec, 0, 168)
+///   6e929: c7 43 04 2c 01..   movl $0x12c,0x4     ; +4    max_life = 300
+///   6e930: c7 43 0c 08 00..   movl $0x8,0xc       ; +12   flags    = 8
+///   6e937: 66 c7 83 82.. 10.. movw $0x10,0x82     ; +130           = 16
+///   6e940: 66 c7 43 2a 64 00  movw $0x64,0x2a     ; +42 (@0x2A)    = 100
+///   6e946: 66 89 43 1a        mov  %ax,0x1a       ; +26   id24 = slot
+///   6e94d: c6 43 41 ff        movb $0xff,0x41     ; +65            = 0xFF
+///   6e951: c6 43 42 ff        movb $0xff,0x42     ; +66            = 0xFF
+///   6e955: c7 83 a0.. ac 83.. movl $0x83ac,0xa0   ; +160 row base (ABSOLUTE 59)
+///   6e95f: c7 83 a4.. b0 42.. movl $0x242b0,0xa4  ; +164 guest ptr (unmodelled)
+///   6e969: c6 43 43 0a        movb $0xa,0x43      ; +67            = 10
+///   6e970: c6 43 39 fa        movb $0xfa,0x39     ; +57            = 0xFA
+///   6e97b: 66 89 53 14        mov  %dx,0x14       ; +20   rand = (slot + global) as WORD
+///   6e976: 88 43 3e           mov  %al,0x3e       ; +62            = slot (byte)
+/// ```
+/// Store for store the two lists are the SAME defaults at each layout's
+/// own offsets, and [`Gen::new_event`] reproduces every one of them
+/// (the two `+160`/`+164` guest pointers are deliberately unmodelled —
+/// `port_ent_lanes_mc2` publishes `ptr_a4` as `None` and `verify.rs`
+/// never compares MC1's `owner_ptr`). **Exactly one store differs in
+/// its HOME**: MC1 seeds `+44 = 0x2C`, MC2 seeds `+42 = 0x2A` and
+/// leaves `@0x2C` at the memset's 0.
+///
+/// The port names entity fields by MC1's decimal offsets, so `f44` IS
+/// MC1's `+44` and `e.f44 = 100` is exactly right for MC1 — ⛔ this law
+/// must never touch the MC1 arm, and does not. On MC2 `f44` is the
+/// `subSpellIndex_0x2A_42` home for MOST models but the
+/// `word_0x2C_44` home for an enumerated set (`port_ent_lanes_mc2`'s
+/// `ramp2c` + class 15 + `c10_2c_in_f44` + the (10,79) piece + the
+/// (10,89) cave-in), and for
+/// those the allocator's 100 lands in retail's ZERO word.
+///
+/// Every MC2 ctor in that set was audited against its retail twin. All
+/// but six overwrite `f44` themselves; the six that do not are the call
+/// sites of [`Gen::mc2_alloc_2c_zero`], and each retail twin makes NO
+/// store to +0x2C — e.g. `sub_4EED0` (the (10,18) summit vortex, file
+/// **0x736D0**) is
+/// `movb $0x12,0x45 / movb $0xa,0x3f / movb $0x12,0x40 /
+///  movw $0xc8,0x2a / movl $0,0x10 / movl $0x2710,0x4 /
+///  andb $0xf7,0xc / movsl+movsw -> +0x4c`, i.e. it seeds @0x2A = 200
+/// (which the port homes in `f140`, `c10_2a_in_f140`) and never writes
+/// @0x2C at all.
+///
+/// WITNESSES — free-run `MGC_RAW_SHADOW=1`, `f2c` lane, every row
+/// `retail 0 port 100`: mc2l13 (10,18) 22,324 rows / (10,19) 1,337 /
+/// (10,9) 4; mc2l4 (10,18) 6,374 / (10,19) 486 / (10,9) 2;
+/// mc2l6-rival-spells-galore (10,18) 4,067 / (10,19) 1,059 / (10,9) 5 /
+/// (10,71) 6 / (10,67) 33; mc2l22-new (10,19) 971 / (10,18) 79 /
+/// (10,9) 2; mc2l17 (10,67) 3 / (10,9) 1 / (10,18) 1.
+pub(crate) fn no_mc2_alloc_2c_seed() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALLOC_2C_SEED").is_some())
+}
+
+/// `MGC_NO_MC2_NULL_DISPATCH_PHASE=1` restores the pre-dig per-tick
+/// phase counter, which clocked `byte_0x3E_62` for EVERY walked MC2
+/// record — including the class-10 actions retail's dispatch table
+/// leaves NULL (0x2E, and the (10,75)/(10,77) chain nodes 0x52/0x54),
+/// which retail neither runs nor clocks. The shipped-table citation
+/// and the receipts live at the call site in
+/// [`crate::engine::world::World`]'s entity walk.
+pub(crate) fn no_mc2_null_dispatch_phase() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_NULL_DISPATCH_PHASE").is_some())
 }
 
 /// `MGC_NO_MC2_M16_SWEEP_ROSTER=1` restores the pre-dig LIVE POOL walk
@@ -3641,13 +4069,26 @@ impl Gen {
     /// the twin of [`Self::rebuild_mob_chains`] for tests that drive a
     /// bare `Gen` instead of `World::tick` (whose top sweep at
     /// world.rs:2702 is the only non-test builder).
+    ///
+    /// ⚠⚠ **THIS TEST-ONLY TWIN DRIFTED FROM THE REAL SWEEP.** The
+    /// production builder admits MC2's **model 57** (the fool's
+    /// sphere — `dword_38523`, EF:40023-62, the third member of the
+    /// sphere family the whirlwind victim list also names,
+    /// `10 => matches!(c.model65, 13 | 14 | 39 | 57)` in
+    /// `mc2::tail`), and this one did not. A test that minted a 57
+    /// and called this to publish it got an **empty chain**, so every
+    /// assertion downstream of "the sphere is a member" was vacuous.
+    /// The gate is the MC2 column, exactly as in `World::tick`'s
+    /// sweep — an MC1 world's model 57 is an unrelated logic model
+    /// and must not join.
     #[cfg(test)]
     pub(crate) fn rebuild_ball_chain(&mut self) {
+        let mc2 = matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
         self.ball_chain.list.clear();
         self.ball_chain.cut = usize::MAX;
         for s in 1..self.ent.len() {
             let e = &self.ent[s];
-            if e.class64 == 10 && matches!(e.model65, 39 | 40) {
+            if e.class64 == 10 && (matches!(e.model65, 39 | 40) || (mc2 && e.model65 == 57)) {
                 self.ball_chain.list.push(s as u16);
             }
         }
@@ -3786,6 +4227,175 @@ impl std::hash::Hash for Lease2e {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
+/// [`Ent::morph_cry`]'s hash opt-out — the METAMORPH PUPPET'S CRY
+/// CADENCE, a PORT INVENTION with no retail counterpart, given its
+/// own home so it stops squatting in retail's `word_0x2E_46`.
+/// Hash-silent OUTRIGHT for the same reason [`Lease2e`] is, and off
+/// the snapshot wire like [`Raw48`] — a sound cadence is in no graded
+/// lane and re-arms within 24 ticks of a load.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct MorphCry(pub i16);
+
+impl std::hash::Hash for MorphCry {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// A/B toggle for MOVING THE MORPH CRY OFF RETAIL'S @0x2E: set
+/// `MGC_NO_MC2_MORPH_CRY_OFF_2E` to restore the pre-dig behaviour,
+/// where [`Gen::mc2_morph_body`]'s 24-tick cry loop stored its
+/// countdown in [`Ent::lease2e`] — the port's home for retail's
+/// `word_0x2E_46`.
+///
+/// ⭐⭐ THE PORT PUBLISHED AN INVENTED WORD INTO A RETAIL LANE.
+/// StageVar2 12's retail worker is `sub_1E4D0` (`sub_1D5D0`'s
+/// `case 0xC` arm), and the shipped `NETHERW.EXE` at file
+/// **0x42CD0-0x42D77** is twelve instructions — the parent-liveness
+/// test, the three position words, the per-model z offset,
+/// `CopyEntityPosition_57CF0`, then `mov %dx,0x20(%esi)` /
+/// `mov %dx,0x1c(%esi)`. **There is no store to +0x2E anywhere in
+/// it**, which is exactly why dig 98-Q20 parked the cry counter
+/// there. But "retail never writes it" is not "retail reads 0 there":
+/// the puppet's @0x2E is whatever its ctor left, and on every witness
+/// in the corpus that is **0**, so the parked counter shows up as a
+/// permanent `retail 0 / port 24` in the `f2e` lane of every morph
+/// model.
+///
+/// WITNESSES — free-run `MGC_RAW_SHADOW=1`, `f2e`, every row
+/// `retail 0 / port 24`: `(5,16)` 17,089 rows over 5 takes (mc2l24
+/// t=24208 slot 619), `(5,2)` 4,634 over 2 (mc2l22 t=1199 slot 673,
+/// 20 slots), `(5,25)` 1,722 over 5, `(5,17)` 1,130, `(5,19)` 577,
+/// `(5,23)` 407, `(5,0)` 334, `(5,20)` 51 — the `_ =>` arm of the cry
+/// table is why the model list is open-ended.
+pub(crate) fn no_mc2_morph_cry_off_2e() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MORPH_CRY_OFF_2E").is_some())
+}
+
+/// A/B toggle for THE MORPH PUPPET'S OWN ROLL: set
+/// `MGC_NO_MC2_MORPH_PUPPET_ROLL` to restore the pre-dig
+/// `roll = yaw = parent yaw`. ⚠ THE NOTE ABOVE MIS-READ `sub_1E4D0`'s
+/// TAIL — it is FOUR instructions, not two, and `dx` is reloaded
+/// between the pairs, so the puppet's `roll_0x20_32` is the PARENT's
+/// `roll_0x20_32` and only `yaw_0x1C_28` comes from the parent's yaw.
+/// Full disassembly and the witness list sit at the store in
+/// [`Gen::mc2_metamorph_creature_tick`]. (Round 148, dig w148t.)
+pub(crate) fn no_mc2_morph_puppet_roll() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MORPH_PUPPET_ROLL").is_some())
+}
+
+/// A/B toggle for THE HUMAN CASTER'S half of that law: set
+/// `MGC_NO_MC2_HUMAN_PUPPET_ROLL` to restore the pre-dig
+/// `roll = ctx.pyaw` the human arm of
+/// [`crate::engine::features::Gen::mc2_metamorph_creature_tick`] fell
+/// back to. ⚠ ROUND 148 LANDED THE POOLED HALF ONLY — `sub_1E4D0`
+/// copies `[ebx+0x20]` whoever the parent is, and the human's carpet
+/// IS a pool record in retail, so the human's puppet takes the human
+/// carpet's @0x20 exactly like a rival's does. What made the human
+/// arm look unreconstructible is that @0x20 on a WIZARD is not a
+/// flight quantity at all: only the death spin writes it, so it is
+/// dead residue (or 0) for the whole of a normal life. It now rides
+/// [`Gen::human_roll_0x20`], seeded from the recorded carpet at every
+/// conformance anchor. Witnesses: mc2l0-spells-galore retail 0 /
+/// port 800·1304·35 (1,297 rows over three models), mc2l24 retail
+/// **1966** / port 1053·786·104 (957 rows, ONE frozen word seen
+/// through three models), mc2l22 retail 82 (1,302), mc2l6-rsg retail
+/// 15 (1,037). Round 149, dig w149b.
+pub(crate) fn no_mc2_human_puppet_roll() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HUMAN_PUPPET_ROLL").is_some())
+}
+
+/// A/B toggle for THE WRITER behind [`Gen::human_roll_0x20`]: set
+/// `MGC_NO_MC2_HUMAN_DEATH_SPIN_AIM` and the seat keeps whatever the
+/// last conformance anchor put in it, which is what round 149's dig
+/// w149b left behind — a seeded value with nothing to move it, so a
+/// FREE RUN that crosses a human death carried the anchor's residue
+/// for the rest of the take.
+///
+/// ⭐⭐⭐ THE DEATH SPIN IS THE ONLY WRITER OF A WIZARD'S @0x20, AND
+/// THE PORT ALREADY COMPUTED THE VALUE AND THREW IT AWAY.
+/// `sub_5E6C0` (EF:60600-60646) is the human corpse's whole tick, and
+/// its killer branch opens with the look-at pair:
+/// `roll_0x20_32 = sub_581E0_maybe_tan2(&self.position, &killer.position)`
+/// then `fov_0x22_34 = sub_58210_radix_tan(...)`, and only THEN the
+/// two `sub_58350(.., 5, 0x16)` servos that walk yaw/pitch onto them.
+/// Shipped `NETHERW.EXE`, linear 0x5E6C0 (file **0x82EC0**):
+///
+/// ```text
+///   82ec9  66 8b 53 24        mov  dx,[ebx+0x24]    ; the killer latch
+///   82ed2  75 02              jne  0x82ed6          ; 0 -> the +5 spin arm
+///   82ee3  66 8b 7b 24        mov  di,[ebx+0x24]
+///   82ee7  8b 3c bd e4 a3 01 00  mov edi,[edi*4+0x1a3e4]  ; Entities[killer]
+///   82eee  83 c7 4c           add  edi,0x4c         ; &killer.position
+///   82ef3  e8 e8 9a ff ff     call 0x7c9e0          ; sub_581E0 tan2
+///   82efd  66 89 43 20        mov  [ebx+0x20],ax    ; <- THE STORE
+///   82f01  e8 0a 9b ff ff     call 0x7ca10          ; sub_58210 radix_tan
+///   82f1b  66 89 43 22        mov  [ebx+0x22],ax    ; @0x22, write-only
+///   82f0f  66 8b 7b 20        mov  di,[ebx+0x20]    ; servo target
+///   82f1f  e8 2c 9c ff ff     call 0x7cb50          ; sub_58350(yaw,@20,5,22)
+///   82f69  66 83 43 1c 05     addw $0x5,0x1c(%ebx)  ; the KILLER-LESS arm —
+///                                                   ; no @0x20 store at all
+/// ```
+///
+/// The killer-less arm writes neither word, which is why a corpse
+/// that killed itself keeps the previous death's residue.
+///
+/// ⚠ THE HUMAN COLUMN ONLY. The single `e8` caller of 0x82EC0 in the
+/// whole image is at file 0x83072, inside `sub_5E7C0`'s
+/// `IsAiPlayer != 1` arm (`cmpb $0x1,0x2be7(%edx,%ebx,1)` /
+/// `jne 0x83066` at file 0x82FEB) — a RIVAL corpse takes the other
+/// fork (the 1200-tick `dword_0x10_16` countdown) and never spins.
+/// Measured: on mc2l24 / mc2l22 / mc2l6-rsg / mc2l19 every single
+/// `@0x20` change on the HUMAN carpet lands at `action45 == 3`
+/// (mc2l24 slot 116: 145/145, mc2l22 slot 424: 90/90, mc2l6-rsg slot
+/// 343: 9/9, mc2l19 slot 318: 82/82), while the seven rival carpets
+/// of mc2l22 move theirs 79,904 times with **zero** of them at
+/// action 3 — their brain owns that word, not this law.
+///
+/// ⚠ @0x22 IS NOT SEATED. `sub_1E4D0`'s metamorph copy reads `0x20`
+/// and `0x1C` only (file 0x42D54 `mov dx,[ebx+0x20]` / 0x42D58 `mov
+/// [esi+0x20],dx` / 0x42D5C `mov dx,[ebx+0x1c]`), and `sub_5E6C0`'s
+/// own `@0x22` read feeds a pitch servo whose result the next
+/// statement overwrites with 0 (file 0x82F86 `movw $0x0,0x1e(%ebx)`).
+/// Nothing else in the port reads the human's @0x22, so it has no
+/// seat. Round 149, dig w149k.
+pub(crate) fn no_mc2_human_death_spin_aim() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HUMAN_DEATH_SPIN_AIM").is_some())
+}
+
+/// A/B toggle for THE MORPH PUPPET'S CTOR @0x10: set
+/// `MGC_NO_MC2_MORPH_KEEPS_CTOR_10` to restore the pre-dig `f26 = 0`
+/// that both metamorph creation paths ([`World::mc2_cast_metamorph`]
+/// and the rival twin in `mc2/rivals.rs`) wrote over the class-5
+/// ctor's `dword_0x10_16 = (this - Entities) % 100`.
+///
+/// ⭐ THE ZERO WAS THE OLD CRY-TIMER SEED. Dig 98-Q20 parked the
+/// port's invented scream loop in @0x10, and round 148's
+/// [`no_mc2_morph_cry_off_2e`] moved it to its own hash-silent home —
+/// but the `= 0` seed at the creation site stayed behind. Retail's
+/// `sub_6A030` (EF:56644-56690) makes NO `dword_0x10_16` store at all:
+/// it mints the body through `_4A190(&caster.position, 5, model)` and
+/// then writes only `StageVar2_0x49_73`, `actionIndex_0x45_69`,
+/// `parentId_0x28_40`, `id_0x1A_26`, the caster's `word_0x96_150` and
+/// two flag bytes. The fourteen class-5 creature ctors all seed
+/// `dword_0x10_16 = (this - D41A0_0.struct_0x6E8E) % 100` (the
+/// animation-phase de-sync; EF:20773, 33731, 33788, 33833, 33881,
+/// 33948, 34072, 34108, 34164, 34198, 34235, 34271, 34306, 34343),
+/// and `sub_1E4D0` never touches it, so a puppet carries that seed for
+/// its whole life.
+/// WITNESS mc2l22: TWENTY (5,2) puppets, every one of them
+/// `scratch10` = its own slot mod 100 in retail and 0 in the port —
+/// 673→73, 953→53, 729→29, 965→65, 947→47, 922→22, 958→58, 957→57,
+/// 951→51, 616→16, 29→29, 454→54, 903→3, 979→79, 939→39, 929→29,
+/// 919→19, 871→71, 878→78, 912→12. 4,629 rows over 2 takes on (5,2)
+/// plus 402 on mc2l0-spells-galore's (5,19) slot 28.
+pub(crate) fn no_mc2_morph_keeps_ctor_10() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MORPH_KEEPS_CTOR_10").is_some())
+}
+
 /// [`Ent::raw48`]'s hash opt-out — retail's `+48` word kept for every
 /// class so the UNGUARDED owned-token readers (`sub_14E60`'s callers)
 /// can read it off a recycled slot. Hash-silent OUTRIGHT for the same
@@ -3795,6 +4405,69 @@ pub(crate) struct Raw48(pub u16);
 
 impl std::hash::Hash for Raw48 {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// [`Ent::summit10`]'s hash opt-out — retail's 32-bit
+/// `dword_0x10_16` on the two SUMMIT CONTROLLERS, given its own home
+/// so the arc counter stops being clipped by the `i16` [`Ent::f26`].
+/// Hash-silent OUTRIGHT for the same reason [`Lease2e`] is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Summit10(pub i32);
+
+impl std::hash::Hash for Summit10 {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// A/B toggle for the SUMMIT ARC COUNTER'S WIDE HOME: set
+/// `MGC_NO_MC2_SUMMIT_ARC_WIDE` to restore the pre-dig behaviour,
+/// where [`crate::engine::World::mc2_summit18_tick`] counted in the
+/// `i16` [`Ent::f26`] with a `saturating_add` and the `scratch10` lane
+/// published it.
+///
+/// ⭐ RETAIL'S COUNTER IS AN `int`, AND THIS ONE RECORD ACTUALLY
+/// OVERFLOWS AN `i16`. `sub_32A70` (address banner `00032A70`,
+/// EF:23928) is the (10,18) eruption-vortex controller and its last
+/// statement is a bare `a1x->dword_0x10_16++` on the 32-bit word — the
+/// ctor `sub_4EED0` stores it 32 bits wide too (shipped `NETHERW.EXE`
+/// file 0x736F9: `c7 43 10 00 00 00 00  movl $0x0,0x10(%ebx)`, and the
+/// (10,91) sibling `sub_4EF30` at file 0x73759 has the identical
+/// store). The counter is only ever reset inside the `> 2500` restart
+/// arm, and that arm is gated on `!D41A0_0.word_0x31` — the vortex
+/// singleton register the live controller is itself holding — so a
+/// latched summit NEVER restarts and just counts: retail reads
+/// **79,064** on mc2l24-crazy slot 397 and **32,768+** on mc2l18 slot
+/// 983, where the port's `i16` sat on 32,767.
+///
+/// ⚠ IT IS BEHAVIOURALLY INERT, VERIFIED FROM THE FUNCTION'S OWN
+/// READS, NOT ASSERTED. `sub_32A70` reads @0x10 exactly five times:
+/// `> 2500`, `< 128`, `& 0xF` (AND-ed after the `< 128`, so dead above
+/// 127), `!x` (== 0) and `>= 127`. There is no `== N`, no modulo and
+/// no shift of the raw word anywhere in it, and no other retail
+/// function reads a (10,18)'s @0x10 — the only other toucher is the
+/// same function's fast-expire of the PREVIOUS vortex
+/// (`v5x->dword_0x10_16 = 250`), a write. Above 2,500 every one of
+/// those five reads answers the same for 32,767 and for 79,064, so the
+/// port's saturation was invisible in every graded lane and visible
+/// only in the raw `scratch10` shadow: **108,759 rows over 2 takes /
+/// 3 slots**, the round-148 free-run census's second-largest lane.
+///
+/// ⚠ `Ent::f26` IS NOT WIDENED. It stays the `i16` class-wide @0x10
+/// home; the two summit models keep their authoritative count here and
+/// mirror it into `f26` saturating, so every other reader of `f26` and
+/// every `import_ent_mc2` arm is untouched.
+pub(crate) fn no_mc2_summit_arc_wide() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SUMMIT_ARC_WIDE").is_some())
+}
+
+/// A/B toggle for the (10,91) APOCALYPSE-RAIN SUMMIT'S `@0x2A` SEED:
+/// set `MGC_NO_MC2_RAIN_2A_SEED` to restore the pre-dig ctor, which
+/// inherited the (10,18) sibling's `f140 = 200` and left the uniform
+/// class-10 `@0x2A` seat `f44` at 0. Full citation and the shipped
+/// bytes at [`crate::engine::World::mc2_spawn_summit91`].
+pub(crate) fn no_mc2_rain_2a_seed() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RAIN_2A_SEED").is_some())
 }
 
 /// A/B toggle for the RAW `+48` TOKEN LANE: set
@@ -3967,6 +4640,7 @@ impl Gen {
             rival_wanted: [0; 8],
             player_invisible: false,
             player_ghost: HashSilent(false),
+            human_roll_0x20: HashSilent(0),
             player_rebound: false,
             player_chain: PlayerChain::default(),
             kills: 0,
@@ -4284,6 +4958,25 @@ impl Gen {
         };
         e.f63 = idx as u8;
         Some(idx)
+    }
+
+    /// ⭐ THE MC2 ALLOCATOR'S `100` IS `@0x2A`, NOT `@0x2C` — drop it
+    /// from a record whose port `f44` is the `word_0x2C_44` home.
+    ///
+    /// [`Gen::new_event`] is SHARED with MC1, whose `NewEvent_372C0`
+    /// really does seed `+44` (`CARPET.EXE` 0x4FB98
+    /// `66 c7 43 2c 64 00`), so the shared `e.f44 = 100` stays. MC2's
+    /// `NewEvent_4A050` seeds `+42` instead (`NETHERW.EXE` 0x6E940
+    /// `66 c7 43 2a 64 00`) and leaves `+44` at the memset's zero.
+    /// Call this straight after `new_event()` in an MC2 ctor whose
+    /// model's `f44` is the `@0x2C` home AND whose retail twin makes no
+    /// store to `+0x2C` — the full citation, the byte tables for both
+    /// binaries and the call-site audit live on
+    /// [`no_mc2_alloc_2c_seed`].
+    pub(crate) fn mc2_alloc_2c_zero(&mut self, i: usize) {
+        if !no_mc2_alloc_2c_seed() {
+            self.ent[i].f44 = 0;
+        }
     }
 
     /// The MC2 allocator's fallback (`NewEvent_4A050` :581-605): with
@@ -5604,6 +6297,25 @@ impl Gen {
                 self.set_sprite(i, 41);
                 self.ent[i].f80 = 512;
                 self.ent[i].f82 = 512;
+                // ⭐ THE SHIFT-ROT HELPER HAS **THREE** LINES, AND THE
+                // THIRD ONE WAS MISSING IN BOTH COLUMNS. MC1's
+                // `sub_3B6F0` tail is `sub_37130_374F0(v2, 512, 512)`
+                // (remc1 sub_main.cpp:47538) and MC1's helper is
+                // `+80 = a2; +82 = a2; +84 = a3` (:43790-94). MC2's
+                // (10,43) ctor `sub_502B0` (EF:36748-64) ends with
+                // `SetEntityShiftRot_49EA0(event, 512, 512)` and that
+                // helper is `array.pitch = shift; array.roll = shift;
+                // array.fov = fov` (EF:32869-74) — the port's own
+                // [`Gen::mc2_shift_rot`] spells all three. Only the
+                // shift pair was transcribed here, so `afov` kept
+                // whatever the sprite-41 row left (125) instead of 512.
+                // WITNESS (free-run raw shadow): `(10,43) afov` 1,209
+                // rows across ALL 40 MC2 takes, retail **512** / port
+                // 125 (mc2l7 27 rows / 15 tokens, mc2l9 t=4250).
+                // `MGC_NO_UPGRADE_TOKEN_FOV=1` restores the old value.
+                if !no_upgrade_token_fov() {
+                    self.ent[i].f84 = 512;
+                }
             }
             // sub_3B300 (model 34): the PORTAL vortex — sprite row 223,
             // 1-tile extents, spawned 640 alt units above ground (its
@@ -7015,6 +7727,35 @@ impl Gen {
                 self.ent[i].flags,
                 self.ent[i].id24
             );
+        }
+        // ⭐ THE LIVE ARM OPENS WITH THE ANIMATION STEP, OUTSIDE THE
+        // ONE-SHOT LATCH — and both columns spell it. MC2's
+        // `sub_389F0` (EF:28265-97) is
+        // ```c
+        //     v1 = life; dword_0x10_16++; life = v1 - 1;
+        //     if (v1 >= 0) { sub_585A0(a1x);
+        //                    if (!(byte[0] & 2)) { … } }
+        //     DisableEntityDrawing04_57F10(a1x);
+        // ```
+        // and MC1's twin `sub_293D0` (remc1 sub_main.cpp:31009-40) has
+        // `sub_42510_42850(a1x)` in exactly the same seat. The port
+        // fused the life test with the latch test and dropped the call,
+        // so the token died on `animationFrame_0x5C_92` = 0 where
+        // retail always records 1 (`sub_585A0` = `if (frame88 <
+        // frames89) frame88 += 1`, [`Gen::mc2_anim_step`] /
+        // [`Gen::anim_advance`]).
+        // WITNESS (free-run raw shadow): `(10,43) b5c` 761 rows across
+        // ALL 40 MC2 takes, retail **1** / port 0 (mc2l7 16 rows / 15
+        // tokens). `MGC_NO_UPGRADE_TOKEN_ANIM=1` restores the old
+        // frozen frame. Same family as
+        // [`Self::the_bolt_hit_flash_has_no_animation_step`]'s MC1
+        // finding, from the other side.
+        if life >= 0 && !no_upgrade_token_anim() {
+            if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+                self.mc2_anim_step(i);
+            } else {
+                self.anim_advance(i);
+            }
         }
         if life >= 0 && self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
@@ -9643,6 +10384,16 @@ impl Snap for Ent {
             // path never writes it), so it stays off the wire and the
             // snapshot version does not move.
             raw48: _,
+            // The cry cadence is a SOUND lane (no graded channel) and
+            // re-arms within 24 ticks of a load, so it stays off the
+            // wire exactly like `raw48` and the version does not move.
+            morph_cry: _,
+            // The summit arc counter's wide half is a CONFORMANCE lane
+            // only: `f26` (which IS on the wire) carries the saturated
+            // mirror every gate in `sub_32A70` reads, so a save/load
+            // round trip is behaviourally exact and the version does
+            // not move. See [`no_mc2_summit_arc_wide`].
+            summit10: _,
             f28,
             f30,
             f32,
@@ -9748,7 +10499,7 @@ impl Snap for Ent {
         // `r.get()` calls below run in `put`'s write order — which is
         // why `lease2e` sits after `f26` rather than at its
         // declaration position.
-        Ok(Ent {
+        let mut e = Ent {
             rand: r.get()?,
             max_life: r.get()?,
             act_life: r.get()?,
@@ -9767,6 +10518,8 @@ impl Snap for Ent {
             f26: r.get()?,
             lease2e: Lease2e(r.get()?),
             raw48: Raw48(0),
+            morph_cry: MorphCry(0),
+            summit10: Summit10(0),
             f28: r.get()?,
             f30: r.get()?,
             f32: r.get()?,
@@ -9806,7 +10559,13 @@ impl Snap for Ent {
             dest_x: r.get()?,
             dest_y: r.get()?,
             site_z: r.get()?,
-        })
+        };
+        // The wide summit counter is off the wire (see the destructure
+        // above); re-seed it from the `i16` mirror that IS saved so a
+        // resumed summit keeps counting from where it stood instead of
+        // restarting its pulse at t == 0.
+        e.summit10 = Summit10(e.f26 as i32);
+        Ok(e)
     }
 }
 
@@ -10044,6 +10803,11 @@ impl Gen {
             rival_wanted,
             player_invisible,
             player_ghost: _,
+            // A shim for the out-of-pool carpet's @0x20 — see the
+            // field doc; every conformance import seeds it outright
+            // from the recorded carpet, on the `player_chain`
+            // precedent below.
+            human_roll_0x20: _,
             player_rebound,
             // Bookkeeping the SAVE does not carry, on the
             // `player_deflect_debit` precedent: `cell` restores as
@@ -11649,6 +12413,52 @@ mod tests {
             ChassisParams::MC1,
             crate::verbs::VerbSet::MC2,
         )
+    }
+
+    /// ⭐ **THE `(10,43)` CASTLE UPGRADE TOKEN LOST TWO LINES — ONE IN
+    /// ITS CTOR, ONE IN ITS TICK — AND BOTH COLUMNS SPELL THEM.**
+    ///
+    /// CTOR: MC2's `sub_502B0` (EF:36748-64) ends
+    /// `SetEntityIndexAndRot_49CD0(event, 41)` +
+    /// `SetEntityShiftRot_49EA0(event, 512, 512)`, and the helper is
+    /// THREE lines — `array.pitch = shift; array.roll = shift;
+    /// array.fov = fov` (EF:32869-74). MC1's `sub_3B6F0` closes with
+    /// the identical `sub_37130_374F0(v2, 512, 512)` (remc1
+    /// sub_main.cpp:47538) over the identical three-line body
+    /// (:43790-94). The port transcribed only the shift pair, so
+    /// `afov` kept the sprite row's value.
+    ///
+    /// TICK: MC2's `sub_389F0` (EF:28265-97) and MC1's `sub_293D0`
+    /// (remc1 sub_main.cpp:31009-40) both open the `life >= 0` arm
+    /// with the animation step (`sub_585A0` / `sub_42510_42850`)
+    /// BEFORE the `byte[0] & 2` one-shot latch. The port fused the two
+    /// tests into one `&&` and dropped the call, so the token died on
+    /// frame 0.
+    ///
+    /// WITNESSES (round-148 free-run raw shadow, ALL 40 MC2 takes):
+    /// `(10,43) afov` 1,209 rows retail **512** / port 125, and
+    /// `(10,43) b5c` 761 rows retail **1** / port 0.
+    ///
+    /// NON-VACUITY: `MGC_NO_UPGRADE_TOKEN_FOV=1` fails the first
+    /// assertion, `MGC_NO_UPGRADE_TOKEN_ANIM=1` the last. The
+    /// POSITIVE CONTROL is the shift pair, which the port already had
+    /// and which must stay 512 under either switch.
+    #[test]
+    fn the_castle_upgrade_token_takes_all_three_shift_rot_lines_and_steps_its_frame() {
+        let mut g = mc2_gen();
+        let i = g
+            .spawn_creator(43, 40u16 << 8, 40u16 << 8, 0)
+            .expect("the (10,43) token");
+        assert_eq!(g.ent[i].f84, 512, "SetEntityShiftRot's THIRD line");
+        // POSITIVE CONTROL — the two lines the port already had.
+        assert_eq!((g.ent[i].f80, g.ent[i].f82), (512, 512));
+        assert_eq!(g.ent[i].tick70, 45, "action 45, the delivery receipt");
+        assert_eq!(g.ent[i].frame88, 0, "the ctor leaves frame 0");
+        assert!(g.ent[i].frames89 >= 1, "sprite row 41 has frames to step");
+        // One armed tick: the step runs before the latch, and the
+        // token is freed the same tick either way.
+        g.tick_upgrade_token(i);
+        assert_eq!(g.ent[i].frame88, 1, "sub_585A0 / sub_42510 stepped it");
     }
 
     /// ⭐⭐⭐ RETAIL TAKES THE LIGHTNING BEAM OFF THE TILE MAP FOR ITS
@@ -13316,6 +14126,58 @@ mod tests {
         g.ent[i].f63 = 0;
         g.m26_tick(i, &far);
         assert_eq!(g.ent[i].tick70, 209, "out of range: back to approach");
+    }
+
+    /// ⚠⚠ THE TEST-ONLY CHAIN BUILDER DRIFTED FROM THE REAL SWEEP.
+    /// `World::tick`'s tick-top sweep admits class-10 models **39, 40
+    /// and — on MC2 only — 57**, the fool's sphere (`dword_38523`,
+    /// EF:40023-62; the same third member the whirlwind victim list
+    /// names, `10 => matches!(c.model65, 13 | 14 | 39 | 57)` in
+    /// `mc2::tail`). [`Gen::rebuild_ball_chain`], the `#[cfg(test)]`
+    /// twin every bare-`Gen` test publishes its chain with, admitted
+    /// only `39 | 40` — so a test that minted a 57 and asked the aura
+    /// (or the possession lock) to find it got an EMPTY chain and
+    /// asserted nothing.
+    ///
+    /// NON-VACUOUS: restore `matches!(e.model65, 39 | 40)` in
+    /// `rebuild_ball_chain` and the first assert fails (len 1, not 2).
+    /// POSITIVE CONTROL: the MC1 column, where model 57 is an
+    /// unrelated logic model and must NOT join — that arm passes
+    /// before and after.
+    #[test]
+    fn the_test_ball_chain_admits_the_mc2_fools_sphere() {
+        let mk = |g: &mut Gen, model: u8| {
+            let s = g.new_event().unwrap();
+            let e = &mut g.ent[s];
+            e.class64 = 10;
+            e.model65 = model;
+            s
+        };
+        let mut g = mc2_gen();
+        let ball = mk(&mut g, 39);
+        let fool = mk(&mut g, 57);
+        g.rebuild_ball_chain();
+        assert_eq!(
+            g.ball_chain.list,
+            vec![ball as u16, fool as u16],
+            "MC2: the (10,57) fool's sphere is a member of dword_38523"
+        );
+        // The MC1 column's model 57 is unrelated logic: not a member.
+        let mut g1 = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        let b1 = mk(&mut g1, 39);
+        let _ = mk(&mut g1, 57);
+        g1.rebuild_ball_chain();
+        assert_eq!(
+            g1.ball_chain.list,
+            vec![b1 as u16],
+            "MC1: model 57 is not a mana-ball-chain member"
+        );
     }
 
     /// The aura claim handshake — the first aura in slot order keeps

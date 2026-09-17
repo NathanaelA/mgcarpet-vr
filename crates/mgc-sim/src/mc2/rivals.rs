@@ -110,6 +110,143 @@ pub(crate) fn no_mc2_human_respawn_truce() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_HUMAN_RESPAWN_TRUCE").is_some())
 }
 
+/// A/B toggle for THE TRUCE LOOP'S TWO **RIVAL** CALL PATHS: set
+/// `MGC_NO_MC2_RIVAL_TRUCE_ROSTER` to restore the pre-dig behaviour,
+/// where a rival's spawn and a rival's respawn stamped
+/// [`HATE_RESPAWN`] into **every** entry of `mc2_rivals` instead of
+/// walking retail's tick-top class-3 roster.
+///
+/// ⭐⭐⭐ **A LAW ON ONE CALL PATH IS NOT LANDED.** The roster walk at
+/// the bottom of `sub_5C950` (the bytes quoted on
+/// [`no_mc2_human_respawn_truce`], shipped NETHERW.EXE VA
+/// 0x5CE1A..0x5CE5C = file 0x8161A..0x8165C) reads its members from
+/// `dword_38519` — `mov 0x9677(%eax),%eax` at 0x5CE1A, the CLASS-3
+/// tick-top chain ([`Gen::wiz_chain`]), whose membership is sampled
+/// once per tick at `life_0x8 >= 0` (EF:40281-88). The previous round
+/// landed that on the HUMAN respawn only; the two RIVAL paths kept a
+/// flat `for other in &mut self.mc2_rivals` loop that knows nothing
+/// about life or about the tick top. Two consequences, both measured:
+///
+/// 1. **LEVEL-START SEATING.** `sub_5C950` is the PlayerAction-1 arm
+///    of the input switch (EF:37887), so every wizard is seated inside
+///    ONE tick whose class-3 chain was built BEFORE any wizard record
+///    existed — the walk visits nobody and no ledger is stamped.
+///    The flat loop instead stamped every already-seated rival,
+///    producing the TRIANGULAR init-check signature (wiz k wrong
+///    toward every colour > k: mc2l22-new 21 rows, mc2l17 15,
+///    mc2l12 6, at 40927 minus the settle ticks' decay against
+///    retail's 24607).
+/// 2. **A RESPAWN WHILE OTHER WIZARDS ARE DEAD.** `dword_38519` only
+///    ever holds `life >= 0` records, so a rival that is in its
+///    dead-wait (action 3) when another colour comes back takes NO
+///    truce. mc2l17 t=1500: wizards 1,2,3,4,6 all hold `life < 0`
+///    (−3114/−2737/−2260/−2012/−670) with only wizard 5 and the human
+///    alive; colour 3's dead-wait counter hits 0 (`scratch10 1 -> 0`)
+///    and it respawns at t=1501. Retail stamps wizard 5 alone; the
+///    port stamped 1,2,4,5,6 — the pair census's `wiz 2/4/6 [3]:
+///    retail 24607 port 40927` at t=1501, and 2,085 free-run rows
+///    behind them.
+///
+/// ⚠ The respawner itself is excluded by `cmp 0x1a(%ebx),%dx` /
+/// `je` at 0x5CE26 — an ID test, which matters on the ALIVE respawn
+/// arm (PlayerAction 0xF with a castle, EF:37937), where the
+/// respawner IS on the roster.
+pub(crate) fn no_mc2_rival_truce_roster() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_TRUCE_ROSTER").is_some())
+}
+
+/// `MGC_NO_MC2_WIZ_BLOCK_AT_BIRTH=1` restores the pre-dig ordering, in
+/// which `Gen::rival_ents[slot]` — the port's only entity → player
+/// block map — was seated at the very END of [`Mc2Ctx::mc2_spawn_rival`],
+/// after the authored starting castle had already been built.
+///
+/// ⭐⭐ RETAIL WIRES THE BACK-POINTER AT WIZARD BIRTH, NOT AT THE END
+/// OF THE SPAWN. `sub_5C950` (EF:44058, banner `0005C950`) writes
+/// ```text
+///   v2x->dword_0xA4_164x = &a1x->dword_0x3E6_2BE4_12228;
+/// ```
+/// in its opening block, ~130 source lines ABOVE the authored-castle
+/// arm (EF:44130-44170), and everything downstream resolves a player
+/// through it. In particular the castle HP/CAP ladder `sub_60810`
+/// (EF:62092, banner `00060810`) reads the owner's Life scalar as
+/// ```text
+///   Entities_EA3E4[locEvent->id_0x1A_26]->dword_0xA4_164x->word_0x24A_586
+/// ```
+/// — a two-hop pointer chase off the CASTLE's owner id, with no roster
+/// scan anywhere. Shipped bytes (`NETHERW.EXE`, file = VA + 0x24800),
+/// `sub_60810` at file 0x85010 = VA 0x60810:
+/// ```text
+///   8501c  movswl 0x1a(%ebx),%eax           ; castle->id_0x1A_26
+///   85020  mov    0x1a3e4(,%eax,4),%eax     ; Entities_EA3E4[id]
+///   85053  mov    0xa4(%eax),%eax           ; ->dword_0xA4_164x
+///   85059  mov    0x10(%ebx),%ecx           ; castle->dword_0x10_16
+///   8505c  movsbl 0x24e(%ecx,%eax,1),%ecx   ; array_0x24E_590[level]
+///   85064  shl    $0x8,%ecx
+///   85067  movswl 0x24a(%eax),%eax          ; word_0x24A_586  (Life)
+///   8506e  add    $0x100,%ecx
+///   85074  imul   %eax,%ecx
+///   8507a  sar    $0x8,%ecx                 ; number1
+/// ```
+/// and `sub_5C950` at file 0x81150 = VA 0x5C950, whose back-pointer
+/// write and Life write both precede its call into the ladder:
+/// ```text
+///   8124d  lea    0x3e6(%edx),%eax          ; &player->dword_0x3E6
+///   81259  mov    %eax,0xa4(%ebx)           ; wizard->dword_0xA4_164x
+///   ...
+///   8143e  mov    0x3612f(%eax),%cx         ; WizardMapSettings.Life
+///   81445  test   %cx,%cx
+///   81448  je     0x8146a                   ; 0 keeps the 0x100 default
+///   8144a  mov    %cx,0x24a(%edx)           ; ->word_0x24A_586
+///   ...
+///   8158f  call   0x85010                   ; sub_60810, authored castle
+/// ```
+///
+/// The port has no per-entity player pointer: `Gen::mc2_castle_ladder`
+/// (mc2/castle.rs) resolves the owner's colour by scanning
+/// `Gen::rival_ents` for the owner entity id and falls back to
+/// `unwrap_or(0)` — the HUMAN, whose `mc2_life_scale` is the flat 256.
+/// Because `rival_ents[slot]` was written only after
+/// `mc2_spawn_authored_castle` returned, EVERY authored rival castle
+/// took its birth ladder at scale 256 instead of the map header's
+/// `WizardMapSettings.Life_0x3612F`.
+///
+/// Usually invisible, because the castle's FIRST build tick re-runs
+/// the ladder (`mc2_castle_upgrade`) once `rival_ents` is complete and
+/// overwrites the wrong HP. It survives to record 0 exactly when the
+/// level-up is REFUSED — `mc2_castle_build` case 0's
+/// `mc2_castle_space_ok` says no, the castle parks at action 4 holding
+/// its birth rung. Witness mc2l22 / mc2l22-new slot 476 (level 1,
+/// owner wizard 451 = colour 1, `Life_0x3612F` = 254): retail
+/// `life`/`max_life` 19843 = `20000 * 254 >> 8`, port 20000.
+pub(crate) fn no_mc2_wiz_block_at_birth() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_WIZ_BLOCK_AT_BIRTH").is_some())
+}
+
+/// `MGC_NO_MC2_AUTHORED_CASTLE_LINK_Z=1` restores the pre-dig link of
+/// the authored starting castle, which used the perimeter-min build
+/// datum (`site_z`) as its map-link altitude instead of the ground
+/// under the raw caller point. See the citation at the use site in
+/// [`Mc2Ctx::mc2_spawn_authored_castle`] — `sub_4AA40` EF:33385/33399/
+/// 33400, banner `0004AA40`; shipped `NETHERW.EXE` file 0x6F240 =
+/// VA 0x4AA40:
+/// ```text
+///   6f29a  push   $0x1b398             ; &predictedAxis_EB398ar (RAW)
+///   6f2a3  call   0x35440              ; getTerrainAlt_10C40
+///   6f2ac  mov    %ax,-0x8(%ebp)       ; v6ar.z <- ground at the RAW pt
+///   6f2f2  movsl ; 6f2f3 movsw         ; entity +0x9A <- v6ar (x,y,z)
+///   6f357  call   0x6d660              ; sub_48E60 perimeter minimum
+///   6f35c  shl    $0x5,%eax            ;   x 32
+///   6f362  mov    %ax,0x9e(%ebx)       ; entity +0x9E <- the build datum
+///   6f369  lea    -0xc(%ebp),%eax      ; &v6ar — z STILL the raw ground
+///   6f36e  call   0x7c570              ; AddEventToMap_57D70(entity, v6ar)
+/// ```
+pub(crate) fn no_mc2_authored_castle_link_z() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_AUTHORED_CASTLE_LINK_Z").is_some())
+}
+
 /// The MC2 AI per-spell recast cooldowns `x_WORD_D3F4C` (EF:1070) —
 /// differs wholesale from MC1's table AND is indexed by MC2 spell id.
 const AI_RECAST: [u16; MC2_SPELLS] = [
@@ -293,6 +430,115 @@ fn no_mc2_rival_homeless_speed_run() -> bool {
 fn no_mc2_rival_start_purse() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_START_PURSE").is_some())
+}
+
+/// A/B toggle for the AUTHORED SPELL LEVELS ON ALL 26 SLOTS (round
+/// 147, native-init channel): set `MGC_NO_MC2_RIVAL_AUTHORED_LEVELS`
+/// to restore the pre-dig behaviour, where `SpellLevels_0x41D` was
+/// written only for spells the map both GRANTED and did not BLOCK.
+/// Retail's `InitialiseSpells_54A50` takes the AI arm on a bare
+/// `IsAiPlayer_0x009_2BE4_11239 == 1` test, ahead of the
+/// StartingSpells/BlockedSpells test that computes `setSpell`
+/// (EF:39025-29; NETHERW.EXE 0x792e5 `cmpb $0x1,0x9(%edx)` /
+/// `je 0x7938f`, arm = 0x793a8 `mov 0x360fb(%ebx,%eax,1),%bl` +
+/// 0x793af `mov %bl,0x803(%edi)` — `str_611 + 0x41D = player + 0x803`).
+/// WITNESS (init-check record 0): mc2l17 wiz 1 is authored
+/// `starting_spell_levels = [1; 26]` with 14 spells granted, and
+/// retail's block reads 1 on all 26 while the port read 0 on the
+/// other 12; mc2l18 wiz 6 differs on index 25 alone, which is
+/// exactly its one blocked spell.
+fn no_mc2_rival_authored_spell_levels() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_AUTHORED_LEVELS").is_some())
+}
+
+/// A/B toggle for the RIVAL QUICK-SLOT SEAT (round 147, native-init
+/// channel): set `MGC_NO_MC2_RIVAL_AUTHORED_HANDS` to restore the
+/// pre-dig behaviour, where a natively spawned rival kept
+/// `Mc2Spellbook::default()`'s empty `-1/-1` hands for its whole life.
+/// `InitialiseSpells_54A50` clears `SpellIndexLeft_0x451` /
+/// `SpellIndexRight_0x453` to -1 (EF:38998-99; NETHERW.EXE 0x79280 /
+/// 0x7928e `movw $0xffff`) and then seats the FIRST granted spell in
+/// the left hand and the SECOND in the right, inside the same
+/// 26-iteration walk (EF:39089-96; NETHERW.EXE 0x794d9 `movswl
+/// 0x837(%edx),%ebx` / `cmp $-1` / 0x794e5 `mov %ax,0x837(%edx)`,
+/// else 0x794ee/0x794fa for 0x839). There is no `break`, so once both
+/// are seated the remaining grants change nothing.
+/// WITNESS: retail reads 0/1 on all 51 rival seats of the 13 MC2 rival
+/// takes; the port read -1/-1 on every one.
+/// ⚠ NOTHING IN THE PORT READS A RIVAL'S HANDS TODAY — see the dig
+/// note on [`World::mc2_spawn_rival`]; this seats the register for the
+/// init census and for the (unported) `sub_68FF0` rival pickup.
+fn no_mc2_rival_authored_hands() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_AUTHORED_HANDS").is_some())
+}
+
+/// A/B toggle for THE RESPAWN RE-MINT'S KEY (round 148, the
+/// "no port home" scoping dig): set `MGC_NO_MC2_RIVAL_REMINT_MARKER`
+/// to restore the pre-dig behaviour, where
+/// [`World::mc2_rival_respawn`] re-minted the AUTHORED grant set
+/// ([`Mc2Rival::known`]) and never cleared an entry the mint could
+/// not fill.
+///
+/// ⭐ **`sub_5CF40` HAS NO "KNOWN" SET AT ALL — THE BOOK SLOT *IS*
+/// THE PREDICATE.** The re-mint walks all 26 slots and takes a slot
+/// only when `SpellEnabled[i]` is non-zero, which after
+/// `sub_5E310`'s death scatter is the BOOLEAN 1 marker of what the
+/// wizard actually held when it died (EF:60146) — not what the map
+/// authored. And when the mint FAILS (the event pool is exhausted)
+/// it writes the slot back to **0**, so the spell is gone for good.
+/// Shipped `NETHERW.EXE` (file = VA + 0x24800), `sub_5CF40` at file
+/// 0x81740:
+/// ```text
+///   81760: 66 83 bc 07 33 03 00 00  cmpw $0x0,0x333(%edi,%eax,1) ; SpellEnabled[i]
+///   81769: 74 6f                    je   0x817da                 ; empty slot -> skip
+///   8176b: 56 / 6a 0f / …           push i / push $0xf           ; mint a (15,i)
+///   81772: e8 19 d2 fe ff           call 0x6e990                 ; IfSubtypeCall…4A190
+///   8177e: 74 4a                    je   0x817ca                 ; NULL -> the loss arm
+///   817aa: 66 89 87 33 03 00 00     mov  %ax,0x333(%edi)         ; slot = the new record
+///   817c0: 66 89 41 28              mov  %ax,0x28(%ecx)          ; parentId = the wizard
+///   817c4: 80 49 0c 01              orb  $0x1,0xc(%ecx)          ; byte[0] |= 1
+///   817ca: 8b 83 a4 00 00 00        mov  0xa4(%ebx),%eax
+///   817d0: 66 c7 84 07 33 03 00 00  movw $0x0,0x333(%edi,%eax,1) ; THE LOSS
+///   817db: 83 fe 1a                 cmp  $0x1a,%esi              ; 26 slots
+/// ```
+///
+/// The port's [`Mc2Rival::known`] is a non-retail shadow of that one
+/// lane, and the two DO come apart: the conformance importer already
+/// derives it as `known[s] = book.ent[s] != 0`
+/// ([`World::reanchor_mc2_rival_ai`]), the level-start seating leaves
+/// `known[s]` true for a spell whose mint failed on a full pool, and
+/// `sub_605E0`'s castle-death purge zeroes `book.ent[2]` while the
+/// grant stands ([`World::mc2_castle_death_token_purge`]). Round
+/// 104 converted the four BRAIN gates from `known` to the
+/// manifestation register for exactly this reason
+/// (`rival_cascade_token_gate_off`, `rival_raid_castleless_token_off`)
+/// — ⭐ A LAW ON ONE CALL PATH IS NOT LANDED: the respawn was the
+/// fifth reader and kept asking the grant.
+///
+/// UNWITNESSED IN THE CORPUS by construction: in replay the importer
+/// makes the two keys identical at every anchor, and round 147's
+/// free-run census reads ZERO rival `spell_ent` rows over all 40 MC2
+/// takes. This is a NATIVE-PLAY law and takes a unit test
+/// (docs/CONFORMANCE.md — an ungraded lane can only take one).
+fn no_mc2_rival_remint_marker() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_REMINT_MARKER").is_some())
+}
+
+/// A/B toggle for the ZERO WEAVE DIRECTION AT SPAWN (round 147,
+/// native-init channel): set `MGC_NO_MC2_RIVAL_WEAVE_DIR_ZERO` to
+/// restore the pre-dig behaviour, where [`Mc2Rival::new`] invented
+/// `weave_dir = 1`. `str_611_byte_0x45C_1116` has exactly one writer
+/// in the whole retail engine — `sub_13890`'s tick-0 arm, which
+/// stores 1 or 2 (EF:6022/6027) — and exactly one reader, inside that
+/// same arm's `if (byte_0x45D)` guard (EF:6006), so the spawn value is
+/// UNREADABLE on both sides and this is a state seat, not a
+/// behavioural law.
+fn no_mc2_rival_weave_dir_zero() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_WEAVE_DIR_ZERO").is_some())
 }
 
 /// A/B toggle for the SCRATCH SLOT'S AUTHORED SITE (round 114): set
@@ -785,6 +1031,119 @@ fn no_knock_from_dead_source() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_KNOCK_FROM_DEAD_SOURCE").is_some())
 }
 
+/// A/B toggle for **THE DEAD-WAIT DISPATCH CLEARS THE KNOCK MAGNITUDE
+/// EVERY TICK**: set `MGC_NO_MC2_DEAD_WAIT_KNOCK_CLEAR` to restore the
+/// pre-dig behaviour, where a dead MC2 wizard kept whatever
+/// `moveBoost_0x1E_30` its killing letter stamped for the whole 1,200
+/// tick respawn countdown. `sub_5E7C0` (EF:60660) opens with
+/// `a1x->dword_0xA4_164x->moveBoost_0x1E_30 = 0` **above** its
+/// AI/human and castle/banished branches — shipped `NETHERW.EXE` file
+/// 0x82FC9 `8b 86 a4 00 00 00` = `mov 0xa4(%esi),%eax` / 0x82FCF
+/// `66 c7 40 1e 00 00` = `movw $0x0,0x1e(%eax)`, the FIRST two
+/// instructions after the prologue, with the `IsAiPlayer` test only at
+/// 0x82FEB. See [`World::mc2_rival_dead_wait`] and the eliminated arm
+/// of [`World::mc2_rival_entity_tick`].
+fn no_mc2_dead_wait_knock_clear() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DEAD_WAIT_KNOCK_CLEAR").is_some())
+}
+
+/// A/B toggle for **THE RIVAL DUEL LOCK'S DEATH-FALL TETHER**: set
+/// `MGC_NO_MC2_RIVAL_DUEL_DEATH_TETHER` to restore the pre-dig
+/// behaviour, where a rival wizard had no duel lock register at all
+/// and `mc2_rival_carpet_move`'s doc comment listed `sub_5DE30` under
+/// "NOT reproduced".
+///
+/// ⭐⭐⭐ **A RIVAL'S DUEL LOCK IS INERT WHILE IT LIVES AND LIVE WHILE
+/// IT DIES — AND THE CALL GRAPH IS WHY.** `sub_5DE30` is the duel
+/// enforcement (the leash plus the opponent DRAIN). Scanning
+/// `NETHERW.EXE` for `e8 <rel32>` (file = VA + 0x24800) gives the
+/// whole graph, and it is three edges wide:
+///
+/// ```text
+///   sub_5DE30  (file 0x82630)  callers: 0x82163  = VA 0x5D963  -> INSIDE sub_5D530
+///   sub_5D530  (file 0x81D30)  callers: 0x82934  = VA 0x5E134  -> AddPlayer03_00_5E010
+///                                       0x82B1D  = VA 0x5E31D  -> sub_5E310, +0xD = ITS FIRST STATEMENT
+///   sub_12A70  (the AI brain)  callers: VA 0x12918 (sub_12910) only
+///   sub_146F0  (the AI mover)  callers: VA 0x12C40 (sub_12A70) only
+/// ```
+///
+/// So the enforcement has exactly TWO reachable seats: the live
+/// wizard body `AddPlayer03_00_5E010` — which an AI wizard NEVER
+/// runs, its action-0 entry being `sub_12A70` → `sub_146F0`, a mover
+/// with no duel leg — and `sub_5E310`, THE DEATH FALL, which is one
+/// shared function for both columns (the port already models its
+/// opening `sub_5D530` call, [`World::mc2_rival_death_fall`]). A
+/// rival that holds `word_0x146_326` therefore does nothing with it
+/// for its whole life and then, on every tick of its death fall,
+/// slews toward its opponent and bills them.
+///
+/// The body (file 0x82630-0x827E9), with the operands this arm
+/// reproduces:
+///
+/// ```text
+///   82644  66 8b 9a 46 01 00 00  mov 0x146(%edx),%bx     ; word_0x146_326 = the lock
+///   8265a  39 cb / 0f 86 ..      cmp/jbe 0x827EB         ; lock 0 -> return, NO clear
+///   82662  0f bf 82 4a 01 00 00  movswl 0x14a(%edx)      ; word_0x14A_330 = the TIER
+///   82676  66 8b 8a 4f 03 00 00  mov 0x34f(%edx),%cx     ; SpellEnabled[14] = manifestation
+///   82694  e8 57 a5 ff ff        call 0x7CBF0            ; sub_583F0_distance_3d (3-D)
+///   826a6  66 83 7f 2e 00        cmpw $0x0,0x2e(%edi)    ; manifestation charged?
+///   826bc  83 7b 08 00 / jl      cmpl $0x0,0x8(%ebx)     ; VICTIM life >= 0  (never the caster's)
+///   826c6  ..0x84(%esi)..        minSpeed 80 -> cap 120, divisor 1024/120 = 8
+///   8273a  e8 a1 a2 ff ff        call 0x7C9E0            ; tan2 bearing
+///   8275e  e8 ed a3 ff ff        call 0x7CB50            ; sub_58350 yaw servo, rate 0x82
+///   82785  e8 16 a0 ff ff        call 0x7C7A0            ; MoveEntity_57FA0 onto 0x1B398
+///   8278d  8a 40 18              mov 0x18(%eax),%al      ; row.life_0x1A = the DRAIN MODE
+///   82793  3c 01 / 72 54         cmp $1 / jb  0x827EB    ; mode 0 -> no drain
+///   82797  76 1c                 jbe 0x827B5             ; mode 1 -> mana only
+///   82799  3c 02 / 75 4e         cmp $2 / jne 0x827EB    ; mode > 2 -> return
+///   827a3  0f bf 80 63 01 00 00  movswl 0x163(%eax)      ; victim lifeRegen_0x163_355
+///   827ad  83 c0 02 / 29 c1      life -= lifeRegen + 2   ; NO floor
+///   827b5  8b 83 88 00 00 00     victim manaRegen_0x88_136
+///   827c1  83 c0 08 / 29 c6      mana -= manaRegen + 8
+///   827cc  85 f6 / 7d 1b         test/jge -> movl $0x0   ; the ONE clamp: mana floors at 0
+///   827dc  8b 86 a4 00 00 00     mov 0xa4(%esi),%eax     ; the CASTER's own player block
+///   827e2  66 c7 80 46 01 00 00  movw $0x0,0x146(%eax)   ; THE CLEAR — the liveness ELSE
+/// ```
+///
+/// The clear is therefore exactly two sites: this `else` (manifestation
+/// discharged, out of the tier's range, or the victim dead) and
+/// `sub_5C950`'s respawn, file 0x81662 `movw $0x0,0x146(%eax)` beside
+/// its 0x81671 twin for `word_0x148_328`. NOTHING clears it at the
+/// kill — the lock survives the fatal letter, the whole fall, and the
+/// landing payout, and the 26-token scatter's `SpellEnabled[i] = 1`
+/// then makes the manifestation test read pool slot 1 (retail's own
+/// out-of-bounds class), which is what usually trips the `else` one
+/// tick after touchdown.
+///
+/// ⚠ **UNWITNESSED, AND STRUCTURALLY SO ON THIS COLUMN.** Spell 14 is
+/// in none of the AI's pick tables ([`ATTACK_WIZARD`],
+/// [`ATTACK_CASTLE`], the Home/Defense immediates), so no retail AI
+/// ever stamps its own lock in single player; the register can only
+/// arrive through the conformance import, which is why this dig also
+/// seats it ([`Mc2RivalAi::duel_target`]) and grades it
+/// ([`Mc2Rival::wiz_shadow_lanes`]). Ported on the player's ruling of
+/// 2026-09-18 because it is player-visible the moment a lock exists.
+pub(crate) fn no_mc2_rival_duel_death_tether() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_DUEL_DEATH_TETHER").is_some())
+}
+
+/// A/B toggle for **THE KNOCK BEARING IS STORED RAW, NOT MASKED TO 11
+/// BITS**: set `MGC_NO_MC2_KNOCK_DIR_RAW` to restore the pre-dig
+/// `& 0x7FF`. `sub_5EFA0` writes the tangent's full 16-bit return
+/// straight into `yaw_0x1E_30` — shipped `NETHERW.EXE` file 0x83A19
+/// `e8 c2 8f ff ff` = `call 0x7C9E0` (`sub_581E0` tan2) / 0x83A1E
+/// `8b 93 a4 00 00 00` / 0x83A27 `66 89 42 20` = `mov %ax,0x20(%edx)`,
+/// with no `and` in between — and `angle_of` returns **2048** on the
+/// `-dx < -dy` quadrant edge, which the port folded to 0. The consumer
+/// (`MoveEntity_57FA0`) masks at use, so this is a register-state law
+/// only. Witness mc2l22-new t=3421 wiz 6: retail 2048, port 0.
+pub(crate) fn no_mc2_knock_dir_raw() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_KNOCK_DIR_RAW").is_some())
+}
+
 /// A/B toggle for **`sub_12A70`'s LETHAL RETURN IS THE HOUSEKEEPING'S,
 /// NOT THE BRAIN'S**: set `MGC_NO_RIVAL_DEATH_BRAIN` to restore the
 /// pre-dig behaviour, where [`World::mc2_rival_alive`]'s lethal branch
@@ -815,6 +1174,17 @@ fn rival_invis_window_off() -> bool {
 fn no_m57_sig_is_slot() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M57_SIG_IS_SLOT").is_some())
+}
+
+/// A/B toggle for the (10,40) GRAVE's MC2 mail-mask home: set
+/// `MGC_NO_MC2_GRAVE_MASK_HOME` to restore the pre-dig ctor, which
+/// wrote only the MC1 `@0x38` home (`f28`) and left the class-2/10 one
+/// (`f56` — the home `import_ent_mc2` seats and `port_ent_lanes_mc2`
+/// publishes as `b38`) at zero. Citation and receipts at the call site
+/// in [`Gen::mc2_spawn_grave`].
+fn no_mc2_grave_mask_home() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_GRAVE_MASK_HOME").is_some())
 }
 
 /// A/B toggle for THE RE-DETECT TICK THAT PROBES NOTHING: set
@@ -1626,17 +1996,28 @@ fn rival_pin_afford_off() -> bool {
 /// measured tick sits above it.
 ///
 /// This is retail reading OUTSIDE ITS OWN DATA (docs/DEVIATIONS.md
-/// "RETAIL'S OWN OUT-OF-BOUNDS READS", player-ruled 2026-09-04): the
-/// AUTHORED behaviour — the remc2 `//fix`'s origin — stays the default
-/// and the affected rows are the registered-deviation floor.
-/// `MGC_MC2_IVT_GHOST=1` opts into the fitted DOSBox words for the
-/// A/B (the bearing and the z-step then match the recording).
+/// "RETAIL'S OWN OUT-OF-BOUNDS READS"). ⚖ PLAYER-RULED 2026-09-04:
+/// stays unfaithful, the authored origin (the remc2 `//fix`'s
+/// `(0, 0, 0)`) is the default. ⚖ **RE-RULED 2026-09-18 (round 150),
+/// on the painter-residue precedent** (`mc2_painter_ctor_extents`:
+/// ONE STABLE WITNESSED VALUE ⇒ SEED IT): unlike every other member
+/// of the class the words are the same on every recording made on
+/// the same DOSBox, and re-measured on the round-149 floor the fitted
+/// words take mc2l22 **3 → 1 segment** (the two roster-excused
+/// boundaries 4661/9784 go clean), its raw shadow **4 → 0** (the
+/// `(3,1)`/`(5,2)` `roll` rows at 4662/9784/9785), the other 39 MC2
+/// takes byte-identical, and the t=6160 downstream head that kept the
+/// origin the default in round 102 no longer exists. So the fitted
+/// words ARE the default; `MGC_NO_MC2_IVT_GHOST=1` restores the
+/// authored origin for the A/B. Fixture:
+/// `mc2l22/a-blank-defense-rescan-bears-on-the-interrupt-vector-table`
+/// (pair 4661→4662, four `z` rows).
 fn mc2_ivt_ghost() -> (u16, u16, i16) {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *V.get_or_init(|| std::env::var_os("MGC_MC2_IVT_GHOST").is_some()) {
-        (0x1100, 0xF000, 0x1100)
-    } else {
+    if *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_IVT_GHOST").is_some()) {
         (0, 0, 0)
+    } else {
+        (0x1100, 0xF000, 0x1100)
     }
 }
 
@@ -1793,6 +2174,17 @@ pub(crate) struct Mc2RivalAi {
     /// will pay out.
     pub knock_dir: u16,
     pub knock_mag: i16,
+    /// The players-block DUEL LOCK words `word_0x146_326` /
+    /// `dword_0x142_322` / `word_0x14A_330`. Round 148 measured the
+    /// cost of NOT seating these: every candidate pair fixture in the
+    /// mc2l6-rsg duel window failed on rival 370's `mana`, because an
+    /// imported world could not run the drain at all. A rival's own
+    /// lock is only ever nonzero in a recording (the AI never casts
+    /// spell 14), and it decides its whole death fall — see
+    /// [`no_mc2_rival_duel_death_tether`].
+    pub duel_target: u16,
+    pub duel_hold: i32,
+    pub duel_tier: u8,
 }
 
 /// Hash-silent bool (the `CrtRand` pattern — features.rs): carried
@@ -1811,6 +2203,26 @@ impl std::hash::Hash for BrakeWord {
 pub(crate) struct NudgeLatch(pub bool);
 
 impl std::hash::Hash for NudgeLatch {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// The rival's DUEL LOCK register triple, hash-silent for the same
+/// reason as [`BrakeWord`] and [`NudgeLatch`] ([`Mc2Rival`] is
+/// `derive(Hash)`, so a bare field would re-pin every golden).
+///
+/// `Some((opponent, hold, tier))` mirrors the human's
+/// `World::mc2_duel` and carries retail's three player-block words:
+/// `word_0x146_326` (the opponent's entity index, or
+/// [`PLAYER_TARGET`] for the human), `dword_0x142_322` (the held
+/// distance, clamped to [1024, 3072] at the stamp) and
+/// `word_0x14A_330` (the tier the SPELLS row 14 lookup uses).
+/// `None` IS retail's 0 — a cleared lock reads 0/stale on the other
+/// two, which the wizard shadow's lane table already skips.
+/// See [`no_mc2_rival_duel_death_tether`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct DuelLock(pub Option<(u16, i32, u8)>);
+
+impl std::hash::Hash for DuelLock {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
@@ -1905,6 +2317,16 @@ pub(crate) struct Mc2Rival {
     /// its whole life and pays it out over t=1846..1850.
     knock_dir: u16,
     knock_mag: i16,
+    /// ⭐⭐⭐ THE DUEL LOCK, AND ONLY THE DEATH FALL EVER READS IT.
+    /// Retail's `word_0x146_326`/`dword_0x142_322`/`word_0x14A_330`
+    /// on this wizard's player block. `sub_5DE30` is reached from
+    /// `sub_5D530` alone, and `sub_5D530` from `AddPlayer03_00_5E010`
+    /// (human-only) and `sub_5E310` (the shared death fall) alone —
+    /// so a rival carrying a lock enforces nothing while it lives and
+    /// then tethers, slews and DRAINS its opponent for every tick of
+    /// its fall. See [`no_mc2_rival_duel_death_tether`] for the full
+    /// call graph and the shipped bytes.
+    pub(crate) duel: DuelLock,
     /// The flight-brake word (`word_0xe_14`): cleared FIRST on every
     /// approach call (EF:6718), set by the arrive branch (EF:6733-35)
     /// and by the can't-boost else (EF:6751-52). The SPEED token's
@@ -1956,13 +2378,22 @@ impl Mc2Rival {
             site: (0, 0),
             strafe: 0,
             weave: 0,
-            weave_dir: 1,
+            // ⭐ THE COMMITTED WEAVE DIRECTION STARTS AT THE MEMSET 0.
+            // `str_611_byte_0x45C_1116` has exactly ONE writer in
+            // retail — `sub_13890`'s tick-0 arm (EF:6022/6027), which
+            // only ever stores 1 or 2 — and `sub_5C950`'s spawn tail
+            // does not touch it, so a freshly started rival carries 0
+            // until its first whiff weave. The port's `1` was an
+            // invention. Measured on all 13 MC2 rival takes: retail's
+            // record 0 reads 0 on every seat (51/51).
+            weave_dir: if no_mc2_rival_weave_dir_zero() { 1 } else { 0 },
             shield_state: 0,
             avoid: 0,
             avoid_exit: 0,
             vdes: 0,
             knock_dir: 0,
             knock_mag: 0,
+            duel: DuelLock(None),
             v14: BrakeWord(false),
             nudge_latch: NudgeLatch(false),
             grace: 100,
@@ -2027,8 +2458,15 @@ impl Mc2Rival {
             ("avoid_exit", self.avoid_exit as i64),
             // Round 147's widening: every register the importer SEATS
             // on the rival (`reanchor_mc2_rival_ai`) and nothing
-            // compared. `hand_*` is `-1` = empty on both sides.
+            // compared. ⚠ `hand_*` is NOT "-1 on both sides": retail
+            // seats the first two granted spells at level init
+            // (`InitialiseSpells_54A50` — see
+            // [`no_mc2_rival_authored_hands`]), which reads 0/1 on
+            // every rival seat of every MC2 take.
             ("life_regen", self.life_delta as i64),
+            ("duel_target", self.duel.0.map_or(0, |d| d.0) as i64),
+            ("duel_hold", self.duel.0.map_or(0, |d| d.1 as i64)),
+            ("duel_tier", self.duel.0.map_or(0, |d| d.2) as i64),
             ("knock_dir", self.knock_dir as i64),
             ("knock_mag", self.knock_mag as i64),
             ("hand_left", self.book.left as i64),
@@ -2116,6 +2554,24 @@ impl World {
         let rand = self.g.ent[i].rand;
         self.g.ent[i] = crate::engine::features::Ent::default();
         self.g.ent[i].rand = rand;
+        // `sub_5C950`/`AddPlayer_4A920` place player 0 at its own start
+        // marker BEFORE `sub_55AB0` reifies the carried book, and the
+        // reify mints each token at the CARPET's `position_0x4C_76`
+        // (Level.cpp:1319). Without this the `human_pose` register is
+        // still the constructor's (0,0,0) when the book is granted.
+        // [`crate::engine::features::no_mc2_native_human_start_pose`].
+        if !crate::engine::features::no_mc2_native_human_start_pose() {
+            if let Some((mx, my)) = self.start_markers[0] {
+                let x = (mx << 8).wrapping_add(128);
+                let y = (my << 8).wrapping_add(128);
+                let z = (self.g.ground_z(x, y) as i16).wrapping_add(0x100);
+                let e = &mut self.g.ent[i];
+                e.x = x;
+                e.y = y;
+                e.z = z;
+                self.human_pose = (x, y, z);
+            }
+        }
         self.mc2_carpet_slot = i as u16;
         self.g.mc2_pinned = crate::engine::features::Mc2Pinned(i as u16);
     }
@@ -2217,16 +2673,55 @@ impl World {
         }
         // The ladder reads the owner's Life scalar per slot.
         self.g.mc2_life_scale.0[slot as usize] = r.life_scale;
+        // …and it reaches that slot through `rival_ents`, the port's
+        // stand-in for retail's per-entity player-block back-pointer
+        // `dword_0xA4_164x`, which `sub_5C950` wires HERE — at wizard
+        // birth, above the authored castle (EF:44058). See
+        // [`no_mc2_wiz_block_at_birth`].
+        if !no_mc2_wiz_block_at_birth() {
+            self.g.rival_ents[slot as usize] = i as u16;
+        }
         // The book: `InitialiseSpells_54A50` (EF:38650) — AI grant =
         // granted && !blocked; starting LEVEL = byte_0x360FBx clamped
         // <= 2, written straight into SpellLevels (no XP accrual).
         // spellIndex_D94FF is identity for the 26 real spells
         // (open-closure §4) — raw spell-id indexing.
+        //
+        // ⭐⭐ THE AUTHORED LEVEL LANDS ON ALL 26 SPELLS, NOT ONLY THE
+        // GRANTED ONES. The AI arm is a bare `if (IsAiPlayer == 1)`
+        // inside the 26-iteration walk, taken BEFORE the
+        // StartingSpells/BlockedSpells test that computes `setSpell`
+        // (EF:39025-29, NETHERW.EXE 0x792e5 `cmpb $0x1,0x9(%edx)` /
+        // `je 0x7938f`, and the arm itself is the two-instruction
+        // 0x793a8 `mov 0x360fb(%ebx,%eax,1),%bl` / 0x793af
+        // `mov %bl,0x803(%edi)`). So a spell the map BLOCKS or does
+        // not grant still gets its `byte_0x360FBx` level written into
+        // `SpellLevels_0x41D`.
+        if !no_mc2_rival_authored_spell_levels() {
+            for s in 0..MC2_SPELLS {
+                r.book.levels[s] = cfg.start_level[s].min(2);
+            }
+        }
         for s in 0..MC2_SPELLS {
             if cfg.start[s] && !cfg.blocked[s] {
                 r.known[s] = true;
                 let lvl = cfg.start_level[s].min(2);
                 r.book.levels[s] = lvl;
+                // ⭐ THE QUICK SLOTS ARE BOUND HERE, IN THE SAME WALK.
+                // `InitialiseSpells_54A50` clears both hands to -1 up
+                // front (EF:38998-99) and then, on every `setSpell`
+                // spell in index order, fills LEFT if it is still -1
+                // else RIGHT if THAT is still -1 (EF:39089-96;
+                // NETHERW.EXE 0x794d9..0x79500). No `break`: once both
+                // are seated the rest of the walk simply skips the
+                // test, so the pair is the FIRST TWO granted spells.
+                if !no_mc2_rival_authored_hands() {
+                    if r.book.left == -1 {
+                        r.book.left = s as i8;
+                    } else if r.book.right == -1 {
+                        r.book.right = s as i8;
+                    }
+                }
                 // ⭐ THE AUTHORED START IS A **LEVEL**, NOT A
                 // SELECTION. `InitialiseSpells_54A50` opens by zeroing
                 // `array_0x437_1079x.SpellIndex[i]` — the SELECTED
@@ -2256,12 +2751,24 @@ impl World {
         if cfg.castle_level > 0 && r.known[2] {
             self.mc2_spawn_authored_castle(&mut r, cfg.castle_level);
         }
-        // The post-spawn truce: every OTHER wizard's ledger toward
-        // this newcomer = the elevated-but-decaying 40927 (EF:43839).
-        for other in &mut self.mc2_rivals {
-            other.hate[slot as usize] = HATE_RESPAWN;
+        // The post-spawn truce: every OTHER wizard ON THE TICK-TOP
+        // CLASS-3 ROSTER takes the elevated-but-decaying 40927 toward
+        // this newcomer (EF:44185-93). At LEVEL-START seating that
+        // roster is empty — the chain is rebuilt before the input
+        // handlers run and no wizard record existed yet — so nothing
+        // is stamped. `MGC_NO_MC2_RIVAL_TRUCE_ROSTER=1` restores the
+        // flat every-rival loop.
+        if no_mc2_rival_truce_roster() {
+            for other in &mut self.mc2_rivals {
+                other.hate[slot as usize] = HATE_RESPAWN;
+            }
+        } else {
+            self.mc2_truce_roster(slot as usize, i as u16);
         }
         // Team resolver for owner recolors (balls/balloons/flags).
+        // ⚠ Already seated at birth unless the kill switch is set —
+        // see [`no_mc2_wiz_block_at_birth`]. Kept unconditional so the
+        // switched-off arm is byte-identical to the pre-dig tree.
         self.g.rival_ents[slot as usize] = i as u16;
         self.mc2_rivals.push(r);
         self.entities_dirty = true;
@@ -2279,7 +2786,11 @@ impl World {
         {
             let e = &mut self.g.ent[m];
             e.tick70 = (spell as u8).wrapping_mul(3); // owned state
-            e.f54 = 64;
+            // The reify does NOT arm the re-steal lock — see
+            // [`crate::engine::features::no_mc2_pickup_only_steal_lock`].
+            if crate::engine::features::no_mc2_pickup_only_steal_lock() {
+                e.f54 = 64;
+            }
             e.id24 = r.ent;
             e.f26 = 0;
             e.f44 = 0;
@@ -2396,6 +2907,11 @@ impl World {
             e.model65 = 2;
             e.tick70 = 4; // standing (the buildable steady state)
             e.max_life = 40000;
+            // `byte_0x38_56 = 33` (EF:33433) — the castle's damage
+            // channel mask; NewEvent leaves it 0.
+            if !crate::mc2::mobs::no_mc2_castle_ch_mask() {
+                e.f28 = 33;
+            }
             e.id24 = r.ent;
             // Even-parity tile-corner snap (the shared castle anchor
             // law, MC1 :44229 = MC2 sub_4A9E0).
@@ -2412,7 +2928,32 @@ impl World {
         // the painter/leveler read site_z, not the live ground.
         let z = self.g.mc2_castle_site_z((sx >> 8) as u8, (sy >> 8) as u8);
         self.g.ent[c].site_z = z;
-        self.g.link(c, sx, sy, z);
+        // ⭐⭐ TWO Z DATA, NOT ONE — AND THIS CALL PATH ONLY EVER HAD
+        // ONE. `Gen::spawn_castle` (mc1/combat.rs) already carries the
+        // law: `sub_4AA40`'s link takes the ctor LOCAL `v6ar`, whose z
+        // is `getTerrainAlt_10C40(&predictedAxis_EB398ar)` — the ground
+        // under the RAW caller point (EF:33385) — while the
+        // perimeter-min `32 * sub_48E60(..)` overwrite lands on the
+        // ENTITY's `axis_0x9A_154x.z` one line earlier (EF:33399) and
+        // never touches `v6ar`. `AddEventToMap_57D70(v2x, &v6ar)`
+        // (EF:33400) then links at the raw ground.
+        //
+        // The authored-castle arm of `sub_5C950` reaches that same ctor
+        // through `IfSubtypeCallCreatingManaSphere_4A190(&v2x->
+        // position_0x4C_76, 3, 2)` (EF:44131) — the RAW point is the
+        // WIZARD's own position — but the port's copy of the ctor here
+        // linked with `site_z`, so an authored castle whose perimeter
+        // minimum differs from the ground under its wizard was born at
+        // the wrong altitude. Invisible on a take settled far enough
+        // for the standing tick's `z = ground_z(x, y)` refresh to run;
+        // mc2l22-new is settled 2 ticks and catches it: retail slot 476
+        // z 4623, port 4384 (= 32 x 137, the perimeter min).
+        let link_z = if no_mc2_authored_castle_link_z() {
+            z
+        } else {
+            self.g.ground_z(wx, wy) as i16
+        };
+        self.g.link(c, sx, sy, link_z);
         self.g.refill_life(c);
         // The team flag: retail `+90 += TransformPlayerColorIndex`
         // (EF:61133) — flag family 177 + COLOR_ART[slot] (the MC2
@@ -2498,8 +3039,16 @@ impl World {
         if self.mc2_rivals[ri].eliminated {
             // Retail still dispatches the corpse: `sub_5E7C0`'s
             // banished arm, call-free.
-            if self.g.ent[i].tick70 == 3 && !crate::engine::features::no_mc2_m27_v34_corpse_transparent() {
-                self.g.m27_v34_transparent(i);
+            if self.g.ent[i].tick70 == 3 {
+                // ⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT LANDED. The
+                // knock wipe sits ABOVE `sub_5E7C0`'s AI/castle
+                // branches, so the BANISHED corpse takes it too.
+                if !no_mc2_dead_wait_knock_clear() {
+                    self.mc2_rivals[ri].knock_mag = 0;
+                }
+                if !crate::engine::features::no_mc2_m27_v34_corpse_transparent() {
+                    self.g.m27_v34_transparent(i);
+                }
             }
             return;
         }
@@ -2764,6 +3313,19 @@ impl World {
         // imported rival resumes owing whatever its last hit stamped.
         r.knock_dir = ai.knock_dir;
         r.knock_mag = ai.knock_mag;
+        // The duel lock: retail state the import had no seat for at
+        // all until this dig. `word_0x146_326 == 0` IS "no lock", and
+        // the other two words are stale-but-present in that case, so
+        // only the nonzero register becomes a `Some`.
+        r.duel = if no_mc2_rival_duel_death_tether() || ai.duel_target == 0 {
+            DuelLock(None)
+        } else {
+            DuelLock(Some((
+                ai.duel_target,
+                ai.duel_hold.clamp(1024, 3072),
+                ai.duel_tier.min(2),
+            )))
+        };
         // The book: `SpellsEnabled_0x333` is the live manifestation
         // slot, and DEATH rewrites every owned entry to the boolean
         // marker 1 (EF:60147) — imported verbatim, quirk included,
@@ -3575,7 +4137,13 @@ impl World {
         if let Some((ax, ay)) = attacker {
             let (vx, vy) = (self.g.ent[i].x, self.g.ent[i].y);
             let r = &mut self.mc2_rivals[ri];
-            r.knock_dir = Gen::angle_between(ax, ay, vx, vy) & 0x7FF;
+            // ⚠ NO 11-BIT MASK — see [`no_mc2_knock_dir_raw`].
+            let bearing = Gen::angle_between(ax, ay, vx, vy);
+            r.knock_dir = if no_mc2_knock_dir_raw() {
+                bearing & 0x7FF
+            } else {
+                bearing
+            };
             r.knock_mag = (dmg / 10).clamp(0, 80) as i16;
         }
         // ⭐⭐ THE KILLER LATCH BELONGS TO THE LETHAL BRANCH ALONE —
@@ -4249,6 +4817,24 @@ impl World {
     /// with a 100-mana manifestation opening — retail 588 → 580
     /// (drain −92, regen −100), the port 588 → 488.
     pub(crate) fn mc2_duel_drain(&mut self, opp: u16, mode: u8) {
+        // ⭐⭐⭐ THE VICTIM CAN BE THE HUMAN, and until the rival duel
+        // lock landed nothing could reach this arm: the only holder
+        // of a lock was the carpet, and a wizard never duels itself.
+        // Retail's drain is written against `v2x`, the OPPONENT
+        // entity, with no column test anywhere in `sub_5DE30` —
+        // `mana_0x90_144`/`manaRegen_0x88_136` off the entity and
+        // `lifeRegen_0x163_355` off its player block, exactly as the
+        // rival arm below reads them. See
+        // [`no_mc2_rival_duel_death_tether`].
+        if opp == PLAYER_TARGET {
+            let d = self.player.mana_delta as i64 + 8;
+            let m = self.player.mana as i64 - d;
+            self.player.mana = m.max(0) as u32;
+            if mode == 2 {
+                self.player.life -= self.player.life_rate + 2;
+            }
+            return;
+        }
         let Some(ri) = self.mc2_rivals.iter().position(|r| r.ent == opp) else {
             return;
         };
@@ -4861,6 +5447,15 @@ impl World {
                 if s == 0xB && self.mc2_rival_afford(ri, m) {
                     let first_b = self.g.ent[m].f26 as u16 == self.g.ent[m].f28.max(1);
                     mc2_invis_cloak_edge(&mut self.g, m, own_slot, first_b);
+                    // ⭐ A LAW ON ONE CALL PATH IS NOT LANDED: the
+                    // cloak edge's third write is the CASTER's spawn
+                    // grace (`word_0x159_345 = 0`, NETHERW.EXE
+                    // 0x8FA46), and the human's twin is
+                    // `mc2_spell_fire`'s own `0xB` arm. See
+                    // [`crate::mc2::cast::no_mc2_invis_clears_grace`].
+                    if first_b && !crate::mc2::cast::no_mc2_invis_clears_grace() {
+                        self.mc2_rivals[ri].grace = 0;
+                    }
                 }
                 self.g.ent[m].f26 -= 1;
                 if self.g.ent[m].f26 == 0 {
@@ -7175,9 +7770,9 @@ impl World {
                 if !in_band {
                     // Face + z-track the wizard (overrides the anchor
                     // heading, EF:7815-40); none → the NULL record's
-                    // position — see [`mc2_ivt_ghost`] (authored: the
-                    // remc2 //fix's origin; opt-in: the IVT words retail
-                    // actually reads).
+                    // position — see [`mc2_ivt_ghost`] (default: the IVT
+                    // words retail actually reads; `MGC_NO_MC2_IVT_GHOST`:
+                    // the remc2 //fix's authored origin).
                     let (wx, wy, wz) = wiz.map(|(_, p, _)| p).unwrap_or_else(mc2_ivt_ghost);
                     self.mc2_rival_face(i, wx, wy);
                     let want = wz.saturating_add(512);
@@ -8713,7 +9308,12 @@ impl World {
                     e.site_z = 12; // StageVar2 = 12: the pose-puppet
                     e.tick70 = model.wrapping_mul(8).wrapping_add(7);
                     e.id24 = owner; // @0x1A = @0x28 = the casting wizard
-                    e.f26 = 0;
+                    // See
+                    // [`crate::engine::features::no_mc2_morph_keeps_ctor_10`]
+                    // — the class-5 ctor's `slot % 100` stays.
+                    if crate::engine::features::no_mc2_morph_keeps_ctor_10() {
+                        e.f26 = 0;
+                    }
                     self.g.ent[m].f146 = c as u16; // word_0x96_150 link
                     // ⭐⭐⭐ THE METAMORPH CLOAK IS THE INVISIBILITY BIT,
                     // AND `sub_6A030` IS CASTER-GENERIC. The first-tick
@@ -8780,7 +9380,7 @@ impl World {
         // `yaw ± 113` (+113 on the first, −113 on the second, masked
         // 0x7FF) to `yaw_0x1C_28` ALONE after the unfanned muzzle
         // step, and cross-links the pair via `word_0x34_52`
-        // (EF:56651-56). The human column has carried this since
+        // (EF:57002-06; the port home is `f54`). The human column has carried this since
         // `mc2_spell_fire`'s fan; the rival funnel minted one bolt.
         // mc2l22 t=4636→4637: rival 584 fires its tier-2 lightning
         // (token 592 `b46` 2) at castle 556 and retail births TWO
@@ -8803,6 +9403,9 @@ impl World {
             // arm in mc2_launch already carries this (mc2l4 t=83 slot
             // 306: retail 33 = the token's purse, not the ctor's 50).
             let token_mana = self.g.ent[m].f140;
+            // The token's `subSpellIndex_0x2A_42` (class-15 home = f30)
+            // — the leveled possession bolt's reach root, below.
+            let token_sub = self.g.ent[m].f30 as i32;
             let charge_bank =
                 std::mem::take(&mut self.wiz_charge[self.mc2_rivals[ri].slot as usize]);
             {
@@ -8832,8 +9435,15 @@ impl World {
                 // and @0x1e — there is no `0x2a(%ebx)` anywhere in it.
                 // Census witness (rsg pairs 0..2000, `MGC_RAW_SHADOW=1`):
                 // 143 `(9,1) f2a` rows, retail 100 / port 10.
-                if !matches!(subtype, 1 | 17 | 24) || crate::mc2::cast::no_rival_launch_2a_absence()
-                {
+                // ⭐ …AND THE FOURTH MEMBER, THE STEAL-MANA BOLT (9,8),
+                // on this twin call path too — `sub_6DCA0`'s `a3 <= 0xD`
+                // arm is the one band arm that writes neither `@0x2A`
+                // nor `@0x46`, and `sub_6B3E0` (caster-generic, so
+                // rivals run the same body) adds no `@0x2A` write.
+                // Full citation on [`crate::mc2::cast::no_steal_2a_absence`].
+                let absent_2a = matches!(subtype, 1 | 17 | 24)
+                    || (subtype == 8 && !crate::mc2::cast::no_steal_2a_absence());
+                if !absent_2a || crate::mc2::cast::no_rival_launch_2a_absence() {
                     e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
                 }
                 if charge {
@@ -8944,8 +9554,19 @@ impl World {
                 // `scratch10` 0 where retail banked 60. @0x10 is the
                 // port's `f26` (`port_ent_lanes_mc2` maps it to the
                 // `scratch10` lane).
+                // ⭐ …AND THE LEVELED POSSESSION BOLT IS NEITHER: ITS
+                // @0x10 IS THE SQUARED REACH, ON THIS CALL PATH TOO.
+                // `sub_69640`'s (9,17) arm (EF:56329) writes
+                // `(token->subSpellIndex_0x2A_42 << 8)²` and only
+                // ZEROES the caster's charge meter — it never banks it
+                // on the bolt. The rival funnel wrote the bank here, so
+                // a rival's leveled bolt carried a completely different
+                // word. Homed as the ROOT, published squared — see
+                // [`crate::mc2::cast::no_posses_reach_root`].
                 e.f26 = if subtype == 1 {
                     200
+                } else if subtype == 17 && !crate::mc2::cast::no_posses_reach_root() {
+                    token_sub as i16
                 } else {
                     charge_bank as i16
                 };
@@ -8979,8 +9600,13 @@ impl World {
             // dest (51308, 26565, -142) where -142 = 360 -
             // 16384*sin(10/2048*2pi) and the horizontal leg is
             // 16384*cos(pitch) = 16376. The port left all three at 0.
+            // The reach's spell-1 arm is keyed on the SPAWNED class-9
+            // model (`sub_69900` 10240 vs `sub_69640` 0x4000) — see
+            // [`crate::mc2::cast::no_mc2_posses_axis_reach_by_subtype`].
+            // The rival funnel has the minted record in hand, so it
+            // names the spawner directly.
             if let Some((reach, use_pitch, ground_snap)) =
-                crate::mc2::cast::mc2_launch_axis_reach(s, sub.life)
+                crate::mc2::cast::mc2_launch_axis_reach(s, sub.life, self.g.ent[p].model65)
             {
                 if !crate::mc2::cast::no_rival_launch_axis() {
                     let mut dest = (ex, ey, ez);
@@ -9003,8 +9629,19 @@ impl World {
                 self.g.ent[p].f30 = yaw.wrapping_add(off) & 0x7FF;
             }
             if let Some(t) = twin {
-                self.g.ent[p].f52 = t as u16;
-                self.g.ent[t].f52 = p as u16;
+                // ⭐⭐⭐ THE CROSS-LINK'S HOME IS **f54** (@0x34), ON
+                // THE TWIN CALL PATH TOO — `sub_6A5C0` is
+                // caster-generic, so the rival funnel writes the same
+                // `word_0x34_52`. Citation, shipped bytes and the
+                // 177+177-row (9,12) census on
+                // [`crate::mc2::cast::no_mc2_m12_handle_home`].
+                if crate::mc2::cast::no_mc2_m12_handle_home() {
+                    self.g.ent[p].f52 = t as u16;
+                    self.g.ent[t].f52 = p as u16;
+                } else {
+                    self.g.ent[p].f54 = t as u16;
+                    self.g.ent[t].f54 = p as u16;
+                }
             }
             twin = Some(p);
         }
@@ -9111,6 +9748,29 @@ impl World {
         }
     }
 
+    /// Test hook: seat the rival's knock register directly, so a test
+    /// can pin the dead-wait wipe without having to construct a fall
+    /// short enough to leave an impulse unspent.
+    #[doc(hidden)]
+    pub fn debug_arm_mc2_rival_knock(&mut self, slot: u8, dir: u16, mag: i16) {
+        if let Some(ri) = self.mc2_rivals.iter().position(|r| r.slot == slot) {
+            self.mc2_rivals[ri].knock_dir = dir;
+            self.mc2_rivals[ri].knock_mag = mag;
+        }
+    }
+
+    /// Test hook: is the rival's wizard record in the DEAD-WAIT arm
+    /// (`actionIndex_0x45_69 == 3`, `sub_5E7C0`)? The death fall
+    /// (action 2) has to reach the floor first.
+    #[doc(hidden)]
+    pub fn debug_mc2_rival_dead_waiting(&self, slot: u8) -> bool {
+        self.mc2_rivals
+            .iter()
+            .find(|r| r.slot == slot)
+            .and_then(|r| self.g.ent.get(r.ent as usize))
+            .is_some_and(|e| e.tick70 == 3)
+    }
+
     /// Test hook: hand a rival wizard a damage letter from an
     /// ARBITRARY pool source (`str_0x5E_94.word_0x62_98`), so a test
     /// can pin WHICH record the knockback bearing is taken off.
@@ -9192,12 +9852,75 @@ impl World {
     ///   row's buoyancy `v_14` above the clearance band, the clearance
     ///   floor below it.
     ///
+    /// - and `sub_5DE30`, THE DUEL ENFORCEMENT, is block 7
+    ///   ([`Self::mc2_rival_duel_enforce`]). This arm's old comment
+    ///   filed it under "not reproduced … no rival duel cast is
+    ///   ported", which confused the STAMP with the ENFORCEMENT: the
+    ///   register is retail state the import restores, and this mover
+    ///   is the only place any wizard column ever reads it off a
+    ///   rival. See [`no_mc2_rival_duel_death_tether`].
+    ///
     /// NOT reproduced, and inert on this column: the one-shot
     /// `xAdd/yAdd/zAdd` mailbox and the water counter (neither is
-    /// modelled per-rival), the slow/mobilize scalings and their
-    /// counters (a rival carries no debuff state), and `sub_5DE30` —
-    /// the duel leash reads the CASTER's own manifestation window and
-    /// no rival duel cast is ported.
+    /// modelled per-rival), and the slow/mobilize scalings and their
+    /// counters (a rival carries no debuff state).
+    /// `sub_5DE30` (file 0x82630) DRIVEN BY A RIVAL — the duel
+    /// enforcement, the state half and the leash, off the rival's own
+    /// lock register instead of the human's `World::mc2_duel`. The
+    /// arithmetic is [`World::mc2_duel_enforce`]'s verbatim (3-D
+    /// metric, cap 120, divisor 8, SIGNED clamp — the caster is shoved
+    /// back out inside the held distance), and so is the liveness set:
+    /// exactly three tests, manifestation charged / victim `life >= 0`
+    /// / in the tier's range, with the caster's OWN life never asked.
+    ///
+    /// ⭐ THE VICTIM MAY BE THE HUMAN, who has no pool record when the
+    /// carpet is out of pool — hence the [`PLAYER_TARGET`] fork on the
+    /// pose and the liveness read. Everything else is one body.
+    ///
+    /// Called from [`Self::mc2_rival_carpet_move`], which on this
+    /// column is reached ONLY by the death fall — see
+    /// [`no_mc2_rival_duel_death_tether`].
+    fn mc2_rival_duel_enforce(
+        &mut self,
+        ri: usize,
+        i: usize,
+        pos: (u16, u16, i16),
+    ) -> Option<(u16, i16)> {
+        if no_mc2_rival_duel_death_tether() {
+            return None;
+        }
+        let (opp, hold, tier) = self.mc2_rivals[ri].duel.0?;
+        // `SpellEnabled[14]` on the CASTER's own book, and the death
+        // scatter's boolean 1 marker is imported verbatim — so a
+        // landed corpse indexes pool slot 1 here exactly as retail
+        // does (file 0x826A6 `cmpw $0x0,0x2e(%edi)`).
+        let m = self.mc2_rivals[ri].book.ent[14] as usize;
+        let live = m != 0 && self.g.ent.get(m).is_some_and(|e| e.f26 != 0);
+        let (alive, vpos) = if opp == PLAYER_TARGET {
+            (self.player.life >= 0, self.human_pose)
+        } else {
+            match self.g.ent.get(opp as usize) {
+                None => (false, (0, 0, 0)),
+                Some(e) => (e.act_life >= 0, (e.x, e.y, e.z)),
+            }
+        };
+        let dist = Gen::mc2_dist3(pos, vpos) as i32;
+        let (range, mode) = self.mc2_duel_tier(tier as usize);
+        if !live || !alive || dist >= range {
+            // The liveness `else`, file 0x827DC-0x827E9.
+            self.mc2_rivals[ri].duel = DuelLock(None);
+            return None;
+        }
+        let cap = 3 * 80 / 2; // `3 * minSpeed_0x84_132 / 2`, the wizard's constant 80
+        let pull = ((dist - hold) / (1024 / cap)).clamp(-cap, cap) as i16;
+        let bearing = Gen::angle_between(pos.0, pos.1, vpos.0, vpos.1);
+        if mode >= 1 {
+            self.mc2_duel_drain(opp, mode);
+        }
+        let _ = i;
+        Some((bearing, pull))
+    }
+
     fn mc2_rival_carpet_move(&mut self, ri: usize, i: usize) {
         // The one-shot move veto (EF:59615-19): byte[1] & 8 skips the
         // whole mover and clears itself.
@@ -9217,7 +9940,7 @@ impl World {
                 e.f126 += d.signum() * 16;
             }
         }
-        let (x, y, z, yaw) = {
+        let (x, y, z, mut yaw) = {
             let e = &self.g.ent[i];
             (e.x, e.y, e.z, e.f30)
         };
@@ -9244,6 +9967,26 @@ impl World {
                     r.knock_mag = 0;
                 }
             }
+        }
+        // Block 7: `sub_5DE30` (file 0x82163, the call INSIDE
+        // `sub_5D530`) — the duel enforcement, at retail's own seat
+        // between the knock payout and the commit gate. Blocks 6 and
+        // 8 (the one-shot xAdd mailbox / water counter, and the
+        // debuff decay) are the two this column still does not model,
+        // and neither touches the leash.
+        if let Some((bearing, pull)) = self.mc2_rival_duel_enforce(ri, i, (x, y, z)) {
+            // The yaw servo writes `a1x->yaw_0x1C_28` back (file
+            // 0x8276D `mov %ax,0x1c(%esi)`), so the gate's own turn
+            // below composes onto the SERVOED heading, not the one
+            // this tick started with.
+            let step = Gen::turn_step(yaw, bearing, 0x82);
+            yaw = ((yaw as i32 + step as i32) & 0x7FF) as u16;
+            self.g.ent[i].f30 = yaw;
+            // …and the step's heading is the RAW bearing, at the
+            // published aim pitch (`pitch_0x1E_30`, block 0's tail
+            // stamped it 0 on this column).
+            let pitch = self.g.ent[i].f32;
+            Gen::polar_step(&mut cand, bearing, pitch, pull);
         }
         // Block 9: the commit gate and the vertical resolution.
         let row = BEHAVIOR[self.g.ent[i].row156 as usize];
@@ -9531,6 +10274,14 @@ impl World {
     /// BANISHED (checked every tick — losing the castle mid-wait
     /// converts to elimination).
     fn mc2_rival_dead_wait(&mut self, ri: usize, i: usize) {
+        // ⭐⭐⭐ THE KNOCK MAGNITUDE IS WIPED EVERY DEAD TICK, ABOVE
+        // EVERY BRANCH — `sub_5E7C0`'s first statement (EF:60660,
+        // shipped file 0x82FCF `movw $0x0,0x1e(%eax)`). See
+        // [`no_mc2_dead_wait_knock_clear`]. The bearing (+32) is NOT
+        // touched here; only the respawn `sub_5C950` clears that.
+        if !no_mc2_dead_wait_knock_clear() {
+            self.mc2_rivals[ri].knock_mag = 0;
+        }
         // The two call-free arms of `sub_5E7C0` (banished, countdown)
         // leave both hydra `v34` dwords alone — see
         // [`crate::engine::features::no_mc2_m27_v34_corpse_transparent`].
@@ -9617,6 +10368,12 @@ impl World {
             e.f140 = 1000; // `mana_0x90_144 = maxMana` in the tail
         }
         self.mc2_rivals[ri].life_scale = 256; // word_0x24A_586 (EF:43703)
+        // `sub_5C950`'s duel-lock clear (EF:44194-95) — shipped
+        // `NETHERW.EXE` file 0x81662 `66 c7 80 46 01 00 00 00 00` =
+        // `movw $0x0,0x146(%eax)`, with its `word_0x148_328` twin at
+        // 0x81671. The OTHER of the register's only two clears; see
+        // [`no_mc2_rival_duel_death_tether`].
+        self.mc2_rivals[ri].duel = DuelLock(None);
         let slot = self.mc2_rivals[ri].slot;
         // The same tail's model-1 arm (EF:43847-52) runs on the reuse
         // path too: `SpellEnabled[2] = 4 * playerColorIndex` — see
@@ -9639,9 +10396,24 @@ impl World {
         // The port's `book.ent[s] == 0` guard meant a rival that died
         // once respawned with an EMPTY book — 72 missing class-15s at
         // mc2l6-rsg t=3084.
-        let known = self.mc2_rivals[ri].known;
-        for (s, &k) in known.iter().enumerate() {
-            if k {
+        //
+        // ⭐⭐⭐ **AND THE SLOT IT WALKS IS THE BOOK'S OWN, NOT THE
+        // AUTHORED GRANT.** `sub_5CF40`'s gate is
+        // `cmpw $0x0,0x333(%edi,%eax,1)` (file 0x81760) — the death
+        // scatter's BOOLEAN 1 marker, i.e. what the wizard actually
+        // held when it died — and the NULL-mint arm at file 0x817d0
+        // writes the slot back to **0**, losing the spell for good.
+        // The port asked [`Mc2Rival::known`], a non-retail shadow the
+        // four round-104 brain gates were already converted away from.
+        // See [`no_mc2_rival_remint_marker`].
+        let marker = no_mc2_rival_remint_marker();
+        for s in 0..MC2_SPELLS {
+            let held = if marker {
+                self.mc2_rivals[ri].known[s]
+            } else {
+                self.mc2_rivals[ri].book.ent[s] != 0
+            };
+            if held {
                 let r = &self.mc2_rivals[ri];
                 let ent = r.ent;
                 let sel = r.book.sel[s];
@@ -9653,13 +10425,25 @@ impl World {
                     {
                         let e = &mut self.g.ent[m];
                         e.tick70 = (s as u8).wrapping_mul(3);
-                        e.f54 = 64;
+                        // The respawn re-mint is a reify too — no lock.
+                        // [`crate::engine::features::no_mc2_pickup_only_steal_lock`].
+                        if crate::engine::features::no_mc2_pickup_only_steal_lock() {
+                            e.f54 = 64;
+                        }
                         e.id24 = ent;
                         e.f26 = 0;
                         e.f44 = 0;
                     }
                     self.mc2_rival_set_spell(m, sel, ent);
                     self.mc2_rivals[ri].book.ent[s] = m as u16;
+                } else if !marker {
+                    // `movw $0x0,0x333(%edi,%eax,1)` (file 0x817d0) —
+                    // a pool-exhausted re-mint LOSES the spell. The
+                    // port's `known` shadow has to follow it, or the
+                    // next respawn would resurrect a book slot retail
+                    // has already zeroed.
+                    self.mc2_rivals[ri].book.ent[s] = 0;
+                    self.mc2_rivals[ri].known[s] = false;
                 }
             }
         }
@@ -9734,12 +10518,21 @@ impl World {
         // in both worlds — for a (9,9) node. Retail's recorded recycle
         // stack stays empty through the whole window.
         self.g.mc2_recycle.stack.clear();
-        // The post-respawn truce toward this color.
+        // The post-respawn truce toward this color — the tick-top
+        // class-3 roster, NOT the rival vector: a wizard still in its
+        // own dead-wait is off `dword_38519` and takes no truce
+        // (EF:44185-93). `MGC_NO_MC2_RIVAL_TRUCE_ROSTER=1` restores
+        // the flat every-rival loop.
         let slot = self.mc2_rivals[ri].slot as usize;
-        for (oj, o) in self.mc2_rivals.iter_mut().enumerate() {
-            if oj != ri {
-                o.hate[slot] = HATE_RESPAWN;
+        if no_mc2_rival_truce_roster() {
+            for (oj, o) in self.mc2_rivals.iter_mut().enumerate() {
+                if oj != ri {
+                    o.hate[slot] = HATE_RESPAWN;
+                }
             }
+        } else {
+            let own = self.mc2_rivals[ri].ent;
+            self.mc2_truce_roster(slot, own);
         }
         self.entities_dirty = true;
     }
@@ -9778,8 +10571,33 @@ impl World {
         if no_mc2_human_respawn_truce() || colour >= 8 {
             return;
         }
+        // The human carpet is not in `mc2_rivals`, so nothing on the
+        // roster can be the respawner here; pass the sentinel.
+        self.mc2_truce_roster(colour, u16::MAX);
+    }
+
+    /// The truce loop itself (shipped NETHERW.EXE 0x5CE1A..0x5CE5C):
+    /// walk the TICK-TOP class-3 chain `dword_38519`
+    /// ([`Gen::wiz_chain`]) and stamp `hate[colour] = 0x9FDF` on every
+    /// member whose `model_0x40_64` is 0 (the human) or 1 (a rival),
+    /// skipping the record whose `id_0x1A_26` matches the
+    /// respawner's. Membership is `life_0x8 >= 0` sampled at the tick
+    /// top, so a wizard in its dead-wait takes no truce, and at
+    /// level-start seating the chain is still empty. The port's
+    /// `wiz_chain` is already the class-3 arm of the same sweep, so
+    /// the model test is implicit — only wizards are in `mc2_rivals`.
+    ///
+    /// See [`no_mc2_rival_truce_roster`] for the two rival call paths
+    /// and [`no_mc2_human_respawn_truce`] for the human one.
+    pub(crate) fn mc2_truce_roster(&mut self, colour: usize, own_ent: u16) {
+        if colour >= 8 {
+            return;
+        }
         for c in 0..self.g.wiz_chain.visible_len() {
             let j = self.g.wiz_chain.list[c] as usize;
+            if j == own_ent as usize {
+                continue;
+            }
             if let Some(r) = self.mc2_rivals.iter_mut().find(|r| r.ent as usize == j) {
                 r.hate[colour] = HATE_RESPAWN;
             }
@@ -9806,6 +10624,33 @@ impl Gen {
             e.tick70 = 42;
             e.f26 = (s % 11) as i16;
             e.f28 = 2;
+            // ⚠⚠ …AND THE MASK'S **SECOND** HOME, THE MC2 ONE.
+            // `sub_501D0` (the (10,40) ctor, `EventsFunctions.cpp`
+            // signature line 36711, banner `(000501D0)`) is
+            // ```text
+            // event->actionIndex_0x45_69 = 0x2A;
+            // event->class_0x3F_63 = 0xA;   event->model_0x40_64 = 0x28;
+            // event->dword_0x10_16 = (event - Entities) % 11;
+            // event->byte_0x38_56 = 2;
+            // ```
+            // `byte_0x38_56` is `@0x38`, which the port keeps at `f28`
+            // for most classes but at **`f56` for class 2/10** —
+            // `import_ent_mc2` seats BOTH (`f28: r.b38`, and
+            // `f56: if matches!(class, 2 | 10) { r.b38 }`) and
+            // `port_ent_lanes_mc2` publishes `f56` on the `b38` lane
+            // for class 2/10. This is the exact sibling of the law
+            // `Gen::spawn_mana_ball` already carries ("⚠⚠ THE MASK HAS
+            // TWO HOMES AND MC2's WAS EMPTY", mc1/combat.rs) — the
+            // grave ctor set only the MC1 home, so every free-run MC2
+            // grave published mask 0 where retail publishes 2.
+            // Census: `(10,40) b38` = **290,065 rows over 29 takes**,
+            // every one `retail 2 / port 0` (mc2l8 slot 1 from t=2920,
+            // mc2l6 slot 1 from t=1205). `MGC_NO_MC2_GRAVE_MASK_HOME=1`
+            // reverts. State-only: `area_write`'s admit test reads the
+            // MC1 home `f28`, which is already right.
+            if !no_mc2_grave_mask_home() {
+                e.f56 = 2;
+            }
         }
         self.link(s, x, y, z);
         self.refill_life(s);
@@ -9867,6 +10712,7 @@ impl Snap for Mc2Rival {
             vdes,
             knock_dir,
             knock_mag,
+            duel,
             v14,
             nudge_latch,
             grace,
@@ -9905,6 +10751,10 @@ impl Snap for Mc2Rival {
         w.put(vdes);
         w.put(knock_dir);
         w.put(knock_mag);
+        // SNAPSHOT 24 — retail persists the lock too
+        // (`engine_support.cpp:678`: `S164SC(dword_0x142_322, 4);
+        // S164SC(word_0x146_326, 2);`).
+        w.put(&duel.0);
         w.put(&v14.0);
         w.put(&nudge_latch.0);
         w.put(grace);
@@ -9945,6 +10795,7 @@ impl Snap for Mc2Rival {
             vdes: r.get()?,
             knock_dir: r.get()?,
             knock_mag: r.get()?,
+            duel: DuelLock(r.get()?),
             v14: BrakeWord(r.get()?),
             nudge_latch: NudgeLatch(r.get()?),
             grace: r.get()?,
@@ -9953,5 +10804,53 @@ impl Snap for Mc2Rival {
             invisible: r.get()?,
             rebound: r.get()?,
         })
+    }
+}
+
+#[cfg(test)]
+mod grave_tests {
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::verbs::VerbSet;
+
+    fn flat_mc2_gen() -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    /// ⚠⚠ THE MAIL-CHANNEL ADMIT MASK HAS TWO HOMES AND THE GRAVE'S
+    /// MC2 ONE WAS EMPTY — the exact sibling of the law
+    /// `Gen::spawn_mana_ball` already carries. `sub_501D0` writes
+    /// `byte_0x38_56 = 2`; `@0x38` lives in `f28` for most classes but
+    /// in `f56` for class 2/10, which is the home `import_ent_mc2`
+    /// seats and `port_ent_lanes_mc2` publishes as `b38`. Census:
+    /// `(10,40) b38` = 290,065 rows over 29 takes, all
+    /// `retail 2 / port 0`.
+    /// FAILS under `MGC_NO_MC2_GRAVE_MASK_HOME=1`; the `f28`, `f26`
+    /// and action assertions are the POSITIVE CONTROL.
+    #[test]
+    fn the_wizard_grave_stamps_both_homes_of_its_admit_mask() {
+        let mut g = flat_mc2_gen();
+        let s = g.mc2_spawn_grave(40 << 8, 40 << 8, 100).expect("grave slot");
+        assert_eq!(g.ent[s].f56, 2, "byte_0x38_56 = 2, the MC2 class-10 home");
+        // POSITIVE CONTROL — the rest of `sub_501D0`.
+        assert_eq!(g.ent[s].f28, 2, "…and the MC1 home the ctor already had");
+        assert_eq!(g.ent[s].f26, (s % 11) as i16, "dword_0x10_16 = slot % 11");
+        assert_eq!(g.ent[s].tick70, 42, "actionIndex_0x45_69 = 0x2A");
+        assert_eq!((g.ent[s].class64, g.ent[s].model65), (10, 40));
     }
 }

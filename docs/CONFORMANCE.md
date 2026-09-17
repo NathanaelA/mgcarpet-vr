@@ -880,10 +880,20 @@ every lane — the complete census in one run, and the way to see the
 `owner28` rows the conservative family test over-skips.
 
 Two gates the MC1 arm does not need. **Torn slots** are excluded:
-`torn_slots` drops any slot whose `phase3e` did not advance by exactly
-1 across the pair (a per-entity capture tear), and since
+`torn_slots` drops any slot whose `phase3e` moved by an amount its
+species' CADENCE does not allow (round 149, `verify_mc2::slot_is_torn`:
+`+1` is a dispatch; a HELD phase under a null state-table row is the
+entity's normal cadence; `|d| > 2` or a life that ROSE is a slot
+RE-SEEDED at rebirth from `array_0x10[model]++`, not a tear), and since
 `compare_mc2_gated` already skips them, counting them here would
-report the capture rather than the port. And the **free stack and the
+report the capture rather than the port. ⚠ TWO SCOPES
+(`verify_mc2::TearScope`): the raw-shadow census runs the whole law;
+the GRADED pair diff and the fixture suite keep the null-row clause
+only, because the re-seed half un-hides real rows inside pairs that pin
+other laws (mc2l16 t=7903 slot 934). `MGC_TEAR_LEGACY=1` restores the
+bare `!= 1` test everywhere; `MGC_TEAR_NO_RESEED=1` drops the re-seed
+half from the census. The census prints what the gate hid
+(`⚠ TEAR GATE HID …`, per (class, model)). And the **free stack and the
 RECYCLE stack are compared separately**, because MC2 pops free first
 and falls back to recycle — merging them would measure the importer's
 composition instead of the port's allocator order.
@@ -904,6 +914,30 @@ as "nobody looked". `duel_hold`/`duel_tier` are compared only while
 retail holds a lock (stale otherwise); arrays follow RETAIL's length
 with the port padded by 0, so a register the port does not hold reads as
 empty rather than as nothing to compare.
+
+⚠ **PAIR-MODE HUMAN `knock_mag` IS A HARNESS ARTIFACT — do not re-open it as a defect** (round 147,
+dig w147c): 25,632 rows on 40/40 takes in pair mode, ZERO in the free run, every row exactly +4 toward
+zero. `exec_pair_mc2` pins the recorded pose and ticks with `drive = None`, and the carpet's knock
+spend/decay lives inside `if let Some(d) = drive`, so `take_knock_step` never runs on a pinned tick. The
+same goes for the pair-only `balloons`/`guards` rows (the pair importer's allocator hands a newborn a
+different slot) — the free run is the judge for the wizard block.
+
+⚠ **AND SO IS PAIR-MODE `knock_dir` WHEN THE ATTACKER IS THE HUMAN — IT IS NOT RECONSTRUCTIBLE FROM
+THE RECORDING AT ALL** (round 148, dig w148f). The whole corpus holds FIVE such rows, all on mc2l16
+(wiz 5 t=9074/9075/9077/9078 ±1, wiz 0 t=9066 ±2) and ZERO in any free run. The bearing routine is
+NOT the difference: retail's `sub_581E0` (file 0x7C9E0) is `sub_72633(a2->x − a1->x, a2->y − a1->y)`
+with `a1` = the attacker's `+0x4C` and `a2` = the victim's — pushed in that order at the knock site
+(`sub_5EFA0`, file 0x83A01/0x83A15/0x83A19, result stored to `0x20(%edx)`) — which is exactly
+`Gen::angle_between(ax, ay, vx, vy)`; and the 258-entry `x_WORD_DE350` atan table is byte-identical to
+the port's `ATAN` at file 0xF3B50 (VA 0xCF350). What differs is the ATTACKER OPERAND. Retail reads the
+human's own POOL RECORD (`Entities_EA3E4[mail.src]`, mc2l16 slot 303), and the port — whose carpet is
+not a pool record — reads `World::human_pose`, which in pair mode is retail's record at N+1 exactly
+(verified on 4/4 ticks). **Retail's own answer is neither record**: on 4 of the 5 ticks it solves to a
+pose strictly BETWEEN record N and record N+1 (the midpoint reproduces all four; no single
+interpolation fraction reproduces all five), i.e. retail's carpet record is only PARTIALLY advanced when
+a higher walk slot reads it, and the capture only ever holds the settled value. No port implementation
+seeded from the recording can reproduce that operand, so the lane is unwitnessable here — do not mask
+it (five rows in 40 takes is a cheap sentinel), just do not re-open it as a defect.
 
 ⚠ STILL NO PORT HOME, so still unwatched: a RIVAL's `regen_stall`,
 `recast_surcharge` and duel lock (`mc2_duel` is the human caster's
@@ -992,6 +1026,18 @@ ALL fields print, graded and ungraded alike; `—` = a lane the port
 does not model (MC1: `f61`/`f62`, wizard `f132`, `f148`, bare `f48`;
 MC2: per-CLASS, mirroring `import_ent_mc2`'s dual homes — a `—` on
 one record can be a live lane on the next).
+⚠ **A slot retail holds FREE (class byte 0) is RESIDUE, not evidence**
+(round 150): the pair diff never compares a class-0 slot, the importer
+deliberately carries its stale bytes, and the lane table homes every
+`@offset` by the CURRENT class byte — which retail's free path has
+zeroed — so residue written under the slot's previous class reads back
+through a different port field (mc2l22 slot 5 at t=63665: one `@0x2A`
+= 400 printed as two rows, `f44` and `f140`). The dump banners such a
+slot (naming its free/recycle stack) and marks its rows `·` instead of
+`≠`; dump the tick the slot was last LIVE to compare it. This is what
+round 149 banked as "`--port --start` on a mid-take anchor is broken" —
+it was not: `--start t0` is one `skip_to` into the SAME `run_mc2` loop
+and is byte-identical to replaying a slice cut at `t0`.
 Representation merges are translated back into retail conventions
 (the `PLAYER_TARGET` untranslation, `f58` as the unsigned byte, the
 class-12 owner re-homed to `f42`, the castle transform sub-state on
@@ -1010,6 +1056,36 @@ hold when slot 388 ran", the question that was twice a hand-written
 MC2 unchanged (the mid-walk pose-phase family's native instrument).
 The retail column stays the boundary state
 (retail has no mid-walk sample); the header says so.
+
+⭐⭐⭐ **WHICH TICK IS `t`? — THE ONE-TICK TRAP, AND THE RULE THAT ENDS
+IT (round 149).** `dump-state --port t=N` shows the port AFTER the tick
+`N-1 → N` beside retail's record AT `N`: it is a statement about the
+**BOUNDARY N**. The header now names the pair outright
+(`pair N-1 → N`) so this never has to be inferred again.
+
+The campaign speaks **two** tick vocabularies and until round 149 two
+instruments spoke different ones about the same fact:
+
+| output | names | why |
+|---|---|---|
+| `dump-state --port`, `replay`'s graded rows and its raw shadow | the **BOUNDARY** `N` | a comparison against retail@N |
+| `verify-deltas`' graded `PairDiff` rows, `--dump`, the fixture manifests, `DEBUG_TICK` (so `MGC_WRITE_TRACE`, `MGC_PLIFE_TRACE`, `MGC_CARPET_PROBE` under pair mode) | the **PAIR START** `N-1` | a pair diff is a statement about the pair, and the whole fixture corpus is keyed on its start tick |
+
+The **raw shadow used to straddle the two**: in `replay` it stamped the
+boundary, in `verify-deltas` it stamped the pair start, while comparing
+the identical post-tick state against the identical record. One
+boundary, two numbers — round 148 lost a dig to it on mc2l24-crazy's
+`(5,25)` `target96`/`f2e`. **Round 149 moved the pair-mode shadow onto
+the boundary** (`verify_mc2.rs` / `verify.rs`, `let bt = pt + 1`), so
+every shadow row everywhere now names the boundary it compared. The
+pair-scoped half deliberately did NOT move.
+
+⚠ The trap survives in `MGC_WRITE_TRACE`: the same write prints
+`t=59885` under `verify-deltas` and `t=59886` under `replay`. That is
+`DEBUG_TICK`, which is pair-scoped by design, and it is **reproducible
+in one command pair** — `--env MGC_WRITE_TRACE=346 replay <slice>` vs
+`--env MGC_WRITE_TRACE=346 verify-deltas <slice>`. Read a trace row's
+`t` as "the tick this instrument's mode names", not as a boundary.
 
 **`explain <take> <t> [<slot>…]` — retail's OWN t-1 → t changelog.**
 Not a comparison: both endpoints are the recording's. Prints the
@@ -1196,15 +1272,69 @@ instrument's own seeding debt):
 
 - the human's carpet slot is excluded from occupancy (the port keeps it
   outside the pool);
-- **MC2** seeds the human's book MODELS off record 0 but not its
-  `levels` / `xp_bank` / `ring` (a carried save's progress), so those
-  three wiz-0 lanes fire on nearly every take;
+- **MC2** seeds the human's book off record 0 — the MODELS (which
+  spells the save carried) and, since round 148, the PROGRESS in them
+  (`levels` / `xp_bank` / `ring`, `World::mc2_seed_book_progress`): no
+  native build can know what a save had earned, and unseeded those
+  three wiz-0 lanes fired on nearly every take (1,658 of the 1,659
+  init wizard rows round 147 closed on);
+- the (10,54)/(10,69) aura's `scratch10` lane is published in RETAIL's
+  encoding — the 32-bit squared reach `(k << 8)²` — off the port's
+  tile radius `k` (round 148; compared raw it read "268435456 vs 64"
+  on every aura, an encoding and not a defect);
 - **MC1 seeds no book at all** (`verify::build_world` has no
   `_with_book` twin), so the human's tokens are retail-only, every later
   slot — the rivals' carpets included — shifts, and the rival brain
   block is NOT compared on such takes (the seat table flags it);
 - the settle flies an IDLE carpet at the authored start, so anything the
   player's first inputs touched is the player's, not the port's.
+- ⭐ **AN MC2 INIT CENSUS ASSUMES THE STANDARD RECORDING SESSION** (round
+  148, player-ruled default 2026-09-18): the autosave inputs are ON by
+  default at frame 2 — `MGC_INIT_AUTOSAVE_AT=<n>|none` moves or drops the
+  checkpoint autosave and `MGC_INIT_SEVER_AT=<n>|none` the severance
+  (unset, it follows the autosave frame; `1` / `1` on mc2l30-new). Both
+  model retail's one-shot level-start CHECKPOINT AUTOSAVE — the `&2`-clear
+  StageVar severance (a player-adjudicated deviation) and
+  `SaveLevel_55080`'s free-stack rebuild — whose FRAME is a property of
+  the recording session, not the level. Under that recipe (now the bare
+  command) 38 of 40 MC2 takes read IDENTICAL; the two that do not are mc2l21
+  (the registered hydra `v34` parity, IDENTICAL with
+  `MGC_M27_V34_SEED=268435499`) and mc2l24-crazy (the player's own
+  fireball fired before record 0).
+
+### The three census switches (round 148, dig w148a)
+
+    MGC_RAW_SHADOW_ROWS=<path>   every mismatching row as TSV
+                                 (t/slot/class/model/field/retail/port).
+                                 The verdict prints ONE `e.g.` per lane;
+                                 this is how you read the other 172.
+    MGC_INIT_DUMP=<slot>[,…]     the native world's lanes beside
+                                 retail's for those slots, ≠-marked,
+                                 preceded by retail's LIVE StageVar
+                                 table (kind/flags/chain/cadence/payload
+                                 + the pool-guarded `stagevar_watch`
+                                 decode). ⭐ `dump-state --port`
+                                 free-runs from an IMPORT and therefore
+                                 cannot show a constructor row; this can.
+    MGC_INIT_SEVER_AT=<n>|none   after n settle ticks, apply retail's
+                                 OWN autosave-severed StageVar closure
+                                 to the native world
+                                 (`World::mc2_debug_sever_stagevar_watches`).
+                                 DEFAULT: the autosave frame (2) —
+                                 player-ruled 2026-09-18; `none` is the
+                                 plain native settle.
+
+⭐⭐⭐ **THE AUTOSAVE-SEVERED DEATH WATCH IS THE WHOLE MC2 INIT CENSUS
+ON EVERY TAKE THAT AUTHORS A `&2`-CLEAR WATCH ROW.** The port implements
+the AUTHORED level-data law (player ruling 2026-07-25, docs/DEVIATIONS.md
+`stagevars.rs::mc2_stagevar_tick (&2-clear death watch …)`); shipped
+retail severs the row's bound-entity pointer into a `slot × 0xA8` offset
+a couple of ticks into every level and never converts it back, so every
+recording opens on the severed side. `replay` imports that outcome
+(`conformance.rs`'s `&2`-clear watch overlay) and never sees it;
+`init-check` is the first instrument that does. `MGC_INIT_SEVER_AT=2`
+subtracts it: **mc2l4 173 → 0 entity rows, mc2l4-new 151 → 0, mc2l21
+185 → 2**. Run it before reading an MC2 init census as port defects.
 
 ## Recording slices — the dig instrument for late ticks (2026-09-05)
 

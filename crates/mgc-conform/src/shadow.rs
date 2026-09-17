@@ -162,6 +162,24 @@ pub(crate) struct Shadow {
     /// Retail lane names absent from the port's table (`?` in
     /// `dump-state`): a table skew, reported once rather than per slot.
     pub(crate) skew: BTreeSet<&'static str>,
+    /// ⚠⚠ **THE SHADOW'S OWN BLIND SPOT, MADE VISIBLE** (round 149).
+    /// [`Self::compare_ents_mc2`] skips every slot `torn_slots` named,
+    /// and said nothing about it — so a family whose `phase3e` steps
+    /// by a legal non-1 amount (the SWARM/multipart bodies) is never
+    /// shadowed on ANY take and the summary still prints a confident
+    /// mismatch count. "Nobody looked" and "clean" must never render
+    /// the same, which is the rule `wiz_fed`/`board_fed` already
+    /// encode; this is the per-entity half of it.
+    ///
+    /// Keyed `(class, model)` of the RETAIL record, value = slot
+    /// exclusions (one per slot per boundary).
+    pub(crate) hidden: BTreeMap<(u8, u8), u64>,
+    /// Distinct slots the tear gate hid at least once.
+    pub(crate) hidden_slots: BTreeSet<u16>,
+    /// Boundaries on which `compare_ents_mc2` ran — the DENOMINATOR
+    /// for the exclusion count (a "1,000 exclusions" headline means
+    /// nothing without the number of pairs it is spread over).
+    pub(crate) ent_n: u64,
     /// `MGC_RAW_SHADOW_ALL=1` — report every lane, graded or not.
     pub(crate) all_lanes: bool,
     /// `MGC_ALLOC_CENSUS=1` — print one classified line per
@@ -186,8 +204,17 @@ impl Shadow {
     /// native world was never imported, so no lane is "already
     /// judged" — and none of the env-driven magnifiers.
     pub(crate) fn census_all() -> Self {
+        // …except the per-row TSV, which costs nothing when unset and
+        // is the only way to read a census lane's WHOLE row list
+        // (`init-check` prints one `e.g.` per lane).
+        let rows = std::env::var_os("MGC_RAW_SHADOW_ROWS").and_then(|p| {
+            let mut w = std::io::BufWriter::new(std::fs::File::create(&p).ok()?);
+            writeln!(w, "t\tslot\tclass\tmodel\tfield\tretail\tport").ok()?;
+            Some(w)
+        });
         Shadow {
             all_lanes: true,
+            rows,
             ..Default::default()
         }
     }
@@ -236,6 +263,12 @@ impl Shadow {
         if std::env::var_os("MGC_RAW_SHADOW").is_none() {
             return Ok(None);
         }
+        // Player-ruled 2026-09-18: the (10,23)/(10,38) null-victim
+        // heap ghost (44546, `mc2_null_victim_ghost`) is an INSTRUMENT
+        // default — the census stamps it so the `target96` lane reads
+        // honest; the sim and the graded runners never do.
+        // `MGC_MC2_NULL_VICTIM_GHOST=0` overrides.
+        mgc_sim::mc2::set_null_victim_ghost_instrument(true);
         let rows = match std::env::var_os("MGC_RAW_SHADOW_ROWS") {
             Some(p) => {
                 let mut w = std::io::BufWriter::new(
@@ -603,8 +636,10 @@ impl Shadow {
     ///
     /// Two gates the MC1 arm does not need:
     /// - **TORN SLOTS.** `verify_mc2::torn_slots` drops any slot whose
-    ///   `phase3e` did not advance by exactly 1 across the pair — a
-    ///   per-entity capture tear, one pass early or late.
+    ///   `phase3e` moved by an amount its SPECIES' CADENCE cannot
+    ///   produce — a per-entity capture tear, one pass early or late.
+    ///   ⚠ Round 149 narrowed that test: a null-dispatch row HOLDS its
+    ///   phase byte and a birth RE-SEEDS it, and neither is a tear.
     ///   `compare_mc2_gated` already skips them, so counting them here
     ///   would report the capture, not the port.
     /// - **CLASS/MODEL AGREEMENT**, read off the port's own table: a
@@ -658,9 +693,20 @@ impl Shadow {
         torn: &BTreeSet<u16>,
         t: u64,
     ) {
+        self.ent_n += 1;
         for (slot, re) in st.ents.iter().enumerate() {
             let slot = slot as u16;
-            if slot == 0 || slot == human_slot || re.class3f == 0 || torn.contains(&slot) {
+            if slot == 0 || slot == human_slot || re.class3f == 0 {
+                continue;
+            }
+            // ⚠ THE TEAR GATE IS AN EXCLUSION — COUNT IT. See
+            // [`Shadow::hidden`]. This slot is about to be dropped
+            // from every ungraded lane; without this tally the
+            // summary's "0 mismatches" on a swarm family is
+            // indistinguishable from "never looked at".
+            if torn.contains(&slot) {
+                *self.hidden.entry((re.class3f, re.model40)).or_insert(0) += 1;
+                self.hidden_slots.insert(slot);
                 continue;
             }
             let Some(port) = world.port_ent_lanes_mc2(slot, human_slot, false) else {
@@ -1101,6 +1147,44 @@ impl Shadow {
                 lane.slots.len(),
                 lane.example
             );
+        }
+        // ⚠⚠ THE EXCLUSION CENSUS — see [`Shadow::hidden`]. Printed
+        // right under the mismatch headline, because it is the
+        // denominator that headline is missing: every slot named here
+        // had ALL its ungraded lanes dropped, so a lane that is wrong
+        // on a swarm body forever still reads as 0 rows above.
+        if self.ent_n > 0 {
+            let htotal: u64 = self.hidden.values().sum();
+            if htotal == 0 {
+                let _ = writeln!(
+                    s,
+                    "    tear gate: 0 slot-exclusions over {} boundaries — every live slot \
+                     was shadowed",
+                    self.ent_n
+                );
+            } else {
+                let _ = writeln!(
+                    s,
+                    "    ⚠ TEAR GATE HID {htotal} slot-exclusion(s) over {} boundaries, \
+                     {} distinct slot(s) — NOT shadowed on any ungraded lane \
+                     (`torn_slots`: phase3e moved by an amount its species' \
+                     CADENCE does not allow — see verify_mc2::slot_is_torn)",
+                    self.ent_n,
+                    self.hidden_slots.len()
+                );
+                let mut fam: Vec<_> = self.hidden.iter().collect();
+                fam.sort_by_key(|(k, v)| (std::cmp::Reverse(**v), **k));
+                for ((c, m), n) in fam.iter().take(8) {
+                    let _ = writeln!(s, "      hidden ({c:>3},{m:>3}): {n}");
+                }
+                if fam.len() > 8 {
+                    let _ = writeln!(
+                        s,
+                        "      … and {} more hidden (class, model)",
+                        fam.len() - 8
+                    );
+                }
+            }
         }
         if !self.skew.is_empty() {
             // A retail lane with no port twin. Loud once, because the

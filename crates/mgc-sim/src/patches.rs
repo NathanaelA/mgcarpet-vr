@@ -227,6 +227,33 @@ pub struct WorldPatches {
     /// EF:28063/28074). Patched: `177 + COLOR_ART[team]`, the castle's
     /// band. Retail (conformance): `177 + team`.
     pub mc2_house_flag_color: bool,
+    /// **THE IMMEDIATE FREE (MC2)** — player-ruled 2026-09-18 (round
+    /// 149), the explicit opt-out of retail's tick-top reap. Retail's
+    /// `UpdateEntities_57730` (banner `00057730`, shipped `NETHERW.EXE`
+    /// file 0x7BF30) opens every frame with an ASCENDING sweep that
+    /// frees each `byte[1] & 4` record BEFORE a single handler runs:
+    /// ```text
+    ///   7bf4e  mov    0x1a3e8,%ebx             ; Entities_EA3E4[1]
+    ///   7bf56  cmpb   $0x0,0x3f(%ebx)          ; class != 0 ?
+    ///   7bf5c  testb  $0x4,0xd(%ebx)           ; byte[1] & 4  (port flags & 0x400)
+    ///   7bf63  call   0x7c720                  ; sub_57F20 — FREE
+    ///   7bf6b  add    $0xa8,%ebx               ; stride 168 — ASCENDING
+    ///   7bf77  jb     0x7bf56
+    /// ```
+    /// so a record that dies at walk slot `n` stays occupied for the
+    /// rest of its own tick and its slot cannot be popped by a spawner
+    /// at a later slot — but ANY stale index that still names it
+    /// resolves to a live record for one more frame, and the slot is
+    /// then re-popped by whatever spawns first at the next top
+    /// (retail's own stale-index hazard; the doom-summon husk and the
+    /// mc2l22 orphan balloon both ride it). Retail (conformance, every
+    /// graded lane, `init-check`'s witnesses on mc2l13/l16/l24): the
+    /// tick-top sweep. Patched (native default): the port's original
+    /// MC2 arm — a reap-flagged record is freed at the end of its OWN
+    /// dispatch iteration, so its slot returns within the tick and no
+    /// later handler can dereference a corpse. MC1 runs retail's
+    /// sweep in both arms (it never had the in-walk free).
+    pub mc2_immediate_reap: bool,
 }
 
 impl WorldPatches {
@@ -248,6 +275,7 @@ impl WorldPatches {
         mc2_wyvern_alliance_brain: false,
         mc2_orphan_balloon_reap: false,
         mc2_house_flag_color: false,
+        mc2_immediate_reap: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -274,5 +302,9 @@ impl WorldPatches {
         mc2_wyvern_alliance_brain: false,
         mc2_orphan_balloon_reap: false,
         mc2_house_flag_color: false,
+        // Native MC2 freed in-walk from the first port until round 148
+        // (2026-09-17) landed retail's sweep; the player's 2026-09-18
+        // ruling keeps the in-walk free as the native default.
+        mc2_immediate_reap: true,
     };
 }

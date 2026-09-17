@@ -48,6 +48,17 @@ and lists what remains; history lives in the archive and git.
   smooth motion, shore/fire/lightning effect tracks, options registry.
 - 2026-07-19: comment sweep (histology out, `DEVIATIONS.md` born), docs
   restructure, retrospective.
+- **MC2 conformance campaign (07-30 → 09-18, rounds 1-150): WRAPPED.**
+  Retail DOS memory recorded every tick (`recordings/*.mgcr`, 40 MC2 takes
+  over 30 levels) and free-run by `mgc-conform replay`: **every MC2 take
+  `devs=0 horizon=END`** (ten in a single segment), `terrain-check` 40/40
+  IDENTICAL, native `init-check` 37/40 bare (three registered), the
+  ungraded census (entity raw shadow / wizard-brain / objective board /
+  free+recycle stacks) at 95 / 0 / 0 / 0 rows — the 95 are one registered
+  camera-frustum bit. 596 pair fixtures, one per law, guard it on every
+  `cargo test`; `docs/DEVIATIONS.md` registers the rest. Ledger:
+  `docs/CONFORMANCE-FINDINGS.md` (§ROUND 150 is the close). MC1's
+  campaign is next (19 staged takes in `recordings-new/`).
 
 ## Remaining work
 

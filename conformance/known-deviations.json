@@ -204,24 +204,6 @@
    ]
   },
   {
-   "id": "mc2-painter-oob-build-row-applied-pitch",
-   "status": "deviation",
-   "note": "PLAYER-RULED 2026-09-04 (DEVIATIONS.md 'RETAIL'S OWN OUT-OF-BOUNDS READS'): AddTerrainMod0A_2A_37BC0 (NETHERW.EXE 0x5C3C0, EF:27648) loads the castle painter's BUILD00 row as movsbl 0x46(%ebx),%edx at three sites - sign-extended, UNCLAMPED, no bound test - into a 77-row table, and sub_377A0 - the BUILDING-completion tail (EF:27286/27304), which runs the castle re-paint sub_5FBD0 on EVERY class-3 live-list member overlapping the finished building, model unchecked (the carpet (3,0), rival wizards, castles AND castle balloons; NOT a castle deviation - the human's castle is never read) - stamps byte_0x46_70 from the human's wizard->dword_0x10_16, which is the DEATH RESPAWN TIMER: 0 until the human's first death, 1200 forever after (the human arm never counts it down). Retail therefore indexes far outside the table (row 176 = 1200 & 0xFF on mc2l6-rival-spells-galore, after its first death between t=20000 and 26000) and reads heap residue as the painter's collision half-extents w=38 h=18, which the ctor stamps into the record at BIRTH. Those extents are not derivable from any shipped asset (exhaustive scan, round 98), so the port takes BUILD00 row 0 (the table's own empty row) for any out-of-range index and these birth rows DIVERGE BY DEFINITION. Witnessed: rsg t=34604 slot 24, t=39012 slot 631. Ledger ROUND 99 dig 99-5 (MGC_NO_MC2_PAINTER_ROW_VERBATIM). NOTE applied_pitch/applied_yaw are the X/Y collision half-extents (@0x54), NOT angles.",
-   "kind": "field",
-   "class": 10,
-   "model": 42,
-   "field": "applied_pitch"
-  },
-  {
-   "id": "mc2-painter-oob-build-row-applied-yaw",
-   "status": "deviation",
-   "note": "PLAYER-RULED 2026-09-04 (DEVIATIONS.md 'RETAIL'S OWN OUT-OF-BOUNDS READS'): AddTerrainMod0A_2A_37BC0 (NETHERW.EXE 0x5C3C0, EF:27648) loads the castle painter's BUILD00 row as movsbl 0x46(%ebx),%edx at three sites - sign-extended, UNCLAMPED, no bound test - into a 77-row table, and sub_377A0 - the BUILDING-completion tail (EF:27286/27304), which runs the castle re-paint sub_5FBD0 on EVERY class-3 live-list member overlapping the finished building, model unchecked (the carpet (3,0), rival wizards, castles AND castle balloons; NOT a castle deviation - the human's castle is never read) - stamps byte_0x46_70 from the human's wizard->dword_0x10_16, which is the DEATH RESPAWN TIMER: 0 until the human's first death, 1200 forever after (the human arm never counts it down). Retail therefore indexes far outside the table (row 176 = 1200 & 0xFF on mc2l6-rival-spells-galore, after its first death between t=20000 and 26000) and reads heap residue as the painter's collision half-extents w=38 h=18, which the ctor stamps into the record at BIRTH. Those extents are not derivable from any shipped asset (exhaustive scan, round 98), so the port takes BUILD00 row 0 (the table's own empty row) for any out-of-range index and these birth rows DIVERGE BY DEFINITION. Witnessed: rsg t=34604 slot 24, t=39012 slot 631. Ledger ROUND 99 dig 99-5 (MGC_NO_MC2_PAINTER_ROW_VERBATIM). NOTE applied_pitch/applied_yaw are the X/Y collision half-extents (@0x54), NOT angles.",
-   "kind": "field",
-   "class": 10,
-   "model": 42,
-   "field": "applied_yaw"
-  },
-  {
    "id": "mc2l24-ball-terrain-roll",
    "status": "capture",
    "note": "Resolved 'MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL' (2026-08-02) item 4 + UPDATED 2026-08-04 (fountain dig): the fountain spawner is BYTE-EXACT (3 births/tick, LCG-proven); the 'over-spawn' was retail merge DEATHS the port under-reproduced — ring-walk partner search + MC2 hard-free donor LANDED (native, cave golden re-pinned). Residual extras = summit merges the pristine terrain cannot host (retail deaths cluster on the doomsday mound z 2400-3300; the port ball hovers ~60 units up, never grounds, so the merge arm never runs) + one-snapshot decay-expiry linger; 12 missing = within-ring visit order (bitmaps_E9980x, DEVIATIONS combat.rs). Ball laws byte-exact (TTL/arc/bounce/friction).",
@@ -881,41 +863,6 @@
    "kind": "field",
    "field": "flags",
    "t_min": 39508
-  },
-  {
-   "id": "mc2l22-ivt-ghost-z",
-   "status": "deviation",
-   "note": "PLAYER-RULED 2026-09-04 (close of ROUND 102, DEVIATIONS.md 'mc2/rivals.rs::mc2_ivt_ghost'): \"It's completely fair that the OOB ghost stays unfaithful and remains a horizon.\" sub_161A0's Defense else arm (EF:7815-40) aims at the record its class-3 rescan elected, and every NewEvent_4A050 recycle-arm seizure blanks dword_38519 for the rest of the walk (Events.cpp:583-87) - so on a full-pool tick a Defense rival dispatched after the first seizure sees NOBODY and the shipped code does `lea 0x4c(%edi)` with edi = 0 (NETHERW.EXE 0x3ac06): linear 0x4C, the real-mode INTERRUPT VECTOR TABLE mapped 1:1 under DOS/4GW. x/y/z are INT 13h's offset/segment and INT 14h's offset - the EMULATOR's words (DOSBox's BIOS callbacks live in segment 0xF000), not a game asset. The port keeps remc2's authored origin (0,0,0); MGC_MC2_IVT_GHOST=1 opts into the fitted (0x1100,0xF000,0x1100) and is a MEASUREMENT INSTRUMENT ONLY. THE FLOOR IS MEASURED, NOT ASSUMED: with the ghost on, replay's boundaries 4662 and 9785 both go clean and nothing else on the take changes except a NEW head at 6160 that is the ghost's own downstream state - which is why the authored origin stays the default. This rule is the 4662 half (pair 4661): z on the two blank-chain Defense rivals' targets and their knock-on. Ledger ROUND 102 / ROUND 103.",
-   "takes": [
-    "mc2l22"
-   ],
-   "kind": "field",
-   "field": "z",
-   "slots": [
-    451,
-    530,
-    557,
-    903
-   ],
-   "ticks": [
-    4661
-   ]
-  },
-  {
-   "id": "mc2l22-ivt-ghost-heading",
-   "status": "deviation",
-   "note": "The 9785 half of mc2l22-ivt-ghost-z (pair 9784) - see that rule's note for the mechanism and the player ruling. Retail's rival 530 takes the blank-chain Defense else arm at t=9784 and bears on the IVT origin (roll 303 at (50204,10724)); `roll` is not a graded lane on a (3,1), so the recorded face of it is the servo's heading one boundary later: retail 1532 / port 1533. Verified by the same discriminator as the 4662 half - MGC_MC2_IVT_GHOST=1 takes this boundary clean. Ledger ROUND 102 / ROUND 103.",
-   "takes": [
-    "mc2l22"
-   ],
-   "kind": "field",
-   "field": "heading",
-   "slots": [
-    530
-   ],
-   "ticks": [
-    9784
-   ]
   },
   {
    "id": "mc1l48-search-ring-heap-damage",

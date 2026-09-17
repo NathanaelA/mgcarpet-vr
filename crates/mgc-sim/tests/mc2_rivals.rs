@@ -1475,6 +1475,90 @@ fn an_mc2_rival_banks_its_knockback_until_it_dies() {
     );
 }
 
+/// ⭐⭐⭐ THE DEAD-WAIT DISPATCH WIPES THE KNOCK MAGNITUDE EVERY TICK.
+/// `sub_5E7C0`'s FIRST statement is
+/// `a1x->dword_0xA4_164x->moveBoost_0x1E_30 = 0` (EF:60660) — above
+/// the `IsAiPlayer` test, above the castle/banished split, so it runs
+/// on every tick of the 1,200-tick respawn countdown and on a banished
+/// corpse too. Shipped `NETHERW.EXE` file 0x82FC9
+/// `8b 86 a4 00 00 00` / 0x82FCF `66 c7 40 1e 00 00`, the two
+/// instructions after the prologue; the `IsAiPlayer` compare is at
+/// 0x82FEB. The BEARING at `+0x20` is NOT written here — only the
+/// respawn `sub_5C950` (EF:44064) clears that.
+///
+/// Corpus witness mc2l12 wiz 4 (`explain` t=1596 -> 1597): retail's
+/// death fall decays 20 -> 16 on the tick the wizard turns action 3,
+/// and the very next tick reads **0**; 1,200 ticks later at t=2797 the
+/// respawn drops `knock_dir 1898 -> 0`. The port held 16 for the whole
+/// window — 2,400 shadow rows on that take alone.
+#[test]
+fn an_mc2_dead_rival_wipes_its_knock_every_tick_of_the_wait() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let clear_off = std::env::var_os("MGC_NO_MC2_DEAD_WAIT_KNOCK_CLEAR").is_some();
+    let views = w.rival_views();
+    assert!(!views.is_empty(), "level-004 spawns rivals");
+    let color = views[0].slot;
+    let (rx, rz) = (views[0].x as u8, views[0].z as u8);
+    let pose = PlayerPose::from_tiles(0.0, 20.0, 0.0, 0.0, 0.0, 0.0);
+    let idle = PlayerCommand::default();
+    for _ in 0..105 {
+        w.tick(pose, idle);
+    }
+    w.debug_place_mc2_rival(color, rx as f32 + 40.0, rz as f32 + 40.0)
+        .expect("the rival relocates");
+    for _ in 0..3 {
+        w.tick(pose, idle);
+    }
+    w.debug_kill_mc2_rival(color);
+    // Walk the death fall down to the floor; the landing flips the
+    // wizard to action 3 and arms the 1,200-tick countdown. (The fall
+    // itself spends the impulse 4/tick — `sub_5E310` -> `sub_5D530`,
+    // the pinned law this one sits on top of.)
+    let mut landed = false;
+    for _ in 0..400 {
+        w.tick(pose, idle);
+        if w.debug_mc2_rival_dead_waiting(color) {
+            landed = true;
+            break;
+        }
+    }
+    assert!(landed, "the corpse reaches the floor and enters the dead-wait");
+    // Seat a fresh impulse on the corpse — retail's own witness is a
+    // rival killed low enough that the fall could not spend it
+    // (mc2l12 wiz 4: 20 at t=1595, the fall's 16 at t=1596, and 0 at
+    // t=1597, the first wait tick).
+    w.debug_arm_mc2_rival_knock(color, 1300, 40);
+    w.tick(pose, idle);
+    let after_one = w.debug_mc2_rival_knock(color);
+    for _ in 0..10 {
+        w.tick(pose, idle);
+    }
+    let after_ten = w.debug_mc2_rival_knock(color).map(|k| k.1);
+    if clear_off {
+        assert_eq!(
+            after_one.map(|k| k.1),
+            Some(40),
+            "pre-dig arm: the dead wizard banks the residue for the whole wait"
+        );
+        assert_eq!(after_ten, Some(40), "pre-dig arm: and never spends it");
+    } else {
+        assert_eq!(
+            after_one.map(|k| k.1),
+            Some(0),
+            "sub_5E7C0's FIRST statement, on the very next wait tick"
+        );
+        assert_eq!(after_ten, Some(0), "and on every wait tick after it");
+    }
+    assert_eq!(
+        after_one.map(|k| k.0),
+        Some(1300),
+        "the BEARING is untouched by the wait — Type_164 +0x20 is not in sub_5E7C0's write list"
+    );
+}
+
 /// ⭐⭐ THE DEATH PAYOUT'S SPELL-TOKEN SCATTER KEEPS THE OWNER AND
 /// LEAVES A BOOLEAN IN THE BOOK. `sub_5E310`'s landing arm (EF:60137-62)
 /// writes exactly four things per owned manifestation — flag bit 0

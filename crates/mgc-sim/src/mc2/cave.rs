@@ -513,6 +513,9 @@ impl Gen {
             return None;
         }
         let i = self.new_event()?;
+        // Retail's ctor makes NO store to +0x2C; this model's
+        // port `f44` is that word. See `Gen::mc2_alloc_2c_zero`.
+        self.mc2_alloc_2c_zero(i);
         {
             let e = &mut self.ent[i];
             e.class64 = 10;

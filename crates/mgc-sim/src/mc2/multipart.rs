@@ -109,6 +109,63 @@ use super::sprite_params::SPRITE_PARAMS;
 use crate::engine::features::Gen;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 
+/// `MGC_NO_MC2_M27_HIDE_BIT=1` restores the port's invented `0x20` in
+/// the m27 hydra's four burrow show/hide ops — i.e. it reverts this law.
+///
+/// ⭐ THE RIGHT SYMPTOM ON THE WRONG BIT, a second time (cf.
+/// [`crate::mc2::mobs::no_mc2_class14_marker_hide_bit`], which found
+/// the same invention on the (14,3)/(14,4) ending markers). This
+/// module's own header said so out loud — *"writes flags bit 0
+/// VERBATIM … PLUS the port's 0x20 draw alias"* — and the alias is
+/// surplus: the port's MC2 billboard pass ALREADY hides a class-5
+/// record on bit 0 (`live_poses_mc2`'s
+/// `let hidden = (e.class64 == 5 && e.flags & 1 != 0) || enemy_mine`),
+/// which is exactly retail's `byte[0] & 0x21` pair. Dropping 0x20
+/// changes nothing on screen and stops the port stamping the
+/// INVISIBILITY bit on fifty-odd hydra records at once.
+///
+/// `sub_29A90` (banner `//----- (00029A90)`) — all four ops, shipped
+/// `NETHERW.EXE`, file = VA + 0x24800:
+/// ```text
+///   ; burrow hide, one node per gauge step (decompile :20093)
+///   4e805  8a 68 0c     mov ch,[eax+0xc]
+///   4e808  80 cd 01     or  ch,0x1
+///   4e80b  88 ea        mov dl,ch
+///   4e80d  80 e2 f7     and dl,0xf7
+///   4e810  88 50 0c     mov [eax+0xc],dl      ; (byte[0]|1) & 0xF7
+///   ; case 0xF, hide the branch and all nine segments (:20200)
+///   4e8bc  8a 4a 0c     mov cl,[edx+0xc]
+///   4e8bf  80 c9 01     or  cl,0x1
+///   4e8c2  88 cd        mov ch,cl
+///   4e8c4  80 e5 f7     and ch,0xf7
+///   4e8c7  88 6a 0c     mov [edx+0xc],ch      ; (byte[0]|1) & 0xF7
+///   ; case 0xA re-show + re-targetable
+///   4e929  80 e1 f6     and cl,0xf6
+///   4e93c  80 cd 08     or  ch,0x8
+///   4e93f  88 6b 0c     mov [ebx+0xc],ch      ; (byte[0] & 0xF6) | 8
+///   ; case 0xC sequential segment re-show (:20168)
+///   4e99a  80 66 0c fe  and byte [esi+0xc],0xfe
+/// ```
+/// Bits 0 and 3 only, in every one of the four. The only three retail
+/// setters of `0x20` are `sub_6B1C0`, `sub_5E310` and
+/// `DisableEntitesDrawing_5E660` — all wizard-side.
+///
+/// WITNESS — free run, `MGC_RAW_SHADOW=1`: `(5,27) flags.b0_x20`
+/// 16,210 rows over 6 takes, every row `retail 0 port 1`; mc2l24 7,304
+/// rows t=13010..43341 over 118 slots, mc2l21 3,985 over 114,
+/// mc2l22-new 1,725, mc2l19 1,319, mc2l19-taketwo 1,055, mc2l22 822.
+pub(crate) fn no_mc2_m27_hide_bit() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_M27_HIDE_BIT").is_some())
+}
+
+/// The bit(s) the m27 burrow ops touch on `byte[0]`: retail's bit 0
+/// alone, or bit 0 + the port's legacy `0x20` draw alias under
+/// [`no_mc2_m27_hide_bit`].
+pub(crate) fn m27_hide_mask() -> u32 {
+    if no_mc2_m27_hide_bit() { 0x21 } else { 0x01 }
+}
+
 pub(crate) const M0_BASE: u8 = 0;
 pub(crate) const M3_BASE: u8 = 24;
 pub(crate) const M22_BASE: u8 = 176;
@@ -1762,12 +1819,23 @@ impl Gen {
         if self.free.len() < 51 {
             return None;
         }
+        // ⚠ `f44` on this family is `word_0x2C_44` (the branch
+        // speed-mode selector), NOT `subSpellIndex_0x2A_42` — and
+        // `new_event` seeds the @0x2A default 100 into the one field
+        // both words share. Retail's `memset` leaves @0x2C at 0 and
+        // `sub_4D000` (banner EF:34642) never writes it, so every
+        // member is born in mode 0. See
+        // [`crate::mc2::mobs::no_mc2_m27_2c_zero`].
+        let zero2c = !crate::mc2::mobs::no_mc2_m27_2c_zero();
         let body = self.new_event()?;
         {
             let e = &mut self.ent[body];
             e.class64 = 5;
             e.model65 = 27;
             e.tick70 = M27_BASE + 1; // 0xD9
+            if zero2c {
+                e.f44 = 0;
+            }
         }
         self.link(body, x, y, z);
         let mut prev = body;
@@ -1782,6 +1850,9 @@ impl Gen {
                 e.id24 = body as u16;
                 e.f52 = body as u16;
                 e.f54 = 0;
+                if zero2c {
+                    e.f44 = 0;
+                }
             }
             self.ent[prev].f54 = br as u16;
             self.link(br, x, y, z);
@@ -1797,6 +1868,9 @@ impl Gen {
                     e.id24 = body as u16;
                     e.f52 = body as u16;
                     e.f54 = 0;
+                    if zero2c {
+                        e.f44 = 0;
+                    }
                 }
                 self.ent[prev].f54 = seg as u16;
                 self.link(seg, x, y, z);
@@ -3301,7 +3375,7 @@ impl Gen {
                             };
                             if hide != 0 {
                                 let f = &mut self.ent[hide].flags;
-                                *f = (*f | 0x21) & !0x08;
+                                *f = (*f | m27_hide_mask()) & !0x08;
                             }
                             let v22 = self.ent[br].f68 + 1;
                             self.ent[br].f26 += 1;
@@ -3343,7 +3417,7 @@ impl Gen {
                     e.f146 = first_seg;
                     // Case 0xA re-show: `(byte[0] & 0xF6) | 8` —
                     // shown AND re-targetable (EF:20113-17).
-                    e.flags = (e.flags & !0x21) | 0x08;
+                    e.flags = (e.flags & !m27_hide_mask()) | 0x08;
                     e.f34 = row[D404C_W12] as u16;
                     e.f126 = 156;
                     e.f36 = row[D404C_W14] as u16;
@@ -3367,7 +3441,7 @@ impl Gen {
                     if s != 0 {
                         // Case 0xC: `byte[0] &= 0xFE` — show only,
                         // bit 3 untouched (EF:20144).
-                        self.ent[s].flags &= !0x21;
+                        self.ent[s].flags &= !m27_hide_mask();
                         self.ent[br].f146 = self.ent[s].f54;
                     }
                     self.ent[br].f26 += 1;
@@ -3397,7 +3471,7 @@ impl Gen {
                 let mut m = br;
                 for _ in 0..10 {
                     // `(byte[0]|1) & 0xF7` on all 10 (EF:20177).
-                    self.ent[m].flags = (self.ent[m].flags | 0x21) & !0x08;
+                    self.ent[m].flags = (self.ent[m].flags | m27_hide_mask()) & !0x08;
                     m = self.ent[m].f54 as usize;
                     if m == 0 {
                         break;
@@ -4142,5 +4216,55 @@ mod tests {
             M22_BASE + 1,
             "a target that is no longer class 3 reverts too"
         );
+    }
+
+    /// ⭐⭐⭐ EVERY ONE OF THE HYDRA'S 51 RECORDS IS BORN IN SPEED MODE
+    /// 0 (round 147, dig w147f;
+    /// [`crate::mc2::mobs::no_mc2_m27_2c_zero`]).
+    ///
+    /// On this family `f44` is `word_0x2C_44`, the branch SPEED-MODE
+    /// SELECTOR (`sub_2A340`, banner EF:20255) — not
+    /// `subSpellIndex_0x2A_42`. Retail's `memset` leaves @0x2C at 0
+    /// and `sub_4D000` (banner EF:34642) never writes it, so every
+    /// body, branch and segment is born in mode 0; the port's shared
+    /// `new_event` default put NewEvent's @0x2A **100** in that one
+    /// field and sent all 51 records down the integrator's
+    /// fall-through arm.
+    ///
+    /// ⛔ NATIVE-INIT ONLY, SO IT GETS A UNIT TEST: replay imports the
+    /// pool, so no graded lane ever sees this ctor run.
+    ///
+    /// Non-vacuous by the `new_event` control below — the shared
+    /// default really is 100 in this rig, so the 51 zeroes are the
+    /// ctor's work. With `MGC_NO_MC2_M27_2C_ZERO=1` all 51 read 100.
+    #[test]
+    fn every_hydra_record_is_born_in_speed_mode_zero() {
+        let mut g = flat_gen();
+        // POSITIVE CONTROL: the shared ctor default this law overrides.
+        let bare = g.new_event().expect("a bare record");
+        assert_eq!(
+            g.ent[bare].f44, 100,
+            "`new_event` seeds NewEvent's @0x2A 100 into the shared field"
+        );
+
+        let body = g.mc2_spawn_m27(40 << 8, 40 << 8, 100).expect("hydra");
+        // Walk the one linear f54 chain the ctor builds: body, then
+        // each branch followed by its nine segments.
+        let mut members = vec![body];
+        let mut n = g.ent[body].f54 as usize;
+        while n != 0 {
+            members.push(n);
+            n = g.ent[n].f54 as usize;
+        }
+        assert_eq!(members.len(), 51, "1 body + 5 branches + 45 segments");
+        for m in members {
+            assert_eq!(g.ent[m].class64, 5);
+            assert_eq!(g.ent[m].model65, 27);
+            assert_eq!(
+                g.ent[m].f44, 0,
+                "hydra member {m} (action {}) is born in speed mode 0",
+                g.ent[m].tick70
+            );
+        }
     }
 }

@@ -913,7 +913,7 @@ impl Simulation {
         // for Space. (The faithful-walk path runs both this and the
         // death fall world-side, at the carpet's walk slot.)
         if dead && !faithful_walk {
-            if let Some(w) = &self.world
+            if let Some(w) = &mut self.world
                 && let Some((kx, kz)) = w.killer_pos()
             {
                 const RAD: f32 = std::f32::consts::TAU / 2048.0;
@@ -922,6 +922,14 @@ impl Simulation {
                 let tx = (kx.rem_euclid(256.0) * 256.0) as u16;
                 let ty = (kz.rem_euclid(256.0) * 256.0) as u16;
                 let target = features::Gen::angle_between(px, py, tx, ty);
+                // ⭐ `sub_5E6C0` STORES THAT BEARING (NETHERW.EXE file
+                // 0x82EFD `mov [ebx+0x20],ax`) before either servo, and
+                // a metamorph puppet copies the carpet's `@0x20`
+                // verbatim — so the enhanced mover seats it too. MC2
+                // only, and behind
+                // `MGC_NO_MC2_HUMAN_DEATH_SPIN_AIM`; see
+                // [`world::World::mc2_seat_death_spin_aim`].
+                w.mc2_seat_death_spin_aim(target);
                 let mut d = (target as i32 - self.carpet.yaw as i32) & 0x7FF;
                 if d > 1024 {
                     d -= 2048;

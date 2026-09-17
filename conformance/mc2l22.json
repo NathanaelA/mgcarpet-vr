@@ -499,6 +499,12 @@
    "file": "a-bursting-blast-leaves-the-listener-distance-on-the-hydra-slot.mgcr",
    "source": "mc2l22-new",
    "note": "A (10,23) BLAST'S BURST TICK LEAVES THE LISTENER DISTANCE ON THE HYDRA'S W-64: `sub_33D80` (NETHERW.EXE file 0x58580, no locals) ends with `PrepareEventSound_6E450` (0x92C50, `83 ec 24`, ebp = W-44), whose `[ebp-0x14]` = W-64 is stored at 0x92D2C from EuclideanDist(listener, blast) past the silent-emitter (0x80) and hearing-range (0x9000000) exits. Assumes sound was enabled in the recorded take. WITNESS mc2l22-new pair 49897->49898: blast 587 bursts 2,818 units from the human in front of hydra body 610 - even, > 4 - so retail stamps f71 = 4 and draws twice, where the port read the house's 29. A/B: `MGC_NO_MC2_M27_V34_BLAST_SOUND_RESIDUE=1` re-reds it. Round 146, dig w146h."
+  },
+  {
+   "t": 4661,
+   "file": "a-blank-defense-rescan-bears-on-the-interrupt-vector-table.mgcr",
+   "source": "mc2l22",
+   "note": "A BLANK DEFENSE RESCAN BEARS ON THE INTERRUPT VECTOR TABLE: `sub_161A0`'s Defense else arm (EF:7815-40) aims and z-tracks the record its class-3 rescan elected, and when every `NewEvent_4A050` recycle-arm seizure has blanked `dword_38519` for the rest of the walk (Events.cpp:583-87) the shipped code does `lea 0x4c(%edi)` with edi = 0 (NETHERW.EXE 0x3ac06) - linear 0x4C, the real-mode IVT under DOS/4GW: x = INT 13h offset, y = INT 13h segment, z = INT 14h offset, which on DOSBox read (0x1100, 0xF000, 0x1100). WITNESS mc2l22 pair 4661->4662: pool free 1 -> 0 on the tick, Defense rivals 503/530 dispatched after the seizure see nobody and bear on the ghost (503's roll 318 at (47824, 10966)); the graded face is `z` on slots 451/530/557/903. Player-ruled unfaithful 2026-09-04 (round 102: registered as the `mc2l22-ivt-ghost-z`/`-heading` floor), RE-RULED 2026-09-18 (round 150) on the painter-residue precedent - one stable value witnessed on every recording from the same DOSBox is seedable - once the fitted words measured mc2l22 3 -> 1 segment, raw shadow 4 -> 0, the other 39 takes byte-identical. A/B: `MGC_NO_MC2_IVT_GHOST=1` restores the authored origin (0,0,0) and re-reds it."
   }
  ]
 }

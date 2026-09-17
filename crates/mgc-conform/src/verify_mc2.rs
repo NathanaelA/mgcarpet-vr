@@ -199,9 +199,24 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     let press_latch_mode = std::env::var_os("MGC_PRESS_LATCH").is_some();
     let mut prev_press: Option<(i16, i16)> = None;
     let mut press_moves = 0u64;
-    // The respawn-key lane ([`respawn_key_mc2`]): the previous record's
-    // SPACE state and cursor, the two witnesses that date the press
-    // against retail's poll.
+    // ⭐⭐⭐ THE RESPAWN LANE IS `mgc_formats::recover::Mc2RespawnWitness`,
+    // NOT A SECOND COPY OF IT. This loop used to hand-roll the dating
+    // rule (`space && (prev_space || (mouse != prev_mouse && mouse ==
+    // press))`) — the PRE-ROUND-146 form, the one
+    // `MGC_NO_MC2_RESPAWN_CENTRE_POINT=1` restores — while the free
+    // runner (`replay.rs`) had long since moved to the shared witness,
+    // whose own doc comment names *mc2l22-new record 27599* as the
+    // press the cursor-equality rule misses. The pair runner therefore
+    // never respawned the human on that boundary at all: retail's
+    // `[REVIVED]` at t=27598→27599 rewrote `charge`, `invuln`,
+    // `regen_stall`, `knock_dir`, `life_regen` and all 26 `spell_ent`
+    // book slots, and every one of them read as a WIZEXT pair row
+    // (31 rows on one boundary) because the port's tick simply did not
+    // take the transition. See round 148, dig w148f.
+    // `MGC_NO_MC2_PAIR_RESPAWN_WITNESS=1` restores the hand-rolled copy
+    // for A/B.
+    let pair_respawn_legacy = std::env::var_os("MGC_NO_MC2_PAIR_RESPAWN_WITNESS").is_some();
+    let mut respawn_witness = mgc_formats::recover::Mc2RespawnWitness::default();
     let mut prev_space = false;
     let mut prev_mouse: Option<(i16, i16)> = None;
     // The cycle-ring cast lane (`ring_cast_mc2`): unreachable on today's
@@ -307,12 +322,14 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         // The respawn key rides the pair's END record like the aligned
         // cast bits — see [`respawn_key_mc2`] for the two witnesses
         // that date the press against retail's poll.
+        let witness = respawn_witness.observe(tick.input.as_ref());
         let space = respawn_key_mc2(tick.input.as_ref());
-        let mouse = mouse_pos_mc2(tick.input.as_ref());
-        let recentred = mouse.is_some() && mouse != prev_mouse && mouse == press;
-        aligned.respawn = space && (prev_space || recentred);
+        let mouse = mgc_formats::recover::mouse_pos(tick.input.as_ref());
+        let legacy = space
+            && (prev_space || (mouse.is_some() && mouse != prev_mouse && mouse == press));
         prev_space = space;
         prev_mouse = mouse.or(prev_mouse);
+        aligned.respawn = if pair_respawn_legacy { legacy } else { witness };
         let moved = matches!((prev_press, press), (Some(a), Some(b)) if a != b);
         press_moves += u64::from(moved);
         if press_edge_mode {
@@ -381,6 +398,10 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                 let rec =
                     mgc_formats::recover::recover_pair_mc2(&pst, &st, false, tick.input.as_ref());
                 c.mc2_select = rec.mc2_select;
+                // …and the pane's SHIFT+click ring bind, which shares
+                // the handler's sound and the same "reconstruct input
+                // IDENTICALLY in every fold" rule (CONFORMANCE.md).
+                c.spell_ring = rec.spell_ring;
                 // A recorded retail cheat mutates the world, so the
                 // pair it fires on cannot conform without it
                 // (`engine::world::cheats`).
@@ -484,21 +505,45 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     // Feed the raw shadow HERE — the world is exactly
                     // the post-tick state the graded diff just judged,
                     // and the pose lane below re-installs terrain.
+                    //
+                    // ⭐⭐⭐ **A SHADOW ROW NAMES THE BOUNDARY IT
+                    // COMPARED, NOT THE PAIR THAT REACHED IT** (round
+                    // 149). Every `compare_*` below is `port-after-the
+                    // -tick` vs `st`, and `st` is retail's record at
+                    // **`pt + 1`** — so stamping these rows `pt` said
+                    // "t=59885" about a boundary the FREE-RUN shadow
+                    // (`replay.rs`, which certified the corpus) and
+                    // `dump-state --port` both call 59886. Two
+                    // instruments, one boundary, two numbers: round
+                    // 148 lost a dig to exactly that on mc2l24-crazy's
+                    // (5,25) `target96`/`f2e`.
+                    //
+                    // The PAIR-scoped output (`PairDiff` rows,
+                    // `--dump`, the fixture manifests, `DEBUG_TICK`
+                    // and every probe hung off it) keeps `pt`: a pair
+                    // diff is a statement about the pair and the whole
+                    // fixture corpus is keyed on its start tick. Only
+                    // the BOUNDARY-scoped shadow moves, and it is
+                    // stdout-only and ungraded — nothing is keyed on
+                    // it. `bt` is `tick.t` (the pair branch is
+                    // `tick.t == pt + 1` by construction — see the
+                    // `anchor` test above).
+                    let bt = pt + 1;
                     if let Some(sh) = shadow.as_mut() {
-                        sh.compare_ents_mc2(&world, &st, human_slot, &torn, pt);
-                        sh.compare_map_heads_mc2(&world, &st, human_slot, &torn, pt);
-                        sh.compare_wiz_mc2(&world, &st, pt);
+                        sh.compare_ents_mc2(&world, &st, human_slot, &torn, bt);
+                        sh.compare_map_heads_mc2(&world, &st, human_slot, &torn, bt);
+                        sh.compare_wiz_mc2(&world, &st, bt);
                         // THE OBJECTIVE BOARD — recorded since the
                         // capture was written, ungraded until round
                         // 98. Here the importer restored it from
                         // retail@t before the tick, so a row is a
                         // one-tick WRITE bug.
-                        sh.compare_board_mc2(&world, &st, pt);
+                        sh.compare_board_mc2(&world, &st, bt);
                         // A fallback pair started from a SCANNED free
                         // list, not retail's, so it has nothing to say
                         // about the allocator.
                         if report.stack_fallback.is_none() {
-                            sh.compare_free_mc2(&world, &st, human_slot, pt);
+                            sh.compare_free_mc2(&world, &st, human_slot, bt);
                         }
                     }
                     if let Some(sg) = stagetrace.as_mut() {
@@ -861,7 +906,8 @@ pub(crate) fn sample_cmd_mc2(input: Option<&serde_json::Value>) -> PlayerCommand
 // The respawn SPACE lane + press-dating witness laws moved to the
 // shared recovery home (mgc_formats::recover — doc comments travel
 // with them) so the app's `--replay` shares one implementation.
-pub(crate) use mgc_formats::recover::mouse_pos as mouse_pos_mc2;
+// (`mouse_pos` moved inside `Mc2RespawnWitness` with the shared dating
+// rule — see the respawn lane above.)
 pub(crate) use mgc_formats::recover::respawn_key as respawn_key_mc2;
 
 /// The two recorded MC2 mouse registers, UNMERGED:
@@ -1105,7 +1151,7 @@ pub(crate) fn exec_pair_mc2(
         castles,
     };
     let port = world.obs_project_mc2(&pin);
-    let torn = torn_slots(pst, st);
+    let torn = torn_slots_scoped(pst, st, TearScope::Graded);
     let mut pd = compare_mc2_gated(obs, &port, report.human_slot, &torn);
     append_sprite_diffs_mc2(&mut pd, st, world, report.human_slot, &torn);
     Ok((pd, port, report))
@@ -1173,86 +1219,279 @@ pub(crate) fn append_sprite_diffs_mc2(
 /// of 191,695 `(5,27)` action-233 pairs on mc2l22 advance by exactly
 /// 1. It stays under the +1 test.
 ///
-/// ⚠⚠⚠ **DEFAULT OFF — SESSION 96 LEFT THIS UNMEASURED.** The dig that
-/// wrote the citation above was stopped at session close before it
-/// reported an ON/OFF pair, so nobody has ever measured what this
-/// un-exclusion grades. It is an INSTRUMENT change that deliberately
-/// WIDENS grading (it un-excludes ~1.7M slot-exclusions on mc2l22
-/// alone), and the campaign's standing rule is that a tool change ships
-/// only with its proof — ⭐⭐⭐ **A GRADING ORACLE TUNED TO ITS OWN
-/// SCORE CAN HIDE A PORT BUG.** Set `MGC_TEAR_PHASE_LAW=1` to arm it.
-/// NEXT SESSION: arm it, re-cut both focus censuses, and check whether
-/// the newly-graded rows are CLEAN (the citation is right and the guard
-/// was over-firing) or DIRTY (a wall was hiding behind the exclusion —
-/// which would mean the "dirty ticks remaining" figure is a floor).
+/// ⭐⭐⭐ **ARMED BY DEFAULT SINCE ROUND 149 — WITH THE PROOF SESSION 96
+/// OWED.** The citation above was written in session 96 and then left
+/// unmeasured for fifty rounds; round 149 (dig w149j) measured the
+/// ON/OFF pair on both focus takes and both halves came back FREE:
+///
+/// | take   | arm      | tear-gate hidden | RAW SHADOW mismatches | graded |
+/// |--------|----------|------------------|-----------------------|--------|
+/// | mc2l24 | legacy   |        1,936,794 |  980 (4 lanes)        | 10 seg |
+/// | mc2l24 | class 5  |          345,999 |  980 (same 4 lanes)   | 10 seg |
+/// | mc2l24 | 5 + 10   |          269,714 |  980 (same 4 lanes)   | 10 seg |
+/// | mc2l24 | + reseed |            3,309 |  980 (same 4 lanes)   | 10 seg |
+/// | mc2l22 | legacy   |        2,298,158 | 1307 (3 lanes)        |  4 seg |
+/// | mc2l22 | class 5  |          572,903 | 1307 (same 3 lanes)   |  4 seg |
+/// | mc2l22 | 5 + 10   |          477,525 | 1307 (same 3 lanes)   |  4 seg |
+/// | mc2l22 | + reseed |           12,472 | 1308 (+1 row, old lane)|  4 seg |
+///
+/// 3.28 M slot-boundaries that had NEVER been shadowed on any ungraded
+/// lane came back BYTE-CLEAN, and `--segmented --brief` is unchanged on
+/// both takes. ⚠ The class-10 warning below is now HISTORY: the (10,77)
+/// fire-sphere wall it describes (673 → 1,935 dirty pairs, 5,219 →
+/// 306,813 rows on mc2l22) has been PAID by the constellation-tumble
+/// laws that landed after session 96 — the same flag on today's tree
+/// moves nothing. ⚠ `MGC_TEAR_PHASE_LAW` and `MGC_TEAR_NO_BUMP_C10`
+/// are RETIRED (the law they armed is the default); old recipes that
+/// set them now get the default arm either way, and the only switch is
+/// `MGC_TEAR_LEGACY=1`.
+///
+/// ⭐ THE CADENCE, MEASURED OFF THE RECORDING (round 149, whole
+/// mc2l24, consecutive recorded ticks, wrapping delta of `phase3e`):
+///   (5,27) act 0xEA: +0 ×1,591,335 / +1 ×135    — null row, HELD
+///   (5,27) act 0xE9: +1 ×176,770  / +0 ×60      — null row BUT the
+///                    body's `sub_29A90` bumps it out of band (EF:19827)
+///   (10,75) act 0x52: +0 ×28,006  (100.0%)      — null row, HELD
+///   (10,77) act 0x54: +0 ×49,875  / −17 ×8      — null row, HELD
+/// Every one of those four is exactly what the shipped table predicts
+/// (`address_6 == 0 && dword_10 == 0` for 0xE9/0xEA/0x52/0x54).
+///
+/// ⚠ **THE TEST IS STILL WRONG FOR THE RE-SEED SPECIES** — see
+/// [`torn_slots`]'s `MGC_TEAR_RESEED_LAW`.
+///
+/// Set `MGC_TEAR_LEGACY=1` to restore the bare `!= 1` test.
 fn mc2_no_bump_action(class: u8, action: u8) -> bool {
-    static ARMED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ARMED.get_or_init(|| std::env::var_os("MGC_TEAR_PHASE_LAW").is_some()) {
-        return false;
-    }
     match class {
         5 => matches!(action, 0x28..=0x47 | 0x58..=0x5F | 0xEA),
-        // ⚠ OPT-IN. The class-10 rows are just as well cited, but
-        // un-excluding them UNCOVERS A WALL rather than confirming
+        // HISTORY (session 96, superseded round 149): "un-excluding
+        // the class-10 rows UNCOVERS A WALL rather than confirming
         // conformance: on mc2l22 the (10,77) FIRE-SPHERE SATELLITES
         // (action 0x54) alone take the census from 673 to 1935 dirty
         // pairs and 5,219 to 306,813 unexplained field rows —
         // x/y/z/pitch on 387 satellite slots over 1,287 ticks, the
-        // constellation tumble (`sub_33B20`, mc2/tail.rs) drifting
-        // out of phase. That is a REAL port debt this guard has been
-        // hiding, not noise, but it is a lane-sized dig of its own:
-        // grade it deliberately with `MGC_TEAR_NO_BUMP_C10=1` once
-        // the tumble law lands, so the headline census does not jump
-        // 300k rows in the middle of another grind. The arm itself is
-        // sound: the same flag on mc2l6-rival-spells-galore drops the
-        // 4,004 `(10,75)` sibling-satellite exclusions and the census
-        // comes back BYTE-IDENTICAL, so only mc2l22's `(10,77)` is
-        // carrying debt.
-        10 if no_bump_class10() => {
-            matches!(
-                action,
-                0x27 | 0x2E | 0x2F | 0x31 | 0x32 | 0x3F | 0x52 | 0x54
-            )
-        }
+        // constellation tumble (`sub_33B20`, mc2/tail.rs) drifting out
+        // of phase." That debt is PAID: round 149 measured mc2l22 with
+        // this half armed at 1,307 raw-shadow mismatches, identical to
+        // the legacy arm, and 95,380 fewer exclusions.
+        10 => matches!(
+            action,
+            0x27 | 0x2E | 0x2F | 0x31 | 0x32 | 0x3F | 0x52 | 0x54
+        ),
         _ => false,
     }
 }
 
-/// Opt-in for the class-10 half of the no-bump set — see
-/// `mc2_no_bump_action`.
-fn no_bump_class10() -> bool {
+/// The bare `phase3e != 1` tear test, as it stood before round 149.
+/// `MGC_TEAR_LEGACY=1` — the kill switch for the cadence law.
+fn tear_legacy() -> bool {
     static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *F.get_or_init(|| std::env::var_os("MGC_TEAR_NO_BUMP_C10").is_some())
+    *F.get_or_init(|| std::env::var_os("MGC_TEAR_LEGACY").is_some())
+}
+
+/// ⚠ OPT-IN, ROUND 149 — **A RE-SEEDED PHASE BYTE IS NOT A TEAR
+/// EITHER, AND A TEAR CANNOT MOVE A SLOT BY MORE THAN ONE DISPATCH.**
+///
+/// `byte_0x3E_62` is not only bumped by `UpdateEntities_57730`; it is
+/// RE-SEEDED at birth from a per-model round-robin counter,
+/// `a1x->byte_0x3E_62 = D41A0_0.array_0x10[a1x->model_0x40_64]++`
+/// (EF:20780 `sub_2AC50`//20bc50, EF:19172 `sub_28CE0`//209ce0, and
+/// the whole `NewEvent` family EF:33792/33836/33883/33952/33996/34040/
+/// 34079/34114/34171/34202/…). A slot that is freed and re-allocated
+/// to the SAME (class, model) inside one capture interval therefore
+/// shows an arbitrary delta that no tear could produce.
+///
+/// A capture tear can only shift a slot by ONE dispatch on each side
+/// of the pair, so for a +1-per-dispatch counter the tear-reachable
+/// deltas are exactly {−1, 0, +1, +2}. Anything else — mc2l24's
+/// (10,0) `−10 ×51,753 / −9 ×15,966 / −6 ×2,737 / −5 ×2,591` and
+/// (10,14) `−16/−17/−31/…` families — is a re-seed and MUST be graded.
+///
+/// ⚠⚠ This deliberately WIDENS grading, so it ships with its own
+/// measurement, per ⭐⭐⭐ A GRADING ORACLE TUNED TO ITS OWN SCORE CAN
+/// HIDE A PORT BUG. Round 149, on top of the no-bump law (both
+/// clauses — the out-of-range delta and the life-rose witness):
+///   mc2l24  hidden 269,714 → **3,309** · RAW SHADOW 980 → **980**
+///           (the same 4 lanes) · `--brief` byte-identical
+///   mc2l22  hidden 477,525 → **12,472** · RAW SHADOW 1,307 → **1,308**
+///           (the one new row lands in the EXISTING `(5,16) roll`
+///           lane, 1,303 → 1,304 rows, same 3 slots, same t window —
+///           a row the gate had been hiding, not a new family)
+/// ⚠ The MC1/HW half of this law was already written down —
+/// docs/RECORDING.md "Capture tearing": *"only steps of exactly dv±1
+/// count as tear suspects … arbitrary-step deviants are ambient spawn
+/// CHURN (slot re-use overwrites +63 with the spawn ordinal)"* — and
+/// `capture_clean_mc2`'s own PAIR test already ignores deltas outside
+/// {0,1,2}. Only this per-slot gate never got it: ONE LADDER, TWO
+/// COPIES, ONE WRONG.
+/// `MGC_TEAR_NO_RESEED=1` disarms this half alone; `MGC_TEAR_LEGACY=1`
+/// disarms the whole cadence law.
+/// `MGC_TEAR_NO_SLOT_SEED=1` — the kill switch for the
+/// `NewEvent_4A050` slot-index seed clause of [`slot_is_torn`]
+/// (round 150). It rides inside [`tear_reseed_law`], so
+/// `MGC_TEAR_NO_RESEED=1` and `MGC_TEAR_LEGACY=1` disarm it too.
+fn tear_slot_seed_law() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("MGC_TEAR_NO_SLOT_SEED").is_none())
+}
+
+fn tear_reseed_law() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("MGC_TEAR_NO_RESEED").is_none())
 }
 
 /// Slots live at both ends whose phase byte did NOT advance exactly
 /// once — per-entity capture tear inside an accepted pair.
 pub(crate) fn torn_slots(pst: &RetailMc2, st: &RetailMc2) -> std::collections::BTreeSet<u16> {
+    torn_slots_scoped(pst, st, TearScope::Shadow)
+}
+
+/// Which consumer the tear verdict is for.
+///
+/// HISTORY (round 149 → 150). The re-seed clauses of [`slot_is_torn`]
+/// shipped SHADOW-ONLY, because on the GRADED pair diff they un-hid
+/// the fixture `mc2l16/a-dead-carpet-is-not-on-the-switch-fire-roster`
+/// (t=7903): four `(10,0)`/`(10,1)` death-fall newborns — one of them
+/// slot 934, REVIVED mid-tick — placed at retail's 7065 and the
+/// port's 6943. Round 150 dug that row: it was not a tear and not a
+/// gate defect but the pinned-pair arm of the death fall reading the
+/// SETTLED z where retail reads the mover's pre-gravity output
+/// (`no_mc2_fall_puff_pinned_pre_z`). With that landed, the widened
+/// graded scope is clean, so **both consumers now take the full
+/// cadence law** — see [`slot_is_torn_scoped`]. The enum is kept as
+/// the lever for the next widening.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TearScope {
+    /// The graded pair diff and the fixture suite.
+    Graded,
+    /// The raw-shadow census.
+    Shadow,
+}
+
+pub(crate) fn torn_slots_scoped(
+    pst: &RetailMc2,
+    st: &RetailMc2,
+    scope: TearScope,
+) -> std::collections::BTreeSet<u16> {
     let mut torn = std::collections::BTreeSet::new();
     for slot in 1..pst.ents.len().min(st.ents.len()) {
         let (a, b) = (&pst.ents[slot], &st.ents[slot]);
         if a.class3f == 0 || a.class3f != b.class3f || a.model40 != b.model40 {
             continue;
         }
-        if b.phase3e.wrapping_sub(a.phase3e) != 1 {
-            // A HELD phase byte under an action that retail never
-            // dispatches is the entity's normal cadence, not a
-            // capture tear — see `mc2_no_bump_action`. Excluding it
-            // blinded the census to whole families for whole takes
-            // (mc2l22: 45 m27 tier-2 segments, 1,725,255 of the
-            // take's 2,298,158 slot-exclusions, ungraded for 38,340
-            // consecutive pairs). Set `MGC_TEAR_PHASE_STRICT` to
-            // restore the bare `!= 1` test.
-            if a.phase3e == b.phase3e
-                && a.action45 == b.action45
-                && mc2_no_bump_action(a.class3f, a.action45)
-            {
-                continue;
-            }
+        if slot_is_torn_scoped(slot, a, b, scope) {
             torn.insert(slot as u16);
         }
     }
     torn
+}
+
+/// The per-slot half of [`torn_slots`], pulled out so the cadence law
+/// is unit-testable without a 168-byte×1000 closure.
+#[cfg(test)]
+fn slot_is_torn(a: &RetailEntMc2, b: &RetailEntMc2) -> bool {
+    // Slot 0 is the reserved hole, so the slot-seed clause below can
+    // never fire for it — the unit tests keep testing the cadence
+    // clauses in isolation. `slot_is_torn_at` is the seeded form.
+    slot_is_torn_scoped(0, a, b, TearScope::Shadow)
+}
+
+/// [`slot_is_torn`] at a named slot, for the `NewEvent_4A050`
+/// slot-index seed clause.
+#[cfg(test)]
+fn slot_is_torn_at(slot: usize, a: &RetailEntMc2, b: &RetailEntMc2) -> bool {
+    slot_is_torn_scoped(slot, a, b, TearScope::Shadow)
+}
+
+fn slot_is_torn_scoped(
+    slot: usize,
+    a: &RetailEntMc2,
+    b: &RetailEntMc2,
+    scope: TearScope,
+) -> bool {
+    // ⭐ ROUND 150 (w150a): THE RE-SEED CLAUSES ARE GRADED NOW. They
+    // were `TearScope::Shadow`-only because widening them un-hid
+    // mc2l16 t=7903 — four death-fall newborns the pinned-pair arm
+    // planted one gravity step low. That row is DUG AND LANDED
+    // (`no_mc2_fall_puff_pinned_pre_z`), and with the law on, the
+    // widened graded scope reads clean: 596/596 fixtures over every
+    // mc1*/mc2* manifest, and mc2l16 + mc2l22 `--segmented --brief`
+    // byte-identical (both `segments=1 devs=0 horizon=END`). The
+    // scope stays in the signature as the lever for the next
+    // widening; today both consumers take the same verdict.
+    let _ = scope;
+    let reseed = tear_reseed_law();
+    let d = b.phase3e.wrapping_sub(a.phase3e);
+    if d == 1 {
+        return false;
+    }
+    if tear_legacy() {
+        return true;
+    }
+    // A HELD phase byte under an action that retail never dispatches
+    // is the entity's normal cadence, not a capture tear — see
+    // `mc2_no_bump_action`. Excluding it blinded the census to whole
+    // families for whole takes (mc2l22: 45 m27 tier-2 segments,
+    // 1,725,255 of the take's 2,298,158 slot-exclusions, ungraded for
+    // 38,340 consecutive pairs).
+    if a.phase3e == b.phase3e
+        && a.action45 == b.action45
+        && mc2_no_bump_action(a.class3f, a.action45)
+    {
+        return false;
+    }
+    // A tear shifts a slot by at most ONE dispatch per side, so
+    // {−1, 0, +1, +2} is the whole tear-reachable set for a
+    // +1-per-dispatch counter. A wilder delta is a BIRTH re-seed
+    // (`array_0x10[model]++`) — see `tear_reseed_law`.
+    if reseed && !matches!(d, 0xFF | 0 | 1 | 2) {
+        return false;
+    }
+    // ⭐⭐⭐ …AND THE EXACT NEWBORN WITNESS, WHICH THE RECORD HAS
+    // CARRIED ALL ALONG: `NewEvent_4A050` seeds `byte_0x3E_62` TO THE
+    // RECORD'S OWN SLOT INDEX. Shipped `NETHERW.EXE` file 0x6E850
+    // (= VA 0x4A050 + 0x24800), the ctor tail:
+    //   6e913: 89 d8              mov  eax,ebx        ; the record
+    //   6e915: 8d 91 8e 6e 00 00  lea  edx,[ecx+0x6e8e] ; the pool base
+    //   6e91b: 29 d0              sub  eax,edx
+    //   6e91f: be a8 00 00 00     mov  esi,0xa8       ; the 168-byte stride
+    //   6e927: f7 fe              idiv esi            ; ⭐ eax = SLOT INDEX
+    //   6e946: 66 89 43 1a        mov  [ebx+0x1a],ax  ; …into @0x1A too
+    //   6e976: 88 43 3e           mov  [ebx+0x3e],al  ; ⭐⭐⭐ THE SEED
+    // ⛔ ROUND 149's `array_0x10[model]++` IS THE CLASS-5 CREATURE
+    // CTOR'S counter (29 models, `Gen::mc2_ord`) and governs NONE of
+    // the class-9/10 effect families this gate trips over. Measured
+    // over the whole of mc2l22, every non-`+1` live pair cross-tabbed
+    // against both tests:
+    //   array_0x10[model] in [pre, post)   465,052 heur-only,      0 ord-only
+    //   phase == slot (or slot+1)          465,050 BOTH,      12,471 ord-only,
+    //                                            3 heur-only,     1 neither
+    // — the 12,471 are exactly the round-149 residue ((9,9) 7,903,
+    // (9,13) 2,762, (9,0) 1,711, (10,11) 94), and the gate's leftover
+    // drops from 12,472 slot-exclusions to ONE. The `slot + 1`
+    // alternative is the newborn that also took its own dispatch in
+    // the walk it was minted in (mc2l16 t=7903 slot 934: minted 166,
+    // recorded 167 — the four siblings minted above the cursor record
+    // their bare slot byte).
+    // `MGC_TEAR_NO_SLOT_SEED=1` disarms this clause alone.
+    if reseed && tear_slot_seed_law() {
+        let si = slot as u8;
+        if b.phase3e == si || b.phase3e == si.wrapping_add(1) {
+            return false;
+        }
+    }
+    // …and the INDIRECT re-seed witness: retail's `life_0x8` counts DOWN
+    // under the handler (`sub_67410`//248410 is literally
+    // `life--; if (old < 0) retire`), so a life that ROSE across the
+    // pair is a slot that was freed and re-allocated inside the
+    // interval — a new instance, with a new `array_0x10[model]` seed.
+    // A capture tear cannot raise a countdown. mc2l24's (9,9) sparks
+    // are a 2-tick species that respawns in place; cross-tabulated
+    // over the whole take, EVERY +1 pair (278,523) has life falling
+    // and 179,457 of the 180,248 non-+1 pairs have life RISING.
+    if reseed && b.life > a.life {
+        return false;
+    }
+    true
 }
 
 /// The recorded carpet's raw fields as the pinned pose. MC2's live
@@ -1806,5 +2045,154 @@ mod tests {
         assert_eq!(ring_cast_mc2(&ring_player(0x30, 5, 0, 9)), None);
         // The cursor's three padding cells are not spells.
         assert_eq!(ring_cast_mc2(&ring_player(0x40, 5, 0, 27)), None);
+    }
+
+    /// ⭐ THE TEAR GATE'S CADENCE LAW (round 149, dig w149j).
+    /// `UpdateEntities_57730` (NETHERW.EXE file 0x7BF30, VA 0x57730)
+    /// bumps `byte_0x3E_62` ONLY inside the arm that ran a handler:
+    ///
+    /// ```text
+    ///   7c26d: mov  0x4(%eax),%cx      ; row.word_4
+    ///   7c274: cmp  %cx,%dx            ; == action?
+    ///   7c277: je   7c284              ;   no  -> sub_7C710, NO BUMP
+    ///   7c284: cmpl $0x0,0xa(%eax)     ; row.dword_10
+    ///   7c288: je   7c299              ;   0   -> NO BUMP
+    ///   7c28a: call *0x6(%eax)         ; row.address_6 (the handler)
+    ///   7c28e: mov  0x3e(%ebx),%ch
+    ///   7c291: inc  %ch
+    ///   7c296: mov  %ch,0x3e(%ebx)     ; THE BUMP
+    /// ```
+    ///
+    /// The shipped tables give the null rows verbatim — class 5 0xEA
+    /// `{0x002A5C30, 0x00EA, 0x00000000, 0x00000000}` (EF:1479) and
+    /// class 10 0x52/0x54 `{0x002A5C44, 0x0052/0x0054, 0, 0}`
+    /// (EF:1686/1688) — so those entities HOLD their phase byte for
+    /// life. Measured on the mc2l24 recording: (5,27) act 0xEA is +0
+    /// on 1,591,335 of 1,591,470 consecutive-tick pairs; (10,75) act
+    /// 0x52 is +0 on 28,006 of 28,006; (10,77) act 0x54 on 49,875 of
+    /// 49,883. Calling that a capture tear hid 82% of mc2l24's
+    /// exclusions on ONE species.
+    #[test]
+    fn mc2_a_null_dispatch_row_holds_its_phase_byte_and_is_not_torn() {
+        let hold = |class: u8, action: u8| {
+            let mut a = RetailEntMc2 { class3f: class, model40: 27, action45: action, phase3e: 77, ..Default::default() };
+            a.model40 = if class == 5 { 27 } else { 77 };
+            let b = a;
+            slot_is_torn(&a, &b)
+        };
+        // The m27 tier-2 spline segment and both fire-sphere satellites.
+        assert!(!hold(5, 0xEA));
+        assert!(!hold(10, 0x52));
+        assert!(!hold(10, 0x54));
+        // The m27 BRANCH is a null row too, but `sub_29A90` (EF:19827)
+        // bumps it out of band every tick, so a HELD branch IS a tear.
+        assert!(hold(5, 0xE9));
+        // A dispatched row that held is a tear, as before.
+        assert!(hold(5, 0xD9));
+        assert!(hold(10, 0x00));
+    }
+
+    /// The same pair under `MGC_TEAR_LEGACY=1` is torn — the kill
+    /// switch's POSITIVE CONTROL, asserted through the same function
+    /// the gate calls (the env read is a `OnceLock`, so this test
+    /// drives `mc2_no_bump_action` directly rather than racing it).
+    #[test]
+    fn mc2_the_legacy_tear_test_is_the_bare_plus_one() {
+        // The law's whole content: which (class, action) rows are
+        // no-bump. Legacy answers "none of them".
+        assert!(mc2_no_bump_action(5, 0xEA));
+        assert!(mc2_no_bump_action(10, 0x52));
+        assert!(mc2_no_bump_action(10, 0x54));
+        assert!(!mc2_no_bump_action(5, 0xE9));
+        assert!(!mc2_no_bump_action(9, 0x0E));
+        // Class 5's dispatched span either side of the null block.
+        assert!(!mc2_no_bump_action(5, 0x27));
+        assert!(mc2_no_bump_action(5, 0x28));
+        assert!(mc2_no_bump_action(5, 0x47));
+        assert!(!mc2_no_bump_action(5, 0x48));
+    }
+
+    /// ⭐⭐⭐ A REBIRTH'S PHASE BYTE IS ITS OWN SLOT INDEX — the EXACT
+    /// witness, where the life-rose/out-of-range pair below are only
+    /// heuristics. `NewEvent_4A050` (shipped `NETHERW.EXE` file
+    /// 0x6E850) divides `record − pool_base` by the 0xA8 stride
+    /// (`6e91f: be a8 00 00 00` / `6e927: f7 fe`) and stores the low
+    /// byte of the quotient: `6e976: 88 43 3e  mov [ebx+0x3e],al`.
+    /// ⛔ It is NOT `array_0x10[model]++` — that is the class-5
+    /// creature ctor's counter and governs none of these families.
+    /// Cross-tabbed over the whole of mc2l22, the slot-index test
+    /// confirms 12,471 pairs the round-149 heuristics missed ((9,9)
+    /// 7,903 · (9,13) 2,762 · (9,0) 1,711 · (10,11) 94) and takes the
+    /// gate's leftover from 12,472 slot-exclusions to ONE.
+    /// ⚠ REVERSION PROBE: `MGC_TEAR_NO_SLOT_SEED=1` disarms the clause
+    /// and the first two asserts below fail.
+    #[test]
+    fn mc2_a_reborn_slot_carries_its_own_slot_index_as_its_phase() {
+        let spark = |ph: u8, life: i32| RetailEntMc2 {
+            class3f: 9,
+            model40: 9,
+            action45: 0x0E,
+            phase3e: ph,
+            life,
+            ..Default::default()
+        };
+        // mc2l22's residue shape: |d| <= 2 AND life still falling —
+        // invisible to both round-149 clauses — but the new phase IS
+        // the slot's own index, so the record was re-minted here.
+        // (slot 934 seeds 934 & 0xFF = 166; d = -1 is inside the
+        // tear-reachable set, so ONLY this clause can acquit it.)
+        assert!(!slot_is_torn_at(934, &spark(167, -2), &spark(166, -3)));
+        // …and one past it, for a newborn minted above the walk
+        // cursor that then took its own dispatch (mc2l16 t=7903).
+        assert!(!slot_is_torn_at(934, &spark(168, -2), &spark(167, -3)));
+        // A phase that is NOT this slot's seed stays a tear.
+        assert!(slot_is_torn_at(934, &spark(169, -2), &spark(168, -3)));
+        // …and the clause is per-SLOT: the same bytes at slot 935 are
+        // still a tear, which is what makes it an exact witness rather
+        // than another blanket exclusion.
+        assert!(slot_is_torn_at(935, &spark(167, -2), &spark(166, -3)));
+    }
+
+    /// ⭐ A REBIRTH IS NOT A TEAR. Retail's `life_0x8` counts DOWN in
+    /// the handler (class 9 action 0x0E is `sub_67410`//248410, four
+    /// instructions: `life--; if (old < 0) retire`), so a life that
+    /// ROSE across the pair is a slot that was freed and re-allocated
+    /// inside the interval and re-seeded from the per-model spawn
+    /// ordinal `D41A0_0.array_0x10[model]++` (EF:20780). Measured on
+    /// the whole mc2l24 recording for the (9,9) spark: EVERY one of
+    /// the 278,523 `+1` pairs has life FALLING, and 179,457 of the
+    /// 180,248 non-`+1` pairs have life RISING. Excluding them cost
+    /// 169,271 unshadowed slot-boundaries on mc2l24 alone.
+    #[test]
+    fn mc2_a_reborn_slot_is_a_new_instance_not_a_capture_tear() {
+        let spark = |ph: u8, life: i32| RetailEntMc2 {
+            class3f: 9,
+            model40: 9,
+            action45: 0x0E,
+            phase3e: ph,
+            life,
+            ..Default::default()
+        };
+        // The mc2l24 slot-296 receipt: phase 41 → 40 while life goes
+        // −2 → −1. A countdown cannot rise; the slot was re-allocated.
+        assert!(!slot_is_torn(&spark(41, -2), &spark(40, -1)));
+        // The same phase move with life still FALLING is a real tear.
+        assert!(slot_is_torn(&spark(41, -2), &spark(40, -3)));
+        // The ordinary dispatched pair is never torn.
+        assert!(!slot_is_torn(&spark(41, 5), &spark(42, 4)));
+        // A delta no tear can reach (mc2l24's (10,0) −10 family) is a
+        // re-seed even with life falling.
+        let mine = |ph: u8, life: i32| RetailEntMc2 {
+            class3f: 10,
+            model40: 0,
+            action45: 0x00,
+            phase3e: ph,
+            life,
+            ..Default::default()
+        };
+        assert!(!slot_is_torn(&mine(60, 9), &mine(50, 8)));
+        // …but −1 / 0 / +2 stay inside the tear-reachable set.
+        assert!(slot_is_torn(&mine(60, 9), &mine(59, 8)));
+        assert!(slot_is_torn(&mine(60, 9), &mine(62, 8)));
     }
 }

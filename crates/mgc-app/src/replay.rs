@@ -873,6 +873,7 @@ impl ReplayDriver {
             fire_left: rp.fire_left,
             fire_right: rp.fire_right,
             mc2_select: rp.mc2_select,
+            spell_ring: rp.spell_ring,
             respawn: rp.respawn,
             demolish: rp.demolish,
             cheat: rp.cheat,

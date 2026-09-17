@@ -1493,6 +1493,20 @@ impl World {
         out
     }
 
+    /// `init-check`'s CARRIED-SAVE seat: the human's book PROGRESS
+    /// (`levels` / `xp_bank` / `ring`) as the take's record 0 holds it.
+    /// A native build knows which spells the book holds (the
+    /// instrument grants the MODELS off record 0) but not what the
+    /// save had earned in them, so those three wiz-0 lanes fired on
+    /// nearly every take and buried the one row that was not theirs
+    /// (round 147's harness debt). Instrument-only: no sim path calls
+    /// it, and it re-derives nothing — the values are retail's own.
+    pub fn mc2_seed_book_progress(&mut self, levels: [u8; 26], xp_bank: [i32; 26], ring: [u8; 26]) {
+        self.mc2_book.levels = levels;
+        self.mc2_book.xp_bank = xp_bank;
+        self.mc2_book.ring = ring;
+    }
+
     /// Every MC2 wizard's ungraded player-block/brain lanes, retail
     /// convention — the twin of [`Self::wiz_shadow_mc1`] and the arm
     /// the harness never had. Wiz 0 is the human's book + charge; each
@@ -1877,6 +1891,7 @@ impl World {
         let wind_node = c == 10 && m == 75 && c10_field_home();
         let ramp2c = m27
             || (c == 5 && matches!(m, 21 | 22 | 23))
+            || (c == 5 && m == 0 && !crate::mc2::mobs::no_mc2_m0_2c_home())
             || (c == 14 && m == 2)
             || (c == 2 && matches!(m, 7 | 8));
         // The doomsday-release life latch: sv2 (relocated to site_z)
@@ -1947,7 +1962,16 @@ impl World {
             ("flags", None),
             (
                 "flags.b0_walk1",
-                if c == 3 && m == 3 { bit(0) } else { None },
+                // The (14,3)/(14,4) ending markers joined 2026-09-17:
+                // their byte[0] bit 0 is retail's PRE-HIDE, set by
+                // `sub_51570`/`sub_515C0` and cleared by the ending
+                // trip — the only lane that witnesses the marker law
+                // (see [`World::mc2_spawn_class14`]).
+                if (c == 3 && m == 3) || (c == 14 && matches!(m, 3 | 4)) {
+                    bit(0)
+                } else {
+                    None
+                },
             ),
             ("flags.b0_done2", bit(1)),
             ("flags.b0_link4", bit(2)),
@@ -1973,6 +1997,33 @@ impl World {
                 "scratch10",
                 if piece {
                     some(e.f44 as i64)
+                } else if c == 10
+                    && matches!(m, 18 | 91)
+                    && !crate::engine::features::no_mc2_summit_arc_wide()
+                {
+                    // ⭐ THE TWO SUMMIT CONTROLLERS' @0x10 IS A 32-BIT
+                    // ARC COUNTER THAT REALLY OVERFLOWS AN i16 — retail
+                    // 79,064 on mc2l24-crazy where the port's `f26` sat
+                    // on 32,767. `Ent::summit10` is its wide home; see
+                    // [`crate::engine::features::no_mc2_summit_arc_wide`].
+                    some(e.summit10.0 as i64)
+                } else if (c == 10 && matches!(m, 54 | 69))
+                    || (c == 9 && m == 17 && !crate::mc2::cast::no_posses_reach_root())
+                {
+                    // The aura's @0x10 is retail's 32-bit SQUARED reach
+                    // `(k << 8)²`; the port homes the TILE radius `k`
+                    // in `f26` (the importer takes the root — see the
+                    // `(10, 54 | 69)` import arm). The LEVELED
+                    // POSSESSION bolt `(9,17)` joined 2026-09-17: same
+                    // encoding, same reason (`sub_69640` EF:56329 —
+                    // `(token->subSpellIndex << 8)²`, 14,745,600 on the
+                    // corpus, which an i16 `f26` truncates to 0). See
+                    // [`crate::mc2::cast::no_posses_reach_root`].
+                    // Publish it in
+                    // retail's encoding: compared raw, every aura read
+                    // "268435456 vs 64" (round 147's init census, 5
+                    // rows on 3 takes) — an encoding, not a defect.
+                    some(((e.f26 as i64) << 8) * ((e.f26 as i64) << 8))
                 } else if c == 5 && !devil5 && !crate::engine::features::no_summon_lease_field() {
                     // ⭐ DIG 98-Q20 — WITH THE SECOND FIELD BOTH RETAIL
                     // WORDS ARE PUBLISHABLE AT ONCE. Class 5's `f26` is
@@ -2016,7 +2067,13 @@ impl World {
             (
                 "yaw",
                 if c == 15 {
-                    some(0) // f30 holds @0x2A there; retail yaw dead 0
+                    // f30 holds @0x2A on class 15, so @0x1C lives in
+                    // `f46` here (see `import_ent_mc2`). This lane used
+                    // to publish a hard `some(0)` on the claim "retail
+                    // yaw dead 0" — REFUTED by the free run: the
+                    // detached jar carries the caster's yaw
+                    // (`sub_59DC0`), 130k+ rows over 10 takes.
+                    some(e.f46 as i16 as i64)
                 } else {
                     some(if piece { e.f34 } else { e.f30 } as i16 as i64)
                 },
@@ -2131,9 +2188,22 @@ impl World {
                     }
                 } else if sphere
                     || (c == 10 && m == 45)
+                    || (c == 10 && m == 78 && mc2_mine_f2e_lane())
                     || (c == 3 && matches!(m, 0 | 1))
                     || orb_breathe_at_3d(c, m)
                 {
+                    // ⭐⭐ THE (10,78) MAGIC MINE WAS THE HOLE IN THIS
+                    // LIST. `import_ent_mc2`'s `f46` arm seats
+                    // `r.b3d` for `(10, 45 | 78)` ALIKE — the mine's
+                    // `@0x3D` burst shot counter — and the `b3d` arm
+                    // below publishes `e.f46` for it, but this arm
+                    // named only 45, so `f2e` ALSO published `f46`
+                    // and every mine read `retail 0 / port 1` against
+                    // retail's untouched `@0x2E` (`sub_50840`, the
+                    // mine ctor, writes `fontTypeIndex_0x3D_61 = 1`
+                    // and never touches `word_0x2E_46`). Census:
+                    // 84,570 rows over 3 takes, e.g. mc2l6-rsg
+                    // t=13051 slot 775 and mc2l24 t=27614 slot 778.
                     None // f46 repurposed (z-vel from @0x2C / @0x3D link)
                 } else {
                     some(e.f46 as i64)
@@ -2271,6 +2341,16 @@ impl World {
                 "sv_timer",
                 if pyramid {
                     some(e.f50 as i64)
+                } else if c == 15
+                    && held.is_none()
+                    && !crate::engine::features::no_mc2_jar_hand_hint_seat()
+                {
+                    // The stolen-jar HAND HINT (`word_0x4A_74`) — on an
+                    // UNHELD class-15 record @0x4A is the hint's home
+                    // and `f36` is the port's (`import_ent_mc2`'s twin
+                    // arm seats it under the same `sv1 == 0` test). See
+                    // [`crate::engine::features::no_mc2_jar_hand_hint_seat`].
+                    some(e.f36 as i64)
                 } else {
                     held.map(|h| h.timer as i64)
                 },
@@ -2583,6 +2663,11 @@ impl World {
     /// the free stack, seed the globals and the human column, clear
     /// the cross-pair latches.
     pub fn retail_import_mc2(&mut self, st: &RetailMc2) -> Result<ImportReport, String> {
+        // A SEEDED world is not a fresh level load: disarm the load's
+        // last `sub_49F90` (see `no_mc2_load_free_rebuild`), which
+        // retail ran long before the tick this closure was captured at.
+        // The recorded stacks below ARE retail's ranking.
+        self.mc2_load_rebuild = 0;
         self.strict_retail = true;
         self.patches = crate::patches::WorldPatches::RETAIL;
         let local = st.local_player as usize;
@@ -2609,6 +2694,14 @@ impl World {
         self.human_pose_prev = self.human_pose;
         self.human_yaw = carpet.yaw as u16;
         self.human_yaw_prev = self.human_yaw;
+        // ⭐ THE CARPET'S TARGET-YAW WORD @0x20, which the port has no
+        // other source for: nothing in the port writes it (only
+        // retail's wizard DEATH SPIN does, and the value then sits
+        // frozen for the rest of the life), yet `sub_1E4D0` copies it
+        // into every metamorph puppet the human casts. See
+        // [`crate::engine::features::Gen::human_roll_0x20`] and
+        // [`crate::engine::features::no_mc2_human_puppet_roll`].
+        self.g.human_roll_0x20 = crate::engine::features::HashSilent(carpet.roll as u16);
         // The flight COMMAND register the speed token reads for its
         // direction (`World::mc2_cmd_speed`). A pinned-pose pair never
         // runs a driven tick, so this seed is its only source.
@@ -3457,6 +3550,14 @@ impl World {
                         life_regen: p.life_regen,
                         knock_dir: p.knock_dir,
                         knock_mag: p.knock_mag,
+                        // The duel lock — the lane round 148 named as
+                        // the reason no pair fixture could be cut in
+                        // the mc2l6-rsg duel window. `tr` maps a lock
+                        // on the carpet onto the port's out-of-pool
+                        // `PLAYER_TARGET`, exactly like `target96`.
+                        duel_target: tr(p.duel_target),
+                        duel_hold: p.duel_hold,
+                        duel_tier: p.duel_tier.min(2) as u8,
                     };
                     let book = crate::mc2::cast::Mc2Spellbook {
                         ent: p.spell_ent,
@@ -3592,6 +3693,36 @@ impl World {
         // Type_160 tail; without this a free-running replay anchored
         // mid-buffet starts with a silently empty channel.
         self.g.player_knock = (ply.knock_dir, ply.knock_mag);
+
+        // ⭐⭐⭐ THE MC2 HUMAN'S BRAKE WORD (`word_0xe_14`, Type_160
+        // +14) — THE SAME SEAT THE MC1 ARM ALREADY HAS, 2,400 LINES
+        // UP (`self.mc1_v14 = wiz.v14 != 0`). MC2 decoded the word all
+        // along (`RetailPlayerMc2::brake`, `mgcr.rs` `t + 14`; the
+        // rival column rides it as `Mc2Rival.v14`) but the HUMAN's
+        // seat was missing, so every MC2 pair ran its speed token
+        // against whatever the port's own previous tick had computed.
+        // It is read BELOW the carpet — the speed token's slot (mc2l16
+        // 285) sits under the carpet's (303) — so the post-tick
+        // capture at N is exactly what the token reads during pair
+        // N→N+1, the MC1 comment's argument verbatim.
+        //
+        // `sub_69DB0` (EF:56540, banner 00069DB0 at EF:56539) opens
+        // its effect body at EF:56567
+        // `if (!sub_68D50(a1x, v1x) || v1x->wizext->word_0xe_14)
+        //     { if (word_0xe_14) word_0x2E_46 = 1; } else { … }`,
+        // and BOTH the spell-3 XP award (EF:56594, shipped
+        // `NETHERW.EXE` file 0x8E6D5 `push $0x1` / 0x8E6D9 `push $0x3`
+        // / 0x8E6E0 `call 0x920b0`, itself under the FIRST-TICK test
+        // 0x8E6C5 `mov 0x2e(%ebx),%ax` / `cmp %dx,%ax` / `jne`) and
+        // the boost write live in that `else` — so a braked tick kills the window and pays
+        // nothing. mc2l16 t=9693/9708/9713 are three re-casts with
+        // retail `brake=1`: retail's counter goes 301 → 0 the next
+        // tick with no award, the port (reading a stale `false`)
+        // credited `xp_vol[3]` and flew the burst.
+        // `MGC_NO_MC2_BRAKE_SEAT=1` restores the unseeded pair.
+        if std::env::var_os("MGC_NO_MC2_BRAKE_SEAT").is_none() {
+            self.mc1_v14 = ply.brake != 0;
+        }
 
         // The human's str_611 spellbook: manifestation slots, XP,
         // and tier state live in the per-player block and mutate at
@@ -4460,6 +4591,18 @@ pub(crate) fn c10_field_home() -> bool {
 /// (the lane table feeds `dump-state`, `explain` and the
 /// `MGC_RAW_SHADOW` census, never `obs_project_mc2`). See the read
 /// site in [`World::port_ent_lanes_mc2`].
+/// A/B toggle for the (10,78) MAGIC MINE's `f2e` lane: set
+/// `MGC_NO_MC2_MINE_F2E_LANE` to restore the pre-dig behaviour, where
+/// `port_ent_lanes_mc2` published the mine's `f46` — which
+/// `import_ent_mc2` seats from `b3d` (`@0x3D`, the burst shot counter),
+/// NOT from `@0x2E` — on the `f2e` lane as well as on `b3d`.
+/// INSTRUMENT-ONLY, exactly like [`mc2_piece_target96_lane`]. See the
+/// read site in [`World::port_ent_lanes_mc2`].
+pub(crate) fn mc2_mine_f2e_lane() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MINE_F2E_LANE").is_none())
+}
+
 pub(crate) fn mc2_piece_target96_lane() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PIECE_TARGET96_LANE").is_none())
@@ -4578,7 +4721,8 @@ pub(crate) fn orb_breathe_at_3d(class: u8, model: u8) -> bool {
 /// siblings (whose spin rides `roll`) stepped correctly: the port's
 /// satellites froze one tumble step behind retail's and stayed there
 /// for the orb's whole life. Measured on mc2l22 under
-/// `MGC_TEAR_PHASE_LAW=1 MGC_TEAR_NO_BUMP_C10=1`: 76,300 slot-ticks
+/// the widened tear gate (then `MGC_TEAR_PHASE_LAW=1
+/// MGC_TEAR_NO_BUMP_C10=1`; round 149 made it the DEFAULT): 76,300 slot-ticks
 /// across 1,287 ticks and 387 slots, `pitch` off by EXACTLY the orb's
 /// own spin (e.g. the t=47851 orb, slots 135/445/789/…, delta 111 on
 /// every tick of its life) and x/y/z off with it. ON/OFF on one
@@ -4592,6 +4736,9 @@ pub(crate) fn orb_breathe_at_3d(class: u8, model: u8) -> bool {
 /// censuses are the SAME 3,919 rows row for row, so
 /// `MGC_TEAR_NO_BUMP_C10` is now free to arm on mc2l22 — the wall
 /// `mc2_no_bump_action`'s comment warned about was this one law.
+/// ⭐ ROUND 149 CONFIRMED IT ON THE WHOLE TAKE and armed the gate by
+/// default: mc2l22's raw shadow is 1,307 mismatches with the class-10
+/// half armed and 1,307 without, for 95,380 fewer exclusions.
 /// ⭐⭐⭐ AN UNREADABLE FIELD IS NOT A CLEARED FIELD — when the
 /// recording says an objective row is BOUND but `mgcr::mc2_pool_base`
 /// could not convert its guest pointer (both allocator stacks empty
@@ -5222,8 +5369,21 @@ pub(crate) fn import_ent_mc2(
     // seat (mc2l22 t=1: head @0x2A retail 110 / port 99, segment
     // 346 @0x2C retail 160 / port 149, x 568 / 555; ALL 53,813 dirty
     // pairs of the take carry this (5,22) x/y family).
+    // The (5,0) WORM/HYDRA HEAD is tenant eight: `word_0x2C_44` is its
+    // DODGE STEP TIMER (`sub_1F0C0`, banner EF:11274 — the strafe step
+    // is `48 * word_0x2C_44` at EF:11313, decremented at EF:11315 and
+    // re-armed to 5 on a fresh hook at EF:11354), and the port homes
+    // it in f44 (mc2/multipart.rs header). Its ctor `sub_4B240`
+    // (banner EF:33693) writes `word_0x2C_44 = 0` at EF:33737 and
+    // never touches
+    // `subSpellIndex_0x2A_42`, which keeps NewEvent's 100 — so the
+    // uniform @0x2A home imported 100 as the dodge timer and published
+    // the port's timer on the `f2a` lane.
     let ramp2c = m27
         || (r.class3f == 5 && matches!(r.model40, 21 | 22 | 23))
+        || (r.class3f == 5
+            && r.model40 == 0
+            && !crate::mc2::mobs::no_mc2_m0_2c_home())
         || (r.class3f == 14 && r.model40 == 2)
         || (r.class3f == 2 && matches!(r.model40, 7 | 8));
     let mut e = Ent {
@@ -5236,6 +5396,21 @@ pub(crate) fn import_ent_mc2(
         lease2e: crate::engine::features::Lease2e(r.f2e),
         // MC1-only lane (the ungated `sub_14E60` token read).
         raw48: crate::engine::features::Raw48(0),
+        morph_cry: crate::engine::features::MorphCry(0),
+        // ⭐ THE SUMMIT CONTROLLERS' WIDE @0x10. `f26` below keeps its
+        // class-wide `as i16` seat (which TRUNCATES retail's 72,620 to
+        // 7,084); the two models whose arc counter runs past an i16
+        // carry the exact word here. Every gate in `sub_32A70` reads
+        // `> 2500` / `< 128` / `== 0` up there, so this changes no
+        // behaviour — only the `scratch10` lane. See
+        // [`crate::engine::features::no_mc2_summit_arc_wide`].
+        summit10: crate::engine::features::Summit10(
+            if r.class3f == 10 && matches!(r.model40, 18 | 91) {
+                r.scratch10
+            } else {
+                0
+            },
+        ),
         rand: r.rand as u32,
         // Bit-preserving: retail's lightning trail stamps a node's
         // maxLife to -1 (sub_66750 EF:58336-43) and the port's own
@@ -5318,6 +5493,13 @@ pub(crate) fn import_ent_mc2(
             // i16 can reach 32767, and `mc2_aura_tick`'s `r * r` on
             // `(32767 << 8)²` panics in a debug build.
             (10, 54 | 69) => {
+                (crate::engine::features::Gen::isqrt(r.scratch10.max(0) as u32) >> 8) as i16
+            }
+            // The LEVELED POSSESSION bolt carries the SAME `(k << 8)²`
+            // encoding in @0x10 (`sub_69640` EF:56329) and the same
+            // i16 home, so it inverts the same way. See
+            // [`crate::mc2::cast::no_posses_reach_root`].
+            (9, 17) if !crate::mc2::cast::no_posses_reach_root() => {
                 (crate::engine::features::Gen::isqrt(r.scratch10.max(0) as u32) >> 8) as i16
             }
             // The m0 worm/hydra keeps its BOB VELOCITY in @0x10
@@ -5724,10 +5906,35 @@ pub(crate) fn import_ent_mc2(
         e.f30 = r.f2a;
         e.f44 = r.f2c as u16;
         e.f54 = r.f36;
+        // …and the STOLEN-JAR HAND HINT `word_0x4A_74` (@0x4A =
+        // `sv_timer`) → `f36`, the port's own home for it
+        // ([`Gen::mc2_spell_steal`]). `sv1 == 0` is the STAGEVAR-HOLD
+        // exclusion, mirrored in `port_ent_lanes_mc2`'s twin arm: a
+        // held record's @0x4A is the hold's countdown
+        // (`Mc2Held::timer`), and only an UNHELD one has @0x4A free
+        // for the hint. See
+        // [`crate::engine::features::no_mc2_jar_hand_hint_seat`].
+        if r.sv1 == 0 && !crate::engine::features::no_mc2_jar_hand_hint_seat() {
+            e.f36 = r.sv_timer as u16;
+        }
         e.f59 = r.b3b as u8;
         e.f136 = r.d88;
         e.max_life = r.mana_max.max(0) as u32;
-        e.f46 = 0;
+        // ⭐ @0x1C (the UNIFORM YAW) IS NOT DEAD ON CLASS 15 — it is
+        // simply homeless there, because `f30` was handed to @0x2A. It
+        // goes live on the DETACHED jar: `sub_59DC0` (banner
+        // `//----- (00059DC0)`) opens its rising leg with
+        // `a1x->yaw_0x1C_28 = v1x->yaw_0x1C_28` off the parent. The
+        // `yaw` lane used to publish a hard `some(0)` for class 15, so
+        // no instrument could see it. Seat it on `f46`, which is dead
+        // for class 15 (the `f2e` lane reads `f26` here, and `f2a`/
+        // `f2c` only borrow `f46` on the worm / pyramid / sphere /
+        // castle families). See [`World::no_mc2_stolen_arc_yaw`].
+        e.f46 = if crate::mc2::cast::no_mc2_stolen_arc_yaw() {
+            0
+        } else {
+            r.yaw
+        };
         e.f50 = 0;
         e.f56 = 0;
         // The DETACHED spell-jar (action 78) — the m26-wraith steal's
@@ -5735,8 +5942,9 @@ pub(crate) fn import_ent_mc2(
         // dormant-manifestation homes above. Its arc runs off DIFFERENT
         // fields: the arc counter `dword_0x10_16` (@0x10 = scratch10,
         // steps 0..5 rising then homing) → f26, and the wraith slot
-        // `word_0x26_38` (@0x26) → f38 (`Entities[word_0x26_38]` is the
-        // homing target, EF:41224). `sub_69300` (EF:55807) zeroes @0x10
+        // `word_0x26_38` (@0x26) → **f40** (`Entities[word_0x26_38]` is
+        // the homing target, EF:41224) — the home the GENERIC seat
+        // above already fills. `sub_69300` (EF:55807) zeroes @0x10
         // at the steal; the parent (@0x28 = the caster/player) drives the
         // rising leg. Without these homes `mc2_stolen_arc` read the armed
         // timer as the counter (n≫5 → straight to the homing branch),
@@ -5754,7 +5962,15 @@ pub(crate) fn import_ent_mc2(
             } else {
                 e.f50 = r.scratch10 as i16;
             }
-            e.f38 = tr(r.f26 as u16);
+            // ⚠ The line that used to stand here — `e.f38 =
+            // tr(r.f26 as u16)` — was a leftover from the OLD wraith
+            // home and clobbered `@0x24` with `@0x26`. Both words are
+            // already seated by the generic arms above (`f38:
+            // tr(r.f24)`, `f40: tr(r.f26)`). See
+            // [`crate::mc2::cast::no_mc2_arc_keeps_killer_latch`].
+            if crate::mc2::cast::no_mc2_arc_keeps_killer_latch() {
+                e.f38 = tr(r.f26 as u16);
+            }
         }
     }
     // Class-10 fires keep the area amount in `subSpellIndex_0x2A`
@@ -6306,6 +6522,10 @@ fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
         // owned-token slot. `f26` above only homes it while the record
         // is still a class-12 manifestation.
         raw48: crate::engine::features::Raw48(r.f48),
+        // MC2-only lane (the two summit controllers' wide @0x10).
+        summit10: crate::engine::features::Summit10(0),
+        // Port-only sound cadence, not a retail word — see `MorphCry`.
+        morph_cry: crate::engine::features::MorphCry(0),
         rand: r.rand,
         max_life: r.max_life,
         act_life: r.act_life,
@@ -6774,6 +6994,38 @@ mod tests {
         assert_eq!(e.site_z, 1760);
     }
 
+    /// ⭐ THE STOLEN-JAR HAND HINT `word_0x4A_74` (@0x4A = `sv_timer`)
+    /// is a CLASS-15 home the uniform map has no seat for. Retail's
+    /// re-collect (`sub_68FF0`, shipped bytes at `NETHERW.EXE` file
+    /// 0x8D96B) reads it BEFORE the left/right quick-slot fallback: 1
+    /// re-equips the RIGHT hand, 2 the LEFT. The port keeps the hint in
+    /// `Ent::f36` ([`Gen::mc2_spell_steal`]), and the importer used to
+    /// leave that at 0, so an imported mid-theft jar re-equipped by the
+    /// fallback instead of the remembered hand (mc2l5 pair t=2018 and
+    /// t=2714, `hand_left`/`hand_right` exchanged).
+    ///
+    /// POSITIVE CONTROL: a hint of 0 must import as 0 — that is the
+    /// fresh-jar case, and seating garbage there would swap the
+    /// fallback's hand instead.
+    /// REVERSION: under `MGC_NO_MC2_JAR_HAND_HINT_SEAT=1` the `1`/`2`
+    /// arms read back 0 and this test FAILS — asserted unconditionally
+    /// on purpose, so the switch is a real pre-fix binary.
+    #[test]
+    fn mc2_class15_jar_hand_hint_import_home() {
+        for hint in [0i16, 1, 2] {
+            let r = RetailEntMc2 {
+                class3f: 15,
+                model40: 1,
+                action45: 4, // the ground-jar state 3M+1 for model 1
+                sv_timer: hint,
+                ..Default::default()
+            };
+            let e = import_ent_mc2(&r, 79, 79, &|v| v);
+            assert_eq!(e.class64, 15);
+            assert_eq!(e.f36, hint as u16, "the hand hint @0x4A -> f36 (hint={hint})");
+        }
+    }
+
     /// ⭐⭐ **THE LANE TABLE'S `piece` LIST HAD A HOLE, AND IT WAS THE
     /// ONE DIVERTED LANE NOBODY CHECKED.** `import_ent_mc2` seats a
     /// (10,79) defender piece's `@0x96` into **`f28`** (the test above
@@ -6955,6 +7207,128 @@ mod tests {
             "devil f44 = the @0x2C jump impulse, not the dead @0x2A"
         );
         assert_eq!(e.f26, 12, "devil f26 = the @0x44 rest countdown");
+    }
+
+    /// The (5,0) WORM/HYDRA HEAD is a `ramp2c` tenant (round 147, dig
+    /// w147f; [`crate::mc2::mobs::no_mc2_m0_2c_home`]). The head's f44
+    /// IS `word_0x2C_44`, its DODGE STEP TIMER — `sub_1F0C0` strafes
+    /// `48 * word_0x2C_44` and decrements it (EF:11313/11315),
+    /// re-arming to 5 on a fresh hook (EF:11354); the ctor `sub_4B240`
+    /// (banner EF:33693) writes `word_0x2C_44 = 0` (EF:33737) and
+    /// leaves `subSpellIndex_0x2A_42` at NewEvent's 100. With the old
+    /// uniform @0x2A membership `import_ent_mc2` seeded every replayed
+    /// head's dodge timer from @0x2A (100 = a 4,800-unit strafe step)
+    /// and `port_ent_lanes_mc2` published the timer on the `f2a` lane
+    /// (1,054 init-check rows over 12 takes; 125 pair rows on mc2l4
+    /// from t=2591).
+    ///
+    /// ⭐ THE MEMBERSHIP HAS TWO HALVES AND BOTH ARE ASSERTED: the
+    /// importer's word CHOICE and the lane table's PUBLICATION seat.
+    /// Reverting either alone leaves the round trip inconsistent.
+    ///
+    /// Non-vacuous: with `MGC_NO_MC2_M0_2C_HOME=1` the import reads
+    /// f44 = 100 (the dead @0x2A) and the lanes publish the timer as
+    /// `f2a` with `f2c` empty — every assert below parts.
+    #[test]
+    fn mc2_m0_head_takes_the_dodge_timer_from_2c() {
+        // The IMPORT half: @0x2A is the dead NewEvent 100, @0x2C the
+        // live dodge step count.
+        let r = RetailEntMc2 {
+            class3f: 5,
+            model40: 0,
+            f2a: 100, // NewEvent's default — must NOT reach f44
+            f2c: 7,   // @0x2C — the live dodge step timer
+            ..Default::default()
+        };
+        let e = import_ent_mc2(&r, 240, 0, &|v| v);
+        assert_eq!(
+            e.f44, 7,
+            "(5,0) f44 = the @0x2C dodge timer, not the dead @0x2A"
+        );
+
+        // …and a (5,19) sibling, which is NOT in the `ramp2c` set,
+        // still takes @0x2A — so the arm above is about model 0 and
+        // not about the whole family moving.
+        let sib = RetailEntMc2 {
+            class3f: 5,
+            model40: 19,
+            f2a: 100,
+            f2c: 7,
+            ..Default::default()
+        };
+        assert_eq!(
+            import_ent_mc2(&sib, 240, 0, &|v| v).f44,
+            100,
+            "the (5,19) sibling keeps the uniform @0x2A home"
+        );
+
+        // The LANE half: a native (5,0) publishes its f44 on `f2c`,
+        // and leaves `f2a` unpublished (the word has no port home on a
+        // `ramp2c` tenant).
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|_| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                e.extend_from_slice(&[4, 4]);
+                e
+            })
+            .collect();
+        let mut dat = Vec::new();
+        for _ in 0..4 {
+            dat.push(4u8);
+            dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+            dat.push(0);
+        }
+        let fa = crate::engine::features::FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        let mut w = World::new_for_game(planes, &[], 1, fa, crate::ids::GameId::Mc2);
+        for (slot, model) in [(90usize, 0u8), (91, 19)] {
+            let e = &mut w.g.ent[slot];
+            *e = Ent::default();
+            e.class64 = 5;
+            e.model65 = model;
+            e.id24 = slot as u16;
+            e.max_life = 100;
+            e.act_life = 100;
+            e.f44 = 7;
+        }
+        let lane = |w: &World, slot: u16, name: &str| -> Option<i64> {
+            w.port_ent_lanes_mc2(slot, 424, false)
+                .expect("lanes")
+                .into_iter()
+                .find(|(n, _)| *n == name)
+                .and_then(|(_, v)| v)
+        };
+        assert_eq!(
+            lane(&w, 90, "f2c"),
+            Some(7),
+            "a (5,0) publishes its dodge timer on the @0x2C lane"
+        );
+        assert_eq!(
+            lane(&w, 90, "f2a"),
+            None,
+            "…and publishes NOTHING on @0x2A — the word has no port home"
+        );
+        // POSITIVE CONTROL: the (5,19) sibling still publishes the
+        // uniform @0x2A seat, so the pair above is model 0's alone.
+        assert_eq!(
+            lane(&w, 91, "f2a"),
+            Some(7),
+            "the (5,19) sibling still publishes f44 on @0x2A"
+        );
     }
 
     /// The `owner` obs lane = retail parentId @0x28. The importer must

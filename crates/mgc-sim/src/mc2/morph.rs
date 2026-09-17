@@ -17,8 +17,10 @@
 //!   (EF:58228 — NOT an earthquake event, the open-closure trace §1).
 //!   The dome's own area beat DOES credit it (the `mc2_cast_xp` mail
 //!   push at the type-0 beat below, EF:23388-95); only the summit-rain
-//!   flood's row-18 XP — on the (10,91) apocalypse mana-rain child —
-//!   is still deferred, hits computed and dropped.
+//!   child's own row-18 AREA-BEAT credit — on the (10,91) apocalypse
+//!   mana-rain child — is still deferred, hits computed and dropped.
+//!   That child's 26-row `sub_6D8B0` FLOOD is a different call and IS
+//!   landed ([`no_mc2_rain_spell_xp`]).
 //! - The `life==3` children: (10,18) = the ground-vortex eruption
 //!   controller (`sub_32A70` — emits (10,16) tornadoes riding the
 //!   whirlwind driver, the (10,19) column + a (9,0) bolt on tick 0,
@@ -47,6 +49,49 @@ use crate::mc1::mobs::MobCtx;
 fn no_mc2_rain_arm() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RAIN_ARM").is_some())
+}
+
+/// A/B toggle for the APOCALYPSE RAIN'S 26-ROW SPELL-XP FLOOD
+/// (`sub_32CF0`'s second half, EF:24096-24112): set
+/// `MGC_NO_MC2_RAIN_SPELL_XP` to restore the pre-dig behaviour, where
+/// the summit spawned its three spheres and awarded nothing.
+///
+/// Retail closes `sub_32CF0` with, verbatim from the shipped
+/// `NETHERW.EXE` (file = VA + 0x24800; the loop is file
+/// 0x576DD..0x5772D, VA 0x32EDD..0x32F2D):
+/// ```text
+///   576dd  8b 45 14              mov    0x14(%ebp),%eax      ; the summit
+///   576e0  f6 40 3e 01           testb  $0x1,0x3e(%eax)      ; byte_0x3E_62 & 1
+///   576e4  75 49                 jne    0x5772f              ;   odd phase: nothing
+///   576e6  be 18 a8 00 00        mov    $0xa818,%esi         ; &SPELLS[0], stride 0x50
+///   576eb  31 db                 xor    %ebx,%ebx            ; spell = 0
+///   576ef  8b 46 42              mov    0x42(%esi),%eax      ; SPELLS[s].subspell[2].xpos1_E
+///   576f2  89 c2                 mov    %eax,%edx
+///   576f4  c1 fa 1f              sar    $0x1f,%edx           ; sign mask
+///   576f7  c1 e2 09              shl    $0x9,%edx            ; 0 / -512, CF = sign
+///   576fa  1b c2                 sbb    %edx,%eax            ; += 511 when negative
+///   576fc  c1 f8 09              sar    $0x9,%eax            ; => xpos1 / 512, toward 0
+///   576ff  50                    push   %eax                 ; amount
+///   5770f  53                    push   %ebx                 ; spell
+///   57710  66 8b 84 02 e8 2b …   mov    0x2be8(%edx,%eax,1),%ax  ; the LOCAL player's ent
+///   5771d  50                    push   %eax                 ; owner
+///   5771e  43                    inc    %ebx
+///   5771f  83 c6 50              add    $0x50,%esi
+///   57722  e8 89 a9 03 00        call   0x920b0              ; sub_6D8B0
+///   5772a  83 fb 1a              cmp    $0x1a,%ebx           ; 26 rows
+///   5772d  7c c0                 jl     0x576ef
+/// ```
+/// — i.e. on every EVEN `byte_0x3E_62` phase the rain pays the LOCAL
+/// player `SPELLS[s].tiers[2].xpos1 / 512` volatile XP on all 26 rows,
+/// owner-blind (the summit's own `id_0x1A_26` is never read) and
+/// life-blind. The `sbb` after `shl` is retail's idiom for C's
+/// truncate-toward-zero `/ 512`, which is Rust's `/` on `i32`.
+/// The decompile is EF:24096-24112 with the broken `__CFSHL__` carry
+/// macro spelled out by hand; the EXE above is the authority.
+/// See [`Gen::mc2_summit91_tick`].
+fn no_mc2_rain_spell_xp() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RAIN_SPELL_XP").is_some())
 }
 
 /// `x_WORD_727B0` (Maths:647-676), the Heron-sqrt seed table: entry n
@@ -101,6 +146,9 @@ impl Gen {
     /// sites (the latch is a World field).
     pub(crate) fn mc2_spawn_dome(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
+        // Retail's ctor makes NO store to +0x2C; this model's
+        // port `f44` is that word. See `Gen::mc2_alloc_2c_zero`.
+        self.mc2_alloc_2c_zero(i);
         {
             let e = &mut self.ent[i];
             e.class64 = 10;
@@ -360,12 +408,18 @@ impl Gen {
     /// RNG.
     pub(crate) fn mc2_spawn_summit18(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
+        // Retail's ctor makes NO store to +0x2C; this model's
+        // port `f44` is that word. See `Gen::mc2_alloc_2c_zero`.
+        self.mc2_alloc_2c_zero(i);
         let e = &mut self.ent[i];
         e.class64 = 10;
         e.model65 = 18;
         e.tick70 = 18;
         e.f140 = 200;
+        // `movl $0x0,0x10(%ebx)` (NETHERW.EXE file 0x736F9) — the arc
+        // counter is stored 32 bits wide; both homes start at 0.
         e.f26 = 0;
+        e.summit10 = crate::engine::features::Summit10(0);
         e.max_life = 10000;
         e.act_life = 10000;
         e.flags &= !8;
@@ -375,14 +429,38 @@ impl Gen {
         Some(i)
     }
 
-    /// `sub_4EF30` (EF:35797) — the (10,91) APOCALYPSE MANA-RAIN
-    /// controller ctor: action 98 (0x62), otherwise the model-18
-    /// numbers with byte[0] = (&0xF6)|1. No RNG.
+    /// `sub_4EF30` (address banner `0004EF30`, EF:35848) — the (10,91)
+    /// APOCALYPSE MANA-RAIN controller ctor: action 98 (0x62),
+    /// otherwise the model-18 numbers with byte[0] = (&0xF6)|1. No RNG.
+    ///
+    /// ⭐ IT SEEDS `subSpellIndex_0x2A_42 = 200` EXACTLY LIKE ITS
+    /// (10,18) SIBLING, and the port dropped it. Byte-verified in the
+    /// shipped `NETHERW.EXE` — file **0x73750**
+    /// `66 c7 40 2a c8 00  movw $0xc8,0x2a(%eax)`, the same six bytes
+    /// `sub_4EED0` has at file 0x736F0, sitting between
+    /// `movb $0x5b,0x40(%eax)` (model 91) and `movl $0x0,0x10(%ebx)`.
+    /// Model 91 is NOT a [`c10_2a_in_f140`] member, so the port's home
+    /// for its @0x2A is the uniform class-10 seat `f44` (which is what
+    /// `import_ent_mc2`'s `f44: … else { r.f2a }` already restores and
+    /// what `port_ent_lanes_mc2` publishes on the `f2a` lane) — and
+    /// [`Gen::mc2_alloc_2c_zero`], inherited from the model-18 ctor,
+    /// had left it at 0. WITNESS (free run, `MGC_RAW_SHADOW=1`):
+    /// `(10,91) f2a` retail **200** / port 0, 5,202 rows on
+    /// mc2l24-crazy slot 747 (t=73863..79064) and 1,218 on mc2l24 slot
+    /// 823 (t=52840..54057). Nothing in `sub_32CF0` spends it — the
+    /// rain bills its own `% 0xA00 + 1` roll per sphere — so the seat
+    /// is home-alignment, like (10,1)/(10,15)/(10,25).
     pub(crate) fn mc2_spawn_summit91(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.mc2_spawn_summit18(x, y, z)?;
         self.ent[i].model65 = 91;
         self.ent[i].tick70 = 98;
         self.ent[i].flags = (self.ent[i].flags & !0x9) | 1;
+        if !crate::engine::features::no_mc2_rain_2a_seed() {
+            // @0x2A = 200; model 91's port home for it is `f44`, not
+            // the model-18 sibling's `f140`.
+            self.ent[i].f44 = 200;
+            self.ent[i].f140 = 0;
+        }
         Some(i)
     }
 
@@ -413,7 +491,7 @@ impl Gen {
     /// importing the captured latch into `erupting` (conformance.rs,
     /// mgcr word_0x31).
     pub(crate) fn mc2_summit18_tick(&mut self, i: usize) {
-        if self.ent[i].f26 > 2500 {
+        if self.arc10(i) > 2500 {
             let r = self.ent_rand(i);
             if r % 0x64 == 0 && self.erupting == 0 {
                 let (x, y, z) = {
@@ -428,10 +506,10 @@ impl Gen {
                         return;
                     }
                 }
-                self.ent[i].f26 = 0;
+                self.set_arc10(i, 0);
             }
         }
-        let t = self.ent[i].f26;
+        let t = self.arc10(i);
         let pulse = (t < 128 && t & 0xF != 0 && self.ent_rand(i) % 5 == 0) || t == 0;
         if pulse {
             let (x, y, z, id) = {
@@ -453,7 +531,7 @@ impl Gen {
             if t == 0 {
                 let prev = self.erupting as usize;
                 if prev != 0 && self.ent[prev].flags & 0x400 == 0 {
-                    self.ent[prev].f26 = 250; // fast-expire the old vortex
+                    self.set_arc10(prev, 250); // fast-expire the old vortex
                 }
                 self.erupting = i as u16;
                 if let Some(col) = self.mc2_spawn_fire_spray(x, y, gz) {
@@ -490,8 +568,16 @@ impl Gen {
                 e.f69 = 17; // impact = the (10,17) meteor
                 e.act_life = 1;
                 e.f30 = byaw;
-                e.f34 = byaw;
-                e.f36 = e.f32;
+                // ⭐ NO @0x20 / @0x22 STORE IN `sub_32A70` EITHER —
+                // the (9,0) block writes yaw, pitch, b43, b44, life
+                // and the @0x9A vector and stops (shipped bytes on
+                // [`crate::mc2::cast::no_spawn_roll_absence`]). The
+                // corpus signature is the constant `port 1280` on the
+                // `(9,0) roll` lane: the vortex's own `yaw += 1280`.
+                if crate::mc2::cast::no_spawn_roll_absence() {
+                    e.f34 = byaw;
+                    e.f36 = e.f32;
+                }
                 e.dest_x = aim.0;
                 e.dest_y = aim.1;
                 e.site_z = aim_z;
@@ -509,9 +595,38 @@ impl Gen {
         // counting past 32767 (the self-latched controller never
         // restarts — the 1-in-100 roll is gated on the vortex register
         // it holds — so it idles until the endgame teardown, OPEN).
-        // Our i16 home would panic there; saturating is behaviorally
-        // identical since every gate reads > 2500, < 128, or == 0.
-        self.ent[i].f26 = self.ent[i].f26.saturating_add(1);
+        // [`Ent::summit10`] is that 32-bit home; `f26` keeps the
+        // saturating i16 mirror, which is behaviourally identical
+        // because every gate above reads `> 2500`, `< 128`, `& 0xF`
+        // (dead above 127), `== 0` or `>= 127`. See
+        // [`crate::engine::features::no_mc2_summit_arc_wide`].
+        let n = self.arc10(i).wrapping_add(1);
+        self.set_arc10(i, n);
+    }
+
+    /// Retail's `dword_0x10_16` on a SUMMIT CONTROLLER, read 32 bits
+    /// wide. See [`crate::engine::features::no_mc2_summit_arc_wide`].
+    #[inline]
+    pub(crate) fn arc10(&self, i: usize) -> i32 {
+        if crate::engine::features::no_mc2_summit_arc_wide() {
+            self.ent[i].f26 as i32
+        } else {
+            self.ent[i].summit10.0
+        }
+    }
+
+    /// Write retail's `dword_0x10_16` on a SUMMIT CONTROLLER: the wide
+    /// home takes the exact value and `f26` — the class-wide `i16`
+    /// home every other reader and every `import_ent_mc2` arm uses —
+    /// takes the saturating mirror.
+    #[inline]
+    pub(crate) fn set_arc10(&mut self, i: usize, v: i32) {
+        if !crate::engine::features::no_mc2_summit_arc_wide() {
+            self.ent[i].summit10 = crate::engine::features::Summit10(v);
+        }
+        // The pre-dig `saturating_add(1)` is exactly this clamp, so the
+        // `f26` half is byte-identical in both arms.
+        self.ent[i].f26 = v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
     }
 
     /// `sub_32CF0` (EF:24007, action 98) — the apocalypse MANA RAIN:
@@ -535,9 +650,9 @@ impl Gen {
     /// live spheres like retail; the 200-slot free cushion is a
     /// pool-exhaustion belt (deliberate: retail has none); the
     /// every-other-tick 26-row spell-XP flood (`sub_6D8B0`, xp =
-    /// tier-2 xpos1/512) is the lone remaining MC2 XP gap (hits
-    /// computed then discarded — see the module header; every other
-    /// XP source is wired through the `mc2_cast_xp` mail).
+    /// tier-2 `xpos1` / 512) is LANDED — see
+    /// [`no_mc2_rain_spell_xp`] for the shipped bytes; every XP
+    /// source here is wired through the `mc2_cast_xp` mail.
     pub(crate) fn mc2_summit91_tick(&mut self, i: usize) {
         let armed = !no_mc2_rain_arm();
         for _ in 0..3 {
@@ -635,7 +750,43 @@ impl Gen {
                 }
             }
         }
-        // (the 26-row XP flood — deferred, module-doc APPROX)
+        // ⭐⭐⭐ THE APOCALYPSE RAIN PAYS THE WHOLE SPELLBOOK, EVERY
+        // OTHER TICK — `sub_32CF0`'s second half (EF:24096-24112; the
+        // shipped bytes are quoted on [`no_mc2_rain_spell_xp`]). It is
+        // the last MC2 `sub_6D8B0` caller with no port home, and it is
+        // a FLOOD, not a credit: 26 rows of `SPELLS[s].tiers[2].xpos1
+        // / 512` to the LOCAL player on every even `byte_0x3E_62`.
+        // Three things make it unlike every other XP source here:
+        // the owner is the local player's entity out of
+        // `D41A0_0.array_0x2BDE[LevelIndex]`, NOT the summit's
+        // `id_0x1A_26` (the rain is never player-owned); the phase
+        // gate is the entity's own `f63` parity, which is why the
+        // measured cadence is every second tick and not every tick;
+        // and the amount is a per-row CONSTANT off the SPELLS table,
+        // so it is nonzero for rows the player has never cast.
+        // WITNESS mc2l24-crazy, `MGC_RAW_SHADOW=1 verify-deltas`: the
+        // (10,91) summit lights at t=73864 and from that tick retail
+        // steps all 25 non-castle rows every second boundary
+        // (`xp_vol[0]` +23, `[1]` +9, `[9]` +19, `[18]` +15 …) while
+        // the port stepped none — 65,003 of the take's 65,030 human
+        // `xp_vol` rows, and the `levels[20]` tier-up at t=74066 under
+        // them. See [`no_mc2_rain_spell_xp`].
+        if !no_mc2_rain_spell_xp() && self.ent[i].f63 & 1 == 0 {
+            for s in 0..26usize {
+                let Some(row) = self.assets.spells.get(s).copied() else {
+                    break;
+                };
+                // `sar $0x9` after the `sbb` sign fixup == C's
+                // truncate-toward-zero divide, == Rust's `i32 / i32`.
+                let amt = row.tiers[2].xpos1 / 512;
+                // Owner-blind: retail pushes the LOCAL player's entity,
+                // which is `PLAYER_TARGET` on this side; `mc2_award_xp`
+                // re-applies `sub_6D8B0`'s own class-3/model-0 guard.
+                self.mc2_cast_xp
+                    .0
+                    .push((crate::mc1::mobs::PLAYER_TARGET, s as u16, amt));
+            }
+        }
     }
 }
 
@@ -685,5 +836,281 @@ mod tests {
         for t in 0..=255u8 {
             assert_eq!(auto_flat(t), expect(t), "type {t}");
         }
+    }
+
+    /// Flat 100-height CAVE world (a ceiling plane makes
+    /// [`Gen::is_cave`] true, which the (10,89) ctor gates on).
+    fn flat_cave_gen() -> Gen {
+        use crate::engine::features::{FeatureAssets, Planes};
+        use crate::chassis::ChassisParams;
+        use crate::verbs::VerbSet;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: vec![200; 0x10000],
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    /// ⭐ THE SUMMIT ARC COUNTER RUNS PAST AN i16, AND THE GATES DO
+    /// NOT CARE (round 148, dig w148o;
+    /// [`crate::engine::features::no_mc2_summit_arc_wide`]).
+    ///
+    /// `sub_32A70`'s counter is the 32-bit `dword_0x10_16` and its
+    /// last statement is a bare `++` with no cap; the port's `i16`
+    /// `f26` parked on 32,767 while retail reached 79,064 on
+    /// mc2l24-crazy. Drive a latched summit from just under the `i16`
+    /// ceiling and the wide home keeps counting.
+    ///
+    /// ⛔ UNIT TEST, NOT A FIXTURE: the lane is the raw shadow's
+    /// `scratch10`, ungraded by construction, and replay re-imports
+    /// every pool record at the anchor.
+    ///
+    /// POSITIVE CONTROL: the counter really does step in this rig (a
+    /// fresh summit goes 0 -> 1), and the SATURATING `f26` mirror the
+    /// gates read is identical in both arms. REVERSION PROOF: this
+    /// test fails with `MGC_NO_MC2_SUMMIT_ARC_WIDE=1`, which parks the
+    /// published count at 32,767.
+    #[test]
+    fn the_summit_arc_counter_is_32_bit() {
+        let mut g = flat_cave_gen();
+        let (px, py) = (40u16 << 8, 40u16 << 8);
+        let p = (px, py, g.ground_z(px, py) as i16);
+
+        // POSITIVE CONTROL: a fresh summit's counter steps at all.
+        let fresh = g.mc2_spawn_summit18(p.0, p.1, p.2).expect("summit18");
+        assert_eq!(g.arc10(fresh), 0, "the ctor's `movl $0x0,0x10`");
+        g.mc2_summit18_tick(fresh);
+        assert_eq!(g.arc10(fresh), 1, "the tail `dword_0x10_16++`");
+
+        // A LATCHED summit past the restart gate: `erupting` holds its
+        // own slot, so the `> 2500` arm's 1-in-100 roll can never fire
+        // and it only ever counts.
+        let i = g.mc2_spawn_summit18(p.0, p.1, p.2).expect("summit18");
+        g.erupting = i as u16;
+        g.set_arc10(i, 32_760);
+        for _ in 0..20 {
+            g.mc2_summit18_tick(i);
+        }
+        assert_eq!(
+            g.arc10(i),
+            32_780,
+            "retail's `int` keeps counting past 32,767"
+        );
+        // …and the gates it feeds answer the same as they did at the
+        // i16 ceiling: no pulse, no despawn, no latch release.
+        assert_eq!(g.ent[i].flags & 0x400, 0, "a latched summit does not despawn");
+        assert_eq!(g.erupting, i as u16, "it keeps the vortex register");
+        assert_eq!(
+            g.ent[i].f26,
+            i16::MAX,
+            "`f26` keeps the saturating mirror every gate reads"
+        );
+    }
+
+    /// ⭐ THE (10,91) APOCALYPSE-RAIN SUMMIT SEEDS `@0x2A` = 200 LIKE
+    /// ITS (10,18) SIBLING (round 148, dig w148o;
+    /// [`crate::engine::features::no_mc2_rain_2a_seed`]).
+    ///
+    /// Both ctors carry the identical `66 c7 40 2a c8 00
+    /// movw $0xc8,0x2a(%eax)` — `sub_4EED0` at `NETHERW.EXE` file
+    /// 0x736F0 and `sub_4EF30` at 0x73750 — but model 91 is not a
+    /// `c10_2a_in_f140` member, so its port home is the uniform
+    /// class-10 seat `f44`, which the port left at 0.
+    ///
+    /// ⛔ NATIVE-SPAWN ONLY, SO IT GETS A UNIT TEST.
+    ///
+    /// POSITIVE CONTROL: the (10,18) sibling's own `f140` seat, which
+    /// this law does not touch. REVERSION PROOF: fails with
+    /// `MGC_NO_MC2_RAIN_2A_SEED=1`.
+    #[test]
+    fn the_rain_summit_seeds_2a_like_its_vortex_sibling() {
+        let mut g = flat_cave_gen();
+        let p = (40u16 << 8, 40u16 << 8, 100i16);
+
+        // POSITIVE CONTROL: model 18's @0x2A home (`f140`) is 200.
+        let v = g.mc2_spawn_summit18(p.0, p.1, p.2).expect("summit18");
+        assert_eq!(g.ent[v].f140, 200, "sub_4EED0 `movw $0xc8,0x2a`");
+
+        let r = g.mc2_spawn_summit91(p.0, p.1, p.2).expect("summit91");
+        assert_eq!((g.ent[r].class64, g.ent[r].model65), (10, 91));
+        assert_eq!(g.ent[r].f44, 200, "sub_4EF30 `movw $0xc8,0x2a`");
+    }
+
+    /// ⭐⭐⭐ THE MC2 ALLOCATOR SEEDS `@0x2A`, NOT `@0x2C` — SO EVERY
+    /// `@0x2C`-HOMED MODEL IS BORN WITH A ZERO THERE (round 148, dig
+    /// w148d; [`crate::engine::features::no_mc2_alloc_2c_seed`]).
+    ///
+    /// `NewEvent_4A050` is `movw $0x64,0x2a` (`NETHERW.EXE` 0x6E940),
+    /// where MC1's `NewEvent_372C0` is `movw $0x64,0x2c`
+    /// (`CARPET.EXE` 0x4FB98) — the port's shared `Gen::new_event`
+    /// reproduces MC1's store, and `f44` is `word_0x2C_44` on these
+    /// six models, so each was born carrying retail's @0x2A default in
+    /// retail's zero word. None of the six retail ctors makes any
+    /// store to +0x2C.
+    ///
+    /// ⛔ NATIVE-SPAWN ONLY, SO IT GETS A UNIT TEST: the graded lanes
+    /// are the raw shadow's `f2c` (ungraded by construction) and
+    /// replay re-imports every pool record at the anchor.
+    ///
+    /// Non-vacuous by the `new_event` positive control below — the
+    /// shared default really is 100 in this rig. With
+    /// `MGC_NO_MC2_ALLOC_2C_SEED=1` all six read 100.
+    #[test]
+    fn every_2c_homed_mc2_model_is_born_with_a_zero_there() {
+        let mut g = flat_cave_gen();
+        // POSITIVE CONTROL: the shared MC1-shaped ctor default this
+        // law overrides.
+        let bare = g.new_event().expect("a bare record");
+        assert_eq!(
+            g.ent[bare].f44, 100,
+            "`new_event` seeds NewEvent's 100 into the shared field"
+        );
+
+        let p = (40u16 << 8, 40u16 << 8, 100i16);
+        let born: Vec<(&str, usize)> = vec![
+            ("(10,9) dome", g.mc2_spawn_dome(p.0, p.1, p.2).expect("dome")),
+            (
+                "(10,18) summit vortex",
+                g.mc2_spawn_summit18(p.0, p.1, p.2).expect("summit18"),
+            ),
+            (
+                "(10,19) fire spray",
+                g.mc2_spawn_fire_spray(p.0, p.1, p.2).expect("fire spray"),
+            ),
+            (
+                "(10,67) flood",
+                g.mc2_spawn_flood(p.0, p.1, p.2).expect("flood"),
+            ),
+            (
+                "(10,71) fissure",
+                g.mc2_spawn_fissure(p.0, p.1, p.2).expect("fissure"),
+            ),
+            (
+                "(10,89) cave-in",
+                g.mc2_spawn_cave_in(p.0, p.1, p.2).expect("cave-in"),
+            ),
+        ];
+        for (name, i) in born {
+            assert_eq!(g.ent[i].class64, 10, "{name} slot {i} is class 10");
+            assert_eq!(
+                g.ent[i].f44, 0,
+                "{name} slot {i} (model {}) is born with word_0x2C_44 = 0",
+                g.ent[i].model65
+            );
+        }
+    }
+
+    /// A (10,91) apocalypse summit on a flat world, with a SPELLS
+    /// table whose 26 tier-2 `xpos1` values are all different, ticked
+    /// once at the given `byte_0x3E_62` phase. Returns the XP mail
+    /// the tick posted.
+    ///
+    /// ⛔ The XP book is re-imported at every conformance anchor, so
+    /// the mail is the only thing a test can read here — the same
+    /// contract as the impact-XP rig in `mc2::proj`.
+    fn summit_rain_xp(phase: u8) -> Vec<(u16, u16, i32)> {
+        use crate::chassis::ChassisParams;
+        use crate::engine::features::{FeatureAssets, Planes};
+        use crate::mc2::spells::{Mc2SpellRow, Mc2SubSpell};
+        use crate::verbs::VerbSet;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // Row s carries tier-2 `xpos1` = `XPOS1[s]`: 26 DIFFERENT
+        // values, one of them negative and none of them a multiple of
+        // 512, so no single constant and no floor-instead-of-truncate
+        // divide can satisfy the set.
+        let spells: Vec<Mc2SpellRow> = (0..26)
+            .map(|s| {
+                let mut row = Mc2SpellRow::default();
+                row.tiers[2] = Mc2SubSpell {
+                    xpos1: xpos1_for(s),
+                    ..Mc2SubSpell::default()
+                };
+                row
+            })
+            .collect();
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells,
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut g = Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2);
+        // ⚠ The summit MUST come out of `new_event()` — a hand-stamped
+        // slot is recycled by the rain's own three sphere mints.
+        let i = g.new_event().expect("summit slot");
+        {
+            let e = &mut g.ent[i];
+            e.class64 = 10;
+            e.model65 = 91;
+            e.id24 = i as u16; // NOT the human: the flood is owner-blind
+            e.max_life = 1000;
+            e.act_life = 1000;
+            e.f63 = phase;
+        }
+        g.link(i, 40 << 8, 40 << 8, 100);
+        g.mc2_summit91_tick(i);
+        g.mc2_cast_xp.0.clone()
+    }
+
+    fn xpos1_for(s: usize) -> i32 {
+        if s == 7 {
+            -1000 // the `sbb` sign fixup arm: -1000 / 512 == -1
+        } else {
+            513 * (s as i32 + 1) + 7
+        }
+    }
+
+    /// `sub_32CF0`'s 26-row spell-XP flood: every EVEN `byte_0x3E_62`
+    /// phase the apocalypse rain pays the LOCAL player
+    /// `SPELLS[s].tiers[2].xpos1 / 512` on all 26 rows, and an ODD
+    /// phase pays nothing (NETHERW.EXE file 0x576DD-0x5772D, quoted on
+    /// [`no_mc2_rain_spell_xp`]).
+    ///
+    /// Non-vacuous by construction: 26 distinct amounts including a
+    /// negative one, plus the empty odd-phase arm, out of one rig
+    /// whose only variable is the phase byte. With
+    /// `MGC_NO_MC2_RAIN_SPELL_XP=1` the even arm mails nothing and
+    /// this fails on the first row.
+    #[test]
+    fn the_apocalypse_rain_floods_all_26_spell_rows_on_an_even_phase() {
+        let mail = summit_rain_xp(0);
+        assert_eq!(mail.len(), 26, "one row per spell: {mail:?}");
+        for (s, row) in mail.iter().enumerate() {
+            assert_eq!(
+                *row,
+                (crate::mc1::mobs::PLAYER_TARGET, s as u16, xpos1_for(s) / 512),
+                "spell {s}"
+            );
+        }
+        // The rounding is retail's truncate-toward-zero, not a floor:
+        // spell 7's -1000 pays -1, and every other row drops its
+        // remainder.
+        assert_eq!(mail[7].2, -1);
+        assert_eq!(mail[0].2, 1);
+        assert_eq!(mail[25].2, 26);
+        // ODD phase: `testb $0x1,0x3e(%eax) / jne` the epilogue.
+        assert!(
+            summit_rain_xp(1).is_empty(),
+            "an odd byte_0x3E_62 phase pays nothing"
+        );
     }
 }

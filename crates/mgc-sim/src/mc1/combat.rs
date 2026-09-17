@@ -1019,7 +1019,44 @@ impl Gen {
                 while j != 0 {
                     let c = &self.ent[j];
                     let next = c.next20 as usize;
-                    if c.id24 != id
+                    // ⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT LANDED —
+                    // `sub_10C80`'s owner immunity is the SAME
+                    // `@0x1A != @0x1A` test as `sub_10780`'s
+                    // self-exclusion — `sub_10C80`'s ch0 tile pass is
+                    // `a1x->id_0x1A_26 != v8x->id_0x1A_26 && …`, and
+                    // its ch1+ and ch3/ch4 arms repeat it verbatim.
+                    // Shipped `NETHERW.EXE`, the ch0 arm at file
+                    // **0x3572e**:
+                    //   3572e  66 8b 43 1a  mov 0x1a(%ebx),%ax  ; POSTER @0x1A
+                    //   35732  66 3b 46 1a  cmp 0x1a(%esi),%ax  ; VICTIM @0x1A
+                    //   35754  8a 56 38     mov 0x38(%esi),%dl  ; …then the mask
+                    //   3575f  f6 46 0c 08  testb $0x8,0xc(%esi); …and byte[0]&8
+                    // (the ch1+ arm repeats the pair at 0x357fa), so
+                    // it needs the SAME
+                    // fused-`id24` unfuse [`Self::probe_self_id`]
+                    // already carries for the victim probe. Without
+                    // it every `@0x28`-fused record — the (10,57)
+                    // fool's-mana sphere above all — is immune to
+                    // every area writer its OWNER launched.
+                    // WITNESS mc2l6-rsg t=11664: the human's own
+                    // fireball detonates on his (10,57) at slot 547,
+                    // the (10,0) impact at slot 510 area-writes its
+                    // inherited `subSpellIndex` 160 over the sphere's
+                    // tile — retail compares `343 != 547` and posts
+                    // `mail0 = (160, 343)`, which `sub_35FB0` NEVER
+                    // reads, so it stands for the rest of the take.
+                    // The port compared `65535 != 65535` (both the
+                    // human) and posted nothing: `(10,57) mail0.amt`
+                    // 188,838 rows + `mail0.src` 187,978 rows on that
+                    // one take, the second-largest entity block of the
+                    // round-148 census.
+                    // `MGC_NO_MC2_AREA_ID_UNFUSE=1` reverts.
+                    let cand_id = if crate::mc2::mobs::no_mc2_area_id_unfuse() {
+                        c.id24
+                    } else {
+                        self.probe_self_id(j)
+                    };
+                    if cand_id != id
                         && c.flags & 8 != 0
                         && c.f28 & (1 << ch) != 0
                         && Self::filter_admits(f66, f67, c.class64, c.model65)
@@ -7935,6 +7972,49 @@ impl Gen {
             // first arm (:29464-90) and MC2's (EF:26111-72) both end
             // without it — the sprite row rides stale until the ball
             // next runs the moving arm.
+            //
+            // ⭐⭐⭐ **BUT THE DECAY TAIL IS NOT PART OF THE MODE
+            // BRANCH, AND THE TETHER ARM FALLS INTO IT TOO.** This
+            // arm used to `return` outright. `TransformArcherToMana_
+            // 35940`'s three arms all converge on the
+            // `if (byte[1] & 0x20) { --life_0x8; … }` tail
+            // (EF:26311-26330), which sits at the SAME brace level as
+            // the `if (byte[0] & 0x40)` head. `NETHERW.EXE` settles it
+            // — the tail is file 0x5A746 (VA 0x35F46,
+            // `f6 43 0d 20` / `74 52` / `8b 43 08` / `48` /
+            // `89 43 08`, then `83 f8 06` `72 0e` `76 22`
+            // `83 f8 0c` `74 12` and `call 0x7c710` =
+            // `DisableEntityDrawing04_57F10` on zero) and every one
+            // of the tether arm's three exits JUMPS to it:
+            // ```text
+            //   5a2b7  80 63 0c bf   andb $0xbf,0xc(%ebx)   ; drop tether
+            //   5a2bb  e9 86 04 00 00  jmp  0x5a746
+            //   5a30e  80 63 0c bf   andb $0xbf,0xc(%ebx)   ; d > 1024
+            //   5a312  e9 2f 04 00 00  jmp  0x5a746
+            //   5a3d0  e8 1b 21 02 00  call 0x7c4f0          ; CopyEntityPosition
+            //   5a3d8  e9 69 03 00 00  jmp  0x5a746
+            // ```
+            // (the frozen arm's `5a3e7 0f 84 59 03 00 00 je 0x5a746`
+            // is the fourth, which the port already had.)
+            //
+            // WITNESS — mc2l24-crazy t=73775, the take's last head and
+            // 24 of its 25 remaining segments. The pyramid at slot 6
+            // dies, its endgame arm stamps `max_life = 140`,
+            // `byte[1] |= 0x20` and `life = 140` on every `(10,39|40|
+            // 57)`, and retail's spheres read `life 139` at that same
+            // boundary because their own movers run later in the tick
+            // and take the first tick off. Slots 682 and 829 are the
+            // two that were TETHERED (`flags 76` — bit 6 set, a
+            // balloon collector), so the port skipped their decrement
+            // and held `140`, then trailed retail by exactly one for
+            // the rest of the countdown — one boundary per tick,
+            // t=73775..73798.
+            // `MGC_NO_MC2_BALL_TETHER_DECAY` restores the early
+            // return. MC1 is untouched in practice: nothing in MC1
+            // sets bit 13, so the tail is a no-op there.
+            if !crate::engine::features::no_mc2_ball_tether_decay() {
+                self.ball_decay_tail(i);
+            }
             return false;
         }
         // ⭐⭐⭐ THE (10,57) THROWN-SPHERE FLIGHT ARM — `sub_35FB0`

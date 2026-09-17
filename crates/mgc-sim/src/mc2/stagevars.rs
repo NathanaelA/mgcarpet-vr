@@ -908,6 +908,22 @@ impl World {
             self.mc2_m27_held_tick(i, ctx);
             return true;
         }
+        // ⭐⭐⭐ **AND m4's WRAPPER OPENS WITH `dword_0x10_16 = 0`.**
+        // `AddScroll05_04_20140` (EF:11974-80) is the archer's whole
+        // phase-7 wrapper and its FIRST statement — before the
+        // `sub_1D5D0` legs, not after them — is the @0x10 clear:
+        // NETHERW.EXE file 0x4494A `c7 43 10 00 00 00 00`
+        // `movl $0x0,0x10(%ebx)`, then 0x44951 `e8 7a d4 ff ff`
+        // `call 0x41dd0` (= `sub_1D5D0`, file = VA + 0x24800), then
+        // the `cmp $0x22,%ah` aim test whose tail is already mirrored
+        // below. The port had landed the TAIL on this seam and left
+        // the HEAD out, which is harmless while the archer ctor leaves
+        // @0x10 at 0 and fatal the moment it stops —
+        // [`super::mobs::no_mc2_archer_10_seed`] carries the ctor half
+        // and the mc2l0-spells-galore witness. Same switch.
+        if self.g.ent[i].model65 == 4 && !crate::mc2::mobs::no_mc2_archer_10_seed() {
+            self.g.ent[i].f26 = 0;
+        }
         let base = self.g.ent[i].model65.wrapping_mul(8);
         match kind {
             // `sub_1D5D0` default arm: kinds without a handler (15,
@@ -2633,6 +2649,96 @@ mod tests {
             w.mc2_sv_held[0].timer as u16, post_nearest,
             "`sub_1E3E0` at 0x42205 runs AFTER `sub_1B8C0` at 0x421ce, \
              so the cached handle is the POST-move winner"
+        );
+    }
+
+    /// ⭐⭐⭐ **THE ARCHER'S `@0x10` IS A BIRTH SEED THAT THE PHASE-7
+    /// WRAPPER CLEARS — BOTH HALVES OR NEITHER.**
+    ///
+    /// `AddArchers_4BA10` (banner EF:33929) stamps
+    /// `dword_0x10_16 = slot % 100` (EF:33948; NETHERW.EXE 0x70292-
+    /// 0x702BC, `lea edx,[ecx+0x6e8e]` / `sub esi,edx` / `idiv` 0xa8 /
+    /// `idiv` 0x64 / `mov [ebx+0x10],edx`), and the field's ONLY
+    /// reader on a (5,4) is `HitArcher_20010` (file 0x44816
+    /// `cmpl $0x0,0x10(%eax)`). Every per-tick archer handler clears
+    /// it first: `sub_1FAA0` (action 33, file 0x442BD) and the phase-7
+    /// wrapper `AddScroll05_04_20140` (action 39, file 0x4494A
+    /// `movl $0x0,0x10(%ebx)` — BEFORE its `sub_1D5D0` legs at
+    /// 0x44951). The port mirrored that wrapper's TAIL on all three
+    /// call paths and its HEAD on only one (`archer_tick`'s role-7
+    /// arm), which is invisible while the ctor leaves @0x10 at 0 and
+    /// de-certifies mc2l0-spells-galore the moment it does not: slots
+    /// 21/23/42 are born at t=27524 straight into action 39 under a
+    /// stage hold, and 42's surviving seed sent it down `HitArcher`'s
+    /// vanish arm (`action: retail 37 port 36`, t=27577).
+    ///
+    /// ⛔ NATIVE-INIT ONLY on the seed half (replay imports the pool),
+    /// which is why this is a unit test and not a fixture.
+    ///
+    /// Non-vacuous: with `MGC_NO_MC2_ARCHER_10_SEED=1` the ctor leaves
+    /// 0 and the first assertion fails.
+    #[test]
+    fn the_archer_birth_seed_is_cleared_by_both_phase_7_wrapper_seams() {
+        let mut w = flat_world();
+        let held = w
+            .g
+            .mc2_spawn_archers(40 << 8, 40 << 8, 100)
+            .expect("held archer");
+        let ctrl = w
+            .g
+            .mc2_spawn_archers(41 << 8, 40 << 8, 100)
+            .expect("controlled archer");
+        // The rig must not sit on a slot whose `% 100` is 0, or the
+        // clear below would be vacuous.
+        assert_ne!(held % 100, 0, "rig slot {held} is discriminating");
+        assert_ne!(ctrl % 100, 0, "rig slot {ctrl} is discriminating");
+        assert_eq!(
+            (w.g.ent[held].f26, w.g.ent[ctrl].f26),
+            ((held % 100) as i16, (ctrl % 100) as i16),
+            "`AddArchers_4BA10` seeds @0x10 with the record's own slot % 100"
+        );
+        assert_eq!(w.g.ent[held].tick70, 4 * 8 + 1, "born at action 33");
+
+        // (a) THE STAGE-HELD SEAM (`sub_1D5D0` kinds 1..=10).
+        w.mc2_stagevars = vec![Mc2StageVar::default(); 2];
+        w.mc2_stagevars[1] = Mc2StageVar {
+            kind: 1,
+            ..Default::default()
+        };
+        w.mc2_sv_held = vec![Mc2Held {
+            ent: held as u16,
+            slot: 1,
+            timer: 0,
+        }];
+        w.g.ent[held].tick70 = 4 * 8 + 7; // 39 — the phase-7 wrapper
+        w.g.ent[held].site_z = 1;
+        w.g.rebuild_mob_chains();
+        assert!(
+            w.mc2_held_tick(held, &ctx_at(0, 0)),
+            "a kind-1 held archer consumes its own tick"
+        );
+        assert_eq!(
+            w.g.ent[held].f26, 0,
+            "`AddScroll05_04_20140`'s FIRST statement clears @0x10 on the held seam"
+        );
+
+        // (b) THE CONTROLLED SEAM (StageVar2 12/13/14/16/17), which
+        // `mc2_held_tick` deliberately does not take.
+        w.g.ent[ctrl].tick70 = 4 * 8 + 7;
+        w.g.ent[ctrl].site_z = 13;
+        assert!(
+            !w.mc2_held_tick(ctrl, &ctx_at(0, 0)),
+            "kind 13 falls through to the controlled arm"
+        );
+        assert_eq!(
+            w.g.ent[ctrl].f26,
+            (ctrl % 100) as i16,
+            "…so nothing has cleared it yet"
+        );
+        w.g.mc2_creature_tick(ctrl, &ctx_at(0, 0));
+        assert_eq!(
+            w.g.ent[ctrl].f26, 0,
+            "and the same first statement clears it on the controlled seam"
         );
     }
 }

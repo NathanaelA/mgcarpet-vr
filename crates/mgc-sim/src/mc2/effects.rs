@@ -58,6 +58,16 @@ fn no_mine_sink_step() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MINE_SINK_STEP").is_some())
 }
 
+/// A/B toggle for THE m25 BRAIN'S ABSENT HIT-RETARGET: set
+/// `MGC_NO_M25_HIT_RETARGET_ABSENCE` to restore the pre-dig
+/// `f38 = f40` on the mailed tick. Full citation and the shipped-EXE
+/// scan sit at the site in `mc2/roster.rs` `m25_brain`.
+/// (Round 148, dig w148t.)
+pub(crate) fn no_m25_hit_retarget_absence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_M25_HIT_RETARGET_ABSENCE").is_some())
+}
+
 /// ⭐⭐⭐ A/B toggle for DIG 98-Q25 — **`sub_28860`'s `case 8` EXPIRY
 /// WRITES THE ACTION AND KEEPS RUNNING.**
 ///
@@ -1123,7 +1133,27 @@ impl Gen {
         self.link(i, x, y, z);
         let (lx, ly) = (self.ent[i].x, self.ent[i].y);
         self.ent[i].z = (self.ground_z(lx, ly) as i16).wrapping_add(640);
-        let _ = self.mc2_rand(i); // the dead launch-axis fling draw
+        let d = self.mc2_rand(i);
+        // ⭐ THE LAUNCH AXIS IS NOT DEAD — ITS Z SURVIVES. `sub_4FE40`
+        // (banner EF:36557) copies the WHOLE record position into
+        // `axis_0x9A_154x` (EF:36576) and then flings it with
+        // `MoveEntity_57FA0(&axis, rand & 0x7FF, 0, -32768)`
+        // (EF:36578), whose pitch 0 leaves Z alone. The disposition
+        // post-init `sub_4A310` overwrites only `.x` and `.y` from
+        // par2/par1 (EF:33131-32), so retail's pad keeps
+        // `dest_z = ground + 640` for the whole level (mc2l14 slot 45:
+        // retail 4480). The port dropped the copy entirely and left
+        // `dest_z` at 0. See
+        // [`crate::mc2::mobs::no_mc2_portal_launch_axis`].
+        if !crate::mc2::mobs::no_mc2_portal_launch_axis() {
+            let (px, py, pz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+            let mut pos = (px, py, pz);
+            Self::polar_step(&mut pos, (d & 0x7FF) as u16, 0, -32768);
+            let e = &mut self.ent[i];
+            e.dest_x = pos.0;
+            e.dest_y = pos.1;
+            e.site_z = pos.2; // @0x9A+4 — the port's `dest_z` home
+        }
         Some(i)
     }
 
@@ -1401,5 +1431,87 @@ impl Gen {
             let amt = self.ent[i].f140 as u32;
             self.area_write(i, 0, amt, ctx, true, false);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes};
+    use crate::verbs::VerbSet;
+
+    /// Flat 100-height open world — the pad ctor is pure record
+    /// arithmetic over one terrain read, so the terrain only has to
+    /// exist.
+    fn flat_gen() -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    /// ⭐ THE (10,34) TELEPORT PAD'S LAUNCH AXIS IS NOT DEAD — ITS Z
+    /// SURVIVES (round 147, dig w147f;
+    /// [`crate::mc2::mobs::no_mc2_portal_launch_axis`]).
+    ///
+    /// `sub_4FE40` (banner EF:36557) copies the WHOLE record position
+    /// into `axis_0x9A_154x` (EF:36576) and then flings it with
+    /// `MoveEntity_57FA0(&axis, rand & 0x7FF, 0, -32768)` (EF:36578),
+    /// whose **pitch 0 leaves Z alone**. The disposition post-init
+    /// `sub_4A310` overwrites only `.x` and `.y` from par2/par1
+    /// (EF:33131-32), so retail's pad keeps `dest_z = ground + 640`
+    /// for the whole level (mc2l14 slot 45: retail 4480). The port
+    /// dropped the copy entirely and left `dest_z` at 0.
+    ///
+    /// ⛔ NATIVE-INIT ONLY: replay imports the pool, so nothing graded
+    /// sees the ctor run.
+    ///
+    /// Non-vacuity: the fling is asserted to have MOVED x/y (so the
+    /// z-equality below is a surviving axis, not an untouched record),
+    /// and the post-ctor entity rand is pinned — the `mc2_rand` draw
+    /// sits ABOVE the gate, so the stream is byte-identical in both
+    /// arms and this assert must hold with the switch either way.
+    /// With `MGC_NO_MC2_PORTAL_LAUNCH_AXIS=1` the three axis asserts
+    /// part and the rand assert does not.
+    #[test]
+    fn the_teleport_pad_keeps_the_launch_axis_z() {
+        let mut g = flat_gen();
+        let i = g
+            .mc2_spawn_portal(40 << 8, 40 << 8, 100)
+            .expect("teleport pad");
+        assert_eq!((g.ent[i].class64, g.ent[i].model65), (10, 34));
+        assert_eq!(g.ent[i].tick70, 36, "sub_4FE40's actionIndex 0x24");
+
+        // EXACTLY ONE ctor draw, and it is spent ABOVE the gate — so
+        // this pin must hold with the switch either way. It is
+        // asserted FIRST so the reversion probe proves it.
+        assert_eq!(
+            g.ent[i].rand, 28_193,
+            "one mc2_rand draw (u16 stream), identical in both arms"
+        );
+
+        let (x, y, z) = (g.ent[i].x, g.ent[i].y, g.ent[i].z);
+        assert_ne!(z, 0, "the ctor hovers the pad at ground + 640");
+        assert_eq!(
+            g.ent[i].site_z, z,
+            "pitch 0 leaves the copied axis Z exactly where the ctor seeded it"
+        );
+        assert_ne!(
+            (g.ent[i].dest_x, g.ent[i].dest_y),
+            (x, y),
+            "…and the -32768 fling really moved x/y, so the Z above SURVIVED a move"
+        );
     }
 }

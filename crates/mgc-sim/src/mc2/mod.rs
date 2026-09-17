@@ -23,6 +23,7 @@ pub(crate) mod multipart;
 pub(crate) mod pads;
 pub(crate) mod probes;
 pub(crate) mod proj;
+pub use proj::set_null_victim_ghost_instrument;
 pub(crate) mod riser;
 pub mod rivals;
 pub(crate) mod roster;
@@ -34,6 +35,8 @@ pub(crate) mod stagevars;
 pub(crate) mod tail;
 pub mod terrain_paint;
 pub(crate) mod tokens;
+#[cfg(test)]
+mod w148n_laws;
 
 /// `TransformPlayerColorIndex_616D0` (remc2 GameUI.cpp:869), the
 /// single-player branch (:908-936): the permutation between a player's

@@ -3090,6 +3090,9 @@ fn run_mc2(
             fire_right: rec.fire_right,
             mc2_select: rec.mc2_select,
             mc2_ring_cast: rec.mc2_ring_cast,
+            // ⭐ THE RING BIND (`PlayerAction 0x26`) — the free
+            // runner's own lane. See `recover::mc2_ring_bind`.
+            spell_ring: rec.spell_ring,
             respawn: rec.respawn,
             suicide: rec.suicide,
             demolish: rec.demolish,
@@ -3321,7 +3324,12 @@ fn run_mc2(
                     castles,
                 };
                 let port = world.obs_project_mc2(&pin);
+                // Two scopes: the census gets the full cadence law, the
+                // graded diff below keeps the narrow one — see
+                // `verify_mc2::TearScope`.
                 let torn = torn_slots(&pst, &st);
+                let torn_graded =
+                    crate::verify_mc2::torn_slots_scoped(&pst, &st, crate::verify_mc2::TearScope::Graded);
                 // THE RAW SHADOW, free-run half. Unlike pair mode the
                 // port has been carrying its OWN state since the
                 // anchor, so the first tick a raw lane parts is the
@@ -3345,10 +3353,10 @@ fn run_mc2(
                     // and a stage-gated disposition rides that latch.
                     sh.compare_board_mc2(&world, &st, tick.t);
                 }
-                let mut pd = compare_mc2_gated(&obs, &port, slot, &torn);
+                let mut pd = compare_mc2_gated(&obs, &port, slot, &torn_graded);
                 // The MC2 sprite lane, free-run half (see the MC1
                 // boundary above).
-                crate::verify_mc2::append_sprite_diffs_mc2(&mut pd, &st, &world, slot, &torn);
+                crate::verify_mc2::append_sprite_diffs_mc2(&mut pd, &st, &world, slot, &torn_graded);
                 let pd = pd;
                 let dump = args.dump == Some(pt)
                     || (args.dump_first
@@ -3721,6 +3729,21 @@ fn render_port_dump(
             "   ⚠ t is an ANCHOR (seed/gap/--start): the port state IS the retail \
              import — expect identity modulo representation"
         );
+    } else {
+        // ⭐ NAME THE PAIR. The port column is the state AFTER the
+        // tick `t-1 -> t`; the retail column is the record AT t. Both
+        // the free-run shadow (`compare_ents_*` below in this loop)
+        // and `verify-deltas`' shadow now stamp that boundary `t` —
+        // but `verify-deltas`' GRADED rows, `--dump` and the fixture
+        // manifests name the same pair by its START tick `t-1`, and a
+        // dig that mixed the two lost a day in round 148.
+        println!(
+            "   pair {} → {t}: the port column is POST-tick, the retail column is the \
+             record AT t (pair-scoped output — graded rows, --dump, fixtures — names \
+             this pair {})",
+            t.saturating_sub(1),
+            t.saturating_sub(1)
+        );
     }
     let mut from_probe = false;
     if let Some(n) = spec.at_slot {
@@ -3750,6 +3773,26 @@ fn render_port_dump(
                  so the port column below is the reserved hole, not the player"
             );
         }
+        // The MC2 twin's law, same shape (see `render_port_dump_mc2`):
+        // a class-0 slot is RESIDUE. `verify.rs`'s pair diff skips it
+        // (`if e.class64 == 0 … continue`) and the lane table homes
+        // every offset by the CURRENT class byte, which retail's free
+        // path has zeroed — so nothing below is comparable.
+        let freed = re.class64 == 0;
+        if freed && slot != human_slot {
+            let on_free = st.free_stack.contains(&slot);
+            let on_rec = st.recycle_stack.contains(&slot);
+            println!(
+                "  ⚠ slot {slot} is FREE in retail (class byte 0{}{}): the pair diff never \
+                 compares a class-0 slot and the lane table homes every offset by the \
+                 CURRENT class, so the rows below are RESIDUE read through the wrong \
+                 field: they are marked with a middle dot, NOT the difference glyph, and \
+                 no grade sees them. Dump the tick the slot was last LIVE to compare it.",
+                if on_free { ", on the free stack" } else { "" },
+                if on_rec { ", on the recycle stack" } else { "" },
+            );
+        }
+        let mark = if freed { "  ·" } else { "  ≠" };
         let retail = retail_ent_lanes_mc1(re);
         let port: BTreeMap<&'static str, Option<i64>> = world
             .port_ent_lanes_mc1(slot, human_slot, from_probe)
@@ -3767,7 +3810,7 @@ fn render_port_dump(
                         name,
                         rv,
                         pv,
-                        if *pv != rv { "  ≠" } else { "" }
+                        if *pv != rv { mark } else { "" }
                     );
                 }
                 Some(None) => println!("    {:24} {:>12} {:>12}", name, rv, "—"),
@@ -3844,6 +3887,21 @@ fn render_port_dump_mc2(
             "   ⚠ t is an ANCHOR (seed/gap/--start): the port state IS the retail \
              import — expect identity modulo representation"
         );
+    } else {
+        // ⭐ NAME THE PAIR. The port column is the state AFTER the
+        // tick `t-1 -> t`; the retail column is the record AT t. Both
+        // the free-run shadow (`compare_ents_*` below in this loop)
+        // and `verify-deltas`' shadow now stamp that boundary `t` —
+        // but `verify-deltas`' GRADED rows, `--dump` and the fixture
+        // manifests name the same pair by its START tick `t-1`, and a
+        // dig that mixed the two lost a day in round 148.
+        println!(
+            "   pair {} → {t}: the port column is POST-tick, the retail column is the \
+             record AT t (pair-scoped output — graded rows, --dump, fixtures — names \
+             this pair {})",
+            t.saturating_sub(1),
+            t.saturating_sub(1)
+        );
     }
     let mut from_probe = false;
     if let Some(n) = spec.at_slot {
@@ -3873,6 +3931,44 @@ fn render_port_dump_mc2(
                  so the port column below is the reserved hole, not the player"
             );
         }
+        // ⭐⭐⭐ A CLASS-0 SLOT IS RESIDUE, AND RESIDUE IS NOT A
+        // DIVERGENCE. Round 149 banked "`--port --start <t>` returns a
+        // divergent port column while the graded replay from the same
+        // anchor is bit-exact" as a broken instrument arm; round 150
+        // measured it and the arm is fine — every one of the 113 `≠`
+        // rows mc2l22 t=63665 printed sat on a slot retail holds FREE.
+        // Two reasons they are not comparable and neither is a defect:
+        //   * the pair diff SKIPS a class-0 slot outright (the importer
+        //     still carries its stale bytes — `import_ent_mc2`'s
+        //     "a freed slot is not an EMPTY slot" arm), so no grade
+        //     ever looks at these lanes;
+        //   * the lane table dispatches every `@offset` on the CURRENT
+        //     class byte, which retail's free path has already zeroed
+        //     — so residue written under the slot's PREVIOUS class
+        //     reads through a DIFFERENT port field. mc2l22 slot 5: the
+        //     port's `f140` still holds the (10,m) `@0x2A` amount 400
+        //     exactly as retail's record does, but class 0 homes `f2a`
+        //     in `f44` and `mana` in `f140`, so one identical residue
+        //     byte printed as TWO `≠` rows.
+        // The free-list link lanes (`next16`/`prev18`) are the same
+        // story from the other side: the port keeps its free list in a
+        // Vec, so it prints 0 where retail's record still holds the
+        // in-slot chain.
+        let freed = re.class3f == 0;
+        if freed && slot != human_slot {
+            let on_free = st.free_stack.contains(&slot);
+            let on_rec = st.recycle_stack.contains(&slot);
+            println!(
+                "  ⚠ slot {slot} is FREE in retail (class byte 0{}{}): the pair diff never \
+                 compares a class-0 slot and the lane table homes every offset by the \
+                 CURRENT class, so the rows below are RESIDUE read through the wrong \
+                 field: they are marked with a middle dot, NOT the difference glyph, and \
+                 no grade sees them. Dump the tick the slot was last LIVE to compare it.",
+                if on_free { ", on the free stack" } else { "" },
+                if on_rec { ", on the recycle stack" } else { "" },
+            );
+        }
+        let mark = if freed { "  ·" } else { "  ≠" };
         let retail = retail_ent_lanes_mc2(re);
         let port: BTreeMap<&'static str, Option<i64>> = world
             .port_ent_lanes_mc2(slot, human_slot, from_probe)
@@ -3890,7 +3986,7 @@ fn render_port_dump_mc2(
                         name,
                         rv,
                         pv,
-                        if *pv != rv { "  ≠" } else { "" }
+                        if *pv != rv { mark } else { "" }
                     );
                 }
                 Some(None) => println!("    {:24} {:>12} {:>12}", name, rv, "—"),

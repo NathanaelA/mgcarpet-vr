@@ -22,8 +22,14 @@
 //! byte[0] bit0 + byte[2] bit4. byte[0] bit0 in this band is the
 //! TOSSED/handled latch (creatures normally carry it clear; the
 //! shove filter skips victims with it set, and the action-74 release
-//! clears it) — our home is [`F_TOSSED`] (retail's bit0 aliases our
-//! "active" flag and cannot be shared). byte[2] bit4 = the grab
+//! clears it) — the quake band's own home is [`F_TOSSED`], but that is
+//! a SECOND home for a bit the port already keeps positionally at
+//! `Ent::flags` bit 0, so both the writes (round 99, dig 99-10) and
+//! the READ ([`flood_held_bit0_law`], round 149, dig w149i) cover the
+//! pair. ~~retail's bit0 aliases our "active" flag and cannot be
+//! shared~~ — `retail_import_mc2` maps retail byte[0] bit 0 straight
+//! onto `flags` bit 0 and the (3,3)/(14,3)/(14,4) markers GRADE it.
+//! byte[2] bit4 = the grab
 //! latch = [`super::mobs::F_NO_CORPSE`]'s retail bit — reusing it is
 //! the authentic alias (quake victims leave no corpse).
 //!
@@ -156,6 +162,54 @@ pub(crate) fn flood_chain_rewalk_law() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_FLOOD_CHAIN_REWALK").is_none())
 }
 
+/// ⭐⭐⭐ THE SHOVE FILTER'S `held` TEST READ ONLY THE **IMPORTED** HALF
+/// OF A BIT WITH TWO PORT HOMES. Set `MGC_NO_MC2_FLOOD_HELD_BIT0=1` to
+/// restore the pre-round-149 `flags & (F_TOSSED | 0x20)`.
+///
+/// Retail's shove-victim filter `sub_39FA0` tests `byte[0] & 0x21` on
+/// three of its fifteen class arms, and byte[0] bit 0 is ONE retail bit.
+/// The port homes it TWICE: positionally at `Ent::flags` bit 0 (every
+/// native setter — the `(14,3)`/`(14,4)` marker pre-hide `sub_51570`
+/// `80 4b 0c 01`, the castle walk latch, the in-book bit …) and, for
+/// the quake band only, at the synthetic [`F_TOSSED`] (bit 31). Round
+/// 99 dig 99-10 already put the quake's own WRITES on both homes
+/// ([`Gen::flood_shove_hit`] and the action-74 release, behind
+/// `MGC_NO_QUAKE_TOSS_BIT0` / `MGC_NO_QUAKE_RELEASE_BIT0`) and the
+/// importer seats both (`retail_import_mc2`, `no_mc2_tossed_import`) —
+/// but the READ stayed on bit 31 alone, so every victim whose byte[0]
+/// bit 0 was set by some OTHER retail routine passed a filter retail
+/// fails. ⭐ A LAW ON ONE CALL PATH IS NOT LANDED: the write half and
+/// the import half landed, the read half did not.
+///
+/// Shipped `NETHERW.EXE`, `sub_39FA0` = runtime 0x39FA0, file 0x5E7A0
+/// (file = runtime + 0x24800); the class-14 arm, file 0x5E879:
+/// ```text
+///   5e879: f6 42 0c 21    testb $0x21,0xc(%edx)   ; byte[0] & 0x21
+///   5e87d: 75 07          jne   0x5e886           ; -> return 0
+///   5e87f: 8a 62 40       mov   0x40(%edx),%ah    ; model
+///   5e882: 38 c4          cmp   %al,%ah           ; al = 1
+///   5e884: 75 02          jne   0x5e888           ; -> return 1
+///   5e886: 30 c0          xor   %al,%al           ; return 0
+/// ```
+/// The same `f6 42 0c 21` opens the class-5 arm (0x5E7C6) and guards
+/// the class-3 MODEL-1 arm (0x5E848); no other arm reads it.
+///
+/// WITNESS — mc2l22 t=63665, the take's LAST graded deviation. The
+/// `(14,3)` checkpoint marker at slot 3 carries retail `flags 13`
+/// (byte[0] bit 0 = the marker pre-hide its ctor stamps, never yet
+/// tripped). Quake slot 906 sweeps it at `d = 3049`, `v5 = 2576`;
+/// retail's filter returns 0 and the marker does not move. The port
+/// had bit 0 set and bit 31 clear, passed the filter, and walked the
+/// marker 10/256 of a tile toward the quake —
+/// `slot 3 y: retail 125.5 port 125.5390625`. It classified as
+/// INHERITED precisely because a slice's importer DOES seat
+/// [`F_TOSSED`] from the same retail bit, so the head vanishes on
+/// every re-anchored replay and only a 53,880-tick free run shows it.
+pub(crate) fn flood_held_bit0_law() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FLOOD_HELD_BIT0").is_none())
+}
+
 /// ⭐⭐ THE QUAKE LATCH'S SECOND HOME — THE RELEASE CLEARS byte[0]
 /// BIT 0 TOO. Retail's action-74 release (LABEL_25, EF:29062-75) is a
 /// three-term interrogation of the victim followed by two masks, and
@@ -214,6 +268,18 @@ fn quake_mail_accum_off() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_QUAKE_MAIL_ACCUM").is_some())
 }
 
+/// A/B toggle for THE QUAKE KILL MAIL IS A SIGNED 32-BIT ADD: set
+/// `MGC_NO_MC2_QUAKE_KILL_MAIL_SIGNED` to restore the pre-dig
+/// `(life + 1).max(0)` floor in [`Gen::flood_shove_hit`]. Retail's
+/// stamp (`NETHERW.EXE` 0x5ea9b — `mov 0x8(%ebx),%eax` / `inc %eax` /
+/// `add %eax,%esi`, EF:29435-37) has no floor, so a corpse the flood
+/// keeps shoving mails a NEGATIVE amount and REFUNDS its own inbox.
+/// Ledger ROUND 149 dig w149f.
+fn no_mc2_quake_kill_mail_signed() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_QUAKE_KILL_MAIL_SIGNED").is_some())
+}
+
 /// Retail byte[0] bit0 in the quake band — the tossed/handled latch
 /// `sub_3A200` sets (dword |= 0x100001) and the action-74 release
 /// clears. A free high bit: 25..30 belong to the mobs/roster MC2
@@ -244,6 +310,9 @@ impl Gen {
     /// No sprite (a terrain effect), no RNG.
     pub(crate) fn mc2_spawn_flood(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
+        // Retail's ctor makes NO store to +0x2C; this model's
+        // port `f44` is that word. See `Gen::mc2_alloc_2c_zero`.
+        self.mc2_alloc_2c_zero(i);
         {
             let e = &mut self.ent[i];
             e.class64 = 10;
@@ -352,11 +421,15 @@ impl Gen {
 
     /// `sub_39FA0` (EF:29214) — the shove-victim filter, the
     /// class/model/flag decision ladder verbatim (helpers doc §2).
-    /// `byte[0] & 0x21` = the tossed latch + invisible → our
-    /// `F_TOSSED | 0x20`.
+    /// `byte[0] & 0x21` = the tossed latch + invisible. Retail's
+    /// byte[0] bit 0 has TWO port homes — the positional `flags` bit 0
+    /// every native setter writes and the quake band's synthetic
+    /// [`F_TOSSED`] — and the test must read BOTH
+    /// ([`flood_held_bit0_law`]).
     fn flood_shovable(&self, i: usize, j: usize) -> bool {
         let e = &self.ent[j];
-        let held = e.flags & (F_TOSSED | 0x20) != 0;
+        let bit0 = if flood_held_bit0_law() { 1 } else { 0 };
+        let held = e.flags & (F_TOSSED | bit0 | 0x20) != 0;
         match e.class64 {
             1 | 4 | 6 | 7 | 8 | 11 | 12 | 13 | 15 => false,
             2 => true,
@@ -413,10 +486,39 @@ impl Gen {
         }
         let rolled = forced || self.ent_rand(i) % 7 == 0;
         if rolled && !suppressed && self.ent[j].f28 & 1 != 0 {
-            // Retail adds life+1 with NO floor (EF:29435); the u32
-            // mail clamps the never-in-practice life < -1 arm to 0
-            // (NOT .max(1)).
-            let amt = (self.ent[j].act_life + 1).max(0) as u32;
+            // ⭐⭐⭐ RETAIL ADDS `life + 1` WITH NO FLOOR, AND THE
+            // "never in practice" ARM IS IN THE CORPUS. The comment
+            // that used to stand here read "the u32 mail clamps the
+            // never-in-practice life < −1 arm to 0 (NOT .max(1))" —
+            // and mc2l0-spells-galore t=22008 slot 296 refutes it.
+            // The shove callback has NO life test on the victim
+            // (`sub_3A200`, the only gates are the 1-in-7 roll, the
+            // model-27 suppression and `byte_0x38_56 & 1`), so it
+            // keeps shoving a CORPSE — here a (3,3) mana balloon the
+            // same flood killed one tick earlier (life 10000 →
+            // −10002 at t=22007, its own tail `sub_60EA0` EF:62336
+            // `if (life < 0) return;` so nothing ever drains the
+            // box again). Retail's next mail is life+1 = **−10001**
+            // and the add is a plain 32-bit `add`, so the inbox goes
+            // 20002 → 10001; the `.max(0)` made the port add nothing
+            // and it stood at 20002.
+            // Shipped `NETHERW.EXE` file **0x5ea9b** (linear
+            // 0x3A200 + 0x24800), the whole stamp:
+            //   5ea95  f6 43 38 01   testb $0x1,0x38(%ebx) ; f28 bit0
+            //   5ea99  74 22         je    0x5eabd
+            //   5ea9b  8b 43 08      mov   0x8(%ebx),%eax  ; life, 32-bit
+            //   5ea9e  8b 73 5e      mov   0x5e(%ebx),%esi ; mail0 AMT
+            //   5eaa1  40            inc   %eax            ; life + 1
+            //   5eaa2  01 c6         add   %eax,%esi       ; NO cmp, NO cmov
+            //   5eaa4  89 73 5e      mov   %esi,0x5e(%ebx)
+            // — no floor instruction anywhere between the load and
+            // the store. `MGC_NO_MC2_QUAKE_KILL_MAIL_SIGNED=1`
+            // restores the clamp.
+            let amt = if no_mc2_quake_kill_mail_signed() {
+                (self.ent[j].act_life + 1).max(0) as u32
+            } else {
+                self.ent[j].act_life.wrapping_add(1) as u32
+            };
             let id = self.ent[i].id24;
             if quake_mail_accum_off() {
                 self.mail_write(MailTarget::Pool(j), 0, amt, id);
@@ -1274,6 +1376,51 @@ mod tests {
         }
     }
 
+    /// ⭐⭐⭐ A CORPSE THE FLOOD KEEPS SHOVING **REFUNDS** ITS OWN
+    /// INBOX — the kill mail is `life + 1` through a plain signed
+    /// 32-bit `add`, with no floor anywhere (`NETHERW.EXE` 0x5ea9b
+    /// `mov 0x8(%ebx),%eax` / 0x5eaa1 `inc %eax` / 0x5eaa2
+    /// `add %eax,%esi`, EF:29435-37). `sub_3A200` has no life test on
+    /// the victim, so once the victim is dead `life + 1` is NEGATIVE
+    /// and the accumulate runs backwards.
+    ///
+    /// WITNESS mc2l0-spells-galore t=22008 slot 296: a `(3,3)` mana
+    /// balloon killed at t=22007 (`life` 10000 -> -10002, `mail0` 0 ->
+    /// (20002, 152)) is shoved again the next tick and retail's inbox
+    /// reads **10001** where the port's `.max(0)` left 20002 — the
+    /// take's only ungraded `(3,3) mail0.amt` row, and it clears with
+    /// this arm. `MGC_NO_MC2_QUAKE_KILL_MAIL_SIGNED=1` restores the
+    /// clamp and this test fails.
+    #[test]
+    fn a_shoved_corpse_mails_itself_a_negative_amount() {
+        let mut g = flood_gen();
+        let q = g.new_event().expect("quake slot");
+        {
+            let e = &mut g.ent[q];
+            e.class64 = 10;
+            e.model65 = 71;
+            e.id24 = 7;
+        }
+        let v = g.new_event().expect("victim slot");
+        {
+            let e = &mut g.ent[v];
+            // class 5 model 12 FORCES the 1-in-7 roll (EF:29430), so
+            // the test does not ride the flood's RNG stream.
+            e.class64 = 5;
+            e.model65 = 12;
+            e.f28 = 1; // byte_0x38_56 bit 0 — the damage contract
+            e.act_life = -10002;
+            e.mail[0] = (20002, 152);
+        }
+        g.flood_shove_hit(q, v);
+        assert_eq!(
+            g.ent[v].mail[0].0,
+            10001,
+            "20002 + (life + 1) = 20002 + (-10001); retail has no floor"
+        );
+        assert_eq!(g.ent[v].mail[0].1, 7, "and the source is re-stamped");
+    }
+
     /// ⭐⭐⭐ THE QUAKE'S HUMAN ARM HAS A VERTICAL LEG — RETAIL HAS NO
     /// SPECIAL CASE AT ALL.
     ///
@@ -1509,6 +1656,77 @@ mod tests {
         assert_ne!(g.ent[c].flags & F_TOSSED, 0, "rig: the creature took sub_3A200");
         assert_eq!(g.ent[w].f32, 512, "the wizard's record pitch is stamped");
         assert_eq!(g.ent[c].f32, 1234, "POSITIVE CONTROL: a creature keeps its pitch");
+    }
+
+    /// ⭐⭐⭐ THE SHOVE FILTER MUST READ **BOTH** PORT HOMES OF RETAIL
+    /// byte[0] BIT 0 ([`flood_held_bit0_law`]).
+    ///
+    /// mc2l22 t=63,665's geometry: the `(14,3)` checkpoint marker, its
+    /// ctor's pre-hide bit set (port `flags` bit 0, NOT the quake
+    /// band's synthetic [`F_TOSSED`]), sitting at `d = 3049` /
+    /// `v5 = 2576` from a live quake — the far push band. Retail's
+    /// `sub_39FA0` class-14 arm (`NETHERW.EXE` file 0x5E879,
+    /// `f6 42 0c 21 / 75 07`) returns 0 and the marker does not move.
+    ///
+    /// POSITIVE CONTROL: the identical marker with byte[0] bit 0 clear
+    /// IS pushed — so the assertion is not vacuous geometry.
+    ///
+    /// `MGC_NO_MC2_FLOOD_HELD_BIT0=1` fails exactly this test.
+    #[test]
+    fn the_shove_filter_honours_byte0_bit0_from_its_positional_home() {
+        let mark = |g: &mut Gen, bit0: bool| {
+            let v = g.new_event().expect("marker slot");
+            {
+                let e = &mut g.ent[v];
+                e.class64 = 14;
+                e.model65 = 3;
+                e.id24 = 3;
+                if bit0 {
+                    e.flags |= 1; // `sub_51570`: `or BYTE PTR [ebx+0xc],0x1`
+                }
+            }
+            g.move_relink(v, 33152, 32128, 4912);
+            v
+        };
+        let rig = |g: &mut Gen| {
+            let q = g.new_event().expect("quake slot");
+            {
+                let e = &mut g.ent[q];
+                e.class64 = 10;
+                e.model65 = 67;
+                e.x = 30103; // d = 3049 from the marker
+                e.y = 32128;
+                e.z = 2336;
+                e.f44 = 2336; // refz ⇒ v5 = 4912 − 2336 = 2576
+                e.tick70 = 73; // not the action-74 release
+                e.id24 = 906;
+            }
+            q
+        };
+        // The human parks far outside the 26×26 sweep.
+        let ctx = flood_ctx(0xF000, 0xF000, 0);
+
+        let mut g = flood_gen();
+        g.t.height.fill(0);
+        let hidden = mark(&mut g, true);
+        let q = rig(&mut g);
+        g.flood_shove(q, &ctx);
+        assert_eq!(
+            (g.ent[hidden].x, g.ent[hidden].y),
+            (33152, 32128),
+            "the pre-hidden (14,3) marker fails `byte[0] & 0x21` and is never shoved"
+        );
+
+        let mut g = flood_gen();
+        g.t.height.fill(0);
+        let shown = mark(&mut g, false);
+        let q = rig(&mut g);
+        g.flood_shove(q, &ctx);
+        assert_ne!(
+            (g.ent[shown].x, g.ent[shown].y),
+            (33152, 32128),
+            "POSITIVE CONTROL: with bit 0 clear the same marker IS pushed"
+        );
     }
 
     #[test]

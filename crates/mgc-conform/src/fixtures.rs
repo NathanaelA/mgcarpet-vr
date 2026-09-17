@@ -388,6 +388,7 @@ fn for_each_pair_mc2(
                         tick.input.as_ref(),
                     );
                     c.mc2_select = rec.mc2_select;
+                    c.spell_ring = rec.spell_ring;
                     c.cheat = rec.cheat;
                     // The demolish witness travels with them — the
                     // suite and `verify-deltas` must reconstruct input

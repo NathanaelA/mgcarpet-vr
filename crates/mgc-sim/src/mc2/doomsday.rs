@@ -233,6 +233,16 @@ fn no_mc2_pyramid_behavior_row() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_BEHAVIOR_ROW").is_some())
 }
 
+/// A/B kill-switch for THE PYRAMID CTOR'S FLAG-WORD TRANSLATION: set
+/// `MGC_NO_MC2_PYRAMID_CTOR_FLAG_XLAT` to restore the pre-dig raw
+/// `|= 0x48800001`, whose bit 27 collides with the port's
+/// [`crate::mc2::mobs::F_BLOCKED`]. Full citation and the shipped-EXE
+/// scan live at the store in [`Gen::mc2_spawn_doomsday`].
+pub(crate) fn no_mc2_pyramid_ctor_flag_xlat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PYRAMID_CTOR_FLAG_XLAT").is_some())
+}
+
 impl Gen {
     /// `sub_4BD00` (EF:33965) — the pyramid ctor MINUS the map gate
     /// (`byte_0x2FED2 & 2` lives on World — the spawn seam checks
@@ -255,7 +265,49 @@ impl Gen {
             // setter of the wind-down escape bit in the whole engine
             // (NETHERW.EXE @0x45f11; the machine itself only ever ANDs
             // it off).
-            e.flags |= 0x4880_0001;
+            //
+            // ⭐⭐⭐ …BUT THE CONSTANT IS A **RETAIL-LAYOUT** WORD AND
+            // THE PORT'S FLAG WORD IS A TRANSLATION, NOT A COPY.
+            // `import_ent_mc2` unpacks retail's four flag bytes into
+            // remapped port bits (`conformance.rs` ~5150-5280): three
+            // of the four bits in 0x48800001 happen to land on their
+            // own port home positionally — bit 0 (`byte[0] & 1`, the
+            // walk bit), bit 23 (`byte[2] & 0x80`, the dormant boss's
+            // raster mode, cleared again at EF:13024 below) and bit 30
+            // (`byte[3] & 0x40`, the render-arm gate) — but **bit 27
+            // does not**. Port bit 27 is [`crate::mc2::mobs::F_BLOCKED`],
+            // the move core's block latch, which the importer fills
+            // from retail's `byte[2] & 4`. So the raw stamp handed
+            // every doomsday pyramid a permanent "move blocked" latch
+            // it never earned.
+            //
+            // AND RETAIL'S `byte[3] & 0x08` IS WRITE-ONLY. A scan of
+            // the whole shipped `NETHERW.EXE` for every `test`/`or`/
+            // `and`/`cmp` of an imm8 against `byte [reg+0x0F]` (the
+            // fourth flag byte) finds **no instruction whose mask
+            // touches 0x08** — the only `and` masks on that byte are
+            // 0xEF (file 0x57DF4), 0xF9 (six sites in 0x43239..0x43632)
+            // and 0xFE (0x45F91), none of which clears it, and the
+            // only imm32 form at the `+0x0C` dword is this very ctor
+            // (`81 4b 0c 01 00 80 48` at file 0x7053E). One writer,
+            // zero readers: the bit is inert in retail and has no port
+            // home, so the port must simply not raise it.
+            //
+            // WITNESS: `(5,10) flags.b2_x4` — 9,499 free-run rows over
+            // two takes, retail 0 / port 1 UNBROKEN from the pyramid's
+            // birth tick to the end of the take (mc2l24 slot 5 from
+            // t=44380; mc2l24-crazy slot 6 from t=52323). ⚠ the lane is
+            // invisible in PAIR mode: the importer re-writes the flag
+            // word every tick and never sets bit 27 there. The stray
+            // latch is not cosmetic — `mc2/stagevars.rs` gates three
+            // `sub_1D5D0` legs on `flags & F_BLOCKED == 0`.
+            // `MGC_NO_MC2_PYRAMID_CTOR_FLAG_XLAT=1` restores the raw
+            // stamp. (Round 148, dig w148t.)
+            e.flags |= if no_mc2_pyramid_ctor_flag_xlat() {
+                0x4880_0001
+            } else {
+                0x4080_0001
+            };
             // `@0x36` is NOT `byte_0x38_56` — see `mc2_class5_w36_legacy`.
             if crate::mc2::roster::mc2_class5_w36_legacy() {
                 e.f56 = 1;
@@ -642,6 +694,31 @@ impl World {
         // radius ≥ the machine's own 0xA00 far-gate is behaviorally
         // identical (far ticks just re-clear the bit), so the gate
         // distance itself is the faithful choice.
+        //
+        // ⛔⛔ ROUND 149 (dig w149e) TRIED TO CLOSE THE RESIDUAL RAW
+        // LANE AND PROVED IT IS NOT CLOSEABLE. The census reports
+        // `(5,10) f2a` retail 80 / port 16 — 23 rows on mc2l24
+        // (t=44468..44490 slot 5) and 72 on mc2l24-crazy
+        // (t=52527..52656 slot 6) — i.e. exactly bit 0x40. Moving the
+        // arm to AFTER the machine (where the frame is drawn) and
+        // dropping the distance test for the ctor's `byte[0] & 1`
+        // dormant gate reproduces mc2l24 EXACTLY (23 rows → 0) and
+        // makes mc2l24-crazy WORSE, 72 rows → **104, sign flipped**
+        // (`t=52481 slot 6: retail 16 port 80`).
+        //
+        // ⭐⭐⭐ THE REASON IS IN RETAIL'S OWN TRAJECTORY: THE BIT
+        // FLICKERS. `dump-state` on mc2l24-crazy slot 6, all with the
+        // dormant bit already down (flags …8C):
+        //   t=52500 f2a 16 · t=52526 16 · t=52527 **80** ·
+        //   t=52600 **16** · t=52656 80 · t=52657 96 (the wake)
+        // On mc2l24 the same window is a solid 80 because the pyramid
+        // sits in frame throughout. So `@0x2A & 0x40` is a CAMERA
+        // FRUSTUM lane — set by the sprite pass whenever the boss is
+        // ON SCREEN, cleared only by the machine — and no deterministic
+        // function of the world state can reproduce it. The proximity
+        // analog is the best available approximation and the residual
+        // is a DEVIATION CANDIDATE, not a port defect. Do not re-dig
+        // it without a camera.
         if self.g.ent[i].flags & 0x4000_0000 != 0 {
             let (ex, ey) = (self.g.ent[i].x, self.g.ent[i].y);
             let dx = (ctx.px as i32 - ex as i32) as i16 as i32;
@@ -900,6 +977,41 @@ impl World {
             self.g.snd(63, i);
         }
         self.g.mc2_pyramid_face(i, ctx);
+        // ⭐⭐⭐ THE RENDERER'S ARM IS NOT DISTANCE-GATED, AND IT RUNS
+        // **AFTER** THE TICK. `GameRenderOriginal.cpp` (the sprite
+        // pass's `a1 == 1` arm, mirrored in the NG/HD renderers) ends
+        //   `if (str_F2C20ar.dword0x14x->struct_byte_0xc_12_15.byte[3] & 0x40)`
+        //   `    str_F2C20ar.dword0x14x->subSpellIndex_0x2A_42 |= 0x40u;`
+        // — the ONLY setter of the wind-down escape bit in the engine
+        // (`NETHERW.EXE` @0x45F11; every other site only ANDs it off).
+        // It fires for EVERY DRAWN record carrying the ctor's flag bit
+        // 30, with no proximity test whatsoever, and the frame is drawn
+        // after the sim tick, so the RECORDED boundary value always
+        // carries the bit once the boss is visible.
+        //
+        // The one gate the corpus does show is the ctor's `byte[0] & 1`
+        // (the port's `flags & 1`, raised by the `|= 0x48800001` stamp
+        // and dropped by the kill-all exit's `byte[0] &= 0xFE`,
+        // EF:12983): while it is up the pyramid is the DORMANT sleeper
+        // and never reaches the sprite pass.
+        //
+        // MEASURED, mc2l24 slot 5 (`dump-state`, retail's own `f2a`):
+        //   t=44380 f2a 0   flags …8D (bit0 up)   — dormant, no 0x40
+        //   t=44467 f2a 4   flags …8D             — still dormant
+        //   t=44468 f2a 80  flags …8C (bit0 down) — the kill-all exit
+        //                   sets 0x10 and the SAME tick's draw adds 0x40
+        //   t=44490 f2a 80                        — far: the machine
+        //                   clears 0x40, the draw puts it straight back
+        //   t=44491 f2a 96  flags loses bit 23    — near: 0x10 → 0x20
+        //   t=44600 f2a 66                        — 0x40 still held
+        // The pre-dig proximity analog reproduced every one of those
+        // EXCEPT the far window, where it left the bit down: `(5,10)
+        // f2a` retail 80 / port 16, mc2l24 23 rows t=44468..44490
+        // slot 5 and mc2l24-crazy 72 rows t=52527..52656 slot 6.
+        //
+        // BEHAVIOURALLY the two arms agree: the machine's `bits & 0x10`
+        // branch is the only reader, and its far arm does nothing but
+        // clear the bit again (EF:13010).
     }
 
     /// `sub_21F60` (EF:13519-13620) — the DEVOUR pass: the pyramid
@@ -1663,3 +1775,4 @@ impl World {
         }
     }
 }
+

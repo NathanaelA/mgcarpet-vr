@@ -55,6 +55,71 @@ pub(crate) fn no_mc2_piece_human_raise() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PIECE_HUMAN_RAISE").is_some())
 }
 
+/// `MGC_NO_MC2_PIECE_BURST_SEED=1` restores the pre-dig (10,79)
+/// defender-piece ctor, which left `fontTypeIndex_0x3D_61` (the BURST
+/// SHOT COUNTER, port `f69` on a piece) at the allocator's memset zero.
+///
+/// `sub_508E0_castle_defend_create` seeds it to **1**, between the
+/// `word_0x2C_44 = 0` and the `word_0x36_54 = 0` it already carries:
+/// ```text
+/// event->byte_0x46_70 = 0;  event->byte_0x43_67 = 0;
+/// event->word_0x2C_44 = 0;  event->fontTypeIndex_0x3D_61 = 1;
+/// event->word_0x36_54 = 0;  event->struct_byte_0xc_12_15.byte[0] &= 0xF7;
+/// ```
+/// (`EventsFunctions.cpp` signature line 37039, banner `(000508E0)`).
+/// Shipped `NETHERW.EXE`, file **0x75122** (VA 0x50922):
+/// `c6 43 3d 01  movb $0x1,0x3d(%ebx)` — sandwiched between
+/// `0x7511b 66 c7 43 2c 0000 movw $0x0,0x2c(%ebx)` and
+/// `0x75129 66 c7 43 36 0000 movw $0x0,0x36(%ebx)`, both of which the
+/// port already models.
+///
+/// ⭐ THE LANE IS THE BIGGEST SINGLE BLOCK OF THE FREE-RUN RAW-SHADOW
+/// CHANNEL: `(10,79) b3d` is **3,090,294 rows across 34 takes** in the
+/// round-148 census — HALF of the whole 6.47M-row channel — every one
+/// of them `retail 1 / port 0`, standing from the tick a castle raises
+/// its stage to the end of the take. The counter itself is re-stamped
+/// by the fire-mode pick (state 6 writes 6 or 1) before anything spends
+/// it, so this is a pure ctor-state law, not a behaviour change.
+pub(crate) fn no_mc2_piece_burst_seed() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PIECE_BURST_SEED").is_some())
+}
+
+/// `MGC_NO_MC2_CASTLE_KILLER_HOME=1` restores the pre-dig killer-latch
+/// field home in the two MC2 intakes that live in this file — a
+/// FIELD-HOMING BUG of the class `mc2/mobs.rs` already documents
+/// ("`word_0x24_36`, but `word_0x26_38` is `f40`, and `f36` is …").
+///
+/// `sub_609E0` (the CASTLE damage intake, `EventsFunctions.cpp`
+/// signature line 62132, banner `(000609E0)`) ends its lethal arm with
+/// ```text
+/// locEvent->word_0x24_36 = locEvent->str_0x5E_94.word_0x62_98;
+/// ```
+/// and `sub_60EA0` (the (3,3) BALLOON tail intake) carries the same
+/// statement. `word_0x24_36` is `@0x24`, whose port home is **`f38`**
+/// (`port_ent_lanes_mc2`: `("f24", some(untr(e.f38)))`; `import_ent_mc2`
+/// seats `f38: tr(r.f24)`). Both sites wrote **`f36`** — the port's
+/// `@0x22` home — so the killer id landed in the fov word and the
+/// killer lane stayed at the allocator's zero forever.
+///
+/// Shipped `NETHERW.EXE`, `sub_609E0` at file **0x851E0**:
+/// ```text
+///   85210  7d 18              jge  0x8522a          ; survived?
+///   85212  66 8b 43 62        mov  0x62(%ebx),%ax   ; mail0.src
+///   85216  66 c7 43 62 00 00  movw $0x0,0x62(%ebx)
+///   8521c  66 89 43 24        mov  %ax,0x24(%ebx)   ; <-- @0x24
+/// ```
+/// Census: `(3,2) f24` = **507,512 rows over 29 takes** (mc2l9 slot 339
+/// latches 154 the tick its life crosses to −1800; mc2l8 slot 163
+/// t=3492) and `(3,3) f24` = **16,674 rows over 18 takes**.
+/// @0x22 is published only for the (5,27) hydra, so the misfiled write
+/// was invisible to every channel; nothing in the port reads either
+/// word on a castle or a balloon, so this is state-only.
+pub(crate) fn no_mc2_castle_killer_home() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CASTLE_KILLER_HOME").is_some())
+}
+
 /// `MGC_NO_MC2_PIECE_SCAN_ALLY=1` restores the pre-dig (10,79) turret
 /// ring scan, which admitted an OWN-PARENT ALLIANCE SUMMON as a
 /// hostile — the exemption `mc2_piece_scan`'s own doc comment used to
@@ -221,6 +286,11 @@ pub(crate) fn no_mc2_painter_settle_lane() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PAINTER_SETTLE_LANE").is_some())
 }
 
+pub(crate) fn no_mc2_class3_2e_home() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CLASS3_2E_HOME").is_some())
+}
+
 /// ⭐⭐⭐ **THE PAINTER'S BUILD00 ROW IS THE *SIGN-EXTENDED* BYTE, AND
 /// RETAIL NEVER CLAMPS IT.** `AddTerrainMod0A_2A_37BC0` (EF:27648;
 /// shipped NETHERW.EXE **0x5C3C0**) reads the row three times and every
@@ -257,6 +327,16 @@ pub(crate) fn no_mc2_painter_settle_lane() -> bool {
 pub(crate) fn no_mc2_painter_row_verbatim() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PAINTER_ROW_VERBATIM").is_some())
+}
+
+/// A/B toggle for THE (10,42) CTOR'S OUT-OF-BOUNDS BUILD ROW RESIDUE:
+/// set `MGC_NO_MC2_PAINTER_OOB_RESIDUE` to restore the row-0 read the
+/// registered deviation describes. Citation, the measured invariant
+/// and the ⚖ ruling note live at
+/// [`Gen::mc2_painter_ctor_extents`].
+pub(crate) fn no_mc2_painter_oob_residue() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PAINTER_OOB_RESIDUE").is_some())
 }
 
 /// ⭐ THE PAINT RUNS INSIDE THE ACCUMULATE LOOP, BEFORE THE RISE.
@@ -669,7 +749,14 @@ impl Gen {
             let (amt, src) = self.ent[i].mail[0];
             self.ent[i].act_life -= amt as i32;
             if self.ent[i].act_life < 0 {
-                self.ent[i].f36 = src; // killer memory (word_0x24_36)
+                // killer memory (`word_0x24_36` = @0x24 = `f38`; the
+                // pre-dig home `f36` is @0x22 — see
+                // [`no_mc2_castle_killer_home`]).
+                if no_mc2_castle_killer_home() {
+                    self.ent[i].f36 = src;
+                } else {
+                    self.ent[i].f38 = src;
+                }
                 self.ent[i].mail[0].1 = 0;
                 return 2;
             }
@@ -724,10 +811,22 @@ impl Gen {
         let Some(p) = self.mc2_spawn_castle_painter_at(i, lvl as u8, false) else {
             return;
         };
-        // The level-up painter is ARMED (EF:61602 `byte[2] |= 1`):
-        // the rise executes whatever stands on the footprint. The
-        // repaint painter is not — see [`F_BUILD_KILL`].
+        // The level-up painter is ARMED (`sub_60480`, banner EF:61961,
+        // the tail `v2x->struct_byte_0xc_12_15.byte[2] |= 1` at
+        // EF:62002): the rise executes whatever stands on the
+        // footprint. The repaint painter is not — see [`F_BUILD_KILL`].
+        // ⚠ THAT ONE RETAIL BIT HAS TWO PORT HOMES: the positional
+        // `byte[2] & 1` seat at 0x1_0000 (which `import_ent_mc2`
+        // fills, and which every raw-lane dump publishes as
+        // `flags.b2_kill1`) and the semantic [`F_BUILD_KILL`] at bit
+        // 21 that the painter tick reads. The native arm used to set
+        // only bit 21, so a natively built castle's painter read
+        // `b2_kill1 = 0` where every imported one reads 1. See
+        // [`crate::mc2::mobs::no_mc2_painter_upgrade_tail`].
         self.ent[p].flags |= F_BUILD_KILL;
+        if !crate::mc2::mobs::no_mc2_painter_upgrade_tail() {
+            self.ent[p].flags |= 0x1_0000;
+        }
         self.snd(10, i);
         self.ent[i].f26 = lvl;
         self.ent[i].tick70 = 5;
@@ -740,7 +839,19 @@ impl Gen {
         // upgrade).
         self.ent[i].f78 = 0xE000;
         self.ent[i].f84 = 0x4000;
-        self.mc2_castle_extents_ent(p, lvl as u8);
+        // ⚠ THE PAINTER TAKES THE PLAIN HELPER, NOT THE CASTLE'S AIM
+        // STAMP. `sub_60480` calls `SetShiftByCastle_49EC0` TWICE
+        // (EF:61986 on the castle, EF:61989 on the painter) and the
+        // `yaw = 0xE000 / fov = 0x4000` pair between them (EF:61987-88)
+        // is written to `a1x` — the CASTLE — only. The painter
+        // therefore keeps the helper's own `yaw = 0 / fov = 256`,
+        // which is exactly what record 0 shows (mc2l4 slot 303:
+        // ayaw 0 afov 256; mc2l16 slot 411).
+        if crate::mc2::mobs::no_mc2_painter_upgrade_tail() {
+            self.mc2_castle_extents_ent(p, lvl as u8);
+        } else {
+            self.mc2_castle_box_quad(p, lvl as u8);
+        }
         self.mc2_castle_ladder(i);
         self.mc2_castle_stages(i);
         let own = self.ent[i].id24;
@@ -1934,6 +2045,53 @@ impl Gen {
         self.ent[b].flags |= 0x400;
     }
 
+    /// ⭐⭐⭐ RETAIL'S `word_0x2E_46` HAS A DIFFERENT PORT HOME ON EVERY
+    /// CLASS-3 MODEL, AND THE BUILD MACHINE WROTE ONLY THE CASTLE'S.
+    ///
+    /// The paint machine is model-blind at both ends. `sub_377A0`
+    /// (banner `//----- (000377A0)`) walks the class-3 roster
+    /// (`dword_38519`) and calls `sub_5FBD0` for EVERY member whose
+    /// extents the completing building overlaps; `sub_5FBD0` (banner
+    /// `//----- (0005FBD0)`) mints a (10,42) painter over it and stamps
+    /// `a1x->word_0x2E_46 = 4` (NETHERW.EXE VA 0x5FBD0 / file 0x843D0,
+    /// the store at file **0x84423**: `66 c7 46 2e 04 00
+    /// movw $0x4,0x2e(%esi)`). Forty-three or forty-four ticks later
+    /// — the painter's 19-tick rise plus its 25-tick repaint settle —
+    /// `AddTerrainMod0A_2A_37BC0` closes with
+    /// `Entities[a1x->parentId_0x28_40]->word_0x2E_46 = 2` (EF:27786),
+    /// again through the parent pointer with no model test.
+    ///
+    /// The port's home for that word depends on the model:
+    ///   * `(3,2)` castle — `f59` (`import_ent_mc2`'s `f59` arm takes
+    ///     `r.f2e`; its `f46` takes `r.f2c`, the GUARD COOLDOWN).
+    ///   * `(3,3)` balloon — `f46` (the importer's `else` arm is
+    ///     `f46 = r.f2e`, and `port_ent_lanes_mc2`'s `f2e` lane
+    ///     publishes `e.f46` for it).
+    ///   * `(3,0|1)` wizard — NO home: `f46` is the DEATH-FALL VELOCITY
+    ///     there (@0x2C; the `f2e` lane prints `—`), so the write is
+    ///     dropped rather than re-aimed, exactly as before.
+    /// A non-class-3 parent keeps `f59`, the castle-column home the
+    /// painter's own call site has always used.
+    ///
+    /// Before this routing the balloon lost BOTH halves at once: the
+    /// `4` was dropped (the repaint arm tested `model65 == 2`) and the
+    /// `2` landed in `f59`, which on a balloon is retail's `@0x3A`.
+    /// That is the paired census signature — `(3,3) f2e` retail 4 /
+    /// port 0 opening at T, and `(3,3) b3a` retail 0 / port 2 opening
+    /// 43-44 ticks later, on the same slot, in eleven takes.
+    pub(crate) fn mc2_store_class3_2e(&mut self, i: usize, v: i16) {
+        if no_mc2_class3_2e_home() {
+            self.ent[i].f59 = v as u8;
+            return;
+        }
+        match (self.ent[i].class64, self.ent[i].model65) {
+            (3, 2) => self.ent[i].f59 = v as u8,
+            (3, 3) => self.ent[i].f46 = v,
+            (3, _) => {} // wizards: f46 is @0x2C, no @0x2E home
+            _ => self.ent[i].f59 = v as u8,
+        }
+    }
+
     /// `sub_4ABA0` (EF:33409) — the MC2 (3,3) balloon ctor: life
     /// 10000, speed 48, cargo cap 10000, ch0 intake, behavior row
     /// 68 (the same servo family as MC1's row 9),
@@ -2152,7 +2310,13 @@ impl Gen {
                 self.balloon_alert = 4;
             }
             if self.ent[i].act_life < 0 {
-                self.ent[i].f36 = src;
+                // `word_0x24_36` → `f38`; see
+                // [`no_mc2_castle_killer_home`].
+                if no_mc2_castle_killer_home() {
+                    self.ent[i].f36 = src;
+                } else {
+                    self.ent[i].f38 = src;
+                }
             } else {
                 self.ent[i].mail[0].1 = 0;
             }
@@ -2199,7 +2363,7 @@ impl Gen {
     pub(crate) fn mc2_spawn_wizard_painter(
         &mut self,
         pos: (u16, u16, i16),
-        row: u8,
+        row: i16,
         _own: u16,
         parent: u16,
     ) -> Option<usize> {
@@ -2236,7 +2400,53 @@ impl Gen {
     /// verbatim moves the free horizon 3240 → **3470**, which is
     /// exactly the take's first divergent PAIR — the free run has
     /// caught up with the graded census.
-    fn mc2_new_painter_record(&mut self, pos: (u16, u16, i16), row: u8) -> Option<usize> {
+    /// `SetShiftByCastle_49EC0` (banner `00049EC0`) — the BUILD0-0.TAB
+    /// row the (10,42) ctor sizes its collision half-extents from.
+    ///
+    /// ⭐⭐⭐ **THE OUT-OF-BOUNDS ROW HAS A RECORDED VALUE.** BUILD0-0.TAB
+    /// ships 462 bytes = 77 six-byte rows, and retail's index is NOT
+    /// bounded: `sub_5FBD0` passes the class-3 member's
+    /// `dword_0x10_16` verbatim, which on a DEAD WIZARD IN RESPAWN
+    /// DEAD-WAIT is the respawn countdown parked at **1200**. Retail
+    /// indexes 7,200 bytes past the table (file 0x6e6c0:
+    /// `lea (,%edx,4)` / `sub` / `add %eax,%eax` / `add base`, then
+    /// plain byte loads of +4 and +5) and reads its own image.
+    ///
+    /// Round 98 scanned the shipped assets for that pair and found
+    /// nothing, so the port took the table's EMPTY row 0 and the
+    /// divergence was registered
+    /// (`mc2-painter-oob-build-row-applied-pitch` / `-applied-yaw`,
+    /// PLAYER-RULED 2026-09-04). ⚠ **THE MEASUREMENT HAS SINCE CLOSED
+    /// THE OTHER HALF**: over the corpus `a2 == 1200` yields the SAME
+    /// extents on **mc2l10 t=11114/13094/13105, mc2l13
+    /// t=18040/18151/31571, mc2l15 t=24152/24184 and mc2l22 t=12970**
+    /// — four takes, three levels, invariant — and remc2 now seeds it
+    /// on that footing (`Build00RowOrRetailResidue`, the same standing
+    /// as `str_D93C0_bldgprmbuffer[76]`). In the port's own units
+    /// (`((w << 8) + 1280) >> 1`) retail's `apitch` 5504 / `aroll` 2944
+    /// ARE `(w 38, h 18)`.
+    ///
+    /// ⚖ THIS RE-LITIGATES A PLAYER RULING and is therefore switched
+    /// OFF-able: `MGC_NO_MC2_PAINTER_OOB_RESIDUE=1` restores the row-0
+    /// read the deviation describes. Rows outside the table that the
+    /// corpus has NOT witnessed stay at row 0 — guessing them would be
+    /// the invented-clamp mistake in a new costume.
+    fn mc2_painter_ctor_extents(
+        tab: &[crate::engine::features::BuildDef],
+        row: i16,
+    ) -> (u16, u16) {
+        if row >= 0
+            && let Some(d) = tab.get(row as usize)
+        {
+            return (d.w as u16, d.h as u16);
+        }
+        if row == 1200 && !no_mc2_painter_oob_residue() {
+            return (38, 18);
+        }
+        (0, 0)
+    }
+
+    fn mc2_new_painter_record(&mut self, pos: (u16, u16, i16), row: i16) -> Option<usize> {
         let i = self.new_event()?;
         let e = &mut self.ent[i];
         e.class64 = 10;
@@ -2246,15 +2456,18 @@ impl Gen {
         e.act_life = 0; // CopyMaxLifeToLife_49A20
         e.flags = (e.flags & !0x9) | 1;
         e.f59 = 1;
-        e.f71 = row;
+        // ⚠ THE CTOR'S ROW AND THE TICK'S ROW ARE DIFFERENT NUMBERS.
+        // `sub_5FBD0` hands `SetShiftByCastle_49EC0` the class-3
+        // member's FULL `dword_0x10_16` (file 0x8441d
+        // `movswl 0x10(%esi)`) and separately truncates it into
+        // `byte_0x46_70`; the painter TICK then re-reads that BYTE
+        // sign-extended (`movsbl 0x46(%ebx)`). 1200 → extents row
+        // 1200, `f71` 176, tick row −80.
+        e.f71 = row as u8;
         e.x = pos.0;
         e.y = pos.1;
         e.z = pos.2;
-        let (w, h) = self
-            .assets
-            .build_tab
-            .get(row as usize)
-            .map_or((0u16, 0u16), |d| (d.w as u16, d.h as u16));
+        let (w, h) = Self::mc2_painter_ctor_extents(&self.assets.build_tab, row);
         let e = &mut self.ent[i];
         e.f78 = 0;
         e.f80 = ((w << 8).wrapping_add(1280)) >> 1;
@@ -2273,7 +2486,7 @@ impl Gen {
             let e = &self.ent[castle];
             (e.x, e.y, e.site_z)
         };
-        let i = self.mc2_new_painter_record((x, y, site_z), row)?;
+        let i = self.mc2_new_painter_record((x, y, site_z), row as i16)?;
         let e = &mut self.ent[i];
         // ⚠ `byte_0x3B_59` is the ctor's flat 1 (see
         // [`Self::mc2_new_painter_record`]); the repaint distinction
@@ -2376,7 +2589,10 @@ impl Gen {
                     }
                 }
                 if parent != 0 && self.ent[parent].flags & 0x400 == 0 {
-                    self.ent[parent].f59 = 2; // pass done
+                    // "pass done" — `word_0x2E_46 = 2` through the
+                    // parent pointer (EF:27786), whose port home is
+                    // per-model. See [`Gen::mc2_store_class3_2e`].
+                    self.mc2_store_class3_2e(parent, 2);
                 }
                 self.ent[i].flags |= 0x400;
             }
@@ -2863,6 +3079,12 @@ impl Gen {
             // (dwell counter, retail dword_0x10_16 — default 100).
             e.f68 = 0;
             e.f44 = 0;
+            // …and it SEEDS the burst counter `fontTypeIndex_0x3D_61`
+            // (a piece's `f69`) to 1 — see
+            // [`no_mc2_piece_burst_seed`] for the shipped bytes.
+            if !no_mc2_piece_burst_seed() {
+                e.f69 = 1;
+            }
             // ⭐⭐ AND THE PIECE IS NOT SOLID. The ctor's own
             // `event->struct_byte_0xc_12_15.byte[0] &= 0xF7`
             // (EF:36998) clears the COLLIDE bit `NewEvent_4A050`
@@ -3475,6 +3697,51 @@ mod tests {
         );
     }
 
+    /// ⭐⭐⭐ THE (10,42) CTOR'S OUT-OF-BOUNDS BUILD ROW HAS A
+    /// RECORDED VALUE (round 149, dig w149e;
+    /// [`no_mc2_painter_oob_residue`]).
+    ///
+    /// `sub_5FBD0` hands `SetShiftByCastle_49EC0` the class-3 member's
+    /// FULL `dword_0x10_16` (file 0x8441d `movswl 0x10(%esi)`), which
+    /// on a wizard in respawn dead-wait parks at **1200**; retail then
+    /// indexes 1200 rows into a 77-row table with no bound test at all
+    /// (file 0x6e6c0) and the corpus records the SAME extents every
+    /// time — mc2l10 t=11114/13094/13105, mc2l13 t=18040/18151/31571,
+    /// mc2l15 t=24152/24184, mc2l22 t=12970: four takes, three levels.
+    /// In the port's own `((w << 8) + 1280) >> 1` units that pair is
+    /// `(38, 18)` — retail's `apitch` 5504 / `aroll` 2944.
+    ///
+    /// ⚖ THIS RE-LITIGATES THE 2026-09-04 RULING behind
+    /// `mc2-painter-oob-build-row-applied-pitch` / `-applied-yaw`.
+    ///
+    /// POSITIVE CONTROL: the IN-RANGE rows either side, which must
+    /// still read the table, and the neighbouring out-of-range rows
+    /// 1199/1201, which stay at the empty row 0 — guessing those would
+    /// be the invented-clamp mistake in a new costume.
+    /// REVERSION PROOF: fails with
+    /// `MGC_NO_MC2_PAINTER_OOB_RESIDUE=1`, where row 1200 reads (0,0).
+    #[test]
+    fn the_painter_ctor_seeds_the_recorded_row_1200_residue() {
+        let tab = [
+            BuildDef { offset: 0, w: 0, h: 0 },   // row 0 — the EMPTY row
+            BuildDef { offset: 0, w: 8, h: 8 },   // row 1 — a level-1 castle
+        ];
+        // POSITIVE CONTROL: in-range rows still come off the table.
+        assert_eq!(Gen::mc2_painter_ctor_extents(&tab, 0), (0, 0));
+        assert_eq!(Gen::mc2_painter_ctor_extents(&tab, 1), (8, 8));
+        // THE LAW.
+        assert_eq!(
+            Gen::mc2_painter_ctor_extents(&tab, 1200),
+            (38, 18),
+            "the dead-rival respawn countdown's recorded residue \
+             (apitch 5504 / aroll 2944)"
+        );
+        // POSITIVE CONTROL: only the WITNESSED index is seeded.
+        assert_eq!(Gen::mc2_painter_ctor_extents(&tab, 1199), (0, 0));
+        assert_eq!(Gen::mc2_painter_ctor_extents(&tab, 1201), (0, 0));
+        assert_eq!(Gen::mc2_painter_ctor_extents(&tab, -80), (0, 0));
+    }
+
     /// ⭐⭐ A TURRET DOES NOT SHOOT ITS OWNER'S OWN CHARMED CREATURE
     /// (round 145, dig W79; [`no_mc2_piece_scan_ally`]).
     ///
@@ -3548,6 +3815,112 @@ mod tests {
         // Must not panic on `10 * i32::MAX`.
         g.mc2_castle_downgrade(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[i].f26, 6, "one level off, no overflow");
+    }
+
+    /// `sub_377A0` → `sub_5FBD0` (`movw $0x4,0x2e(%esi)`, file
+    /// 0x84423) and the painter's finish (EF:27786,
+    /// `Entities[parentId]->word_0x2E_46 = 2`) both write retail's
+    /// `word_0x2E_46` through a class-3 pointer with NO model test —
+    /// and the port's home for that word is per-model: `f59` on a
+    /// (3,2) castle, `f46` on a (3,3) balloon, nowhere on a wizard
+    /// (its `f46` is the death-fall velocity). The build machine used
+    /// to write `f59` flat, which dropped the balloon's `4` and
+    /// mis-filed its `2` into retail's `@0x3A`.
+    /// `MGC_NO_MC2_CLASS3_2E_HOME=1` restores the flat store.
+    #[test]
+    fn mc2_class3_2e_home_is_per_model() {
+        let mut g = flat_gen();
+        let mk = |g: &mut Gen, model: u8| -> usize {
+            let s = g.new_event().expect("slot");
+            g.ent[s].class64 = 3;
+            g.ent[s].model65 = model;
+            s
+        };
+        let castle = mk(&mut g, 2);
+        let balloon = mk(&mut g, 3);
+        let wizard = mk(&mut g, 1);
+        for s in [castle, balloon, wizard] {
+            g.mc2_store_class3_2e(s, 4);
+        }
+        assert_eq!(
+            (g.ent[castle].f59, g.ent[castle].f46),
+            (4, 0),
+            "a (3,2)'s @0x2E is f59 (its f46 is the @0x2C guard cooldown)"
+        );
+        assert_eq!(
+            (g.ent[balloon].f46, g.ent[balloon].f59),
+            (4, 0),
+            "a (3,3)'s @0x2E is f46 — and NOTHING lands in f59, which is @0x3A there"
+        );
+        assert_eq!(
+            (g.ent[wizard].f46, g.ent[wizard].f59),
+            (0, 0),
+            "a (3,0|1) has no @0x2E home at all: the write is dropped, not re-aimed"
+        );
+    }
+
+    /// `sub_609E0` (the castle intake, file 0x85224 `66 89 43 24
+    /// mov [ebx+0x24],ax`) and `sub_60EA0` (the balloon intake, file
+    /// 0x856D7 `66 89 50 24 mov [eax+0x24],dx`) both stamp the LETHAL
+    /// mail's source into retail's `word_0x24_36`. The port's home for
+    /// @0x24 is `f38` (`import_ent_mc2`: `f38: tr(r.f24)`); both
+    /// intakes wrote `f36`, which is @0x22 and dead on these models.
+    /// `MGC_NO_MC2_CASTLE_KILLER_HOME=1` restores the old field (digs w148h
+    /// and w148j found this law independently; one switch guards both sites).
+    #[test]
+    fn mc2_class3_killer_latch_lands_in_the_0x24_home() {
+        let mut g = flat_gen();
+        let ground = g.ground_z(100 << 8, 100 << 8) as i16;
+        // The BALLOON half — `mc2_balloon_tick`'s tail intake.
+        let bal = g.new_event().expect("balloon slot");
+        {
+            let e = &mut g.ent[bal];
+            e.class64 = 3;
+            e.model65 = 3;
+            e.tick70 = 9;
+            e.act_life = 10;
+            e.max_life = 10;
+            e.row156 = 68;
+            e.f126 = 48;
+            e.mail[0] = (100, 777); // lethal, killer = slot 777
+        }
+        g.link(bal, 100 << 8, 100 << 8, ground);
+        g.mc2_balloon_tick(bal, &crate::mc1::mobs::MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        });
+        assert!(g.ent[bal].act_life < 0, "the mail is lethal");
+        assert_eq!(
+            (g.ent[bal].f38, g.ent[bal].f36),
+            (777, 0),
+            "sub_60EA0 stamps @0x24 (f38), not @0x22 (f36)"
+        );
+        // The CASTLE half — `mc2_castle_intake` returns 2 on lethal.
+        let cas = g.new_event().expect("castle slot");
+        {
+            let e = &mut g.ent[cas];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.act_life = 10;
+            e.max_life = 10;
+            e.mail[0] = (100, 555);
+        }
+        g.link(cas, 120 << 8, 120 << 8, ground);
+        assert_eq!(g.mc2_castle_intake(cas), 2, "lethal");
+        assert_eq!(
+            (g.ent[cas].f38, g.ent[cas].f36),
+            (555, 0),
+            "sub_609E0 stamps @0x24 (f38), not @0x22 (f36)"
+        );
     }
 
     /// The MC2 balloon altitude servo is `sub_580E0` (EF:40372), a
@@ -3655,6 +4028,58 @@ mod tests {
         g.link(i, x, y, z);
         g.mc2_castle_extents(i, lvl.clamp(0, 7) as u8);
         i
+    }
+
+    /// ⭐⭐⭐ THE (10,79) CTOR SEEDS ITS BURST COUNTER TO 1.
+    /// `sub_508E0_castle_defend_create` stores
+    /// `fontTypeIndex_0x3D_61 = 1` (`NETHERW.EXE` file 0x75122
+    /// `c6 43 3d 01`), which a piece homes in `f69`. The lane is
+    /// `b3d`, and it is the LARGEST single block of the free-run
+    /// raw-shadow channel: 3,090,294 rows over 34 takes, all
+    /// `retail 1 / port 0`.
+    /// FAILS under `MGC_NO_MC2_PIECE_BURST_SEED=1`; the three
+    /// assertions below it are the POSITIVE CONTROL (the ctor's other
+    /// three ungated stores, which that switch must NOT move).
+    #[test]
+    fn the_defender_piece_ctor_seeds_its_burst_counter() {
+        let mut g = flat_gen();
+        let p = g
+            .mc2_spawn_castle_piece(40 << 8, 40 << 8, 9, 1, 0)
+            .expect("piece slot");
+        assert_eq!(g.ent[p].f69, 1, "fontTypeIndex_0x3D_61 = 1 (file 0x75122)");
+        // POSITIVE CONTROL — the ctor's neighbours in the same block.
+        assert_eq!(g.ent[p].f44, 0, "word_0x2C_44 = 0 (file 0x7511b)");
+        assert_eq!(g.ent[p].f54, 0, "word_0x36_54 = 0 (file 0x75129)");
+        assert_eq!(g.ent[p].flags & 8, 0, "byte[0] &= 0xF7 (file 0x75126)");
+    }
+
+    /// ⭐⭐⭐ THE CASTLE'S KILLER LATCH IS `@0x24`, NOT `@0x22`.
+    /// `sub_609E0`'s lethal arm is `word_0x24_36 = mail0.src`
+    /// (`NETHERW.EXE` file 0x8521c `66 89 43 24`), and `@0x24`'s port
+    /// home is `f38` — `f36` is `@0x22`. Census: `(3,2) f24` =
+    /// 507,512 rows over 29 takes.
+    /// FAILS under `MGC_NO_MC2_CASTLE_KILLER_HOME=1`; the survive arm
+    /// below is the POSITIVE CONTROL (no latch on a non-lethal hit,
+    /// and the mail cleared either way).
+    #[test]
+    fn the_castle_intake_latches_its_killer_in_f38() {
+        let mut g = flat_gen();
+        // SURVIVE — the positive control: no latch, box wiped.
+        let a = place_castle(&mut g, 40 << 8, 40 << 8, 1, 9);
+        g.ent[a].act_life = 5000;
+        g.ent[a].mail[0] = (1000, 424);
+        assert_eq!(g.mc2_castle_intake(a), 1, "a survived hit reports 1");
+        assert_eq!(g.ent[a].f38, 0, "no killer on a survived hit");
+        assert_eq!(g.ent[a].f36, 0, "and nothing in the @0x22 word either");
+        assert_eq!(g.ent[a].mail[0], (0, 0), "survive wipes amount AND source");
+        // LETHAL — the law.
+        let b = place_castle(&mut g, 60 << 8, 60 << 8, 1, 9);
+        g.ent[b].act_life = 500;
+        g.ent[b].mail[0] = (5000, 424);
+        assert_eq!(g.mc2_castle_intake(b), 2, "a lethal hit reports 2");
+        assert_eq!(g.ent[b].f38, 424, "word_0x24_36 = mail0.src (file 0x8521c)");
+        assert_eq!(g.ent[b].f36, 0, "@0x22 is NOT the killer latch");
+        assert_eq!(g.ent[b].mail[0].0, 5000, "the lethal arm keeps the amount");
     }
 
     /// The "no room" scan reads the class-3 castle list (retail
@@ -4284,6 +4709,359 @@ mod tests {
         );
     }
 
+    /// ⭐⭐⭐ THE MC2 REAP IS THE TICK-TOP SWEEP, NOT AN IN-WALK FREE.
+    /// `UpdateEntities_57730` (EF:40233, banner `00057730`; shipped
+    /// `NETHERW.EXE` file 0x7BF30, the `testb $0x4,0xd(%ebx)` /
+    /// `call 0x7c720` / `add $0xa8,%ebx` loop) frees every
+    /// `byte[1] & 4` record ASCENDING, before a single handler runs.
+    /// The port's MC2 NATIVE arm freed at the bottom of the flagged
+    /// record's OWN dispatch iteration, so its slot became poppable to
+    /// every spawner later in the same walk. mc2l16 record 0: three
+    /// `(10,45)` collapses at slots 60/61/62 handed their own slots to
+    /// the archers they minted, where retail took 415..418 and pushed
+    /// 60, 61, 62 at the next tick top.
+    /// The in-walk free survives as PATCH OPTION `mc2_immediate_reap`
+    /// (player-ruled 2026-09-18, native default ON): the second half
+    /// of this test opts in and pins THAT arm — the slot returns
+    /// inside its own tick.
+    #[test]
+    fn a_reap_flagged_mc2_record_survives_its_own_tick() {
+        use crate::engine::world::{PlayerCommand, PlayerPose, World};
+        use crate::ids::GameId;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut build_dat = Vec::new();
+        for _ in 0..9 {
+            build_dat.extend_from_slice(&[0xff, 40]);
+        }
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: vec![
+                BuildDef {
+                    offset: 0,
+                    w: 0,
+                    h: 0,
+                },
+                BuildDef {
+                    offset: 0,
+                    w: 3,
+                    h: 3,
+                },
+            ],
+            build_dat,
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut w = World::new_for_game(planes.clone(), &[], 1, assets.clone(), GameId::Mc2);
+        // A building already in its collapse state (action 53): its
+        // handler's last statement is `flags |= 0x400`.
+        let seed = |w: &mut World| {
+            let b = w.g.new_event().expect("pool");
+            {
+                let e = &mut w.g.ent[b];
+                e.class64 = 10;
+                e.model65 = 45;
+                e.tick70 = 53;
+                e.f71 = 1; // BUILD00 row 1 (the 3x3 stand-in)
+                e.f46 = 0; // no degradation chain
+                e.f26 = 0; // no occupants owed
+                e.f66 = 0; // no on-death disposition
+            }
+            let (bx, by) = (60u16 << 8, 60u16 << 8);
+            w.g.link(b, bx, by, 100);
+            w.g.refill_life(b);
+            b
+        };
+        let b = seed(&mut w);
+        let free_before = w.g.free.len();
+        let far = PlayerPose::from_tiles(5.0, 10.0, 5.0, 0.0, 0.0, 0.0);
+        w.tick(far, PlayerCommand::default());
+        // Non-vacuous: the collapse DID run and DID flag the record.
+        assert_ne!(
+            w.g.ent[b].flags & 0x400,
+            0,
+            "the collapse handler reap-flagged its own record"
+        );
+        assert_eq!(
+            w.g.ent[b].class64, 10,
+            "`sub_57F20` has not run yet — retail's reap is the NEXT frame's top"
+        );
+        assert_eq!(
+            w.g.free.len(),
+            free_before,
+            "and the slot is not back on the free stack inside its own tick"
+        );
+        // The next tick's top sweeps it.
+        w.tick(far, PlayerCommand::default());
+        assert_eq!(w.g.ent[b].class64, 0, "freed at the next tick top");
+        assert_eq!(
+            w.g.free.len(),
+            free_before + 1,
+            "…and pushed exactly once"
+        );
+        // THE PATCHED ARM: the same collapse under `mc2_immediate_reap`
+        // returns the slot inside its own tick.
+        let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
+        w.set_patches(crate::WorldPatches {
+            mc2_immediate_reap: true,
+            ..crate::WorldPatches::RETAIL
+        });
+        let b = seed(&mut w);
+        let free_before = w.g.free.len();
+        w.tick(far, PlayerCommand::default());
+        assert_eq!(w.g.ent[b].class64, 0, "patched: freed in its own walk");
+        assert_eq!(
+            w.g.free.len(),
+            free_before + 1,
+            "patched: the slot is back on the free stack within the tick"
+        );
+    }
+
+    /// ⭐⭐ THE AUTHORED CASTLE'S BIRTH LADDER READS THE OWNER'S
+    /// `Life_0x3612F` SCALAR, AND THE PORT'S OWNER → PLAYER MAP HAS TO
+    /// BE SEATED BY THEN. `sub_60810` (EF:62092, banner `00060810`)
+    /// resolves it as `Entities_EA3E4[castle->id_0x1A_26]->
+    /// dword_0xA4_164x->word_0x24A_586`, and `sub_5C950` wires that
+    /// back-pointer at wizard birth (EF:44061), ~70 lines above the
+    /// authored-castle arm. The port resolves the colour by scanning
+    /// `Gen::rival_ents`, which used to be written at the very END of
+    /// `mc2_spawn_rival` — so every authored rival castle took its
+    /// birth ladder at the HUMAN's flat 256.
+    ///
+    /// Witness: mc2l22 / mc2l22-new slot 476, a level-1 castle owned by
+    /// colour 1 (`Life_0x3612F` = 254) whose first build tick is
+    /// REFUSED by `mc2_castle_space_ok`, so it parks at action 4 still
+    /// holding its birth rung — retail 19843 = `20000 * 254 >> 8`,
+    /// the port 20000. `MGC_NO_MC2_WIZ_BLOCK_AT_BIRTH=1` fails this.
+    #[test]
+    fn the_authored_castle_birth_ladder_scales_by_the_owners_life() {
+        use crate::engine::world::World;
+        use crate::ids::GameId;
+        use crate::mc2::rivals::{MC2_SPELLS, Mc2RivalConfig};
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut build_dat = Vec::new();
+        for _ in 0..9 {
+            build_dat.extend_from_slice(&[0xff, 40]);
+        }
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: vec![
+                BuildDef {
+                    offset: 0,
+                    w: 0,
+                    h: 0,
+                },
+                BuildDef {
+                    offset: 0,
+                    w: 3,
+                    h: 3,
+                },
+            ],
+            build_dat,
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
+        let mut configs: [Option<Mc2RivalConfig>; 8] = Default::default();
+        let mut start = [false; MC2_SPELLS];
+        start[2] = true;
+        configs[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 254, // WizardMapSettings.Life_0x3612F for colour 1
+            castle_level: 2, // → born at level 1, rung 1 = 20000
+            start,
+            start_level: [0; MC2_SPELLS],
+            blocked: [false; MC2_SPELLS],
+        });
+        w.set_mc2_wizards(&configs, 2);
+        let wiz = w.mc2_rivals[0].ent as usize;
+        let castle = (1..w.g.ent.len())
+            .find(|&j| {
+                w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 2 && w.g.ent[j].id24 == wiz as u16
+            })
+            .expect("the authored castle");
+        // Non-vacuous: the ladder ran at rung 1, not at the level-0
+        // skip — the unscaled value would be exactly 20000.
+        assert_eq!(w.g.ent[castle].f26, 1, "born at level 1 (castle_level - 1)");
+        assert_eq!(
+            w.g.ent[castle].max_life,
+            20000 * 254 >> 8,
+            "the birth ladder scaled by the OWNER's Life, not the human's 256"
+        );
+        assert_eq!(
+            w.g.ent[castle].act_life as u32,
+            w.g.ent[castle].max_life,
+            "`sub_60780`'s life = maxLife - debt, and there is no debt"
+        );
+        // POSITIVE CONTROL: the same spawn with `life = 0` takes
+        // `sub_5C950`'s `if (v14)` false arm and keeps the 256 default,
+        // so the rung lands unscaled. This arm is switch-independent.
+        let planes2 = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut bd2 = Vec::new();
+        for _ in 0..9 {
+            bd2.extend_from_slice(&[0xff, 40]);
+        }
+        let assets2 = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: vec![
+                BuildDef {
+                    offset: 0,
+                    w: 0,
+                    h: 0,
+                },
+                BuildDef {
+                    offset: 0,
+                    w: 3,
+                    h: 3,
+                },
+            ],
+            build_dat: bd2,
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut w2 = World::new_for_game(planes2, &[], 1, assets2, GameId::Mc2);
+        let mut cfg2: [Option<Mc2RivalConfig>; 8] = Default::default();
+        let mut start2 = [false; MC2_SPELLS];
+        start2[2] = true;
+        cfg2[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 0,
+            castle_level: 2,
+            start: start2,
+            start_level: [0; MC2_SPELLS],
+            blocked: [false; MC2_SPELLS],
+        });
+        w2.set_mc2_wizards(&cfg2, 2);
+        let wiz2 = w2.mc2_rivals[0].ent as usize;
+        let c2 = (1..w2.g.ent.len())
+            .find(|&j| {
+                w2.g.ent[j].class64 == 3
+                    && w2.g.ent[j].model65 == 2
+                    && w2.g.ent[j].id24 == wiz2 as u16
+            })
+            .expect("the authored castle");
+        assert_eq!(
+            w2.g.ent[c2].max_life, 20000,
+            "life 0 keeps word_0x24A_586 = 256 (EF:44121), rung 1 unscaled"
+        );
+    }
+
+    /// ⭐⭐ THE AUTHORED CASTLE LINKS AT THE GROUND UNDER THE RAW
+    /// CALLER POINT, NOT AT ITS PERIMETER-MIN BUILD DATUM.
+    /// `sub_4AA40` (EF:33385/33399/33400, banner `0004AA40`) keeps two
+    /// z data: the ctor local `v6ar.z = getTerrainAlt_10C40(
+    /// &predictedAxis)` used by `AddEventToMap_57D70`, and the entity's
+    /// own `axis_0x9A_154x.z = 32 * sub_48E60(..)` — the painter datum.
+    /// `Gen::spawn_castle` already carried the split; the authored arm
+    /// in `mc2_spawn_authored_castle` linked with the datum on BOTH
+    /// lanes. Witness mc2l22-new (settle 2, before the standing tick's
+    /// `z = ground_z` refresh): retail slot 476 z 4623, port 4384.
+    /// `MGC_NO_MC2_AUTHORED_CASTLE_LINK_Z=1` fails this.
+    #[test]
+    fn the_authored_castle_links_at_the_raw_ground_not_the_build_datum() {
+        use crate::engine::world::World;
+        use crate::ids::GameId;
+        use crate::mc2::rivals::{MC2_SPELLS, Mc2RivalConfig};
+        // A SLOPE: the perimeter minimum of the 3x3 footprint and the
+        // ground under the wizard are different numbers.
+        let mut height = vec![100u8; 0x10000];
+        for t in 0..0x10000usize {
+            height[t] = 100 + ((t & 0xFF) as u8 % 7);
+        }
+        let planes = Planes {
+            height,
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut build_dat = Vec::new();
+        for _ in 0..9 {
+            build_dat.extend_from_slice(&[0xff, 40]);
+        }
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: vec![
+                BuildDef {
+                    offset: 0,
+                    w: 0,
+                    h: 0,
+                },
+                BuildDef {
+                    offset: 0,
+                    w: 3,
+                    h: 3,
+                },
+            ],
+            build_dat,
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
+        w.start_markers[1] = Some((37, 41));
+        let mut configs: [Option<Mc2RivalConfig>; 8] = Default::default();
+        let mut start = [false; MC2_SPELLS];
+        start[2] = true;
+        configs[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 0,
+            castle_level: 1,
+            start,
+            start_level: [0; MC2_SPELLS],
+            blocked: [false; MC2_SPELLS],
+        });
+        w.set_mc2_wizards(&configs, 2);
+        let wiz = w.mc2_rivals[0].ent as usize;
+        let (wx, wy) = (w.g.ent[wiz].x, w.g.ent[wiz].y);
+        let castle = (1..w.g.ent.len())
+            .find(|&j| {
+                w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 2 && w.g.ent[j].id24 == wiz as u16
+            })
+            .expect("the authored castle");
+        let raw = w.g.ground_z(wx, wy) as i16;
+        // Non-vacuous: on this slope the two data genuinely differ.
+        assert_ne!(
+            raw, w.g.ent[castle].site_z,
+            "the witness needs a site whose perimeter minimum != the raw ground"
+        );
+        assert_eq!(
+            w.g.ent[castle].z, raw,
+            "AddEventToMap_57D70 takes v6ar.z — the RAW-point ground"
+        );
+        assert_eq!(
+            w.g.ent[castle].site_z,
+            32 * (w.g.ent[castle].site_z / 32),
+            "the datum stays the 32x perimeter minimum"
+        );
+    }
+
     /// Round 112 pin — THE PURGE RIDES DOWNGRADE MAIL ONLY. The
     /// castle-death token purge is `sub_605E0`'s own tail
     /// (EF:61645-58), reached only when a castle takes a level
@@ -4609,4 +5387,63 @@ mod tests {
         }
     }
 
+    /// ⭐⭐ THE LEVEL-UP PAINTER KEEPS THE FLAT HELPER BOX, AND ITS
+    /// KILL ARM NEEDS BOTH HOMES (round 147, dig w147f;
+    /// [`crate::mc2::mobs::no_mc2_painter_upgrade_tail`]).
+    ///
+    /// `sub_60480` (banner EF:61961) calls `SetShiftByCastle_49EC0`
+    /// TWICE — EF:61986 on the castle, EF:61989 on the PAINTER — and
+    /// the `yaw = 0xE000 / fov = 0x4000` pair between them
+    /// (EF:61987-88) is written to `a1x`, the CASTLE, only. So the
+    /// painter keeps the helper's own flat `yaw = 0 / fov = 256`
+    /// (record 0: mc2l4 slot 303 ayaw 0 afov 256; mc2l16 slot 411),
+    /// while the castle carries the aim stamp.
+    ///
+    /// The tail's other half is `v2x->struct_byte_0xc_12_15.byte[2]
+    /// |= 1` (EF:62002) — ONE retail bit with TWO port homes: the
+    /// positional `byte[2] & 1` seat at `0x1_0000` that
+    /// `import_ent_mc2` fills and every raw-lane dump publishes as
+    /// `flags.b2_kill1`, and the semantic [`F_BUILD_KILL`] at bit 21
+    /// that the painter tick reads. The native arm set only bit 21, so
+    /// a natively built castle's painter read `b2_kill1 = 0` where
+    /// every imported one reads 1.
+    ///
+    /// ⛔ NATIVE-INIT ONLY on the `b2_kill1` half — replay imports the
+    /// painter's flags — so this is a unit test.
+    ///
+    /// Non-vacuous: the CASTLE's own aim stamp is asserted beside the
+    /// painter's flat box, so the pair parts if the two records ever
+    /// take the same quad. With `MGC_NO_MC2_PAINTER_UPGRADE_TAIL=1`
+    /// the painter reads `f84 == 0x4000` and carries no `0x1_0000`.
+    #[test]
+    fn the_level_up_painter_keeps_the_flat_box_and_both_kill_homes() {
+        let mut g = castle_gen();
+        let castle = place_castle(&mut g, 100 << 8, 100 << 8, 1, 1);
+        g.mc2_castle_upgrade(castle);
+        assert_eq!(g.ent[castle].f26, 2, "the level-up committed");
+
+        let p = (1..g.ent.len())
+            .find(|&j| g.ent[j].class64 == 10 && g.ent[j].model65 == 42)
+            .expect("the level-up minted a painter");
+
+        // The painter takes the PLAIN `SetShiftByCastle_49EC0` quad.
+        assert_eq!(g.ent[p].f78, 0, "painter array_0x52_82.yaw = 0");
+        assert_eq!(g.ent[p].f84, 256, "painter array_0x52_82.fov = 256");
+        // POSITIVE CONTROL: the aim stamp the painter must NOT inherit
+        // landed on the CASTLE, so the rig really did run that write.
+        assert_eq!(g.ent[castle].f78, 0xE000, "the castle takes the aim lift");
+        assert_eq!(g.ent[castle].f84, 0x4000, "…and the fov re-assert");
+
+        // One retail bit, both port homes.
+        assert_ne!(
+            g.ent[p].flags & super::F_BUILD_KILL,
+            0,
+            "the semantic home the painter tick reads"
+        );
+        assert_ne!(
+            g.ent[p].flags & 0x1_0000,
+            0,
+            "the positional byte[2] & 1 seat the raw lanes publish"
+        );
+    }
 }

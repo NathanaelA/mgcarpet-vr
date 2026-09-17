@@ -554,7 +554,7 @@ fn mc2_lightning_storm_rains_beams() {
 fn mc2_lightning_t3_fans_two_bolts() {
     // Lightning T3 (`life_0x1A == 2`): the cast site `sub_6A5C0` spawns
     // TWO (9,12) charged bolts fanned yaw ±113 off the aim heading and
-    // cross-links the pair via f52 (EF:56599-56656) — "two L2 bolts
+    // cross-links the pair via f54 (EF:56599-57006) — "two L2 bolts
     // side by side". T2 (`life == 1`) stays a single bolt.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
@@ -597,10 +597,21 @@ fn mc2_lightning_t3_fans_two_bolts() {
     ];
     expect.sort_unstable();
     assert_eq!(aims, expect, "the pair fans yaw ±113 off the aim heading");
+    // ⭐⭐⭐ THE CROSS-LINK LIVES IN `f54` = retail `word_0x34_52`
+    // (@0x34), NOT in `f52` (@0x32). `MGC_NO_MC2_M12_HANDLE_HOME=1`
+    // restores the old `f52` home and FAILS exactly this pair of
+    // asserts — see `mc2::cast::no_mc2_m12_handle_home` for the
+    // shipped-EXE bytes (NETHERW.EXE file 0x8f15b / 0x8f16b,
+    // `66 89 42 34  mov %ax,0x34(%edx)`) and the 177+177-row census.
     assert_eq!(
-        (bolts[0].leader as usize, bolts[1].leader as usize),
+        (bolts[0].chain as usize, bolts[1].chain as usize),
         (bolts[1].slot, bolts[0].slot),
-        "the twins cross-link via f52 (word_0x34_52)"
+        "the twins cross-link via f54 (word_0x34_52, @0x34)"
+    );
+    assert_eq!(
+        (bolts[0].leader, bolts[1].leader),
+        (0, 0),
+        "retail leaves the (9,12)'s word_0x32_50 (f52) at zero"
     );
 }
 
@@ -1278,6 +1289,12 @@ fn mc2_fools_mana_throws_six_decoys_that_trap_the_possessor() {
         fb0 + 1,
         "the claimed decoy fires exactly one fireball at the possessor"
     );
+    // ⚠ ONE MORE TICK: the sprung sphere reap-flags itself inside its
+    // own dispatch and `UpdateEntities_57730`'s tick-top sweep frees
+    // it at the NEXT frame's top (`MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch),
+    // so the census has to be taken after that sweep. Holds on both
+    // arms of the switch.
+    w.tick(pose, PlayerCommand::default());
     assert_eq!(
         count(&w, 10, 57),
         base + 5,
@@ -1361,6 +1378,12 @@ fn mc2_authored_ground_sphere_is_a_tier0_trap() {
         poof0 + 1,
         "the consumed sphere leaves retail's (10,0) poof (EF:26363)"
     );
+    // ⚠ ONE MORE TICK: the sprung sphere reap-flags itself inside its
+    // own dispatch and `UpdateEntities_57730`'s tick-top sweep frees
+    // it at the NEXT frame's top (`MGC_NO_MC2_NATIVE_TICKTOP_REAP`, since 2026-09-18 the retail arm of the `mc2_immediate_reap` patch),
+    // so the census has to be taken after that sweep. Holds on both
+    // arms of the switch.
+    w.tick(pose, PlayerCommand::default());
     assert_eq!(
         count(&w, 10, 57),
         spheres - 1,
@@ -2009,10 +2032,20 @@ fn mc2_rebound_deflects_and_reowns() {
             let dev = (row.yaw as i32 + 45) & 0x7FF;
             assert!(dev <= 90, "T1 scatter stays within ±45 of the reverse ray");
         }
+        // ⭐⭐ ONE credit, not two. This used to read `2` — "+1 the
+        // cast itself, +1 the deflection" — which encoded an INVENTED
+        // cast-time award: `sub_6AA00`, the rebound manifestation
+        // body (VA 0x6AA00 = file 0x8F200 up to `sub_6AD60` at file
+        // 0x8F560), holds no `sub_6D8B0` call at all, and the `e8
+        // rel32` scan of the shipped image puts spell 8's ONLY award
+        // at file 0x8D009 (`push $0x8`) inside the DEFLECT, EF:55624.
+        // See [`mgc_sim::mc2::cast::no_mc2_rebound_xp_on_deflect`];
+        // `MGC_NO_MC2_REBOUND_XP_ON_DEFLECT=1` restores the 2.
         assert_eq!(
             w.mc2_book_view().xp[8] - xp8,
-            2, // +1 the cast itself, +1 the deflection (EF:55283)
-            "the deflection awards Rebound XP"
+            1, // the DEFLECT alone (EF:55624) — the cast pays nothing
+            "the deflection awards Rebound XP, and it is the only \
+             spell-8 award site in the binary"
         );
         // ⭐ THE VICTIM PAYS A QUARTER OF THE BOLT'S +140, AND THE
         // HUMAN IS A VICTIM LIKE ANY OTHER. EF:55284 subtracts it

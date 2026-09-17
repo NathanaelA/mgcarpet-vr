@@ -40,6 +40,83 @@
 
 use crate::engine::features::{Gen, tile};
 
+/// The 16-bit map word the (10,27) ROAD-STRIP walkers index with:
+/// `LOBYTE` = x, `HIBYTE` = y — numerically identical to [`tile`],
+/// but kept as a `u16` so a `++` can CARRY OUT OF THE X BYTE the way
+/// retail's does.
+#[inline]
+fn road_word(x: u8, y: u8) -> u16 {
+    ((y as u16) << 8) | x as u16
+}
+
+/// One step along a road strip. `carry = true` is retail's own
+/// `v5++` / `v2++` / `v1++` on the 16-bit map index (the seam carry);
+/// `false` is the port's pre-dig per-row x wrap, restored by
+/// [`no_mc2_road_strip_seam_carry`].
+#[inline]
+fn road_step(idx: u16, carry: bool) -> u16 {
+    if carry {
+        idx.wrapping_add(1)
+    } else {
+        road_word((idx as u8).wrapping_add(1), (idx >> 8) as u8)
+    }
+}
+
+/// A/B toggle for THE ROAD STRIP'S SEAM CARRY: set
+/// `MGC_NO_MC2_ROAD_STRIP_SEAM_CARRY` to restore the pre-dig port,
+/// where a road strip that ran past x = 255 wrapped back to x = 0 on
+/// the SAME row.
+///
+/// Retail's three strip stampers index the heightmap through a
+/// single `unsigned __int16` that holds x in its low byte and y in
+/// its high byte, and they advance it with a plain `++`:
+///
+/// - `sub_34210` (action 29, the X run, EventsFunctions.cpp:24951):
+///   `v4 = mapAngle_13B4E0[(unsigned __int16)v2++] | 0x80;` for the
+///   two border-lock walks, and
+///   `if (mapTerrainType_10B4E0[v5] != 8 || sub_33F70(v5))
+///    mapHeightmap_11B4E0[v5] += 48; sub_46180(v5++, 8);`
+///   for the `life` stamped rows — only the per-row RESTART
+///   (`++BYTE1(v12)`) is byte-wise.
+/// - `sub_34000` / `sub_34110` (actions 28 / 27, the Y strips,
+///   EF:24885 / :24919): the same `sub_46180(v1++, 8)`.
+///
+/// Shipped NETHERW.EXE, `sub_34210` VA 0x33C92..0x33CCA = file
+/// 0x58A92..0x58ACA (file = VA + 0x24800) — the stamped-row walk:
+///
+/// ```text
+/// 58a8d: 8b 5d f8              mov  -0x8(%ebp),%ebx     ; row restart: BL=x0, BH=y (BYTE-wise)
+/// 58a92: 31 ff                 xor  %edi,%edi
+/// 58a94: 66 89 df              mov  %bx,%di             ; ⭐ the index is the 16-BIT BX
+/// 58a97: 80 bf e0 b4 03 00 08  cmpb $0x8,0x3b4e0(%edi)  ; mapTerrainType[idx] != 8
+/// 58aa6: e8 c5 fc ff ff        call 0x58770             ; sub_33F70 (VA 0x33F70)
+/// 58ab2: 80 87 e0 b4 04 00 30  addb $0x30,0x4b4e0(%edi) ; mapHeightmap[idx] += 48
+/// 58ac1: e8 ba 1e 01 00        call 0x6a980             ; sub_46180(idx, 8) (VA 0x46180)
+/// 58ac9: 43                    inc  %ebx                ; ⭐ ++ ON THE WHOLE INDEX
+/// 58ad8: 8a 55 f9  fe c2       mov -0x7(%ebp),%dl; inc %dl   ; next row: y++ only
+/// ```
+///
+/// and the two border-lock walks are the same shape
+/// (0x58a65..0x58a7e and 0x58af7..0x58b10, each `mov %bx,%di` /
+/// `inc %ebx`).
+///
+/// Because the address is `%bx`/`%di`, the `inc` carries out of the
+/// x byte: x = 255 becomes x = 0 with y + 1 — the strip steps onto
+/// the NEXT ROW at the map seam instead of wrapping in place. Only
+/// the per-row restart reloads x from the frame, so each row starts
+/// back at `x0`. WITNESS: mc2l31, whose
+/// (8,67) → (245,67) road leg lays its second X run at (255, 67)
+/// with `dword_0x10_16 = 9`; retail's stamped rows are
+/// `(255,67) + (0..7, 68)` and `(255,68) + (0..7, 69)`, the port's
+/// were `(255..7, 67)` and `(255..7, 68)` — the whole
+/// `terrain-check` residue on that take (type 36 · height 36 ·
+/// shading 57 · angle 65 cells, every one of them at x <= 7 or
+/// x = 255).
+pub(crate) fn no_mc2_road_strip_seam_carry() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ROAD_STRIP_SEAM_CARRY").is_some())
+}
+
 pub const CORNER_CLASSES_MC2: [[u8; 4]; 148] = [
     [0x00, 0x00, 0x00, 0x00], // 0
     [0x01, 0x01, 0x01, 0x01], // 1
@@ -633,10 +710,17 @@ impl Gen {
         };
         for _ in 0..rows {
             self.t.angle[tile(x0.wrapping_sub(1), cy)] |= 0x80;
-            for k in 0..W {
-                self.mc2_road_cell(x0.wrapping_add(k), cy);
+            // ⭐ THE STRIP WALKS THE LINEAR MAP INDEX, NOT THE X BYTE
+            // (`sub_46180(v1++, 8)`): a run that reaches x = 255
+            // carries into the HIGH byte and continues on the NEXT
+            // ROW. See [`no_mc2_road_strip_seam_carry`].
+            let carry = !no_mc2_road_strip_seam_carry();
+            let mut idx = road_word(x0, cy);
+            for _ in 0..W {
+                self.mc2_road_cell(idx as u8, (idx >> 8) as u8);
+                idx = road_step(idx, carry);
             }
-            self.t.angle[tile(x0.wrapping_add(W), cy)] |= 0x80;
+            self.t.angle[idx as usize] |= 0x80;
             cy = cy.wrapping_add(dir as u8);
         }
     }
@@ -654,18 +738,30 @@ impl Gen {
         if (tx.wrapping_add(ty)) & 1 == 1 {
             x0 = x0.wrapping_add(1);
         }
-        for k in 0..run {
-            self.t.angle[tile(x0.wrapping_add(k as u8), ty.wrapping_sub(1))] |= 0x80;
+        // ⭐ EVERY ONE OF THE THREE WALKS IS LINEAR IN THE 16-BIT MAP
+        // INDEX (`v2++` / `v5++` / `v6++`), so a run crossing the
+        // x = 255 seam continues on the NEXT ROW; only the per-row
+        // RESTART (`++BYTE1(v12)`) is byte-wise. See
+        // [`no_mc2_road_strip_seam_carry`].
+        let carry = !no_mc2_road_strip_seam_carry();
+        let mut lock = road_word(x0, ty.wrapping_sub(1));
+        for _ in 0..run {
+            self.t.angle[lock as usize] |= 0x80;
+            lock = road_step(lock, carry);
         }
         let mut cy = ty;
         for _ in 0..W {
-            for k in 0..run {
-                self.mc2_road_cell(x0.wrapping_add(k as u8), cy);
+            let mut idx = road_word(x0, cy);
+            for _ in 0..run {
+                self.mc2_road_cell(idx as u8, (idx >> 8) as u8);
+                idx = road_step(idx, carry);
             }
             cy = cy.wrapping_add(1);
         }
-        for k in 0..run {
-            self.t.angle[tile(x0.wrapping_add(k as u8), cy)] |= 0x80;
+        let mut lock = road_word(x0, cy);
+        for _ in 0..run {
+            self.t.angle[lock as usize] |= 0x80;
+            lock = road_step(lock, carry);
         }
     }
 

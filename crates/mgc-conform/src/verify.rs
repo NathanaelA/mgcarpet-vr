@@ -471,13 +471,20 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         pose,
                     };
                     let port = world.obs_project_mc1(&pin);
+                    // A SHADOW ROW NAMES THE BOUNDARY IT COMPARED —
+                    // the MC1 twin of the round-149 law spelled out in
+                    // `verify_mc2.rs`. `st` is retail's record at
+                    // `pt + 1`, which is the tick the free-run shadow
+                    // (`replay.rs`) and `dump-state --port` both print;
+                    // the graded `PairDiff` rows keep `pt`.
+                    let bt = pt + 1;
                     if let Some(sh) = shadow.as_mut() {
-                        sh.compare_ents_mc1(&world, &st, report.human_slot, pt);
-                        sh.compare_wiz_mc1(&world, &st, pt);
+                        sh.compare_ents_mc1(&world, &st, report.human_slot, bt);
+                        sh.compare_wiz_mc1(&world, &st, bt);
                         // A fallback pair started from a SCANNED free
                         // list, not retail's, so it has nothing to say.
                         if report.stack_fallback.is_none() {
-                            sh.compare_free_mc1(&world, &st, report.human_slot, pt);
+                            sh.compare_free_mc1(&world, &st, report.human_slot, bt);
                         }
                     }
                     stats.absorb_rng(pst.rand, obs.rng, port.rng);

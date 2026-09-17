@@ -42,13 +42,74 @@ fn b(t: usize, dx: i32, dy: i32) -> usize {
 
 /// The 28..47 shade fold (EF:41604-41612 et al.): `>= 28`:
 /// `> 40 -> (s&7)+40`; else `(s&3)+28`.
+///
+/// ⭐ **IT IS A BYTE**, and both compares are SIGNED-BYTE. Retail
+/// builds the relief in AL and never widens it — see
+/// [`no_mc2_riser_shade_byte_fold`] for the shipped bytes — so a
+/// relief of +96 (two stacked riser raises) reads `128` as `-128`
+/// and takes the DARK arm, where an `i32` would have taken the
+/// bright `> 40` one.
+/// `hi` / `lo` are the NW / SE heights; the relief and both clamp
+/// compares happen in AL.
 #[inline]
-fn fold_shade(s: i32) -> u8 {
-    (if s >= 28 {
-        if s > 40 { (s & 7) + 40 } else { s }
+fn fold_shade(hi: u8, lo: u8) -> u8 {
+    if no_mc2_riser_shade_byte_fold() {
+        // The pre-dig port widened the relief to `i32` first, so a
+        // relief above +40 took the bright clamp and one below −4
+        // masked a negative.
+        let w = hi as i32 - lo as i32 + 32;
+        return (if w >= 28 {
+            if w > 40 { (w & 7) + 40 } else { w }
+        } else {
+            (w & 3) + 28
+        }) as u8;
+    }
+    let s = hi.wrapping_sub(lo).wrapping_add(32);
+    if (s as i8) >= 28 {
+        if (s as i8) > 40 { (s & 7) + 40 } else { s }
     } else {
         (s & 3) + 28
-    }) as u8
+    }
+}
+
+/// A/B toggle for THE RISER'S BYTE-WIDE SHADE FOLD: set
+/// `MGC_NO_MC2_RISER_SHADE_BYTE_FOLD` to restore the pre-dig port,
+/// which computed `h[nw] - h[se] + 32` and its two clamp compares in
+/// `i32`.
+///
+/// Every shading write in `sub_59F60` — the two build passes
+/// (orientation 1 / 0), the animated raise's last tick and the
+/// lower's — goes through the same eight-bit sequence. Shipped
+/// NETHERW.EXE VA 0x5A140..0x5A18E = file 0x7E940..0x7E98E
+/// (file = VA + 0x24800), the orientation-0 build's (e') pass:
+///
+/// ```text
+/// 7e940: 8a 80 e0 b4 04 00  mov  0x4b4e0(%eax),%al  ; AL = h[se]
+/// 7e946: 2a 81 e0 b4 04 00  sub  0x4b4e0(%ecx),%al  ; AL -= h[nw]   (8-BIT)
+/// 7e94c: f6 d8              neg  %al                ; AL = h[nw]-h[se]
+/// 7e950: 04 20              add  $0x20,%al          ; AL += 32      (8-BIT WRAP)
+/// 7e954: 3c 1c              cmp  $0x1c,%al
+/// 7e956: 7d 06              jge  0x7e95e            ; ⭐ SIGNED BYTE
+/// 7e958: 24 03  04 1c       and  $0x3,%al; add $0x1c,%al   ; (s&3)+28
+/// 7e95e: 3c 28              cmp  $0x28,%al
+/// 7e960: 7e 04              jle  0x7e966            ; ⭐ SIGNED BYTE
+/// 7e962: 24 07  04 28       and  $0x7,%al; add $0x28,%al   ; (s&7)+40
+/// 7e975: 0f be c8           movsbl %al,%ecx         ; widen only AFTER the fold
+/// 7e97d: b8 20 .. 29 c8 8d 48 20   ; non-Day: 32 - s + 32
+/// 7e98e: 88 88 e0 b4 05 00  mov  %cl,0x5b4e0(%eax)  ; mapShading[cell]
+/// ```
+///
+/// WITNESS: mc2l13 cell (148,177), the take's ENTIRE `terrain-check`
+/// residue. Two risers overlap there — slot 43 (orientation 1, at
+/// (146,159)) raises (147,176) to 48, then slot 323 (orientation 0,
+/// at (145,176), L = 42) raises it again to 96 and runs its (e')
+/// shading pass. The relief is `96 - 0 + 32 = 128`; as a signed byte
+/// that is −128, so retail folds DARK to `(128 & 3) + 28 = 28` and
+/// the cave's non-Day inversion stores `64 − 28 = 36`. The `i32`
+/// fold read 128 as `> 40` and stored `64 − ((128 & 7) + 40) = 24`.
+pub(crate) fn no_mc2_riser_shade_byte_fold() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RISER_SHADE_BYTE_FOLD").is_some())
 }
 
 impl Gen {
@@ -247,9 +308,9 @@ impl Gen {
         // (e) SHADING — L+1 cells (bx, by-1+k) off the NW-SE diagonal
         // h[(bx-1, by+k-2)] - h[(bx+1, by+k)] + 32 (EF:41584-41622).
         for k in 0..=l {
-            let hi = self.t.height[b(bb, -1, k - 2)] as i32;
-            let lo = self.t.height[b(bb, 1, k)] as i32;
-            let s = self.day_shade(fold_shade(hi - lo + 32));
+            let hi = self.t.height[b(bb, -1, k - 2)];
+            let lo = self.t.height[b(bb, 1, k)];
+            let s = self.day_shade(fold_shade(hi, lo));
             self.t.shading[b(bb, 0, k - 1)] = s;
         }
         // (f) DIRTY (EF:41623-41639).
@@ -305,9 +366,9 @@ impl Gen {
         }
         // (e') SHADING — L+1 cells (bx-1+k, by) (EF:41734-41774).
         for k in 0..=l {
-            let hi = self.t.height[b(bb, k - 2, -1)] as i32;
-            let lo = self.t.height[b(bb, k, 1)] as i32;
-            let s = self.day_shade(fold_shade(hi - lo + 32));
+            let hi = self.t.height[b(bb, k - 2, -1)];
+            let lo = self.t.height[b(bb, k, 1)];
+            let s = self.day_shade(fold_shade(hi, lo));
             self.t.shading[b(bb, k - 1, 0)] = s;
         }
         // (f') DIRTY (EF:41775-41791).
@@ -393,9 +454,9 @@ impl Gen {
                     // Last-tick shading: ONLY 3 cells (bx..bx+2, by)
                     // — verbatim retail asymmetry (EF:42050-42089).
                     for k in 0..3 {
-                        let hi = self.t.height[b(bb, k - 1, -1)] as i32;
-                        let lo = self.t.height[b(bb, k + 1, 1)] as i32;
-                        let s = self.day_shade(fold_shade(hi - lo + 32));
+                        let hi = self.t.height[b(bb, k - 1, -1)];
+                        let lo = self.t.height[b(bb, k + 1, 1)];
+                        let s = self.day_shade(fold_shade(hi, lo));
                         self.t.shading[b(bb, k, 0)] = s;
                     }
                 }
@@ -423,9 +484,9 @@ impl Gen {
                 if last {
                     // L+1 cells (bx-1+k, by) (EF:42094-42128).
                     for k in 0..=l {
-                        let hi = self.t.height[b(bb, k - 2, -1)] as i32;
-                        let lo = self.t.height[b(bb, k, 1)] as i32;
-                        let s = self.day_shade(fold_shade(hi - lo + 32));
+                        let hi = self.t.height[b(bb, k - 2, -1)];
+                        let lo = self.t.height[b(bb, k, 1)];
+                        let s = self.day_shade(fold_shade(hi, lo));
                         self.t.shading[b(bb, k - 1, 0)] = s;
                     }
                 }
