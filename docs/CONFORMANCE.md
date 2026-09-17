@@ -888,12 +888,29 @@ RECYCLE stack are compared separately**, because MC2 pops free first
 and falls back to recycle — merging them would measure the importer's
 composition instead of the port's allocator order.
 
-⚠ The **WIZEXT half is deliberately NOT watched on MC2** (there is no
-`wiz_shadow_mc2` and no port-side MC2 player-lane projection), so the
-whole per-player block is unchecked. The report now SAYS so instead of
-printing a silent `0 mismatches` — *an instrument that reports "clean"
-where nobody looked is worse than one that reports nothing.* Closing
-it is its own dig.
+**THE MC2 WIZEXT HALF** (`compare_wiz_mc2` ← `World::wiz_shadow_mc2`).
+~~Deliberately not watched~~ — built since, and WIDENED in round 147 to
+every player-block register the importer seats:
+
+| who | scalars | arrays |
+|---|---|---|
+| every rival | `cmd_speed` `strafe` `brake` `invuln` `ai_state` `burst` `poverty` `aggression` `perception` `reflexes` `life_scale` `weave` `weave_dir` `avoid` `avoid_exit` `charge` `castle_ent` + **`life_regen` `knock_dir` `knock_mag` `hand_left` `hand_right` `wanted`** | `hate` `war` `cooldown` + the six book arrays + **`balloons` `guards`** |
+| the human | `charge` `hand_left` `hand_right` + **`invuln` `regen_stall` `life_regen` `knock_dir` `knock_mag` `wanted` `recast_surcharge` `duel_target` `duel_hold` `duel_tier`** | the six book arrays + **`balloons` `guards`** |
+
+The report carries a per-wizard DENOMINATOR (`compared … wiz 1 ×17818
+(skipped 0)`): a rival that is eliminated, or seated in a different slot
+than retail's, is skipped, and "0 mismatches" must never print the same
+as "nobody looked". `duel_hold`/`duel_tier` are compared only while
+retail holds a lock (stale otherwise); arrays follow RETAIL's length
+with the port padded by 0, so a register the port does not hold reads as
+empty rather than as nothing to compare.
+
+⚠ STILL NO PORT HOME, so still unwatched: a RIVAL's `regen_stall`,
+`recast_surcharge` and duel lock (`mc2_duel` is the human caster's
+only), `broll_*`, `notify`, `menu_state`/`hand_pending`/`ring_cursor`
+(UI). The flight lanes (`move_bits`, stick deltas/accumulators,
+`eff_pitch`, slow/mobilize ladders, `water_ctr`, `nudge_latch`) belong
+to the POSE channel, which grades them for the human.
 
 **The per-entity TEAR census.** `torn_slots`' exclusion used to be
 completely silent: every field on an excluded slot was dropped from
@@ -1141,6 +1158,53 @@ faithful movers verbatim (`FlightInput::mc1_move_byte`) — the float
 axes cannot express retail's both-bits-held states — and its
 faithful tier hands `World::tick` the INTEGER carpet pose (the
 quantization-risk fix; the enhanced tier keeps the float flyer).
+
+## `init-check` — the native-vs-recorded first state (2026-09-17, round 147)
+
+Both graded runners SEED FROM THE RECORDING (`replay` imports the take's
+first closure, `verify-deltas` re-imports every tick), so the harness
+grades the tick function and **never the world constructor**: a roster
+the level load never mints, a field no native path writes, a seat the
+importer fills and `World::new` does not are invisible on every take.
+`terrain-check` closed that loop for the terrain planes; `init-check` is
+the same build and the same settle (`native_settled_world` — one
+implementation, by construction) diffed on everything ELSE record 0
+holds:
+
+    ./tools/conform init-check recordings/<take>.mgcr [--settle <n>]
+
+- the LCG (`World::rand_state` vs `st.rand`);
+- **pool occupancy** — per-slot `(class, model)` agree / differ /
+  retail-only / port-only, plus the slot-order-independent
+  `(class, model)` POPULATION table (separates "minted a different
+  NUMBER" from "minted the same things into different slots");
+- **every entity lane** on the slots that agree — the raw shadow with
+  the graded exclusion OFF (`Shadow::census_all`; nothing was imported,
+  so no lane is "already judged"). MC1 walks the curated shadow lanes
+  plus a no-re-home graded core (`compare_core_mc1`);
+- the **wizard / brain block**, with the per-wizard SEAT table — a rival
+  seated in a different slot is skipped by the wizard shadow, and the
+  report says so rather than reading clean where nobody looked;
+- the objective board (MC2) and the free / recycle stacks.
+
+One `INIT <take>: IDENTICAL|DIFFERENT — …` verdict line per take, the
+`TERRAIN` line's twin. It is a CENSUS: it grades nothing and gates
+nothing, and exit 1 only means "something differs".
+
+⚠ Known harness-side rows (not port defects — read them as the
+instrument's own seeding debt):
+
+- the human's carpet slot is excluded from occupancy (the port keeps it
+  outside the pool);
+- **MC2** seeds the human's book MODELS off record 0 but not its
+  `levels` / `xp_bank` / `ring` (a carried save's progress), so those
+  three wiz-0 lanes fire on nearly every take;
+- **MC1 seeds no book at all** (`verify::build_world` has no
+  `_with_book` twin), so the human's tokens are retail-only, every later
+  slot — the rivals' carpets included — shifts, and the rival brain
+  block is NOT compared on such takes (the seat table flags it);
+- the settle flies an IDLE carpet at the authored start, so anything the
+  player's first inputs touched is the player's, not the port's.
 
 ## Recording slices — the dig instrument for late ticks (2026-09-05)
 

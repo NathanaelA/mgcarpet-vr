@@ -1517,6 +1517,24 @@ impl World {
                 ("xp_vol", b.xp_vol.iter().map(|&v| v as i64).collect()),
             ]
         };
+        // The two OWNER-KEYED registers (`array_0x3C_60` fleet,
+        // `array_0x5C_92` guards) — imported verbatim every pair and
+        // never compared. Keyed by the owner stamp, so the human's is
+        // under `PLAYER_TARGET`.
+        let regs = |owner: u16| -> Vec<(&'static str, Vec<i64>)> {
+            let reg = |m: &std::collections::BTreeMap<u16, Vec<u16>>| -> Vec<i64> {
+                m.get(&owner)
+                    .map(|v| v.iter().map(|&s| s as i64).collect())
+                    .unwrap_or_default()
+            };
+            vec![
+                ("balloons", reg(&self.g.mc1_balloon_reg.0)),
+                ("guards", reg(&self.g.mc1_guard_reg.0)),
+            ]
+        };
+        let duel = self.mc2_duel.unwrap_or((0, 0, 0));
+        let mut human_arrays = book(&self.mc2_book);
+        human_arrays.extend(regs(PLAYER_TARGET));
         let mut out = vec![WizShadowMc2 {
             wiz: 0,
             ent: PLAYER_TARGET,
@@ -1524,8 +1542,19 @@ impl World {
                 ("charge", self.wiz_charge[0] as i64),
                 ("hand_left", self.mc2_book.left as i64),
                 ("hand_right", self.mc2_book.right as i64),
+                // Round 147's widening — the human's seated registers.
+                ("invuln", self.player.grace as i64),
+                ("regen_stall", self.player.regen_delay as i64),
+                ("life_regen", self.player.life_rate as i64),
+                ("knock_dir", self.g.player_knock.0 as i64),
+                ("knock_mag", self.g.player_knock.1 as i64),
+                ("wanted", self.g.player_aggro as i64),
+                ("recast_surcharge", self.mc2_recast_surcharge as i64),
+                ("duel_target", duel.0 as i64),
+                ("duel_hold", duel.1 as i64),
+                ("duel_tier", duel.2 as i64),
             ],
-            arrays: book(&self.mc2_book),
+            arrays: human_arrays,
         }];
         for r in &self.mc2_rivals {
             if r.eliminated || r.ent == 0 {
@@ -1534,12 +1563,17 @@ impl World {
             // The rival's own projection already carries the book
             // (same six array names the `book` helper builds for the
             // human) — this half adds only what the World holds.
-            let (mut scalars, arrays) = r.wiz_shadow_lanes();
+            let (mut scalars, mut arrays) = r.wiz_shadow_lanes();
             scalars.push(("charge", self.wiz_charge[r.slot as usize] as i64));
             scalars.push((
                 "castle_ent",
                 self.rival_castle(r.ent).map_or(0, |c| c as i64),
             ));
+            scalars.push((
+                "wanted",
+                self.g.mc2_wanted.0.get(&r.ent).map_or(0, |&v| v as i64),
+            ));
+            arrays.extend(regs(r.ent));
             out.push(WizShadowMc2 {
                 wiz: r.slot,
                 ent: r.ent,
@@ -1741,6 +1775,12 @@ impl World {
             ("dest_y", some(e.dest_y as i64)),
             ("site_z", some(e.site_z as i64)),
         ])
+    }
+
+    /// The LCG state, for `init-check`: the pair runners read it off
+    /// the pinned obs projection, which a native world has none of.
+    pub fn rand_state(&self) -> u32 {
+        self.g.rand
     }
 
     /// The port's free/recycle stacks for the MC2 dump tail — MC2 pops

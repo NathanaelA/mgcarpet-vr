@@ -15,6 +15,7 @@
 mod alloc_trace;
 mod explain;
 mod fixtures;
+mod init_check;
 mod jsondiff;
 mod pose_lane;
 mod replay;
@@ -36,6 +37,12 @@ fn usage() -> ! {
            terrain-diff <file.mgcr>…      diff the take's measured terrain base\n\
                                           against the port's generated planes\n\
                                           (the record-0 stock-bake validator)\n\
+           init-check <file.mgcr>…        NATIVE-vs-RECORDED FIRST STATE: build the\n\
+                                          level the way the port does, settle it by\n\
+                                          the recorder's phase, and diff the pool,\n\
+                                          every entity lane, the wizard block, the\n\
+                                          board, the allocator and the LCG against\n\
+                                          record 0 (census only; --settle <n>)\n\
            terrain-check <file.mgcr>…     THE NAKED TRUTH: one VERDICT line per\n\
                                           take — is the port's GENERATED terrain\n\
                                           bit-identical to what retail had at\n\
@@ -530,6 +537,12 @@ fn main() {
             .files
             .iter()
             .map(|f| terrain_diff(f, &args))
+            .max()
+            .unwrap_or(0),
+        "init-check" => args
+            .files
+            .iter()
+            .map(|f| init_check::init_check(f, &args))
             .max()
             .unwrap_or(0),
         "extract" => args
@@ -1127,6 +1140,73 @@ impl TerrainReport {
     }
 }
 
+/// THE NATIVE WORLD AT RECORD 0 — the port's own level build
+/// (`verify::build_world` / `build_world_mc2_with_book`, the human's
+/// book read off the take), ticked `settle` times with the carpet
+/// idle at the authored start. Shared by `terrain-check` (which keeps
+/// only the planes) and `init-check` (which diffs the whole world
+/// against the take's first closure), so the two instruments can
+/// never settle differently.
+pub(crate) fn native_settled_world(
+    first: &mgc_formats::mgcr::TickRecord,
+    family: mgc_formats::mgcr::Family,
+    game: &str,
+    level: u32,
+    args: &Args,
+    settle: u32,
+) -> Result<(mgc_sim::engine::world::World, mgc_sim::engine::features::Planes), String> {
+    let (mut w, pristine) = match family {
+        mgc_formats::mgcr::Family::Mc1 => verify::build_world(&args.baked, game, level)?,
+        mgc_formats::mgcr::Family::Mc2 =>
+        // planes only — no entity dispatch, so the replay gate cannot apply
+        {
+            // The human's carried book, read off record 0: the class-15
+            // tokens owned by the (3,0) carpet record, in slot order.
+            // Granted between the ctor and the rival spawn so the
+            // native pool lays out like retail's (round 112).
+            let book = retail_record0_human_book(first);
+            let (w, p, _) =
+                verify_mc2::build_world_mc2_with_book(&args.baked, level, false, book.as_deref())?;
+            (w, p)
+        }
+    };
+    if std::env::var_os("MGC_POOL_CENSUS").is_some() {
+        let rows = w.debug_pool_rows();
+        let row: Vec<String> = rows
+            .iter()
+            .map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}"))
+            .collect();
+        eprintln!("POOL CENSUS live={}\n{}", rows.len(), row.join(" "));
+    }
+    let planes = if settle > 0 {
+        // The app's `--map-settle` driver: real ticks (not
+        // `tick_paused`), the carpet idle at the level start.
+        let (px, pz) = mc2_player_start(&args.baked, &family, level).unwrap_or((128.5, 128.5));
+        let idle = mgc_sim::engine::world::PlayerCommand::default();
+        for _ in 0..settle {
+            let alt = w.ground_height_tiles(px, pz) + 2.0;
+            let pose = mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+            w.tick(pose, idle);
+        }
+        if std::env::var_os("MGC_POOL_CENSUS").is_some() {
+            let rows = w.debug_pool_rows();
+            let row: Vec<String> = rows
+                .iter()
+                .map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}"))
+                .collect();
+            eprintln!(
+                "POOL CENSUS AFTER SETTLE live={}\n{}",
+                rows.len(),
+                row.join(" ")
+            );
+        }
+        w.planes_clone()
+    } else {
+        pristine
+    };
+    Ok((w, planes))
+}
+
 /// The shared core of `terrain-diff` and `terrain-check`: decode the
 /// take's record-0 terrain base (or a `--baseline` dump), build the
 /// port's level, settle it `settle` ticks, and count differing cells
@@ -1168,55 +1248,7 @@ fn terrain_compare(
         base: Some(base),
         delta: None,
     })?;
-    let (mut w, pristine) = match family {
-        mgc_formats::mgcr::Family::Mc1 => verify::build_world(&args.baked, &game, level)?,
-        mgc_formats::mgcr::Family::Mc2 =>
-        // planes only — no entity dispatch, so the replay gate cannot apply
-        {
-            // The human's carried book, read off record 0: the class-15
-            // tokens owned by the (3,0) carpet record, in slot order.
-            // Granted between the ctor and the rival spawn so the
-            // native pool lays out like retail's (round 112).
-            let book = retail_record0_human_book(&first);
-            let (w, p, _) =
-                verify_mc2::build_world_mc2_with_book(&args.baked, level, false, book.as_deref())?;
-            (w, p)
-        }
-    };
-    if std::env::var_os("MGC_POOL_CENSUS").is_some() {
-        let rows = w.debug_pool_rows();
-        let row: Vec<String> = rows
-            .iter()
-            .map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}"))
-            .collect();
-        eprintln!("POOL CENSUS live={}\n{}", rows.len(), row.join(" "));
-    }
-    let planes = if settle > 0 {
-        // The app's `--map-settle` driver: real ticks (not
-        // `tick_paused`), the carpet idle at the level start.
-        let (px, pz) = mc2_player_start(&args.baked, &family, level).unwrap_or((128.5, 128.5));
-        let idle = mgc_sim::engine::world::PlayerCommand::default();
-        for _ in 0..settle {
-            let alt = w.ground_height_tiles(px, pz) + 2.0;
-            let pose = mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
-            w.tick(pose, idle);
-        }
-        if std::env::var_os("MGC_POOL_CENSUS").is_some() {
-            let rows = w.debug_pool_rows();
-            let row: Vec<String> = rows
-                .iter()
-                .map(|(j, c, m, a, f26, f59)| format!("{j}:({c},{m})a{a}/{f26}/{f59}"))
-                .collect();
-            eprintln!(
-                "POOL CENSUS AFTER SETTLE live={}\n{}",
-                rows.len(),
-                row.join(" ")
-            );
-        }
-        w.planes_clone()
-    } else {
-        pristine
-    };
+    let (_, planes) = native_settled_world(&first, family, &game, level, args, settle)?;
     if let Some(dir) = &args.out {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }

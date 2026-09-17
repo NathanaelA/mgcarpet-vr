@@ -154,6 +154,11 @@ pub(crate) struct Shadow {
     /// block is clean" when it means "nobody looked", which is exactly
     /// how MC2's half hid until it was built.
     pub(crate) wiz_fed: bool,
+    /// Per-wizard DENOMINATOR: boundaries whose block was compared /
+    /// skipped (eliminated in retail, or seated in a different slot).
+    /// A rival skipped on every boundary reads exactly like a clean
+    /// one without it.
+    pub(crate) wiz_n: BTreeMap<u8, (u64, u64)>,
     /// Retail lane names absent from the port's table (`?` in
     /// `dump-state`): a table skew, reported once rather than per slot.
     pub(crate) skew: BTreeSet<&'static str>,
@@ -177,6 +182,53 @@ pub(crate) struct Shadow {
 }
 
 impl Shadow {
+    /// The tally `init-check` feeds: EVERY lane, graded or not — a
+    /// native world was never imported, so no lane is "already
+    /// judged" — and none of the env-driven magnifiers.
+    pub(crate) fn census_all() -> Self {
+        Shadow {
+            all_lanes: true,
+            ..Default::default()
+        }
+    }
+
+    /// The GRADED core of an MC1 record, for `init-check` only.
+    /// [`Self::compare_ents_mc1`] walks the curated UNGRADED lanes
+    /// (with the importer's re-homes mirrored); the pair runners leave
+    /// the rest to the obs diff, which a native world has no pinned
+    /// projection for. These are the lanes of the two dump-state
+    /// tables that carry straight across with no re-home.
+    pub(crate) fn compare_core_mc1(&mut self, world: &World, st: &RetailMc1, human_slot: u16, t: u64) {
+        const CORE: [&str; 9] = [
+            "rand", "max_life", "act_life", "flags", "x", "y", "z", "type86", "f63",
+        ];
+        for (slot, re) in st.ents.iter().enumerate() {
+            let slot = slot as u16;
+            if slot == 0 || slot == human_slot || re.class64 == 0 {
+                continue;
+            }
+            let Some(port) = world.port_ent_lanes_mc1(slot, human_slot, false) else {
+                continue;
+            };
+            let port: BTreeMap<&'static str, Option<i64>> = port.into_iter().collect();
+            let same = matches!(port.get("class64"), Some(Some(c)) if *c == re.class64 as i64)
+                && matches!(port.get("model65"), Some(Some(m)) if *m == re.model65 as i64);
+            if !same {
+                continue;
+            }
+            for (name, rv) in mgc_sim::engine::world::conformance::retail_ent_lanes_mc1(re) {
+                if !CORE.contains(&name) {
+                    continue;
+                }
+                if let Some(Some(pv)) = port.get(name)
+                    && *pv != rv
+                {
+                    self.hit((re.class64, re.model65, name), t, slot, rv, *pv);
+                }
+            }
+        }
+    }
+
     /// Build the tally if `MGC_RAW_SHADOW` is set, opening the row TSV
     /// if `MGC_RAW_SHADOW_ROWS` names one. `None` = the instrument is
     /// off and costs nothing.
@@ -818,8 +870,10 @@ impl Shadow {
             // Eliminated on either side, or a carpet-slot desync: the
             // roster/graded comparison owns those stories.
             if w.play_index == 0 || (ws.wiz != 0 && w.play_index != ws.ent) {
+                self.wiz_n.entry(ws.wiz).or_default().1 += 1;
                 continue;
             }
+            self.wiz_n.entry(ws.wiz).or_default().0 += 1;
             let ent = st.ents.get(w.play_index as usize);
             for &(name, port) in &ws.scalars {
                 let retail: i64 = match name {
@@ -894,8 +948,10 @@ impl Shadow {
             // Eliminated on either side, or a carpet-slot desync: the
             // roster/graded comparison owns those stories.
             if p.play_index == 0 || (ws.wiz != 0 && p.play_index != ws.ent) {
+                self.wiz_n.entry(ws.wiz).or_default().1 += 1;
                 continue;
             }
+            self.wiz_n.entry(ws.wiz).or_default().0 += 1;
             for &(name, port) in &ws.scalars {
                 let retail: i64 = match name {
                     "charge" => p.charge as i64,
@@ -917,6 +973,24 @@ impl Shadow {
                     "castle_ent" => p.castle_ent as i64,
                     "hand_left" => p.hand_left as i64,
                     "hand_right" => p.hand_right as i64,
+                    "life_regen" => p.life_regen as i64,
+                    "knock_dir" => p.knock_dir as i64,
+                    "knock_mag" => p.knock_mag as i64,
+                    // The port keeps the stall in a u16 (the importer
+                    // clamps the same way).
+                    "regen_stall" => p.regen_stall.clamp(0, u16::MAX as i32) as i64,
+                    // Retail's timer idles at <= 0; the port's rival
+                    // map only holds live (> 0) entries.
+                    "wanted" if ws.wiz != 0 => p.wanted.max(0) as i64,
+                    "wanted" => p.wanted as i64,
+                    "recast_surcharge" => (p.recast_surcharge != 0) as i64,
+                    "duel_target" => p.duel_target as i64,
+                    // hold/tier are stale once the lock drops; the
+                    // port's register is an Option and reads 0.
+                    "duel_hold" if p.duel_target == 0 => continue,
+                    "duel_tier" if p.duel_target == 0 => continue,
+                    "duel_hold" => p.duel_hold as i64,
+                    "duel_tier" => p.duel_tier as i64,
                     _ => continue,
                 };
                 if retail != port {
@@ -934,9 +1008,15 @@ impl Shadow {
                     "ring" => p.ring.iter().map(|&v| v as i64).collect(),
                     "xp_bank" => p.xp_bank.iter().map(|&v| v as i64).collect(),
                     "xp_vol" => p.xp_vol.iter().map(|&v| v as i64).collect(),
+                    "balloons" => p.balloons.iter().map(|&v| v as i64).collect(),
+                    "guards" => p.guards.0.iter().map(|&v| v as i64).collect(),
                     _ => continue,
                 };
-                for (i, (&a, &b)) in retail.iter().zip(port).enumerate() {
+                // Retail's length rules, the port padded with 0: an
+                // owner the port holds NO register for must read as
+                // all-empty, not as "nothing to compare".
+                for (i, &a) in retail.iter().enumerate() {
+                    let b = port.get(i).copied().unwrap_or(0);
                     if a != b {
                         self.wiz_hit((ws.wiz, name), t, i as u16, a, b);
                     }
@@ -1112,6 +1192,15 @@ impl Shadow {
         let _ = writeln!(
             s,
             "  WIZEXT SHADOW (Type_160 wizard/brain lanes): {wiz_total} mismatches"
+        );
+        let _ = writeln!(
+            s,
+            "    compared (boundaries, skipped = eliminated or seated elsewhere): {}",
+            self.wiz_n
+                .iter()
+                .map(|(w, (n, sk))| format!("wiz {w} ×{n} (skipped {sk})"))
+                .collect::<Vec<_>>()
+                .join(" · ")
         );
         let mut keys: Vec<_> = self.wiz_lanes.iter().collect();
         if by_first {

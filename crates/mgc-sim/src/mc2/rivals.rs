@@ -2025,6 +2025,14 @@ impl Mc2Rival {
             ("weave_dir", self.weave_dir as i64),
             ("avoid", self.avoid as i64),
             ("avoid_exit", self.avoid_exit as i64),
+            // Round 147's widening: every register the importer SEATS
+            // on the rival (`reanchor_mc2_rival_ai`) and nothing
+            // compared. `hand_*` is `-1` = empty on both sides.
+            ("life_regen", self.life_delta as i64),
+            ("knock_dir", self.knock_dir as i64),
+            ("knock_mag", self.knock_mag as i64),
+            ("hand_left", self.book.left as i64),
+            ("hand_right", self.book.right as i64),
         ];
         let arrays = vec![
             ("hate", self.hate.iter().map(|&v| v as i64).collect()),
