@@ -15,6 +15,7 @@
 mod alloc_trace;
 mod explain;
 mod fixtures;
+mod blob_census;
 mod init_check;
 mod jsondiff;
 mod pose_lane;
@@ -37,6 +38,12 @@ fn usage() -> ! {
            terrain-diff <file.mgcr>…      diff the take's measured terrain base\n\
                                           against the port's generated planes\n\
                                           (the record-0 stock-bake validator)\n\
+           blob-census <file.mgcr>…       WHICH BYTES OF THE RAW STRUCT IMAGE EVER\n\
+                                          MOVE: per-offset change counts over the\n\
+                                          take, pool/wizard records folded onto\n\
+                                          their stride, each offset tagged DECODED\n\
+                                          or UNDECODED (a lane no decoder lifts is\n\
+                                          in no channel). MC1 only\n\
            init-check <file.mgcr>…        NATIVE-vs-RECORDED FIRST STATE: build the\n\
                                           level the way the port does, settle it by\n\
                                           the recorder's phase, and diff the pool,\n\
@@ -512,6 +519,12 @@ fn main() {
             .files
             .iter()
             .map(|f| check_decode(f, &args))
+            .max()
+            .unwrap_or(0),
+        "blob-census" => args
+            .files
+            .iter()
+            .map(|f| blob_census::blob_census(f, args.limit.map(|n| n as usize)))
             .max()
             .unwrap_or(0),
         "verify-deltas" => args
@@ -1092,6 +1105,49 @@ fn retail_record0_phase(
     }
 }
 
+/// The settle count `init-check`/`terrain-check` use when `--settle` is
+/// not given: the record-0 phase, CORRECTED BY THE LCG. Round 153: on
+/// four of 39 MC1 takes (mc1l11/l16/l42 — and mc1l6, which no count
+/// fits) the `+63 − slot` phase read one tick LOW — every level record
+/// then sat one tick young (1,913 lanes rows on mc1l11, `rand` DIFF)
+/// and the phase+1 build was IDENTICAL on the LCG with 113 rows. The
+/// global LCG is the sharper clock: one draw per dispatched record per
+/// tick, so a settle count off by one can never match it. The phase
+/// stays the first candidate (a clean take never re-settles); ±1, then
+/// ±2 are tried only when it disagrees; no fit falls back to the phase.
+/// Returns `(settle, corrected)`.
+pub(crate) fn record0_settle(
+    path: &std::path::Path,
+    first: &mgc_formats::mgcr::TickRecord,
+    family: mgc_formats::mgcr::Family,
+    game: &str,
+    level: u32,
+    args: &Args,
+) -> Result<(u32, bool), String> {
+    let phase = retail_record0_phase(first, family)
+        .ok_or("record 0 carries no decodable state to read the phase from — pass --settle <n>")?;
+    let state = first.state.as_ref().ok_or("record 0 carries no state channel")?;
+    let want = match family {
+        mgc_formats::mgcr::Family::Mc1 => mgc_formats::mgcr::decode_retail_mc1(state)?.rand,
+        mgc_formats::mgcr::Family::Mc2 => mgc_formats::mgcr::decode_retail_mc2(state)?.rand,
+    };
+    let fits = |n: u32| -> bool {
+        native_settled_world(path, first, family, game, level, args, n)
+            .map(|(w, _)| w.rand_state() == want)
+            .unwrap_or(false)
+    };
+    if fits(phase) {
+        return Ok((phase, false));
+    }
+    for d in [1i64, -1, 2, -2] {
+        let n = phase as i64 + d;
+        if n >= 0 && fits(n as u32) {
+            return Ok((n as u32, true));
+        }
+    }
+    Ok((phase, false))
+}
+
 /// The human's level-start book as retail's record 0 holds it: every
 /// class-15 token whose `parentId` (@0x28) is the local player's carpet
 /// slot, in slot order. `None` when record 0 carries no decodable MC2
@@ -1114,6 +1170,38 @@ fn retail_record0_human_book(first: &mgc_formats::mgcr::TickRecord) -> Option<Ve
             .map(|e| e.model40)
             .collect(),
     )
+}
+
+/// The MC1 twin of [`retail_record0_human_book`]: the human's carried
+/// spells at record 0 in ACQUISITION order — the wizard's `+532` list
+/// holds the tokens' pool slots in pickup order while he is alive
+/// (`sub_3DD50` :49240-58 fills it in `byte_99B88` order and
+/// `sub_44D30` :54882-905 mints one token per entry, rewriting each
+/// entry to the slot), and a class-12 token's model IS its spell id.
+/// An EMPTY book is still `Some` (mc1l37/mc1hwl0 start bookless and
+/// the carpet record must be seated all the same); `None` only when
+/// record 0 carries no seated human — the caller then builds the app's
+/// own layout.
+fn retail_record0_human_book_mc1(first: &mgc_formats::mgcr::TickRecord) -> Option<Vec<u8>> {
+    let state = first.state.as_ref()?;
+    let st = mgc_formats::mgcr::decode_retail_mc1(state).ok()?;
+    let w = st
+        .wizards
+        .get(st.local_player as usize)
+        .or_else(|| st.wizards.first())?;
+    if w.play_index == 0 {
+        return None;
+    }
+    let book: Vec<u8> = w
+        .spell_list
+        .iter()
+        .take_while(|&&s| s > 0)
+        .filter_map(|&s| {
+            let e = st.ents.get(s as usize)?;
+            (e.class64 == 12 && e.f42 == w.play_index).then_some(e.model65)
+        })
+        .collect();
+    Some(book)
 }
 
 /// The human's book PROGRESS at record 0 (`levels`, `xp_bank`, `ring`)
@@ -1174,7 +1262,20 @@ pub(crate) fn native_settled_world(
     settle: u32,
 ) -> Result<(mgc_sim::engine::world::World, mgc_sim::engine::features::Planes), String> {
     let (mut w, pristine) = match family {
-        mgc_formats::mgcr::Family::Mc1 => verify::build_world(&args.baked, game, level)?,
+        mgc_formats::mgcr::Family::Mc1 => {
+            // The human's carried book off record 0, in acquisition
+            // order, seated in `sub_44D30`'s order (carpet record,
+            // tokens, then the rivals) — round 153's MC1 twin of the
+            // MC2 arm below. `MGC_INIT_NATIVE_LAYOUT=1` keeps the
+            // app's own layout (no pooled carpet, rivals first, book
+            // last) for the A/B.
+            let book = if std::env::var_os("MGC_INIT_NATIVE_LAYOUT").is_some() {
+                None
+            } else {
+                retail_record0_human_book_mc1(first)
+            };
+            verify::build_world_mc1_with_book(&args.baked, game, level, book.as_deref())?
+        }
         mgc_formats::mgcr::Family::Mc2 => {
             // The human's carried book, read off record 0: the class-15
             // tokens owned by the (3,0) carpet record, in slot order.
@@ -1336,9 +1437,7 @@ fn terrain_compare(
     // (`retail_record0_phase`); `Some(n)` = the caller's explicit count.
     let settle = match settle {
         Some(n) => n,
-        None => retail_record0_phase(&first, family).ok_or(
-            "record 0 carries no decodable state to read the phase from — pass --settle <n>",
-        )?,
+        None => record0_settle(path, &first, family, &game, level, args)?.0,
     };
     let mut img = mgc_formats::mgcr::TerrainImage::new(&decl);
     img.apply(&mgc_formats::mgcr::TerrainBlock {

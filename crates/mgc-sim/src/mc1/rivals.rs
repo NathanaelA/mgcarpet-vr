@@ -1033,6 +1033,14 @@ impl Rival {
             ("poverty", self.poverty as i64),
             ("target_sig", self.target_sig as i64),
             ("mana_delta", self.mana_delta as i64),
+            // Round 153's widening (the MC1 half of round 147's): the
+            // TEMPO scalar behind every AI cadence (+526) and the
+            // roster's AI-DRIVEN byte (+9) as retail's `== 1` test —
+            // `human_driven` is that test's negation, and the death
+            // scatter's `var_916` overflow is the only thing that can
+            // move it mid-level.
+            ("tempo", self.tempo as i64),
+            ("ai_flag", (!self.human_driven) as i64),
         ];
         let arrays = vec![
             ("hate", self.hate.iter().map(|&v| v as i64).collect()),
@@ -1081,6 +1089,62 @@ impl World {
             };
             self.spawn_rival(slot, cfg.clone());
         }
+    }
+
+    /// ⭐ THE HUMAN'S OWN POOL RECORD, seated where retail seats it —
+    /// the MC1 twin of [`World::mc2_spawn_human_record`] (round 112),
+    /// added in round 153 for `init-check`'s native build.
+    ///
+    /// Retail's level start is the FIRST tick's command processor:
+    /// `sub_3DD50` (:49154) arms a join command per wizard and the
+    /// consume loop (:48633) runs `sub_44D30` for wizard 0..7 in
+    /// order. For a wizard with `playIndex == 0` that routine pops a
+    /// class-3 record at the (3,4+slot) start marker
+    /// (`sub_373F0(&pos, 3, ai_flag)`, :54843-46) BEFORE it mints the
+    /// book's class-12 tokens (:54882-905) and the AI's starting
+    /// castle — so the human's carpet is the first wizard pop, his
+    /// tokens follow it, and every rival record lands below them.
+    /// The native port keeps the human out of the pool and the app
+    /// grants his book AFTER `set_wizards`, so every wizard-minted
+    /// record sat 1 + (book size) slots off and every slot-seeded law
+    /// downstream (`rand = slot + global`, `f63 % n` cadences, which
+    /// free slot a painter pops) ran on the wrong slot — mc1l20's
+    /// `init-check` read the rivals 22 slots low with the brain blocks
+    /// uncompared.
+    ///
+    /// THE REPRESENTATION IS THE IMPORT'S ([`World::retail_import_mc1`]):
+    /// the slot stays CLASS 0, a pinned record whose `rand` lane is
+    /// the live per-entity stream, the pose the runner's input
+    /// anchored at the slot by the walk (`mc1_carpet_slot != 0` takes
+    /// the certified in-walk arm). A world with no marker keeps
+    /// slot 0. NOT wired into `new_for_game` — the app's native seat
+    /// is the player's ruling (docs/CONFORMANCE-FINDINGS.md §ROUND 153).
+    pub fn mc1_spawn_human_record(&mut self) {
+        if matches!(self.game(), crate::ids::GameId::Mc2) || self.mc1_carpet_slot != 0 {
+            return;
+        }
+        let Some((mx, my)) = self.start_markers[0] else {
+            return;
+        };
+        let Some(i) = self.g.new_event() else { return };
+        let rand = self.g.ent[i].rand;
+        self.g.ent[i] = crate::engine::features::Ent::default();
+        self.g.ent[i].rand = rand;
+        // `sub_44D30`'s pose: the marker's tile centre, ground + 0x100
+        // (:54838-42, the same snap `spawn_rival` uses).
+        let x = (mx << 8).wrapping_add(128);
+        let y = (my << 8).wrapping_add(128);
+        let z = (self.g.ground_z(x, y) as i16).wrapping_add(0x100);
+        self.human_pose = (x, y, z);
+        self.human_pose_prev = self.human_pose;
+        self.mc1_cast_pose = crate::engine::world::PlayerPose {
+            x,
+            y,
+            z,
+            ..self.mc1_cast_pose
+        };
+        self.mc1_carpet_slot = i as u16;
+        self.g.mc1_pinned = crate::engine::features::Mc1Pinned(i as u16);
     }
 
     fn spawn_rival(&mut self, slot: u8, cfg: RivalConfig) {

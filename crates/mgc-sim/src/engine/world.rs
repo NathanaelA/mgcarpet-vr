@@ -118,7 +118,7 @@ pub enum LifeState {
 /// from the THING post-init) — the jar keeps its spawn state, the
 /// manifestation keeps the jar's pool slot (slot economy is
 /// load-bearing: level 032 depends on it).
-pub(crate) const MANIFEST_BASE: u8 = 200;
+pub const MANIFEST_BASE: u8 = 200;
 
 /// The human player's carpet-side spell state — the original Type_160
 /// slice: the +308 free mana pool, the var_940/944 hand equips, the
@@ -839,7 +839,7 @@ pub struct World {
     /// walk position, i.e. the pose settled by the PREVIOUS frame's
     /// carpet mover (tokens sit below the carpet in every recorded
     /// pool). A pose echo like `human_pose_prev` — HASH-EXCLUDED.
-    mc1_cast_pose: PlayerPose,
+    pub(crate) mc1_cast_pose: PlayerPose,
     /// The human's ACQUISITION LIST (`Type_160+532`) — retail's
     /// 24-entry i32 array, a PHASE-TAGGED UNION carried verbatim:
     /// while the wizard lives an entry is a pool slot (`<= 0` =
@@ -1098,7 +1098,7 @@ pub struct World {
     /// (victim entity, tick counter, initial-distance hold). The
     /// CASTER is pulled toward the victim until 1000 ticks, 5120
     /// distance, or the victim dies.
-    duel: Option<(u16, u16, u32)>,
+    pub(crate) duel: Option<(u16, u16, u32)>,
     /// The MC2 duel LOCK (`dword_0xA4_164` fields 322/326/330, remc2
     /// EF:60648-56): (opponent avatar entity, held tether distance
     /// clamped [1024, 3072], tier 0..2). Set by the (10,26) tether
@@ -1128,7 +1128,7 @@ pub struct World {
     win_pct: u16,
     /// Consecutive ticks the banked share has exceeded the goal
     /// (sub_415C0 :52130-38; 16 latches the win).
-    win_streak: u16,
+    pub(crate) win_streak: u16,
     /// The latched completion flag (the original's per-player
     /// +13325 bit 2).
     completed: bool,

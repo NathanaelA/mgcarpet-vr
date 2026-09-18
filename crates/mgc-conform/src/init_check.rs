@@ -104,10 +104,9 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
         .state
         .as_ref()
         .ok_or("record 0 carries no state channel")?;
-    let settle = match args.settle {
-        Some(n) => n,
-        None => crate::retail_record0_phase(&first, family)
-            .ok_or("record 0 carries no decodable phase — pass --settle <n>")?,
+    let (settle, corrected) = match args.settle {
+        Some(n) => (n, false),
+        None => crate::record0_settle(path, &first, family, &game, level, args)?,
     };
     let (world, _) = crate::native_settled_world(path, &first, family, &game, level, args, settle)?;
     let mut port: Occupancy = world
@@ -129,6 +128,8 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
                 shadow.compare_core_mc1(&world, &st, human, t);
                 shadow.compare_ents_mc1(&world, &st, human, t);
                 shadow.compare_wiz_mc1(&world, &st, t);
+                shadow.compare_globals_mc1(&world, &st, t);
+                shadow.compare_chains_mc1(&world, &st, human, t);
                 shadow.compare_free_mc1(&world, &st, human, t);
                 let occ = st
                     .ents
@@ -228,7 +229,9 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
         "== init-check {} (game {game}, level {level}, record 0 @t={t}, port settled {settle} \
          tick(s){})",
         path.display(),
-        if args.settle.is_none() {
+        if corrected {
+            " = recorder phase CORRECTED BY THE LCG (the +63 phase read one off)"
+        } else if args.settle.is_none() {
             " = recorder phase"
         } else {
             ""

@@ -29,6 +29,9 @@ use mgc_sim::engine::world::conformance::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 
+/// The port's out-of-pool human sentinel as a slot number.
+const PLAYER_TARGET_U16: u16 = u16::MAX;
+
 /// The MC2 raw lanes the graded diff reports UNCONDITIONALLY, so the
 /// shadow must not double-count: the seventeen `EntObsMc2` carries,
 /// plus `f5a` — the sprite lane, graded off the raw channel since
@@ -182,6 +185,22 @@ pub(crate) struct Shadow {
     pub(crate) ent_n: u64,
     /// `MGC_RAW_SHADOW_ALL=1` — report every lane, graded or not.
     pub(crate) all_lanes: bool,
+    /// The world under comparison is a NATIVE build (`init-check`),
+    /// whose owned MC1 tokens carry the port's own `MANIFEST_BASE +
+    /// spell` in +70; an imported world carries retail's `3·spell`
+    /// and a `MANIFEST_BASE` token THERE is a real divergence (the
+    /// two mc1l0 cheat takes: the human's token mint ignores the
+    /// strict encoding), so the normalization is scoped to this.
+    pub(crate) native: bool,
+    /// The UNMODELLED census's memory (`<lane>~` rows): the last retail
+    /// value per (owner, lane, idx), so a row counts a TRANSITION, not
+    /// a tick — a rival's hands are `0/1` on every tick of every take,
+    /// and "400 rows" of that says nothing; "changed twice" does.
+    pub(crate) unmodelled_last: BTreeMap<(u16, &'static str, u16), i64>,
+    /// The bucket-chain denominator: (links compared, links skipped as
+    /// severed/unlisted) — "0 chain0 rows" must say how many links it
+    /// stands on.
+    pub(crate) chain_n: (u64, u64),
     /// `MGC_ALLOC_CENSUS=1` — print one classified line per
     /// mismatching allocator boundary (see [`Self::alloc_census`]).
     alloc_census: usize,
@@ -214,6 +233,7 @@ impl Shadow {
         });
         Shadow {
             all_lanes: true,
+            native: true,
             rows,
             ..Default::default()
         }
@@ -549,8 +569,22 @@ impl Shadow {
                     },
                 )
             };
+            // A NATIVE world's owned token carries `MANIFEST_BASE +
+            // spell` in +70 where retail (and every imported world)
+            // carries `3·spell + phase`, phase 0 = owned — the port's
+            // own encoding, not a lane (`init-check` is the only
+            // native-world caller; 38 of 39 MC1 takes fired on it).
+            // Scoped to `self.native`: see the field.
+            let gf70 = if self.native
+                && g.class == 12
+                && g.f70 >= mgc_sim::engine::world::MANIFEST_BASE
+            {
+                3 * (g.f70 - mgc_sim::engine::world::MANIFEST_BASE) as i64
+            } else {
+                g.f70 as i64
+            };
             let mut hits: Vec<(&'static str, i64, i64)> = vec![
-                ("f70", w.f70 as i64, g.f70 as i64),
+                ("f70", w.f70 as i64, gf70),
                 ("f71", w.f71 as i64, g.f71 as i64),
                 // ⚠ COMPARE THE BYTE, NOT THE NUMBER. The recording's
                 // `+58` is signed and the port widens it to i16, but
@@ -570,7 +604,30 @@ impl Shadow {
                 ("f52", w.f52 as i64, g.f52 as i64),
                 ("f54", w.f54 as i64, g.f54 as i64),
                 ("f56", w.f56 as i64, g.f56 as i64),
-                ("f59", w.f59 as i64, g.f59 as i64),
+                // ⭐ A (3,2) CASTLE'S `f59` IS NOT RETAIL'S `+59`: the
+                // importer derives it from the transform machine's
+                // `+48` sub-state (`import_ent`: `+70 == 5` →
+                // `{1,4} → 1, s → min(s, 6)`, else 0). Round 153's
+                // first census compared the raw byte and read 136,975
+                // rows on 39/39 takes of exactly that mis-home.
+                (
+                    "f59",
+                    if w.class64 == 3 && w.model65 == 2 {
+                        if w.f70 == 5 {
+                            match w.f48 {
+                                1 | 4 => 1,
+                                s => (s as u8).min(6) as i64,
+                            }
+                        } else {
+                            0
+                        }
+                    } else {
+                        w.f59 as i64
+                    },
+                    g.f59 as i64,
+                ),
+                ("f66", w.f66 as i64, g.f66 as i64),
+                ("f67", w.f67 as i64, g.f67 as i64),
                 ("f68", w.f68 as i64, g.f68 as i64),
                 ("f69", w.f69 as i64, g.f69 as i64),
                 ("f78", w.f78 as i64, g.f78 as i64),
@@ -592,6 +649,14 @@ impl Shadow {
                 hits.push((amt, w.mail[k].0 as i64, g.mail[k].0 as i64));
                 hits.push((src, w.mail[k].1 as i64, untr(g.mail[k].1 as i64)));
             }
+            // Retail's `+48` raw (`Ent::raw48`), everywhere a re-homed
+            // copy is not already compared under its own name.
+            let rehomed48 = w.class64 == 12
+                || (w.class64 == 10 && w.model65 == 41)
+                || (w.class64 == 3 && w.model65 == 2);
+            if !rehomed48 {
+                hits.push(("f48", w.f48 as i64, g.f48 as i64));
+            }
             // The TILE LINKS are structural, not a lane: the port's
             // carpet lives outside the pool, so a chain that threads
             // THROUGH the human can never agree link-for-link. Skip
@@ -609,6 +674,23 @@ impl Shadow {
             for (name, a, b) in hits {
                 if a != b {
                     self.hit((g.class, g.model, name), t, g.slot, a, b);
+                }
+            }
+            // ⚠ THE UNMODELLED CENSUS (round 153): lanes the port has
+            // NO home for, so nothing can be compared — but a retail
+            // value that is ever NON-ZERO says the lane carries state
+            // the port never will. Reported under `<lane>~` with the
+            // port side printed as `—` (−1); `+42` only off class 12,
+            // where it is the token owner already homed in `f144`.
+            let unmodelled: [(&'static str, i64); 3] = [
+                ("f42~", if w.class64 == 12 { 0 } else { w.f42 as i64 }),
+                ("f61~", w.f61 as i64),
+                ("f62~", w.f62 as i64),
+            ];
+            for (name, a) in unmodelled {
+                let last = self.unmodelled_last.insert((g.slot, name, 0), a);
+                if a != 0 && last != Some(a) {
+                    self.hit((g.class, g.model, name), t, g.slot, a, -1);
                 }
             }
         }
@@ -943,6 +1025,19 @@ impl Shadow {
                     "ai_state" => norm_retail_ai_state_mc1(w.ai_state),
                     "burst" => w.burst as i64,
                     "poverty" => (w.poverty != 0) as i64,
+                    // Round 153's widening (the MC1 half of round 147's
+                    // MC2 table). The port's pool SCAN against retail's
+                    // stored +50 — the register itself is graded.
+                    "castle_scan" => w.castle as i64,
+                    "tempo" => w.tempo as i64,
+                    "ai_flag" => (w.ai_flag == 1) as i64,
+                    "win_streak" => w.win_streak as i64,
+                    "duel_victim" => w.duel_victim as i64,
+                    // count/hold are stale once the lock drops; the
+                    // port's register is an Option and reads 0.
+                    "duel_count" | "duel_hold" if w.duel_victim == 0 => continue,
+                    "duel_count" => w.duel_count as i64,
+                    "duel_hold" => w.duel_hold as i64,
                     // The port's human-target sentinel is not retail's
                     // computed sig; those rows have no retail twin.
                     "target_sig" if port == u16::MAX as i64 => continue,
@@ -969,12 +1064,63 @@ impl Shadow {
                     "owned" => w.owned_slots.iter().map(|&v| v as i64).collect(),
                     "acq" => w.spell_list.iter().map(|&v| v as i64).collect(),
                     "balloon_reg" => w.balloon_reg.iter().map(|&v| v as i64).collect(),
+                    "guard_reg" => w.guard_reg.iter().map(|&v| v as i64).collect(),
                     _ => continue,
                 };
-                for (i, (&a, &b)) in retail.iter().zip(port).enumerate() {
+                // Retail's length rules, the port padded with 0 (the
+                // MC2 twin's rule since round 147): an owner the port
+                // holds NO register for must read as all-empty, not
+                // as "nothing to compare".
+                for (i, &a) in retail.iter().enumerate() {
+                    let b = port.get(i).copied().unwrap_or(0);
                     if a != b {
                         self.wiz_hit((ws.wiz, name), t, i as u16, a, b);
                     }
+                }
+            }
+            // ⚠ THE UNMODELLED CENSUS (round 153) — see the entity twin
+            // in [`Self::compare_ents_mc1`]. The registers retail keeps
+            // per wizard that the port has NO home for on this column:
+            // rivals' HUD alarms, house tally, kill/shot/hit counters,
+            // raw hands (255 = empty) and blue-grant flags; the HUMAN's
+            // hate ledger (0x601F = neutral), war flags, learn and
+            // cooldown countdowns; everyone's exit-status word.
+            let neutral_hate = 0x601F_i64;
+            let mut unmodelled: Vec<(&'static str, u16, i64)> = vec![("status~", 0, w.status as i64)];
+            if ws.wiz == 0 {
+                for (i, &h) in w.hate.iter().enumerate() {
+                    unmodelled.push(("hate~", i as u16, if h as i64 == neutral_hate { 0 } else { h as i64 }));
+                }
+                for (i, &v) in w.war.iter().enumerate() {
+                    unmodelled.push(("war~", i as u16, v as i64));
+                }
+                for (i, &v) in w.learn.iter().enumerate() {
+                    unmodelled.push(("learn~", i as u16, v as i64));
+                }
+                for (i, &v) in w.cooldown.iter().enumerate() {
+                    unmodelled.push(("cooldown~", i as u16, v as i64));
+                }
+            } else {
+                unmodelled.extend([
+                    ("danger~", 0, w.danger as i64),
+                    ("banked_houses~", 0, w.banked_houses as i64),
+                    ("kills~", 0, w.kills as i64),
+                    ("shots~", 0, w.shots as i64),
+                    ("hits~", 0, w.hits as i64),
+                    ("castle_alert~", 0, w.castle_alert as i64),
+                    ("player_alert~", 0, w.player_alert as i64),
+                    ("balloon_alert~", 0, w.balloon_alert as i64),
+                    ("hand_left~", 0, if w.hand_left == 255 || w.hand_left == 0xFFFF { 0 } else { w.hand_left as i64 + 1 }),
+                    ("hand_right~", 0, if w.hand_right == 255 || w.hand_right == 0xFFFF { 0 } else { w.hand_right as i64 + 1 }),
+                ]);
+                for (i, &v) in w.blue.iter().enumerate() {
+                    unmodelled.push(("blue~", i as u16, v as i64));
+                }
+            }
+            for (name, idx, a) in unmodelled {
+                let last = self.unmodelled_last.insert((0x100 | ws.wiz as u16, name, idx), a);
+                if a != 0 && last != Some(a) {
+                    self.wiz_hit((ws.wiz, name), t, idx, a, -1);
                 }
             }
         }
@@ -1116,6 +1262,68 @@ impl Shadow {
                     depth.map_or("none (prefix)".into(), |d| d.to_string()),
                 );
             }
+        }
+    }
+
+    /// THE BUCKET CHAINS, link by link (round 153): for every member
+    /// of a port tick-top chain, retail's settled `+0` must name the
+    /// port's next member (slot 0 at the tail). Rows land in the
+    /// entity table under `chain0` keyed by the member's class/model;
+    /// severed chains are skipped. The human's out-of-pool carpet is
+    /// spliced out of the port's class-3 list, so a retail link that
+    /// names the human slot is compared against the member AFTER him.
+    pub(crate) fn compare_chains_mc1(
+        &mut self,
+        world: &World,
+        st: &RetailMc1,
+        human_slot: u16,
+        t: u64,
+    ) {
+        for (_name, list, intact) in world.chains_shadow_mc1() {
+            if !intact {
+                self.chain_n.1 += list.len() as u64;
+                continue;
+            }
+            for (k, &s) in list.iter().enumerate() {
+                if s == human_slot || s == PLAYER_TARGET_U16 {
+                    continue;
+                }
+                let Some(r) = st.ents.get(s as usize) else { continue };
+                if r.class64 == 0 {
+                    self.chain_n.1 += 1;
+                    continue;
+                }
+                self.chain_n.0 += 1;
+                let want = r.chain_next as i64;
+                let got = list.get(k + 1).copied().unwrap_or(0) as i64;
+                // Retail's chain threads THROUGH the human's record;
+                // the port's list has no such member.
+                if want == human_slot as i64 && got != want {
+                    continue;
+                }
+                if want != got {
+                    self.hit((r.class64, r.model65, "chain0"), t, s, want, got);
+                }
+            }
+        }
+    }
+
+    /// The MC1 world globals (`spawn_count[20]`, `erupting`, `plume`) —
+    /// keyed into the wizard-lane table under wiz 255 so the report
+    /// needs no third block. Imported every pair, never compared
+    /// before round 153.
+    pub(crate) fn compare_globals_mc1(&mut self, world: &World, st: &RetailMc1, t: u64) {
+        let (sc, erupting, plume) = world.globals_shadow_mc1();
+        for (i, (&a, &b)) in st.spawn_count.iter().zip(sc.iter()).enumerate() {
+            if a != b {
+                self.wiz_hit((255, "spawn_count"), t, i as u16, a as i64, b as i64);
+            }
+        }
+        if st.erupting != erupting {
+            self.wiz_hit((255, "erupting"), t, 0, st.erupting as i64, erupting as i64);
+        }
+        if st.plume != plume {
+            self.wiz_hit((255, "plume"), t, 0, st.plume as i64, plume as i64);
         }
     }
 
@@ -1291,16 +1499,30 @@ impl Shadow {
             keys.sort_by_key(|(k, l)| (l.first_t, k.0, k.1));
         }
         for (k, lane) in keys {
+            // wiz 255 = the MC1 world globals (`compare_globals_mc1`).
+            let who = if k.0 == 255 {
+                "globals".to_string()
+            } else {
+                k.0.to_string()
+            };
             let _ = writeln!(
                 s,
                 "    wiz {} {}: {} rows t={}..{} across {} idx  e.g. {}",
-                k.0,
+                who,
                 k.1,
                 lane.rows,
                 lane.first_t,
                 lane.last_t,
                 lane.slots.len(),
                 lane.example
+            );
+        }
+        if self.chain_n.0 + self.chain_n.1 > 0 {
+            let _ = writeln!(
+                s,
+                "    bucket chains: {} link(s) compared, {} skipped (severed / freed) — rows under `chain0`",
+                self.chain_n.0,
+                self.chain_n.1
             );
         }
         let _ = writeln!(

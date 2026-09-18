@@ -481,6 +481,8 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     if let Some(sh) = shadow.as_mut() {
                         sh.compare_ents_mc1(&world, &st, report.human_slot, bt);
                         sh.compare_wiz_mc1(&world, &st, bt);
+                        sh.compare_globals_mc1(&world, &st, bt);
+                        sh.compare_chains_mc1(&world, &st, report.human_slot, bt);
                         // A fallback pair started from a SCANNED free
                         // list, not retail's, so it has nothing to say.
                         if report.stack_fallback.is_none() {
@@ -1203,6 +1205,25 @@ pub(crate) fn build_world(
     game: &str,
     level: u32,
 ) -> Result<(World, Planes), String> {
+    build_world_mc1_with_book(baked, game, level, None)
+}
+
+/// [`build_world`] with the human SEATED THE WAY RETAIL SEATS HIM —
+/// the MC1 twin of `verify_mc2::build_world_mc2_with_book` (round 153,
+/// for `init-check`). `Some(book)` = the human's carried spells in
+/// ACQUISITION order (read off the take's record 0): the carpet's pool
+/// record is popped first, the book's class-12 tokens next, the rivals
+/// after — `sub_44D30`'s order for wizard 0, then 1..7 (:48633). `None`
+/// keeps the app's native layout (no pooled carpet, rivals first, the
+/// book granted by the campaign machinery afterwards), which is what
+/// every other caller wants and what the round-153 census measured
+/// as 1 + (book size) slots of drift on every wizard-minted record.
+pub(crate) fn build_world_mc1_with_book(
+    baked: &std::path::Path,
+    game: &str,
+    level: u32,
+    human_book: Option<&[u8]>,
+) -> Result<(World, Planes), String> {
     let lp = baked.join(game).join(format!("level-{level:03}.mgcl"));
     let file = std::fs::File::open(&lp).map_err(|e| format!("{}: {e}", lp.display()))?;
     let pkg: mgc_formats::LevelPackage =
@@ -1248,6 +1269,12 @@ pub(crate) fn build_world(
     let mut w = World::new_for_game(planes, &pkg.things.things, seed, assets, game_id);
     if let Some(f) = pkg.gen_params.as_ref().and_then(|g| g.footer) {
         w.set_win_pct(f[0]);
+    }
+    if let Some(book) = human_book {
+        // Wizard 0 first: the carpet record, then his tokens in
+        // acquisition order (`sub_44D30` :54843 / :54882-905).
+        w.mc1_spawn_human_record();
+        w.grant_spells(book);
     }
     let (wizards, player_count) = rival_configs(pkg.wizards.as_ref());
     w.set_wizards(&wizards, player_count);

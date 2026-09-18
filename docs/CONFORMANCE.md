@@ -1235,6 +1235,19 @@ axes cannot express retail's both-bits-held states — and its
 faithful tier hands `World::tick` the INTEGER carpet pose (the
 quantization-risk fix; the enhanced tier keeps the float flyer).
 
+## `blob-census` — which bytes of the raw image ever move (round 153)
+
+Every lane above is a byte the DECODER lifts; a byte no decoder reads
+is in no channel. `blob-census` walks a take's records and counts, per
+byte offset, how many records changed it, folding the pool and wizard
+records onto their stride and tagging each offset DECODED/UNDECODED:
+
+    ./tools/conform blob-census recordings/<take>.mgcr [--limit <n>]
+
+Both games. MC1's 164-byte record is fully accounted for (ledger §ROUND
+153 part 2 names every undecoded mover); MC2's `+0` chain, `T+298`,
+`T+365`, `T+0`, `T+54` and global `+53` are unread as of round 153.
+
 ## `init-check` — the native-vs-recorded first state (2026-09-17, round 147)
 
 Both graded runners SEED FROM THE RECORDING (`replay` imports the take's
@@ -1249,6 +1262,27 @@ holds:
 
     ./tools/conform init-check recordings/<take>.mgcr [--settle <n>]
 
+Without `--settle` the count is the record-0 phase (MC2: 100 − the
+human's invuln; MC1: `+63 − slot`) **corrected by the LCG**
+(`record0_settle`, round 153): the phase is tried first, then ±1/±2,
+and the first count whose native `rand_state` equals record 0's wins —
+on mc1l11/l16/l42 the MC1 phase byte read one low and on mc1l6 two
+low (every level record one tick young; `rand` DIFF). The banner says
+`CORRECTED BY THE LCG` when it happened. `terrain-check` shares it.
+
+MC1 seats the human THE WAY RETAIL DOES (round 153): the carpet's
+pinned record first, the carried book's tokens next in acquisition
+order (read off record 0), the rivals after — `sub_44D30`'s order.
+`MGC_INIT_NATIVE_LAYOUT=1` builds the app's own layout instead (no
+pooled carpet, rivals first, book last), which is what moved eight of
+the eleven DIFFERENT MC1 `terrain-check` rows (ledger §ROUND 153).
+
+- the tick-top BUCKET CHAINS link by link (`+0` → `chain_next` vs the
+  port's `TickChain`s; `bucket chains: N link(s) compared` is the
+  denominator, rows under `chain0`), the world globals (`wiz globals
+  spawn_count/erupting/plume`), and the UNMODELLED CENSUS — lanes the
+  port has no home for, reported as `<lane>~` with the port side `—`
+  and counted as retail-value TRANSITIONS, not ticks (round 153);
 - the LCG (`World::rand_state` vs `st.rand`);
 - **pool occupancy** — per-slot `(class, model)` agree / differ /
   retail-only / port-only, plus the slot-order-independent

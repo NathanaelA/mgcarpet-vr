@@ -110,6 +110,15 @@ pub struct RawShadowMc1 {
     /// `+68`/`+69` — the class/model this record detonates into.
     pub f68: u8,
     pub f69: u8,
+    /// `+66`/`+67` — team/owner and its companion (round 153: modelled
+    /// since the first port, imported every pair, never compared).
+    pub f66: u8,
+    pub f67: u8,
+    /// Retail's `+48` RAW ([`Ent::raw48`]) — the lane the shadow's own
+    /// comment used to call "not modelled at all". Re-homed copies
+    /// (`f26` on class 12, `f28` on (10,41), the castle's `f59`) are
+    /// compared under their own names; the comparator skips those.
+    pub f48: u16,
     /// `+78`..`+84` — the sprite half-height and the collision extents.
     pub f78: u16,
     pub f80: u16,
@@ -1397,6 +1406,9 @@ impl World {
                     f59: e.f59,
                     f68: e.f68,
                     f69: e.f69,
+                    f66: e.f66,
+                    f67: e.f67,
+                    f48: e.raw48.0,
                     f78: e.f78,
                     f80: e.f80,
                     f82: e.f82,
@@ -1435,11 +1447,43 @@ impl World {
             v.resize(3, 0);
             v
         };
+        // The castle-GUARD register (retail wizext+84, 34 positional
+        // pool slots) — imported every pair, walked by the fleet
+        // dispatch, never compared until round 153.
+        let greg = |key: u16| -> Vec<i64> {
+            let mut v: Vec<i64> = self
+                .g
+                .mc1_guard_reg
+                .0
+                .get(&key)
+                .map(|r| r.iter().map(|&s| s as i64).collect())
+                .unwrap_or_default();
+            v.resize(34, 0);
+            v
+        };
+        // Retail's +314/+316/+318 duel triple; the port's register is
+        // an Option that reads 0/0/0 released (the comparator skips
+        // count/hold while retail's victim is 0 — those are stale).
+        let duel = self.duel.unwrap_or((0, 0, 0));
         let mut out = vec![WizShadowMc1 {
             wiz: 0,
             ent: PLAYER_TARGET,
             scalars: vec![
                 ("charge", self.wiz_charge[0] as i64),
+                // Round 153's widening: the human's duel lock, the
+                // banked-share win streak, and the ESTABLISHED castle
+                // as the port's pool SCAN resolves it (`player_castle`)
+                // against retail's stored +50 — the register itself is
+                // graded (`WizardMc1::castle`); this lane measures how
+                // often a scan-reader would see something else.
+                ("duel_victim", duel.0 as i64),
+                ("duel_count", duel.1 as i64),
+                ("duel_hold", duel.2 as i64),
+                ("win_streak", self.win_streak as i64),
+                (
+                    "castle_scan",
+                    self.player_castle().map_or(0, |c| c as i64),
+                ),
                 ("knock_dir", self.g.player_knock.0 as i64),
                 ("knock_mag", self.g.player_knock.1 as i64),
                 ("danger", self.g.player_danger as i64),
@@ -1465,6 +1509,7 @@ impl World {
             ],
             arrays: vec![
                 ("balloon_reg", breg(PLAYER_TARGET)),
+                ("guard_reg", greg(PLAYER_TARGET)),
                 // The human's acquisition list + owned register were
                 // shadow-blind through session 48 (only RIVALS
                 // exported `acq`/`owned`) — the t=7993 stale-entry
@@ -1485,7 +1530,15 @@ impl World {
             let (mut scalars, mut arrays) = r.wiz_shadow_lanes();
             scalars.push(("charge", self.wiz_charge[r.slot as usize] as i64));
             scalars.push(("aggro", self.g.rival_wanted[r.slot as usize] as i64));
+            // The rival column's castle as its ~10 SCAN sites resolve
+            // it (`rival_castle`) vs retail's stored +50 (see the
+            // human's `castle_scan` above; the round-152 w152c lead).
+            scalars.push((
+                "castle_scan",
+                self.rival_castle(r.ent).map_or(0, |c| c as i64),
+            ));
             arrays.push(("balloon_reg", breg(r.ent)));
+            arrays.push(("guard_reg", greg(r.ent)));
             out.push(WizShadowMc1 {
                 wiz: r.slot,
                 ent: r.ent,
@@ -1614,6 +1667,33 @@ impl World {
     /// hand out different slots for the same spawn.
     pub fn free_stack_mc1(&self) -> &[u16] {
         &self.g.free
+    }
+
+    /// THE TICK-TOP BUCKET CHAINS as `(name, members in walk order,
+    /// intact)` — retail's `var_u32_36462[k]` lists, threaded through
+    /// every record's `+0` (`RetailEntMc1::chain_next`), which the
+    /// port rebuilds as [`TickChain`]s and had never compared link by
+    /// link (round 153). `intact` = no mid-tick NewEvent reuse severed
+    /// it (a severed chain's stale tail links are not comparable).
+    pub fn chains_shadow_mc1(&self) -> Vec<(&'static str, &[u16], bool)> {
+        let mut out: Vec<(&'static str, &[u16], bool)> = vec![
+            ("wiz", &self.g.wiz_chain.list, self.g.wiz_chain.cut == usize::MAX),
+            ("ball", &self.g.ball_chain.list, self.g.ball_chain.cut == usize::MAX),
+            ("bldg", &self.g.bldg_chain.list, self.g.bldg_chain.cut == usize::MAX),
+            ("proj", &self.g.proj_chain.list, self.g.proj_chain.cut == usize::MAX),
+        ];
+        for (m, l) in self.g.mob_chains.list.iter().enumerate() {
+            let intact = self.g.mob_chains.cut.get(m).is_none_or(|&c| c == usize::MAX);
+            out.push(("mob", l, intact));
+        }
+        out
+    }
+
+    /// The MC1 WORLD GLOBALS the recording carries and the importer
+    /// installs every pair (`spawn_count[20]`, the erupting-volcano
+    /// register, the plume register) — never compared until round 153.
+    pub fn globals_shadow_mc1(&self) -> ([u8; 20], u16, u16) {
+        (self.g.spawn_count, self.g.erupting, self.g.plume)
     }
 
     /// The port's MC1 RECYCLE stack (the victim roster `sub_37220`

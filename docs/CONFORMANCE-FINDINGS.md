@@ -106,6 +106,200 @@ rejection streaks; the gate now counts only `dv±1` steps as tear
 suspects.) Every open entry below reproduced across all takes,
 including the 75%-torn pre-gate corpus.
 
+## ROUND 153 (2026-09-18, vm113) — **THE MC1 UNGRADED CHANNELS OPENED**: INSTRUMENTS + CENSUS, NO LAW LANDED
+
+The MC1 twin of round 147: the three channels certification cannot see (the wizard/brain block,
+native init, the entity raw shadow) widened and swept over the whole 39-take MC1 corpus in pair
+mode, free run, `init-check` and `terrain-check`. Instrument-only — every row below is a LEAD for the
+dig discussion, none is landed. Gate 1,331 / 0 / 4 unchanged.
+
+**Instruments added (all instrument-side, no sim law):**
+- `World::wiz_shadow_mc1` / `Rival::wiz_shadow_lanes` / `Shadow::compare_wiz_mc1` widened to the retail
+  record: human `duel_victim/duel_count/duel_hold` (+314/316/318), `win_streak` (+0), `castle_scan`;
+  rivals `castle_scan`, `tempo` (+526), `ai_flag` (+9 as `== 1`); both `guard_reg` (34 slots, +84).
+  `castle_scan` = the port's pool SCAN (`player_castle` / `rival_castle`) against retail's stored +50 —
+  the register itself is graded (`WizardMc1::castle`); this lane measures the round-152 w152c lead
+  ("~10 rival sites resolve the castle by scan"). Arrays now follow RETAIL's length with the port
+  0-padded (the MC2 rule since round 147).
+- **`init-check` MC1 seats the human like retail** — `verify::build_world_mc1_with_book` +
+  `World::mc1_spawn_human_record` (the MC1 twin of round 112's `mc2_spawn_human_record`: a pinned
+  class-0 record at the (3,4) marker, popped BEFORE the book's tokens and the rivals, `sub_44D30`
+  :54843-46 for wizard 0 in the first tick's command processor :48633) and the carried book read
+  off record 0 in ACQUISITION order (`retail_record0_human_book_mc1`: the `+532` list, token model =
+  spell id). `MGC_INIT_NATIVE_LAYOUT=1` restores the app's own layout for the A/B. ⚠ NOT wired
+  into `new_for_game` / the app — that is finding #1 below and the player's ruling.
+- **The settle count is LCG-corrected** (`record0_settle`): the `+63 − slot` phase read one tick
+  LOW on mc1l11/l16/l42 and TWO low on mc1l6 (every level record one tick young, `rand` DIFF,
+  1,913 lane rows on mc1l11); the phase stays the first candidate, ±1/±2 are tried only when the
+  LCG disagrees. `terrain-check` shares it. Result: `rand` MATCH 39/39.
+- `init-check` normalizes a NATIVE owned token's `+70` (`MANIFEST_BASE + spell` → `3·spell`), scoped
+  by `Shadow::native` so the same rows in a REPLAY world stay visible (finding #9).
+
+### ⭐⭐⭐ Finding #1 — THE PORT'S NATIVE MC1 POOL IS LAID OUT UNLIKE RETAIL'S, AND IT MOVES THE TERRAIN
+`terrain-check` MC1 was 11 DIFFERENT (`terrain-check-baseline.txt`: the "first-tick runtime family"
+mc1l42/l49/hwl2 since round 114, plus the eight intake rows mc1l10/13/15/16/19/20/21/22). With the
+human seated in retail's order it is **3 DIFFERENT / 35 IDENTICAL / 1 no-channel**: mc1l10/13/15/16/
+20/22/hwl2/l49 go IDENTICAL, and `MGC_INIT_NATIVE_LAYOUT=1` puts every one of them back. The
+mechanism is round 112's, verbatim: every wizard-minted record sat 1 + (book size) slots low, and the
+load-time fires/painters/craters draw `rand = slot + global` and `f63 % n` off the wrong slot. What
+the native app does today: no pooled human carpet, rivals seated first, the human's book granted
+LAST by the campaign machinery (`mgc-app/src/lib.rs` `grant_spells` after the world build). The
+remaining three: mc1l19 (type 1,363 · height 1,367 · shading 1,217 · angle 1,822 — a different law,
+see #7), mc1l21 (6/5/10/6), mc1l42 (height 3 · shading 6).
+
+### `init-check` MC1 census (39 takes, corrected settle, retail seating)
+`rand` MATCH 39/39 · seats 39/39 · pool occupancy byte-identical 17/39 · free stack MATCH 27/39 ·
+wiz 556 rows in 10 lanes · ent ~5,500 rows. mc1l37 is IDENTICAL but for 3 wiz rows. Families:
+- **#2 the human's token mint is a bare `new_event`** (`World::mint_spell_token`): `x/y/z` 0, `flags`
+  bit 0 (OWNED) unset, `next20/prev22` 0 (never map-linked) on 31 takes — retail's is the ground-jar
+  ctor at the wizard's position + `+16 |= 1` + `+42 = slot` (:54882-905), exactly what
+  `Rival::mint_manifestation` was fixed to in round 115. ~450 of the ent rows.
+- **#3 rival token mint ORDER**: `spawn_rival` and the respawn regrant walk `0..SPELL_COUNT`; retail
+  fills the list in `byte_99B88` order (`0,3,2,16,1,14,4,12,6,9,7,8,15,18,17,19,13,5,11,10,20..23`) —
+  wiz `owned` 442 rows / 21 takes, the `slot disagreements` rows, and the free-stack DIFF on 12 takes
+  are this (the acq list ORDER is what the hands index).
+- **#4 `hate` at seat**: 105 rows / 22 takes, port HATE_RESPAWN (38652..40927) vs retail NEUTRAL 24607
+  — the round-147 w147a truce-roster law's MC1 transfer (`mc1/rivals.rs` spawn tail "everyone hates a
+  newcomer" + the flat loops at :964/:5673), banked in round 147 for "when the MC1 takes arrive".
+- `(3,2) f59` retail 0 port 1 on 20 takes (castle) — and 136,975 rows on 39/39 takes in BOTH runners
+  from t=1: the port stamps the castle's +59 = 1 where retail holds 0. One site.
+- `(5,6) f56` retail 96 port 0 on 8 takes at init, **852,694 free-run rows / 15 takes** (mc1l9 alone
+  541k): the kraken ctor stamps +56 = 96 and the port never does. One field, one site.
+- `(10,0)` fires on hwl2/l20/l21: 147 slots each with x/y/z/chain rows — position, not count
+  (terrain is IDENTICAL on hwl2 now); `(10,2)` x/y/z on 9 takes (29 rows).
+- HW only: `(2,0) f80/f82/rand/type86` on all three HW takes (86 rows: a static's extents 171 vs 177,
+  sprite 83 vs 84).
+- mc1l19: `(2,0)` retail 0 port 38, `(2,1)` 10 vs 13, `(2,2)` 1 vs 2 — 42 PORT-ONLY records (#7, the
+  same take as the 1,300-cell terrain row); mc1hwl1 `(5,5)`/`(5,8)` port-only 6+4, `(11,0)` 6 vs 4.
+- mc1l6: 2 slots differ, 1,322 rows — the settle now fits the LCG (phase+2) but the level is still
+  one tick off on ~190 `(5,13)` records: a draw-count divergence during settle, the `open` take.
+
+### WIZEXT census — pair (414,142 rows / 28 lanes) and free run (2,763,520 rows / 30 lanes)
+Denominators: every wizard compared on every boundary (skipped 0), e.g. mc1hwl0 wiz 0 ×53,043.
+- **#5 the human's counters are OFF BY ONE and stay so**: free `hits` 1,004,060 rows / 36 takes,
+  `shots` 758k / 30, `kills` 632k / 27 (port one HIGH — pair rows 2,480 / 6,282 / 230 name the ticks:
+  mc1l49 t=250 `hits` 8 vs 9, mc1l15 t=4051 `shots` 374 vs 375, mc1l49 t=9641 `kills` 49 vs 50). The
+  round-152 opener's "kills/hits/shots off by one from t≈9k" — it is from the first shot.
+- **#6 the ALARM registers**: `castle_alert` pair 48,628 / 36 takes, `player_alert` 24,906 / 38,
+  `balloon_alert` 8,651 / 36, `danger` 5,364 / 31 — retail 4 vs port 3 (one tick of countdown),
+  `balloon_alert` retail 0 vs port 3 (armed where retail never arms). HUD-visible in native play.
+- `win_streak`: pair 268,342 rows / 37 takes retail 2 vs port 1 (a sample-order lane — the pair
+  importer does not seed it); free 40,516 / 16 takes retail 0 vs port 16 (the port PARKS at 16 where
+  retail has reset). Round 152 landed WIN_STREAK_PRE_TEST off the recording's byte; this lane now
+  watches it.
+- `aggro` (wanted) 39,668 free / 29 takes, retail 200 vs port 199 — the round-147 w147d
+  `WANTED_WALK_SEAT` law's MC1 twin (`sub_45C90` :55405, flagged then as "its own dig").
+- rival `knock_mag` 47,667 free / 24 takes (port 16..20 where retail 0), rival `knock_dir` 30,732 / 16
+  — the round-147 w147c dead-wait knock clear (`sub_5E7C0`'s MC2 arm; MC1's `sub_46480`?) transfer.
+- human `knock_mag` pair 35,435 / 38 takes retail 36 vs port 40 — the SAME +4 shape round 147 proved
+  to be a HARNESS artifact on MC2 (`exec_pair` ticks with `drive = None`); free 4,259 / 19 takes is
+  the real residue.
+- human `regen_stall` 1,849 free / 28 takes (retail 16 port 0) + `life_rate` (retail 5 port 0): the
+  human's post-hit stall register is never armed in the port (`:55387-90`).
+- rival `hate` 35,724 free / 11 takes (mid-take: HATE_RESPAWN vs decayed) — #4's respawn half.
+- `castle_scan` 147 rows / 32 takes, human: retail 0 vs port 443 (mc1l18 t=290) — the scan sees a
+  castle the register has not bound (or has dropped). The w152c lead, MEASURED: small.
+- mc1l26-froze only: rival `guard_reg` 6,528 / `balloon_reg` 1,987 / `ai_state` / `target_sig` /
+  `charge` / `mana_delta` — the level-250 OOB castle's residue (registered rule); elsewhere both
+  registers are CLEAN on every take. mc1l48 `duel_count` 934 rows retail 201 vs port 200 (order),
+  `duel_victim` 2. mc1l32-terrainless `acq` 408 rows retail 20 vs port 3 (one list entry).
+- ZERO rows corpus-wide: rival `ai_state` (bar froze), `burst`, `cooldown` (10 pair rows), `war` (25
+  free rows mc1l49), `learn`, `owned`/`acq` mid-take, `tempo`, `ai_flag`, `grace`, `life_rate`,
+  `regen_stall`, `cmd_speed`, `strafe`, `poverty`. **The MC1 rival brain is as clean as MC2's was
+  after round 147** — the rows are the human's counters and the alarm registers.
+
+### Entity raw shadow — pair (1,026,538 rows / 267 lanes) and free (8,359,910 / 248)
+- **#8 projectile `dest_x/dest_y/site_z`** on every `(9,x)`: free 1.05M+ rows / 39 takes, pair 239k.
+  Retail stamps the dest triple on EVERY bolt; round 152's w152l stamped the Meteor's only. `(9,1)
+  f36` 108k free / 30 takes, `(9,2) f69` 21,910 / 5 takes ride the same records.
+- `(10,45) f40` 442,171 free / 20 takes (retail 0 port 309 from t=3; pair 1,889).
+- `(2,0) f80/f82` 1,602,938 rows on mc1hwl0 — ONE slot (118), retail 177 vs port 176 (extents).
+- `(5,15) f70` 64,806 / 2 takes (retail 91 port 94 — a state byte).
+- mc1l32-terrainless: `(10,39)` dest/f46/f78/f80/f82/f84 ~150k pair rows (the terrainless take's own).
+- tile-chain order: `(10,0) prev22` 19,871 / 28 takes, `next20` 16,760 — fire chains.
+- **#9 (replay world, not init)**: `(12,x) f70` 200+s on mc1l0-spells-galore / mc1l0-bigcastle
+  (11,679 rows per spell): the "access all spells" cheat replay grants through `mint_spell_token`,
+  which writes `MANIFEST_BASE + spell` even in a strict world (the rival mint honours
+  `strict_retail`). Certified END regardless — the graded lanes never read it.
+
+### What is NOT compared yet (no port home)
+Rival `danger`, rival `banked_houses`, rival `kills/shots/hits`, rival alerts, rival hands (+940/+944,
+the port has no rival hand model), `blue` (+var_916), the human's `hate` ledger (`array_0x1FC_508`),
+`status` (+2), the stick-filter registers (`move_bits`, `roll/pitch_delta`, `v14`, `eff_pitch`,
+`roll/pitch_acc` — the pose channel's).
+
+### PART 2 (same day, after the commit) — "ANYTHING ELSE UNGRADED": four more instruments, one blob census
+The player: "try anything to find even more divergences — any additional lanes that haven't been graded,
+let's at least look at them." Cross-checked the port's `Ent`/`Gen` against the retail record field by
+field, then went BELOW the decoder with a raw-byte census.
+- **Entity lanes with a port home, never compared:** `f66`/`f67` (team + companion), retail `+48` RAW
+  (`Ent::raw48` — the shadow's own comment still said "the port has no f48 at all"; compared everywhere a
+  re-homed copy is not already a lane: not class 12 / (10,41) / (3,2)). **`(3,2) f59` was a MIS-HOME**: the
+  importer derives a castle's `f59` from retail `+48`'s transform sub-state, and Part 1 compared the raw
+  `+59` byte — the "137k rows on 39/39 takes" lane is withdrawn; the comparator now derives the same way.
+- **The tick-top BUCKET CHAINS** (`+0`, never decoded): `RetailEntMc1::chain_next` (pointer → slot; the
+  `var_u32_36462[k]` heads live in AE408, the links in the image) vs the port's `TickChain`s (`wiz`, `ball`,
+  `bldg`, `proj`, `mob_chains`), link by link, severed chains skipped, with a denominator.
+- **World globals** `spawn_count[20]` / `erupting` / `plume` (`compare_globals_mc1`, rendered as `wiz globals`).
+- **THE UNMODELLED CENSUS** (`<lane>~`, port printed `—`): lanes with NO port home counted as retail-value
+  TRANSITIONS (a rival's hands are `0/1` on every tick of every take — rows would say nothing). Entity:
+  `f42~` off class 12, `f61~`, `f62~`. Wizard: rival `danger~`, `banked_houses~`, `kills~/shots~/hits~`,
+  alerts, `hand_*~`, `blue~`; human `hate~`, `war~`, `learn~`, `cooldown~`; everyone's `status~`.
+- **`blob-census <take>`** (new mode, both games, ~2 s per 3,000 records): per byte offset of the raw
+  struct image, how many records changed it, pool/wizard records folded onto their stride, each offset
+  tagged DECODED/UNDECODED — the instrument that says which bytes are in NO channel at all.
+
+**Results (39 MC1 takes, pair + free; 172,280,761 chain links compared per runner):**
+- ⭐⭐ **`f48` — 726,669 pair rows / 39 takes, 21M+ free rows**: retail writes `+48` on EVERY creature model
+  (`(5,15)` 270k pair / 21M free, `(5,8)`, `(5,4)`, `(5,7)`, `(5,12)`, `(5,1)`, `(5,9)`, `(5,2)`, `(5,13)`,
+  `(5,3)`, `(5,0)`, `(5,6)`, `(5,14)`, `(5,10)`) and on the mana balls `(10,39)` (260k pair) / `(10,40)`;
+  the port holds 0 everywhere. `raw48` only ever carried the import. The decompile has 191 `+ 48)` sites —
+  what `+48` IS on a creature / ball (a timer? a scratch the AI reads back?) is the dig; the kraken `f56`
+  and this are the same species (a per-class scratch the port never writes).
+- **Bucket chains: CLEAN** — 24 pair rows (`(10,0)`/`(10,12)`/`(10,1)`/`(10,39)` `chain0` retail 0, i.e.
+  a NewEvent-wiped record the port's list still holds, `cut` not lowered) and `f66` 4 / `f67` 1, ALL on
+  mc1l32-terrainless (the format-1 capture). Every other take: zero rows against millions of links. The
+  round-152 roster laws hold link-for-link.
+- **Globals**: `spawn_count` 12 pair rows / 7 takes (e.g. mc1l48 t=9830 `[7]` retail 7 port 0 — a spawn
+  ordinal the port never bumps), `plume` 1 row (mc1l26-froze). Free: 2 rows. Near-clean.
+- **Unmodelled census (transitions):** human `hate~` 7,631 / 36 takes (the human's ledger MOVES — `sub_16540`
+  accumulates +500/+3000 per hit off the bucket-[0] hit list; whether any rival READS player 0's row is the
+  question) · rival `danger~` 351 / 29 · rival `banked_houses~` 156 / 15 (rivals DO claim houses; the
+  port's share/mana income for rivals needs a look) · rival `player_alert~` 87 / 29, `castle_alert~` 76 / 26
+  (alarms arm on rivals — HUD-only unless the AI reads +391..393) · `status~` 79 / 38 (the 0xC respawn
+  bits) · human `war~` 15 / 8 · human `cooldown~` 2 · `f42~` on (10,41)/(10,42) 5,188 / 39 takes (the
+  painter/leveler's owner slot, homed elsewhere in the port — an instrument re-home to add) · `f61~`/`f62~`:
+  ZERO transitions corpus-wide (dead bytes).
+- **`blob-census`, MC1 (1,358,040 records):** pool record — undecoded movers `+0..2` (the chain, now decoded),
+  `+134/135` (162k×: the HIGH HALF of the rival path's DWORD write to `+132`, :17990-18007 — the decoder reads
+  a word; sign-extension noise, not a lane), `+60` (11.7k× = token mints: the hold-to-channel byte the ctor
+  stamps, :47981), `+158/+162` (pointer high bytes, my range typo). **The 164-byte record is fully accounted
+  for.** Wizard record — `+1020..1031` (2.5M×: `str_13895_572[32]`, the view/camera ring: presentation),
+  `+18` (1.36M× = once per record: `var_u32_13341_18`, read by the HUD/map at :26851/:32734/:33353/:33956
+  — a "diameter"), `T160+290..292` (1.38M×: the fleet dispatcher's balloon-mana SUM, :56395-96, no reader
+  — HUD), `T160+351` (775k×: `u32_351`, seeded 2000 at seat, decremented at :55402, NEVER READ — dead),
+  `T160+844..867` (`var_844[48]`: the HUD spell-highlight countdown, :27748-51 — presentation), `T160+396`
+  (`sub_44C10` min-distance register, :54783). Globals — 953 offsets, all ≤170× per corpus: the tail
+  tables (`+197k..201k`, stride 18 — sprite/level rows rewritten once per event) and `+232607`. **Nothing
+  live is hiding below the MC1 decoder.**
+- **`blob-census`, MC2 (40 takes, 1,330,787 records) — UNREAD LEADS:** pool `+0..2` (7.3M×: the MC2 bucket
+  chain — NOT decoded, not compared; the MC1 twin just landed), `+96` (1,020× / 17 takes). Player record —
+  `+913..924` (1.5M×: 12 bytes before `PP_NAME`, the camera ring by shape), **`T+298..300` (890k× / 40
+  takes)**, **`T+365` (410k×)**, **`T+0` (275k×: the consumed move byte — MC1 decodes it, MC2 does not)**,
+  **`T+54` (242k×)**, `T+405/406` (65k×), `T+361`, and a stride-8 family at `T+524..572` (the hate/war
+  ledger by shape — check the decoder's loop covers it). Globals — **`+53` (549,449× / 40 takes: a per-tick
+  byte right after the decoded `0x31/0x33` words)**, `+224770` (32k×), `+54` (21k×), and a ~800-byte u32
+  table at `+2430..3223` (~10k× each / 34-39 takes — the region between the globals and `PLAYERS`, unread).
+  These are MC2's next census; the MC1 playbook (decode → compare → dig) applies verbatim.
+
+Instrument debt from Part 2: `f42~` on (10,41)/(10,42) needs its port home named (then it is a lane, not a
+census); the MC2 `+0` chain decode; `blob-census`'s MC2 decoded predicate is coarse (4-byte tolerance per
+listed word — refine off `decode_retail_player_mc2` before trusting a small MC2 count).
+
+### Raw outputs
+Session scratchpad `r153/{init,pair,free,terrain}/<take>.txt` + `census-{init,pair,free}.txt`
+(`census.py`); regenerable in ~10 min (`xargs -P 20`).
+
 ## ROUND 152 (2026-09-18, vm113) — **THE MC1 CONFORMANCE DRIVE**: NINETEEN TAKES IN, ELEVEN DIGS, TWENTY-ONE LAWS
 
 The player's nineteen new MC1 takes (mc1l7, l9-l16, l18-l26, l26-froze) were re-swept at intake on

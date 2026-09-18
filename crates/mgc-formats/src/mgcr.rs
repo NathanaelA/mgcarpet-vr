@@ -1275,6 +1275,13 @@ impl Obs {
 /// Offsets per Basic.h:368-442.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RetailEntMc1 {
+    /// `+0` — the record's `next` pointer, decoded to a POOL SLOT: the
+    /// per-class TICK-TOP BUCKET chain (`var_u32_36462[k]`, rebuilt
+    /// ascending at :52244-313 — class 3 → [0], mana balls → [1],
+    /// (10,45) → [2], class 9 → [3], creatures per MODEL), tail = slot
+    /// 0. The heads live in the OTHER struct (AE408, not captured);
+    /// the links are here. Round 153: never decoded before.
+    pub chain_next: u16,
     pub rand: u32,     // +4
     pub max_life: u32, // +8
     pub act_life: i32, // +12
@@ -1718,7 +1725,17 @@ pub fn decode_retail_ent_mc1(d: &[u8], slot: u16) -> RetailEntMc1 {
     for (ch, m) in mail.iter_mut().enumerate() {
         *m = (u32_(d, o + 90 + ch * 6), u16_(d, o + 94 + ch * 6));
     }
+    // `+0`: a guest pointer into the pool, or the sentinel `str_29795`
+    // (slot 0). Anything else (a stale pre-level value) reads as 0.
+    let chain_next = {
+        const STRUCT_GUEST: u32 = 0x1DE40;
+        let ptr = u32_(d, o);
+        ptr.checked_sub(STRUCT_GUEST + m1::POOL as u32)
+            .filter(|rel| rel % m1::ENT_STRIDE as u32 == 0 && rel / (m1::ENT_STRIDE as u32) < 1000)
+            .map_or(0, |rel| (rel / m1::ENT_STRIDE as u32) as u16)
+    };
     RetailEntMc1 {
+        chain_next,
         rand: u32_(d, o + 4),
         max_life: u32_(d, o + 8),
         act_life: i32_(d, o + 12),

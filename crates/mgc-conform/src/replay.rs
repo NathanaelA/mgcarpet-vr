@@ -2530,6 +2530,8 @@ fn run_mc1(
                 if let Some(sh) = shadow.as_mut() {
                     sh.compare_ents_mc1(&world, &st, slot, tick.t);
                     sh.compare_wiz_mc1(&world, &st, tick.t);
+                    sh.compare_globals_mc1(&world, &st, tick.t);
+                    sh.compare_chains_mc1(&world, &st, slot, tick.t);
                     sh.compare_free_mc1(&world, &st, slot, tick.t);
                 }
                 let mut pd = compare(&obs, &port, slot);
