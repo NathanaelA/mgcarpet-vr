@@ -888,6 +888,18 @@ justification can silently expire.
 - **MC2 raw shadow over 40 takes: entity 95 rows (ALL the registered (5,10) `f2a` frustum bit) · WIZEXT 0 ·
   OBJECTIVE BOARD 0 · free/recycle stacks 0 · tear gate hides 29 boundaries (was 65,306; 11.6M at round-149
   open).** Sandboxes cleaned.
+- **THE ROSTER, RE-COUNTED (player question: "how many deviations are left, and how many are hidden as known
+  deviations?")**: on the certifying channel the whole MC2 corpus hides **9 boundaries, all mc2l24, all ONE rule**
+  (`mc2l24-hydra-v34-parity`, 18 rows). `known-deviations.json` carried 35 MC2 rules; `verify-deltas` on the five
+  takes they name shows FOUR alive on the pair channel (the hydra parity · `mc2-cast-timing-fields`, the recorder's
+  cast latency, 5,219/867/92/17 rows on mc2l0/l4/l24/l30 · `mc2-fire-churn-m0` 19/63/4 · `mc2-walker-ground-z` 3)
+  and **31 that fire on NO channel** — the July/August blankets whose laws were landed underneath them
+  (`mc2-sphere-terrain-z`, `mc2-balloon-z`, the `mc2-claim-census-*` trio, `mc2-flyer-drift-*`, the mc2l24 terrain
+  family, …). ⚖ Player: **retire them** — done textually, 62 → **31 rules (MC2 4)**; fixtures 596/596, mc2l24's
+  brief identical, pair accounting identical on all five takes (`mc2-balloon-z`'s single mc2l24 row is a
+  pose-phase row — the classifier claims it, 7 → 8, UNEXPLAINED unchanged at 4). Pair-channel residue, for the
+  record: mc2l24 4 field rows, mc2l3 1 (`z` 32 low at t=7906 — the pinned-pair touchdown shape, 🏦 above).
+  ⭐ **A RULE THAT FIRES ON NO CHANNEL IS A CLAIM NOBODY CHECKS** — count hits, not rules.
 
 ### Left open (named; none blocks anything — THE MC2 DATA IS WRAPPED)
 - 🏦 the TOUCHDOWN tick on the pinned pair (mc2l16 pair 7919→7920, slots 261/824 `z`, retail 3520 / port
