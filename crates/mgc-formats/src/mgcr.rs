@@ -1501,9 +1501,28 @@ pub struct RetailWizardMc1 {
     pub hand_left: u16, // +940
     pub hand_right: u16, // +944
     /// HUD alert countdowns: castle/self/balloon under attack.
+    /// ⚠ These are decremented by the HUD DRAW (`sub_22E50`
+    /// :27217-20 / :27347-50 / :27287-90), not by the sim tick: only
+    /// on frames where `frame & 1` (the blink bit `str_93[1]`,
+    /// :48552-53), only while the HUD is drawn (`view` 0/3 and the
+    /// carpet's `actLife >= 0`, :26414-15 / :26454), and the castle
+    /// and balloon panels only while `+50` names a live castle
+    /// (`+26 > 0` for the castle's own). See `World::mc1_alert_cadence`.
     pub castle_alert: u8, // +391
     pub player_alert: u8, // +392
     pub balloon_alert: u8, // +393
+    /// The player block's FRAME COUNTER (`var_u32_13341_18`, block
+    /// +18): `++` once per rendered frame in the command processor
+    /// `sub_3C9D0` (:48548), BEFORE the tick function the recorder
+    /// samples ahead of — so the value at record t is the parity the
+    /// draw AFTER tick t blinks on. The HUD alert cadence's clock.
+    pub frame: u32, // block +18
+    /// The player's VIEW MODE (`var_14421_1098`, block +1098, set by
+    /// `sub_3DC90` :49058): 0 = the game view, 2 = the big map / the
+    /// level-intro fly-in, 3 = text entry. `DrawGameFrame` draws the
+    /// HUD panels (and runs their alert decrements) in modes 0 and 3
+    /// only (:26373-76).
+    pub view: u8, // block +1098
     /// This wizard's own on-screen message slot ([`m1::WIZ_MSGS`]):
     /// the NUL-trimmed text and its lifetime counter. Presentation
     /// state — EXCEPT that retail's cheat handler writes its own name
@@ -1564,6 +1583,8 @@ impl Default for RetailWizardMc1 {
             castle_alert: 0,
             player_alert: 0,
             balloon_alert: 0,
+            frame: 0,
+            view: 0,
             notify: Notify::default(),
         }
     }
@@ -1869,6 +1890,8 @@ fn decode_retail_wizard_mc1(d: &[u8], i: u16) -> RetailWizardMc1 {
         castle_alert: u8_(d, t + 391),
         player_alert: u8_(d, t + 392),
         balloon_alert: u8_(d, t + 393),
+        frame: u32_(d, w + 18),
+        view: u8_(d, w + 1098),
         notify: {
             // The DOUBLE index (see `m1::WIZ_MSGS`): wizard i's own
             // messages land in its own slot i.

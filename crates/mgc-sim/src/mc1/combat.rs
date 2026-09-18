@@ -35,6 +35,29 @@ use crate::mc1::mobs::{MC1_MISS_STAMP, MobCtx, PLAYER_TARGET};
 use crate::mc1::sprite_stats::SPRITE_STATS;
 use crate::verbs::{CorpseVerb, TargetingVerb, VerbKind};
 
+/// A/B toggle for **THE MANA MAGNET HOMES ON GRAVES TOO** (round 156,
+/// w156a): set `MGC_NO_MC1_MAGNET_HOMES_ON_GRAVES` to restore the
+/// pre-dig model-39-only filter on the m17 magnet bolt's acquire walk.
+/// Retail: `sub_54520` case 0x11 (remc1hw `sub_54520_548B0`, the
+/// `case 0x11:` arm after the `//----- (00054520)` body, hw:60386-405)
+/// walks the tick-top ball roster `var_u32_36462[1]` and tests ONLY
+/// `+58` — no model, class, owner or claim test. CARPET.EXE jump
+/// table at VA 0x544CC (+65 index, `cmp $0x13,%al` at 0x54533) sends
+/// case 0x11 to VA 0x548FF (file 0x6D0F7): `mov 0x8e72(%edi),%edi`
+/// (roster head, +36466) / 0x54914 `cmpb $0x0,0x3a(%edi)` (+58) / `je`
+/// next / `push 0x71; push 0x71; push edi; push esi; call sub_54A90` /
+/// `cmp %ebp,%eax; jae` (unsigned best) / 0x54930 `mov (%edi),%edi`
+/// (next). The roster holds class-10 m39 balls AND m40 graves
+/// (`rebuild_ball_chain`), so an awake grave inside the 0x71 cone is a
+/// homing target. (The IMPACT scan `sub_11C00` is m39-only and stays
+/// so — [`Gen::possess_victim_at`].) Witness mc1l27 pair 37366→37367:
+/// the human's magnet bolt 836 elects the (10,40) grave 258 in retail;
+/// the port skipped it and homed on the (10,39) ball 546.
+pub(crate) fn no_mc1_magnet_homes_on_graves() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_MAGNET_HOMES_ON_GRAVES").is_some())
+}
+
 /// `MGC_NO_BALL_MERGE_FIX=1` restores BOTH pre-dig halves of the
 /// mana-sphere merge — the whole-pool partner scan (instead of
 /// retail's `sub_11D10`/`sub_10A50` map-tile ring walk) and the MC2
@@ -267,6 +290,145 @@ pub(crate) fn no_castle_bind_register() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_CASTLE_BIND_REGISTER").is_some())
 }
 
+/// A/B toggle for THE SHOT-STATS MODEL GATE (round 154, w154f; round
+/// 153 finding #5): set `MGC_NO_MC1_SHOT_STATS_MODEL_GATE` to restore
+/// the pre-dig `proj_explode`, which bumped the human's `shots`/`hits`
+/// (`Type_160+343/+347`) on EVERY human-owned class-9 detonation.
+/// Retail's one writer `sub_526C0` (:62585-62612, CARPET.EXE VA
+/// 0x526CC-0x526F2: `cmp $3,%al; jb → cmp $1,%al; ja ret` / `cmp
+/// $7; jb ret` / `cmp $9; jbe ok` / `cmp $0x13; je ok`) counts only
+/// bolt models 0, 1, 3, 7, 8, 9 and 19 — the spell bolts whose ctor
+/// row is a shot: fireball, possession, lightning, the m7/m8/m9
+/// family and m19 — and returns before `shots++` for every other
+/// model (the (9,16) beam segment, the m2 quake, the m4-6 lobs, the
+/// castle ball…). mc1l49 t=633/638/641: three (9,16) detonations
+/// read retail `shots` 61 / `hits` 10 flat against the port's 62 /
+/// 11. The owner test (`class 3, model 0`, 0x5271D-0x52727) is the
+/// human's `PLAYER_TARGET` on both sides.
+pub(crate) fn no_mc1_shot_stats_model_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SHOT_STATS_MODEL_GATE").is_some())
+}
+
+/// A/B toggle for THE HIT-STAT AIM LATCH (round 154, w154f; round 153
+/// finding #5): set `MGC_NO_MC1_HIT_STAT_AIM_LATCH` to restore the
+/// pre-dig `hits` test, which read the bolt's `+146` AT THE
+/// DETONATION and compared it against the struck record's slot OR
+/// its `id24`. Every retail flight handler latches the aimed record's
+/// POINTER at its ENTRY — `v2 = pool + 164 * +146` is the first
+/// statement of `sub_52ED0` (:62952-54), `sub_52B30` (:62807-08),
+/// `sub_52770` (:62644-45) and the m8/m9 twins (:63073, :63653), BEFORE
+/// the `+16 & 2` first-tick acquisition (`sub_54520`, :62961) — and
+/// hands that pointer to `sub_526C0`, whose hit test is `pool < struck
+/// && aimed > pool && struck.id24 == aimed.id24` (CARPET.EXE
+/// 0x52740-0x52750: `cmp %edi,%edx; jae` / `cmp %edx,%ecx; jbe` /
+/// `mov 0x18(%edi),%dx; cmp 0x18(%ecx),%dx`). So a bolt that acquires
+/// and strikes on its FIRST stepped tick (mc1l49 t=250: the possession
+/// lob born on top of ball 928, `+146` 0 → 928 in the same dispatch)
+/// scores a SHOT and no HIT — the aimed pointer was the null record
+/// — and a struck record counts as a hit whenever it shares the aimed
+/// record's OWNER id, not only when it is the aimed record itself.
+/// The latch is [`Gen::mc1_aim_latch`], stamped by `proj_tick` at
+/// dispatch entry.
+pub(crate) fn no_mc1_hit_stat_aim_latch() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HIT_STAT_AIM_LATCH").is_some())
+}
+
+/// A/B toggle for THE BALLOON ALERT SINK (round 154, w154f; round 153
+/// finding #6): set `MGC_NO_MC1_BALLOON_ALERT_SINK` to restore the
+/// pre-dig `balloon_tick`, which armed the human's balloon-under-attack
+/// HUD flash (`Type_160+393 = 4`) on every processed hit on an own
+/// balloon. Retail's `sub_481D0` (:56820-31) writes `*(a1+160)+393`
+/// through the BALLOON'S OWN `+160` (CARPET.EXE 0x481F4 `mov
+/// 0xa0(%eax),%edx` / 0x481FD `movb $0x4,0x189(%edx)`), and a pool
+/// record's `+160` is the allocator's static sink `unk_B7330`
+/// (`NewEvent_372C0` :43878, 0x373BF `movl $0x27330,0xa0(%ebx)`) —
+/// only a WIZARD record is ever re-pointed at its player block
+/// (:54866). So the flash lands in a dummy `Type_160` nobody draws:
+/// retail's balloon panel NEVER flashes, and `+393` reads 0 on every
+/// record of every take (round 153: 8,651 pair rows / 36 takes,
+/// retail 0 vs port 3). ⚠ A retail bug the port reproduces; a PATCH
+/// to re-enable the flash would be a player ruling.
+pub(crate) fn no_mc1_balloon_alert_sink() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_BALLOON_ALERT_SINK").is_some())
+}
+
+/// A/B toggle for THE HUD ALERT CADENCE (round 154, w154f; round 153
+/// finding #6): set `MGC_NO_MC1_ALERT_HUD_CADENCE` to restore the
+/// pre-dig tick tail, which decremented `castle_alert` /
+/// `player_alert` / `balloon_alert` (`Type_160+391..393`) once per
+/// tick unconditionally. Retail's ONLY decrements are in the HUD
+/// panel draw `sub_22E50` (:27217-20 castle, :27287-90 balloon,
+/// :27347-50 self; CARPET.EXE 0x22F5B-0x22F8F / 0x2330E-0x23347 /
+/// 0x235CB `cmpb $0,0x187(%edi)` … `cmpb $0,0x5e(%eax)` … `decb
+/// 0x187(%eax)`), gated on the blink bit `str_93[1] = frame & 1`
+/// (:48552-53, the command processor's per-frame counter `+13341`,
+/// bumped BEFORE the tick function the recorder samples ahead of),
+/// so a flash counts 4,4,3,3,2,2,1,1 — eight frames, not four — and
+/// only while the HUD is drawn at all: view mode 0/3, the carpet's
+/// `actLife >= 0` (:26414 / :26454), the castle panel only while
+/// `+50` names a live castle with `+26 > 0` (0x22F48-0x22F55), the
+/// balloon panel only while `+50` names one. Witness mc1l49 t=84-96:
+/// retail 4,4,3,4,3,2,1 on the even ticks against the port's
+/// 3,3,2,3,2,1,0 (every odd tick agrees). See
+/// [`World::mc1_alert_cadence`].
+pub(crate) fn no_mc1_alert_hud_cadence() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ALERT_HUD_CADENCE").is_some())
+}
+
+/// A/B toggle for THE DANGER CLOCK'S WALK SEAT (round 154, w154f;
+/// round 153 finding #6): set `MGC_NO_MC1_DANGER_WALK_SEAT` to
+/// restore the pre-dig tick tail, which decremented the danger-music
+/// countdown `Type_160 v_46` once per tick in every carpet state.
+/// Retail's one decrement is in the carpet MOVER `sub_455D0`
+/// (:55282-92, gated on `var_48 == local player`), which only the
+/// state-0 flight handler `sub_45C90` (:55380) and the state-2 FALL
+/// `sub_45FC0` (:55463) call — the state-3 dead-wait `sub_46480`
+/// never moves, so the clock HOLDS through it (mc1l49 t=3080-85:
+/// retail 77 flat, the port 76; t=3389-3404: 79 vs 78). And it runs
+/// at the carpet's own walk slot, after that dispatch's mail drain
+/// re-arms it to 100 (:55637) and before every higher-slot
+/// projectile acquisition (:64013), which the tail seat read one
+/// tick late. Now in the carpet dispatch, MC1 only; MC2's
+/// `sub_5EFA0` twin keeps the tail.
+pub(crate) fn no_mc1_danger_walk_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DANGER_WALK_SEAT").is_some())
+}
+
+/// A/B toggle for THE DANGER ARM'S ACQUIRE CASES (round 154, w154f):
+/// set `MGC_NO_MC1_DANGER_ACQUIRE_CASES` to restore the pre-dig
+/// acquire, which armed the danger music (`sub_46520`, `v_46 = 100`)
+/// on EVERY human lock. `sub_54520` calls it from two of its blocks —
+/// models 0/3/4 (:64013, CARPET.EXE 0x54807) and 7/8/B/C (:64095,
+/// 0x54A6D) — and NOT from the lightning's case 9 (:64125-91,
+/// 0x54654-0x54681 stamps `+146`, calls `sub_52500` and returns 1)
+/// nor the possess case 1. A/B arm only.
+pub(crate) fn no_mc1_danger_acquire_cases() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DANGER_ACQUIRE_CASES").is_some())
+}
+
+/// A/B toggle for THE SHOT-STATS ALLOCATION GUARD (round 154, w154f):
+/// set `MGC_NO_MC1_SHOT_STATS_ALLOC_GUARD` to restore the pre-dig
+/// seat, which scored a human detonation BEFORE its effect spawn.
+/// Every retail detonation arm calls `sub_526C0` as the first
+/// statement of its `if (effect = sub_373F0(…))` block (generic
+/// :62762-64, m0 :62925-27, m1 :63002-04, m8 :63193-95 / :63206-08,
+/// lightning :63426-29, :63770-72, :63906-08 / :63915-17), so a
+/// detonation the dry pool cannot give an effect record scores
+/// nothing that tick and re-detonates: mc1l49 t=8009-13, the human's
+/// (9,3) at slot 914 (free stack 0) flies at life −1…−5 and `shots`
+/// 445 → 446 lands with the t=8013 allocation, four ticks after the
+/// port's pre-spawn bump.
+pub(crate) fn no_mc1_shot_stats_alloc_guard() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SHOT_STATS_ALLOC_GUARD").is_some())
+}
+
 /// `MGC_NO_PROBE_ID_UNFUSE=1` restores the pre-dig victim-probe
 /// self-gate that compared the port's FUSED `id24` on both sides.
 /// A/B arm only — see [`Gen::probe_self_id`].
@@ -440,6 +602,34 @@ pub(crate) enum Inbox {
 pub(crate) enum DeflectLaw {
     Fireball,
     Generic,
+}
+
+/// A/B toggle for THE DEFLECTION'S TARGET-PITCH MIRROR (round 154,
+/// w154k; the `(9,x) f36` residue w154b left — mc1l15 233 pair rows,
+/// mc1hwl0 160, mc1l49 158, spells-galore 56, every one a Rebound
+/// deflection tick): set `MGC_NO_MC1_DEFLECT_PITCH_MIRROR` to restore
+/// the pre-dig deflect arms, which reversed the live pitch (`+32`) and
+/// left the TARGET pitch (`+36`) holding the pre-deflection value, so
+/// the record read retail `p` against port `2048 − p` for the tick
+/// (mc1hwl0 t=4494 slot 820 (9,16): retail 2008, port 40). Retail's
+/// deflect block computes the reversed pitch ONCE and stores it to
+/// BOTH words — `v14 = -(sub_42240(0,+32) * sub_42210(0,+32));
+/// BYTE1(v14) &= 7; +36 = v14; +32 = v14` (:62727-32 generic,
+/// :62867-72 fireball) — and the same store sits in all four
+/// deflect-family handlers: CARPET.EXE VA 0x52963 (`sub_52770`),
+/// 0x52D2E (`sub_52B30`), 0x532B3 (`sub_530C0`), 0x53FB6 (`sub_53DC0`),
+/// each `f7 d8 / 80 e4 07 / 66 89 43 24 / 8b 53 04 / 66 89 43 20`
+/// (`neg %eax; and $7,%ah; mov %ax,0x24(%ebx); …; mov %ax,0x20(%ebx)`);
+/// HIDDEN.EXE has the same four (0x52EA8/0x5326E/0x537F8/0x544FB).
+/// The `sub_530C0`/`sub_53DC0` copies are dead for their own bolts
+/// (the m8 seeker carries `+69 = 25`, outside the `{1,17,53}` pair
+/// gate), so the port's two live arms — both in
+/// [`Gen::proj_move_and_hit`] — are every reachable site. Record
+/// fidelity only: the next tick's homer rewrites `+36` before any
+/// reader sees it, so no graded lane moves.
+pub(crate) fn no_mc1_deflect_pitch_mirror() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DEFLECT_PITCH_MIRROR").is_some())
 }
 
 impl Gen {
@@ -645,6 +835,25 @@ impl Gen {
         ch: usize,
         amt: u32,
         ctx: &MobCtx,
+        building_tenth: bool,
+        shake: bool,
+    ) -> u32 {
+        self.area_write_opt(i, ch, amt, Some(ctx), building_tenth, shake)
+    }
+
+    /// [`Self::area_write`] with the out-of-pool player arm OPTIONAL:
+    /// `ctx = None` is the level-load fixpoint (`sub_36620`), where
+    /// retail's writers run the same tile-map walk over the half-built
+    /// pool but no human record exists yet to be billed (it is seated
+    /// after GenerateFeatures). See
+    /// [`crate::engine::features::no_mc1_load_pass_area_mail`].
+    #[track_caller]
+    pub(crate) fn area_write_opt(
+        &mut self,
+        i: usize,
+        ch: usize,
+        amt: u32,
+        ctx: Option<&MobCtx>,
         building_tenth: bool,
         shake: bool,
     ) -> u32 {
@@ -935,6 +1144,9 @@ impl Gen {
             // (8 → 7); the port billed the human, and
             // `mc2_blast25_tick`'s `hits != 0 ⇒ act_life = 0` killed
             // the burst on its first tick.
+            let Some(ctx) = ctx else {
+                return count;
+            };
             let player_in_window = no_mc2_area_window() || no_mc2_area_window_ch34() || {
                 let (ptx, pty) = ((ctx.px >> 8) as u8, (ctx.py >> 8) as u8);
                 (-r..=r).any(|dx| (cx + dx) as u8 == ptx)
@@ -1144,6 +1356,9 @@ impl Gen {
         // the knock (1200/10 clamped 80) threw the carpet off pose.
         // `MGC_NO_MC2_AREA_WINDOW=1` restores the pre-dig `mc2 ||`
         // widening for the A/B (see `no_mc2_area_window`).
+        let Some(ctx) = ctx else {
+            return count;
+        };
         let player_in_window = no_mc2_area_window() && mc2 || {
             let (ptx, pty) = ((ctx.px >> 8) as u8, (ctx.py >> 8) as u8);
             (-r..=r).any(|dx| (ctx_ + dx) as u8 == ptx)
@@ -1273,6 +1488,83 @@ impl Gen {
         self.refill_life(p);
         self.set_sprite(p, sprite);
         Some(p)
+    }
+
+    /// ⭐ THE MANIFESTATION BLOCK STAMPS THE DEST TRIPLE ON EVERY
+    /// BOLT, OFF THE CASTER'S RECORD. Sixteen token machines
+    /// (`sub_56090` … `sub_58240`, :65029-66420) mint a class-9 bolt
+    /// and every one of them closes the mint with the same three
+    /// lines — `*(bolt+150) = *(caster+72); *(bolt+154) = *(caster+76);
+    /// sub_41EC0(bolt+150, caster+30, <pitch>, <reach>)` — the
+    /// CASTER's raw axis (+72/+74/+76, not the muzzle, not the lifted
+    /// z) projected along its LIVE aim. The machine is ONE routine
+    /// for the human and the AI (the token's `+42` → the caster record
+    /// as the walk holds it), so the stamp is the caster's pool record
+    /// at the token's slot in the walk, warp included (w152l's law).
+    /// Three shapes, read off CARPET.EXE (file = VA + 0x187F8; the
+    /// `68 <imm32>` push before each `call sub_41EC0`):
+    ///
+    /// | reach            | pitch | arms (VA of the push)                       |
+    /// |------------------|-------|---------------------------------------------|
+    /// | `0x4000`         | +32   | fireball 0x561DD / 0x5838D (spells 0/23),   |
+    /// |                  |       | steal mana 0x57376, lightning 0x575A2,      |
+    /// |                  |       | undead 0x57966, storm 0x57AFE, magnet       |
+    /// |                  |       | 0x57CCD, wall of fire 0x57E8D, global death |
+    /// |                  |       | 0x581ED                                      |
+    /// | `10240` (0x2800) | +32   | possess 0x56635, meteor 0x56A72, duel 0x57135|
+    /// | `4096` (0x1000)  | **0** | earthquake 0x568CD, volcano 0x56C0D, crater  |
+    /// |                  |       | 0x56DCD, castle CREATE 0x57762 — then `+154 =|
+    /// |                  |       | sub_11F50(+150)`: the GROUND under the dest  |
+    ///
+    /// HIDDEN.EXE carries the same sixteen pushes with ONE immediate
+    /// changed: wall of fire is `0x2800` (file 0x70D72) — the fork
+    /// `cast_firewall` already documents. The castle UPGRADE arm
+    /// (:65904-08) stamps nothing (`+146` = the bound castle instead),
+    /// and the creature shooters (`sub_1A8E0` :21874 …) never touch
+    /// `+150` — a creature's bolt keeps NewEvent's 0.
+    ///
+    /// The port stamped five arms (possess/meteor/duel/lightning on
+    /// the human side, the duel on the rival's, storm/firewall in
+    /// their own machines) and left the rest at the ctor's 0 — round
+    /// 153's `(9,x) dest_x/dest_y/site_z` census: 1.05M free rows /
+    /// 39 takes, 239k pair. mc1l2 t=2 slot 197 (rival 300's fireball):
+    /// retail (36378, 5825, 3253) = (37760, 21872, 254) stepped 0x4000
+    /// along (2020, 1988); t=2380 slot 108 (its possess lob): (55029,
+    /// 53144, −6234) = (47553, 52128, 689) stepped 10240 along (556,
+    /// 242). Nothing in the fireball/lob flights reads the triple back
+    /// (the firewall bolt's homing tail is the one consumer, already
+    /// stamped) — a record-fidelity law, shadow lanes only.
+    ///
+    /// `MGC_NO_MC1_BOLT_DEST_STAMP=1` leaves the newly covered arms at
+    /// the ctor's 0 (the arms that stamped before this law keep their
+    /// own switches or none).
+    pub(crate) fn mc1_stamp_bolt_dest(
+        &mut self,
+        pr: usize,
+        caster: (u16, u16, i16),
+        yaw: u16,
+        pitch: u16,
+        spell: usize,
+    ) {
+        if crate::engine::world::no_mc1_bolt_dest_stamp() {
+            return;
+        }
+        let (reach, pitched) = match spell {
+            0 | 13 | 15 | 17 | 18 | 19 | 22 | 23 => (0x4000, true),
+            20 => (if self.is_hidden_worlds() { 10240 } else { 0x4000 }, true),
+            3 | 7 | 11 => (10240, true),
+            6 | 8 | 9 | 16 => (4096, false),
+            _ => return,
+        };
+        let mut d = caster;
+        Self::polar_step(&mut d, yaw, if pitched { pitch } else { 0 }, reach);
+        if !pitched {
+            d.2 = self.ground_z(d.0, d.1) as i16;
+        }
+        let e = &mut self.ent[pr];
+        e.dest_x = d.0;
+        e.dest_y = d.1;
+        e.site_z = d.2;
     }
 
     /// sub_39A10 (:45861): the fireball. Base speed 384, life 21
@@ -1789,8 +2081,20 @@ impl Gen {
             self.ent[i].f34 = ty_yaw;
             self.ent[i].f36 = ty_pitch;
             // Being targeted arms the danger music (:64013/:64095 —
-            // acquire of a class-3 m0 human calls sub_46520).
-            if slot == PLAYER_TARGET {
+            // acquire of a class-3 m0 human calls sub_46520) — in the
+            // 0/3/4 block and the 7/8/B/C block ONLY. The LIGHTNING's
+            // case 9 (:64125-64191, CARPET.EXE 0x54654-0x54681: `+146
+            // = slot; call sub_52500; mov $1,%eax; ret`) has no such
+            // call — `sub_54520` holds exactly two `call sub_46520`
+            // sites, 0x54807 and 0x54A6D, neither in case 9 (HW's
+            // :60257-60321 likewise; its case 0x10 :60354 does arm).
+            // mc1l49 t=5673: rival 646's (9,9) at slot 797 locks the
+            // carpet above its walk slot and retail's `danger` reads
+            // 99 (the earlier arm, one step down), the port's re-arm
+            // 100. `MGC_NO_MC1_DANGER_ACQUIRE_CASES` re-arms on 9.
+            if slot == PLAYER_TARGET
+                && (self.ent[i].model65 != 9 || no_mc1_danger_acquire_cases())
+            {
                 self.player_danger = 100;
             }
         }
@@ -1941,6 +2245,7 @@ impl Gen {
     /// otherwise only reachable through a full flight tick).
     #[cfg(test)]
     pub(crate) fn proj_strike_for_test(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.mc1_aim_latch = crate::engine::features::HashSilent(self.ent[i].f146);
         self.proj_move_and_hit(i, ctx, false, false, DeflectLaw::Generic)
     }
 
@@ -2412,6 +2717,57 @@ impl Gen {
         v
     }
 
+    /// `sub_526C0`'s model gate (:62591-98, CARPET.EXE 0x526CC-0x526F2):
+    /// which class-9 models are SHOTS for the human's `+343/+347`
+    /// counters — 0, 1, 3, 7, 8, 9 and 19; every other model returns
+    /// before `shots++`. `MGC_NO_MC1_SHOT_STATS_MODEL_GATE` counts all.
+    fn mc1_shot_counts(&self, model: u8) -> bool {
+        no_mc1_shot_stats_model_gate() || matches!(model, 0 | 1 | 3 | 7..=9 | 19)
+    }
+
+    /// `sub_526C0` (:62585-612) for a human-owned detonation: the
+    /// model gate first — only bolt models 0/1/3/7/8/9/19 are shots —
+    /// then `shots++`, then the hit test against the aimed pointer the
+    /// HANDLER latched at dispatch entry (`Gen::mc1_aim_latch`), not
+    /// the live `+146`. See `no_mc1_shot_stats_model_gate` /
+    /// `no_mc1_hit_stat_aim_latch` for the citations.
+    fn mc1_shot_stats(&mut self, i: usize, struck: Option<MailTarget>) {
+        if !self.mc1_shot_counts(self.ent[i].model65) {
+            return;
+        }
+        self.shots += 1;
+        let aimed = if no_mc1_hit_stat_aim_latch() {
+            self.ent[i].f146
+        } else {
+            self.mc1_aim_latch.0
+        };
+        if self.mc1_shot_hit(struck, aimed) {
+            self.hits += 1;
+        }
+    }
+
+    /// `sub_526C0`'s hit test (:62608-11, CARPET.EXE 0x52740-0x52750):
+    /// `pool < struck && aimed > pool && struck.id24 == aimed.id24` —
+    /// the struck record shares the aimed record's OWNER id; a null
+    /// aim (`+146 == 0`, the pool's record 0) never scores. The
+    /// out-of-pool human is never his own bolt's victim. Under
+    /// `MGC_NO_MC1_HIT_STAT_AIM_LATCH` the pre-dig shape (aimed slot
+    /// against the struck record's slot OR id24) is restored.
+    fn mc1_shot_hit(&self, struck: Option<MailTarget>, aimed: u16) -> bool {
+        let Some(MailTarget::Pool(j)) = struck else {
+            return false;
+        };
+        if no_mc1_hit_stat_aim_latch() {
+            return aimed == self.ent[j].id24 || aimed == j as u16;
+        }
+        aimed != 0
+            && j != 0
+            && self
+                .ent
+                .get(aimed as usize)
+                .is_some_and(|a| a.id24 == self.ent[j].id24)
+    }
+
     /// The explode tail shared by the flight handlers: accuracy stats
     /// (sub_526C0 :62585), spawn the +68/+69 effect, despawn. The
     /// generic sub_52770 path (:62759-72) also copies +44 and the
@@ -2429,15 +2785,15 @@ impl Gen {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.id24, e.f30, e.f32, e.f44, e.f69)
         };
-        if owner == PLAYER_TARGET {
-            self.shots += 1;
-            let aimed = self.ent[i].f146;
-            if struck.is_some_and(|s| match s {
-                MailTarget::Pool(j) => aimed == self.ent[j].id24 || aimed == j as u16,
-                MailTarget::Player => false,
-            }) {
-                self.hits += 1;
-            }
+        // The accuracy stats (`sub_526C0`) sit INSIDE the effect
+        // allocation guard in every retail arm — see the `if (result)
+        // { sub_526C0(…); …; sub_41E80(a1) }` blocks below the spawn —
+        // so they land after `spawn_effect`, and a starved detonation
+        // scores nothing (`mc1_shot_stats` below). The pre-dig
+        // pre-spawn seat survives under the switch.
+        let stats_pre_spawn = owner == PLAYER_TARGET && no_mc1_shot_stats_alloc_guard();
+        if stats_pre_spawn {
+            self.mc1_shot_stats(i, struck);
         }
         // Mana Magnet bolt (m17): the real state-18 handler
         // sub_542B0_54640 (hw:59951-60035, byte-identical at
@@ -2491,6 +2847,20 @@ impl Gen {
         let starved0 = self.exhausted;
         let child = self.spawn_effect(f69, x, y, z);
         if let Some(fx) = child {
+            // `sub_526C0` (:62585-612), first statement of every
+            // allocation-guarded detonation block (generic :62762-64,
+            // m0 :62925-27, m1 :63002-04, m8 :63193-95 / :63206-08,
+            // :63770-72, :63906-08 / :63915-17): a POOL-STARVED
+            // detonation neither spawns, dies, nor SCORES — it
+            // re-detonates next tick and scores once, when the effect
+            // allocates. mc1l49 t=8009-13: the human's (9,3) at slot
+            // 914 flies on at life −1…−5 through a dry pool and retail
+            // bumps `shots` 445 → 446 only at the t=8013 allocation;
+            // the port's pre-spawn bump read 446 four ticks early and
+            // stayed one high.
+            if owner == PLAYER_TARGET && !stats_pre_spawn {
+                self.mc1_shot_stats(i, struck);
+            }
             let e = &mut self.ent[fx];
             e.id24 = owner;
             e.f30 = yaw;
@@ -2548,6 +2918,11 @@ impl Gen {
 
     /// Class-9 flight dispatch by state (str_25573C :4838).
     pub(crate) fn proj_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        // The aimed record's pointer, latched at dispatch entry the way
+        // every retail flight handler's first statement does
+        // (`v2 = pool + 164 * +146`, :62952-54) — BEFORE the first-tick
+        // acquisition rewrites `+146`. See [`Gen::mc1_aim_latch`].
+        self.mc1_aim_latch = crate::engine::features::HashSilent(self.ent[i].f146);
         match self.ent[i].tick70 {
             0 => self.proj_m0_tick(i, ctx),
             1 => self.proj_m1_tick(i, ctx),
@@ -2823,7 +3198,8 @@ impl Gen {
         // (hw:60386-60405; remc1's reconstructed switch is TRUNCATED
         // past case 9, which read as "no case 17 → straight flight"
         // until the player's retail playtest refuted it): the
-        // mana-BALL roster only (never graves/dwellings), awake-gated
+        // ball roster only — m39 balls AND m40 graves, never the
+        // dwellings list (mc1l27 t=37367) — awake-gated
         // (+58) and NOTHING else — no team gate, no claim gate, so
         // caster-claimed balls are homing targets too
         // (player retail-verified). Same 0x71/0x71 cone + 5120 range
@@ -2891,11 +3267,13 @@ impl Gen {
             for k in 0..self.ball_chain.visible_len() {
                 let j = self.ball_chain.list[k] as usize;
                 let c = &self.ent[j];
-                // The magnet homes on the ball roster's m39 only
-                // (hw:60386-60405) and skips the claim gate; possess
-                // takes the whole chain behind the shared +144/+58
-                // pair (:64045-49).
-                if magnet && c.model65 != 39 {
+                // The magnet takes the WHOLE ball roster — m39 balls
+                // AND m40 graves — behind the +58 gate alone
+                // (hw:60386-60405, CARPET.EXE 0x548FF; see
+                // [`no_mc1_magnet_homes_on_graves`]) and skips the claim
+                // gate; possess takes the whole chain behind the shared
+                // +144/+58 pair (:64045-49).
+                if magnet && c.model65 != 39 && no_mc1_magnet_homes_on_graves() {
                     continue;
                 }
                 if c.f58 == 0 || (!magnet && c.f144 == own) {
@@ -4222,13 +4600,10 @@ impl Gen {
             let e = &self.ent[i];
             (e.f69, e.f44, e.f140, e.f146)
         };
-        // Accuracy stats sub_526C0 (:62585): human-owned shots only.
-        if owner == PLAYER_TARGET {
+        let stats_pre_spawn = owner == PLAYER_TARGET && no_mc1_shot_stats_alloc_guard();
+        if stats_pre_spawn && self.mc1_shot_counts(self.ent[i].model65) {
             self.shots += 1;
-            if hit.is_some_and(|s| match s {
-                MailTarget::Pool(j) => f146 == self.ent[j].id24 || f146 == j as u16,
-                MailTarget::Player => false,
-            }) {
+            if self.mc1_shot_hit(hit, f146) {
                 self.hits += 1;
             }
         }
@@ -4249,6 +4624,23 @@ impl Gen {
         // difference, so a scan that found nothing records the
         // link-time constant [`MC1_MISS_STAMP`] rather than 0.
         if let Some(fx) = self.spawn_effect(f69, disp.0, disp.1, disp.2) {
+            // Accuracy stats `sub_526C0` (:62585): human-owned shots
+            // only, and INSIDE the effect-allocation guard (:63426-29
+            // `if (v18) { sub_526C0(a1, v17, v29); …}`) like every
+            // other detonation arm — see `proj_explode`. The
+            // lightning's aimed pointer is taken at the ENDPOINT
+            // (:63423, after the flight, which never re-acquires), so
+            // the live `+146` is the latched value here — no
+            // `mc1_aim_latch` read. The model gate still applies.
+            if owner == PLAYER_TARGET
+                && !stats_pre_spawn
+                && self.mc1_shot_counts(self.ent[i].model65)
+            {
+                self.shots += 1;
+                if self.mc1_shot_hit(hit, f146) {
+                    self.hits += 1;
+                }
+            }
             let quartered = match hit {
                 Some(MailTarget::Pool(j)) => {
                     self.ent[j].flags & 0x8000 != 0
@@ -5655,6 +6047,12 @@ impl Gen {
                             // write canonicalizes.
                             e.f30 = (e.f34 as i32 + (d % modulus) as i32 - half) as u16;
                             e.f32 = e.f32.wrapping_neg() & 0x7FF;
+                            // The reversed pitch is stored to BOTH
+                            // words (:62727-32 / :62867-72, VA
+                            // 0x52963 / 0x52D2E).
+                            if !no_mc1_deflect_pitch_mirror() {
+                                e.f36 = e.f32;
+                            }
                             e.f146 = if shooter == PLAYER_TARGET {
                                 PLAYER_TARGET
                             } else {
@@ -5714,6 +6112,10 @@ impl Gen {
                             // Raw store, as in the pool arm above.
                             e.f30 = (e.f34 as i32 + (d % modulus) as i32 - half) as u16;
                             e.f32 = e.f32.wrapping_neg() & 0x7FF;
+                            // `+36 = +32`, as in the pool arm.
+                            if !no_mc1_deflect_pitch_mirror() {
+                                e.f36 = e.f32;
+                            }
                             e.f146 = shooter;
                             e.id24 = PLAYER_TARGET;
                             e.act_life = e.max_life as i32;

@@ -221,7 +221,12 @@ impl World {
             let Some(m) = self.grant_spell(SpellId(s)) else {
                 continue;
             };
-            self.g.link(m, x, y, z);
+            // The mint is the ctor at `human_pose` since round 154
+            // (`mint_spell_token`, the same `&actEvent->position`);
+            // only the pre-dig bare mint still needs the link here.
+            if crate::engine::world::mc1_human_token_ctor_off() {
+                self.g.link(m, x, y, z);
+            }
             self.g.ent[m].flags |= 0x0004_0001;
         }
         self.player.owned = owned_before;

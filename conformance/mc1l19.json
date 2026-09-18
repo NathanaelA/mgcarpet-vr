@@ -7,6 +7,12 @@
    "file": "a-seizure-blank-hides-the-human-from-every-bucket0-reader.mgcr",
    "source": "mc1l19",
    "note": "A SEIZURE BLANK HIDES THE HUMAN FROM EVERY BUCKET[0] READER: NewEvent_372C0's sacrifice arm (remc1/sub_main.cpp:43885-91; CARPET.EXE VA 0x372EE `push 0x50 / add eax,0x8e1e / call memset` over the 20 model heads, then the four `movl $0` roster heads - all BEFORE the unlink and the class=0) nulls every roster head for the rest of the tick when the free stack is empty and the recycle stack pops. The fireball acquire (sub_54520 case 0, head 0x8e6e), the creature wizard scan, the balloon-guard election (sub_15340) and the learn clock (:19394-99) all walk that chain, so a human sitting in a blanked chain is invisible to them - only the wizard pick (mc1_human_on_wiz_roster) had the law. mc1l19 t=14743/45/47 at pool 999: the human's burst seizes four live (2,1) records each tick; rival 600's fireballs 991/957/960 minted the same ticks run the class-3 walk over a NULL head and MISS in retail (chase 0, +34=+30), while the port's pre-pass seated the out-of-pool human and locked him (chase 575, heading 79 -> 113). New hash-silent Gen::mc1_pinned mirror + Gen::mc1_human_on_wiz_chain(). Kill switch MGC_NO_MC1_HUMAN_SEAT_CUT. Ledger ROUND 152 w152h law 1."
+  },
+  {
+   "t": 23652,
+   "file": "a-latched-win-rides-into-the-pair-with-its-streak.mgcr",
+   "source": "mc1l19",
+   "note": "THE PAIR IMPORTER SEEDS THE WIN LATCH AND THE STREAK COUNTER FROM THE RECORD (round 154, w154g rider, MGC_NO_MC1_WIN_LATCH_IMPORT): sub_415C0 (:52119-38, CARPET.EXE 0x59DB8-0x59E7A) runs every frame for every in-play wizard with a bound castle and has NO already-won gate \u2014 share <= goal resets +13323 to 0, < 16 bumps it, else ORs +13325 |= 2; the bit is cleared only by the (11,4) win trigger (sub_59B80 :67310, 0x72408 `and $0xfd`), which stores nothing to +13323. The pair importer re-seeded every pair with completed=false / win_streak=0, so a pair opening with retail's latch up ran the trigger's walk with nothing to consume: 99 (5,9) records missing at 23653. Now seeded from RetailWizardMc1::status & 2 / ::win_streak. Sim half: MGC_NO_MC1_WIN_STREAK_PAST_LATCH (the counter outlives the latch; the consume leaves it parked). Ledger ROUND 154 154-10."
   }
  ]
 }

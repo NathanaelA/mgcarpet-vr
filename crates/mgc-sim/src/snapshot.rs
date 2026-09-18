@@ -140,7 +140,14 @@ const MAGIC: u32 = 0x5343_474D;
 ///     ([`crate::mc2::rivals::no_mc2_rival_duel_death_tether`]): a
 ///     resume that dropped them would land a dueled corpse with its
 ///     opponent un-billed.
-pub const SNAPSHOT_VERSION: u32 = 24;
+/// 25: `World::mc1_frame` — the MC1 player block's frame counter
+///     (`var_u32_13341_18`), the blink clock the HUD alert cadence
+///     decrements on (`World::mc1_alert_cadence`, round 154). Its
+///     PARITY decides which frames the hashed alert bytes step on, so
+///     a resume that restarted it at 0 diverged from the live world
+///     the next time a panel flashed (the level-005 round trip, 328
+///     ticks in). Joins the World stream after `inert`.
+pub const SNAPSHOT_VERSION: u32 = 25;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]

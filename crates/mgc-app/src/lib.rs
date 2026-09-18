@@ -65,6 +65,14 @@ struct WorldInit {
     seed: u32,
     assets: mgc_sim::engine::features::FeatureAssets,
     win_pct: u16,
+    /// The human's level-start book (spell ids, any order): the
+    /// campaign carry ∩ the level's availability mask (retail's
+    /// :49226-33 grant law) ∪ the plausible-spellbook instrument.
+    /// Granted BEFORE the rivals — retail's first-tick order is the
+    /// carpet record, the book's tokens, then the rivals (`sub_44D30`
+    /// for wizard 0..7), and every slot-seeded law downstream reads
+    /// the layout (round 154). MC1 column only.
+    human_book: Vec<u8>,
     /// Rival wizard configs by player slot (wizards.json) + the
     /// level's active-slot count. MC1 column only.
     wizards: [Option<mgc_sim::mc1::rivals::RivalConfig>; 8],
@@ -123,6 +131,12 @@ impl WorldInit {
         } else {
             if self.win_pct > 0 {
                 w.set_win_pct(self.win_pct);
+            }
+            // The constructor seated the carpet record; the book's
+            // tokens next, in book order, the rivals last — retail's
+            // consume-loop order (:48633), see `grant_level_book`.
+            if !self.human_book.is_empty() {
+                w.grant_level_book(&self.human_book);
             }
             w.set_wizards(&self.wizards, self.player_count);
         }
@@ -714,18 +728,12 @@ struct LoadedLevel {
     /// MC2 objective-guide targets (blinking marks + steer arrow),
     /// refreshed per tick from the current objective. Empty off-MC2.
     objective_marks: Vec<mgc_render::ObjectiveMark>,
-    /// The plausible-spellbook grant set (spell ids), computed from the
-    /// campaign jars before this level when the instrument is on; empty
-    /// otherwise. Granted into the world after init. MC1 arm.
-    plausible_spells: Vec<u8>,
     /// The MC2 plausible-spellbook grants: `(spell, banked_xp)` per
     /// learned spell (MC2's book is XP-driven). Empty off-MC2 or when
     /// the instrument is off. Installed via `mc2_grant_plausible`.
+    /// (The MC1 set is `WorldInit::human_book` — granted by the world
+    /// build, before the rivals.)
     plausible_book_mc2: Vec<(u8, i32)>,
-    /// The level's human spell-availability mask (wizards slot 0,
-    /// 0/1 per spell) — the campaign grant law is collected ∩ mask
-    /// (remc1 :49229/:49233). None when the package has none.
-    allowed_spells: Option<Vec<u8>>,
 }
 
 /// Resolve the world's live volumes into map overlay circles: amber =
@@ -851,11 +859,20 @@ fn dot_swap_set(level: &LoadedLevel, cfg: &config::Config) -> std::collections::
 /// terrain pass (craters, canyons, walls, building flattening/painting
 /// — mgc_sim::engine::features) to the pristine baked terrain, as the engine
 /// does. Off = the raw generator output, for comparison renders.
+///
+/// `campaign_carry` = the MC1/HW campaign's collected spells (ids,
+/// unmasked — [`mc1_campaign_carry`]); the level's availability mask
+/// is applied here and the result is the world build's `human_book`,
+/// granted before the rivals. The book has to be known at BUILD time:
+/// the load-time fires/painters/craters draw off pool slot numbers,
+/// and the human's tokens sit between the level's records and the
+/// rivals' (round 154). Empty outside a campaign.
 fn load_level(
     level_path: &Path,
     tileset: Option<u8>,
     terrain_features: bool,
     plausible_spellbook: bool,
+    campaign_carry: &[u8],
     pool_slots: Option<usize>,
     awake_range: Option<u32>,
 ) -> Result<LoadedLevel, String> {
@@ -935,6 +952,80 @@ fn load_level(
     let mut angle = terrain.angle.clone();
     // MC2 cave second heightmap (empty off-cave / on pre-8 bakes).
     let ceiling = terrain.ceiling.clone().unwrap_or_default();
+
+    // MC1 arm — and HW, which shares the spellbook system wholesale
+    // (same jar class, same per-level availability mask); only the
+    // campaign SHAPE differs (25 levels, no skip table), which
+    // `campaign::plausible_spellbook` resolves per game.
+    let plausible_spells = if plausible_spellbook
+        && matches!(package.meta.game, Game::MagicCarpet1 | Game::HiddenWorlds)
+    {
+        let dir = level_path.parent().unwrap_or(Path::new("."));
+        let p = campaign::plausible_spellbook(dir, &package);
+        let names: Vec<&str> = p
+            .spells
+            .iter()
+            .map(|&s| mgc_sim::mc1::spells::SpellId(s).name())
+            .collect();
+        println!(
+            "plausible-spellbook: {} spell(s) from {} campaign level(s) before level {} \
+             [{}]{}{}",
+            p.spells.len(),
+            p.scanned_levels.len(),
+            package.meta.level,
+            names.join(", "),
+            if p.skipped_levels.is_empty() {
+                String::new()
+            } else {
+                format!(" (skipped unreadable levels: {:?})", p.skipped_levels)
+            },
+            if p.masked.is_empty() {
+                String::new()
+            } else {
+                // The level's availability mask (retail :49229) strips
+                // these at level start — rediscover them in play.
+                format!(
+                    " (level mask strips: {})",
+                    p.masked
+                        .iter()
+                        .map(|&s| mgc_sim::mc1::spells::SpellId(s).name())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            },
+        );
+        p.spells
+    } else {
+        Vec::new()
+    };
+
+    // The human's level-start book: the campaign carry ∩ the level's
+    // availability mask (retail's grant law, :49226-33 — the mask is
+    // wizards slot 0's `allowed_spells`, 0/1 per spell) ∪ the
+    // plausible instrument's set. Order is the sim's
+    // (`grant_level_book` walks the book order).
+    let allowed_spells: Option<Vec<u8>> = package
+        .wizards
+        .as_ref()
+        .and_then(|w| w.wizards.first())
+        .and_then(|h| h.allowed_spells.clone());
+    let human_book: Vec<u8> = {
+        let mut book: Vec<u8> = campaign_carry
+            .iter()
+            .copied()
+            .filter(|&s| {
+                allowed_spells
+                    .as_ref()
+                    .is_none_or(|m| m.get(s as usize).is_none_or(|&v| v == 1))
+            })
+            .collect();
+        for &s in &plausible_spells {
+            if !book.contains(&s) {
+                book.push(s);
+            }
+        }
+        book
+    };
 
     // The living world: the load-time feature pass (MC1/HW — MC2
     // terrain is pre-generated, remc2 has no feature event loop),
@@ -1062,6 +1153,7 @@ fn load_level(
                     seed,
                     assets,
                     win_pct,
+                    human_book: human_book.clone(),
                     wizards,
                     mc2_wizards,
                     player_count,
@@ -1272,51 +1364,6 @@ fn load_level(
         Vec::new()
     };
 
-    // MC1 arm — and HW, which shares the spellbook system wholesale
-    // (same jar class, same per-level availability mask); only the
-    // campaign SHAPE differs (25 levels, no skip table), which
-    // `campaign::plausible_spellbook` resolves per game.
-    let plausible_spells = if plausible_spellbook
-        && matches!(package.meta.game, Game::MagicCarpet1 | Game::HiddenWorlds)
-    {
-        let dir = level_path.parent().unwrap_or(Path::new("."));
-        let p = campaign::plausible_spellbook(dir, &package);
-        let names: Vec<&str> = p
-            .spells
-            .iter()
-            .map(|&s| mgc_sim::mc1::spells::SpellId(s).name())
-            .collect();
-        println!(
-            "plausible-spellbook: {} spell(s) from {} campaign level(s) before level {} \
-             [{}]{}{}",
-            p.spells.len(),
-            p.scanned_levels.len(),
-            package.meta.level,
-            names.join(", "),
-            if p.skipped_levels.is_empty() {
-                String::new()
-            } else {
-                format!(" (skipped unreadable levels: {:?})", p.skipped_levels)
-            },
-            if p.masked.is_empty() {
-                String::new()
-            } else {
-                // The level's availability mask (retail :49229) strips
-                // these at level start — rediscover them in play.
-                format!(
-                    " (level mask strips: {})",
-                    p.masked
-                        .iter()
-                        .map(|&s| mgc_sim::mc1::spells::SpellId(s).name())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            },
-        );
-        p.spells
-    } else {
-        Vec::new()
-    };
 
     Ok(LoadedLevel {
         view: LevelView {
@@ -1407,12 +1454,6 @@ fn load_level(
         entry_sha256: package.meta.source.as_ref().map(|s| s.entry_sha256.clone()),
         etext: bundle.etext.unwrap_or_default(),
         sky: bundle.sky,
-        plausible_spells,
-        allowed_spells: package
-            .wizards
-            .as_ref()
-            .and_then(|w| w.wizards.first())
-            .and_then(|h| h.allowed_spells.clone()),
     })
 }
 
@@ -3382,7 +3423,6 @@ impl App {
             apply_instruments(
                 &mut w,
                 self.cfg.gameplay.cheat.dev_spells,
-                &sess.level.plausible_spells,
                 &sess.level.plausible_book_mc2,
                 self.cfg.gameplay.cheat.invincible,
                 self.cfg.gameplay.cheat.ghost,
@@ -3392,7 +3432,7 @@ impl App {
             if let Some(run) = &self.campaign {
                 // The restart is a fresh world — the campaign carry
                 // re-grants like any level entry.
-                apply_campaign_book(&mut w, run, &sess.level);
+                apply_campaign_book(&mut w, run);
             }
             w.terrain_dirty = true;
             w.entities_dirty = true;
@@ -3632,6 +3672,7 @@ impl App {
             self.launch.tileset,
             self.launch.terrain_features,
             false,
+            &mc1_campaign_carry(Some(&fresh)),
             self.launch.pool_slots,
             self.launch.awake_range,
         )?;
@@ -3742,11 +3783,13 @@ impl App {
         run.current = n;
         let path = run.level_path(n);
         println!("campaign: launching level {n}");
+        let carry = mc1_campaign_carry(Some(run));
         let level = match load_level(
             &path,
             self.launch.tileset,
             self.launch.terrain_features,
             false, // the plausible instrument is off in campaign mode
+            &carry,
             self.launch.pool_slots,
             self.launch.awake_range,
         ) {
@@ -3827,7 +3870,6 @@ impl App {
                 apply_instruments(
                     &mut w,
                     self.cfg.gameplay.cheat.dev_spells,
-                    &level.plausible_spells,
                     &level.plausible_book_mc2,
                     self.cfg.gameplay.cheat.invincible,
                     self.cfg.gameplay.cheat.ghost,
@@ -3835,7 +3877,7 @@ impl App {
                     world_patches(&self.cfg.gameplay.patches),
                 );
                 if let Some(run) = &self.campaign {
-                    apply_campaign_book(&mut w, run, &level);
+                    apply_campaign_book(&mut w, run);
                 }
                 Simulation::with_world(w)
             }
@@ -9052,6 +9094,7 @@ fn run_flock_probe(
             seed: init.seed,
             assets: init.assets.clone(),
             win_pct: 0,
+            human_book: Vec::new(),
             wizards: Default::default(),
             mc2_wizards: Default::default(),
             player_count: 1,
@@ -9365,11 +9408,12 @@ fn mc2_sky_srgb(level: &LoadedLevel) -> Option<[f32; 3]> {
 /// Apply the playtest instruments to a freshly built world — ONE place
 /// so a future instrument can't miss a call site (fresh start in
 /// `App::new`, `restart_level`, and the headless screenshot path all
-/// go through here).
+/// go through here). The MC1 plausible-spellbook set is NOT here: it
+/// joins the world build (`WorldInit::human_book`) so its tokens sit
+/// where retail's do, before the rivals (round 154).
 fn apply_instruments(
     w: &mut mgc_sim::engine::world::World,
     dev_spells: bool,
-    plausible_spells: &[u8],
     plausible_book_mc2: &[(u8, i32)],
     invincible: bool,
     ghost: bool,
@@ -9379,9 +9423,6 @@ fn apply_instruments(
     w.set_patches(patches);
     if dev_spells {
         w.set_dev_spells(true);
-    }
-    if !plausible_spells.is_empty() {
-        w.grant_spells(plausible_spells);
     }
     if !plausible_book_mc2.is_empty() {
         w.mc2_grant_plausible(plausible_book_mc2);
@@ -9449,16 +9490,23 @@ fn ring_next(ring: &[u8], owned: &[bool], side: u8, cur: i32, backward: bool) ->
     None
 }
 
+/// The MC1/HW campaign's collected spells (ids, UNMASKED — the
+/// level's availability mask is `load_level`'s, where the book joins
+/// the world build; the grant law is collected ∩ mask, :49226-33).
+fn mc1_campaign_carry(run: Option<&CampaignRun>) -> Vec<u8> {
+    let Some(save) = run.and_then(|r| r.save.mc1()) else {
+        return Vec::new();
+    };
+    (0..24).filter(|&s| save.blob24[s] != 0).map(|s| s as u8).collect()
+}
+
 /// Install the campaign's cross-level carry into a fresh world.
-/// MC1/HW: grant collected-flags ∩ the level's availability mask
-/// (the retail human-branch grant law, :49226-33). MC2: learn the
-/// carried book with its banked XP — `mc2_grant_plausible` is the
+/// MC1/HW: the book itself was granted by the world build (it sits
+/// in the pool BEFORE the rivals — `WorldInit::human_book`, round
+/// 154); what is left is the native cycle-ring sidecar. MC2: learn
+/// the carried book with its banked XP — `mc2_grant_plausible` is the
 /// same grant+bank+re-derive path retail's `sub_549A0` carry feeds.
-fn apply_campaign_book(
-    w: &mut mgc_sim::engine::world::World,
-    run: &CampaignRun,
-    level: &LoadedLevel,
-) {
+fn apply_campaign_book(w: &mut mgc_sim::engine::world::World, run: &CampaignRun) {
     match run.id {
         campaign::CampaignId::Mc2 => {
             let Some(save) = run.save.mc2() else { return };
@@ -9476,16 +9524,8 @@ fn apply_campaign_book(
             w.mc2_install_selector_carry(&book.sel, &book.ring, book.left, book.right);
         }
         _ => {
-            let Some(save) = run.save.mc1() else { return };
-            let mut spells: Vec<u8> = (0..24)
-                .filter(|&s| save.blob24[s] != 0)
-                .map(|s| s as u8)
-                .collect();
-            if let Some(mask) = &level.allowed_spells {
-                spells.retain(|&s| mask.get(s as usize).is_none_or(|&v| v == 1));
-            }
-            if !spells.is_empty() {
-                w.grant_spells(&spells);
+            if run.save.mc1().is_none() {
+                return;
             }
             // Cycle-ring carry (native-only sidecar; kept RAW like
             // MC2's — unavailable members are skipped at cycle time,
@@ -9751,7 +9791,6 @@ fn run_screenshot(
         apply_instruments(
             w,
             dev_spells,
-            &level.plausible_spells,
             &level.plausible_book_mc2,
             false,
             false,
@@ -10340,6 +10379,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             args.tileset,
             args.terrain_features,
             cfg.dev.plausible_spellbook,
+            &mc1_campaign_carry(campaign_run.as_ref()),
             pool_slots,
             awake_range,
         ) {
@@ -10365,10 +10405,8 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             // The windowed path's apply_instruments equivalent for the
             // one instrument a replay honors (`--plausible-spellbook`,
             // the pre-pin-take rescue): the grants must run BEFORE the
-            // pin so a recorded pin still overrides them.
-            if !level.plausible_spells.is_empty() {
-                w.grant_spells(&level.plausible_spells);
-            }
+            // pin so a recorded pin still overrides them. The MC1 set
+            // was granted by the world build itself (round 154).
             if !level.plausible_book_mc2.is_empty() {
                 w.mc2_grant_plausible(&level.plausible_book_mc2);
             }

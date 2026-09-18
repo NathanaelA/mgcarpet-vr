@@ -944,12 +944,73 @@ fn level_005_golden_state_hashes() {
         // switch on and off (`MGC_NO_HUSK_WATCH=1`) — level 005 has
         // no rival death scatter in the window, so nothing in this
         // level's behaviour moved.
-        0x6734887e2cc75de8, // post-init
-        0x9c9a5c3e9d8522c1, // A
-        0x9371760b47f68326, // B
-        0x50673dde9dced8f2, // C
-        0x96a45cff88bb8f2c, // D: 64 ticks of two-hand fireball combat
-        0x7ea72c6c42806165, // E: 100 aftermath ticks
+        // ⭐ ALL SIX re-pinned for THE NATIVE MC1 HUMAN SEAT (round
+        // 154, the player's ruling on round 153's finding #1): the
+        // constructor pops the human's own pool record at the (3,4)
+        // marker BEFORE the book's tokens and the rivals — retail's
+        // `sub_44D30` for wizard 0 (:54843-46) — so the post-init
+        // pool holds one more live record and every later pop sits
+        // one slot up. Post-init moves by construction (the record
+        // is hashed); OBSERVABLE holds at post-init and A and moves
+        // from B on (below), which is the CORRECT signal: `rand =
+        // slot + global` seeds every creature and rival stream off
+        // its slot, and every slot after the seat shifted by one —
+        // the far-afield idle is unchanged, the settler/feeder/combat
+        // windows genuinely play differently. Under
+        // `MGC_NO_MC1_NATIVE_HUMAN_RECORD=1` the previous six return.
+        // ⭐ ALL SIX re-pinned for THE MC1 TOKEN-MINT LAWS (round 154,
+        // w154d; round 153 findings #2/#3). Two laws, separable by
+        // their switches: (B) the RIVAL'S LEVEL-START BOOK IS MINTED
+        // IN BOOK ORDER — `sub_3DD50` fills the `+532` list in
+        // `byte_99B88` order for every wizard (:49213-54) and
+        // `sub_44D30`'s mint walks the list (:54882-905), so Vodor's
+        // tokens swap slots among themselves and post-init moves by
+        // construction; OBSERVABLE holds at post-init and A and moves
+        // from B on (below), which is the CORRECT signal — a token's
+        // walk position and its slot-seeded cadence are its slot, and
+        // the rival plays his tokens where retail plays them. Under
+        // `MGC_NO_MC1_RIVAL_BOOK_ORDER=1` post-init..C return. (A) THE
+        // HUMAN'S TOKEN MINT IS THE GROUND-JAR CTOR AT THE WIZARD
+        // (`sub_373F0(&wizard.+72, 12, spell)` + `+16 |= 1` + `+42`,
+        // :54900-06): D's `grant_all_spells` tokens are now map-linked
+        // at the carpet with `flags 5`, both hashed — D/E move,
+        // OBSERVABLE holds at ALL SIX under `MGC_NO_MC1_RIVAL_BOOK_ORDER=1`
+        // (law A alone is layout-only). Under both switches the
+        // previous six return.
+        // D/E re-pinned again with THE DEST TRIPLE ON EVERY BOLT
+        // (round 154, w154b): every token machine closes its mint
+        // with `+150/152 = caster +72/74` stepped `sub_41EC0` along
+        // the caster's yaw (:65029-66420, 17 `call sub_41EC0` sites),
+        // and the rival emit's invented `+36 = pitch` is gone —
+        // `dest_x/dest_y/site_z/f36` are hashed `Ent` fields and D
+        // is the fireball window. Post-init..C hold, OBSERVABLE holds
+        // at ALL SIX (no graded lane reads the triple). Under
+        // `MGC_NO_MC1_BOLT_DEST_STAMP=1 MGC_NO_MC1_RIVAL_EMIT_PITCH_MIRROR=1`
+        // the previous D/E return.
+        0xfb8dcbbe3206fc3c, // post-init
+        0x90b203887bd17b07, // A
+        0xd4af10855811654e, // B
+        0xc85ab56b28a438fc, // C
+        // D/E re-pinned again with THE NATIVE JAR POLL'S "ALREADY
+        // KNOWN" STAMP (round 154, w154k): `sub_55A40` :64780-97 sets
+        // `+16 |= 1` on every authored jar whose spell the local human
+        // already owns (no distance gate, no phase gate beyond the
+        // poll's `+63 & 3`); D's `grant_all_spells` makes every jar
+        // owned and `flags` is hashed. Post-init..C hold, OBSERVABLE
+        // holds at ALL SIX. Under `MGC_NO_MC1_NATIVE_JAR_KNOWN_STAMP=1`
+        // the previous D/E return.
+        // D/E re-pinned again with THE SHOT-STATS AIM LATCH (round
+        // 154, w154f): every flight handler latches `+146` as its
+        // FIRST statement, before the first-tick acquisition
+        // (`sub_52ED0` :62952-54 and its siblings), so a bolt that
+        // acquires and strikes in its first dispatch is a shot and NO
+        // hit — D's fireballs acquire+strike bees the same tick and
+        // `hits` is hashed. Of w154f's eight switches only
+        // `MGC_NO_MC1_HIT_STAT_AIM_LATCH=1` moves the window, and under
+        // it the previous D/E return. Post-init..C hold, OBSERVABLE
+        // holds at ALL SIX.
+        0xbfb22fe0cb4dcb92, // D: 64 ticks of two-hand fireball combat
+        0xcae4937e19eb380a, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -1143,12 +1204,23 @@ fn level_005_golden_state_hashes() {
         // hold byte-for-byte — no sim change; the projection simply
         // sees entities that were always ticking. E holds because no
         // puff/contrail is alive at its pin point.
-        0x624fc42100d11222, // B — settler phase + feeder leash
+        // B-E re-pinned with THE NATIVE MC1 HUMAN SEAT (round 154, see
+        // the GOLDEN note): post-init and A hold byte-for-byte, so
+        // the seat itself draws nothing and idles nothing differently;
+        // from B on every slot-seeded creature/rival stream runs one
+        // slot up, as retail's does.
+        // B-E re-pinned with THE RIVAL BOOK-ORDER MINT (round 154,
+        // w154d, see the GOLDEN note): post-init and A hold
+        // byte-for-byte; from B on Vodor's tokens tick at retail's
+        // walk positions with retail's slot-seeded cadences, and his
+        // casts and everything they touch follow. The human-mint law
+        // of the same landing moves nothing here.
+        0x7ca91333ae07f184, // B — settler phase + feeder leash
         // C..E re-pinned with the mc1l32 certification session (see
         // the GOLDEN note): the scratch-chase persistence, the m5
         // wake phase and the freed-source knock arm first bite in the
         // C window and compound through combat/aftermath.
-        0x65911f0d01d3d01d, // C
+        0x1ec6fc131336d69c, // C
         // ⭐ D/E re-pinned for THE OWNED-JAR HIDE BECOMING UNCONDITIONAL
         // (2026-08-25g player ruling — `World::owned_spell_jar`). The
         // STATE hashes hold byte-for-byte: this is a painter test, no
@@ -1164,8 +1236,8 @@ fn level_005_golden_state_hashes() {
         // ball claimed after settling now WEARS retail's neutral row
         // through D/E instead of the invented owner color. Post-
         // init..C hold — nothing claims a settled ball before combat.
-        0x8222e906da907f29, // D
-        0x952dde632fb48148, // E
+        0x88101822360b5304, // D
+        0x62fac84bc703603a, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

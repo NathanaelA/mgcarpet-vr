@@ -2188,6 +2188,16 @@ fn run_mc1(
             // The chain (`ch`) is deliberately untouched: retail's
             // paused frame runs no mover, so the pose must not move
             // either.
+            // The HUD-drawn gate is a presentation INPUT (the map key,
+            // the level fly-in) the recovery cannot derive from the
+            // key stream: re-seed it per pair from the record's view
+            // byte, the way the pair importer does. The frame clock
+            // itself free-runs (one frame per tick at the default
+            // game speed).
+            world.set_mc1_hud_drawn(matches!(
+                pst.wizards[pst.local_player as usize].view,
+                0 | 3
+            ));
             if recover::paused_turn_mc1(&pst, &obs) {
                 // ⭐⭐ THE PAUSE SCREEN IS INTERACTIVE. A paused turn
                 // runs no sim, but the BIG MAP / spellbook is still

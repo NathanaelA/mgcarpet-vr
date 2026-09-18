@@ -19,7 +19,9 @@
 //!   (:45086-:45087); `link` guards on the placed flag in both the
 //!   original and this port, so the second call is a no-op.
 
-use crate::engine::features::{Gen, no_mc1_build_site_chain};
+use crate::engine::features::{
+    Gen, HashSilent, Raw48, no_mc1_build_site_chain, no_mc1_vulture_death_mover, no_mc1_wake_dy48,
+};
 use crate::mc1::behavior::{BEHAVIOR, BehaviorRow};
 use crate::mc1::combat::{Inbox, MailTarget};
 use crate::mc1::sprite_stats::SPRITE_STATS;
@@ -148,6 +150,15 @@ fn no_mc1_wanted_death_state() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WANTED_DEATH_STATE").is_some())
 }
 
+/// A/B toggle for THE KRAKEN HEAD'S `+56 = 96` CTOR STAMP (round 154,
+/// w154e): set `MGC_NO_MC1_KRAKEN_HEAD_F56` to restore the pre-dig
+/// `if model != 6` skip in [`Gen::spawn_worm`]. Citation at the write
+/// site.
+fn no_mc1_kraken_head_f56() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_KRAKEN_HEAD_F56").is_some())
+}
+
 /// `MGC_NO_M4_CHASE_WANTED_TRAILER=1` restores the pre-dig behaviour in
 /// which a militiaman's CHASE tick that is FROZEN by the damage inbox
 /// skipped `sub_1BB20`'s wanted-timer tail — see
@@ -156,6 +167,24 @@ fn no_mc1_wanted_death_state() -> bool {
 fn no_m4_chase_wanted_trailer() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_M4_CHASE_WANTED_TRAILER").is_some())
+}
+
+/// A/B toggle for **THE WYVERN'S HOUSE HUNT IS A WRAPPER TRAILER**
+/// (round 155, w155c): set `MGC_NO_MC1_WYVERN_HOUSE_HUNT_ON_HIT` to
+/// restore the pre-dig behaviour in which a wyvern's WANDER tick that
+/// is FROZEN by the damage inbox skipped `sub_20710`'s house hunt.
+/// Retail (:26033-58, CARPET.EXE 0x38F15 `call sub_19D70` then, with
+/// eax never tested, 0x38F1A `mov 0x46(%ebx),%ah` / 0x38F20 `cmp
+/// $0x61,%ah`): the shared wander core's damage prologue returns
+/// into the wrapper, whose ONLY gate on the hunt is `+70 == 97`.
+/// WITNESS mc1l34 pair 14668→14669, wyvern slot 8: militia 466's bolt
+/// 289 lands 250 (`+40` 0 → 466), and on that very tick (`+63` 83 =
+/// 0 mod v_26+1) retail elects dwelling 24 at (1280,36352) — `+146`
+/// 856 → 24, `+70` 97 → 98 — where the port's blanket hit-freeze held
+/// 97/856. See [`Gen::wyvern_house_hunt`].
+fn no_mc1_wyvern_house_hunt_on_hit() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WYVERN_HOUSE_HUNT_ON_HIT").is_some())
 }
 
 /// Per-tick context the creature handlers need: the player's position
@@ -340,7 +369,9 @@ impl Gen {
     // ---- class 3: balloons / castle (str_254B84, :4367) --------------------
 
     /// Class-3 spawn dispatch; models 4..=11 are the player-start
-    /// position markers (no entity — handled by the app), 12+ nothing.
+    /// position markers (no entity — `sub_37720`.. write
+    /// `str_9177[colour]`, which `World::spawn_from_thing_at` records
+    /// in `start_markers` at every disposition fire), 12+ nothing.
     pub(crate) fn spawn_class3(&mut self, model: u16, x: u16, y: u16, z: i16) -> Option<usize> {
         if model > 3 {
             return None;
@@ -1537,6 +1568,21 @@ impl Gen {
             if old > 40 {
                 self.ent[i].f26 = -90;
             }
+            // ⭐ THE BUFFET DRAGS ANY WIZARD, NOT JUST THE HUMAN (w154j):
+            // the three stores go through the TARGET record's `+160`
+            // pointer whoever `+146` names (CARPET.EXE 0x1C6EE `mov
+            // 0xa0(%edi),%edx` with no class test, then 0x1C6F7 `+24`,
+            // 0x1C701 `+26 = 256`, 0x1C719 `+22 = 80`). The bearing is
+            // `sub_42150(kraken+72, target+72)` off the RAW target
+            // record with `(hi + 4) & 7` — `+0x400`, 11-bit. A rival's
+            // wizext lives on `World::rivals`, so the arm posts the
+            // bearing on [`Gen::mc1_buffet_post`] and the walk drains
+            // it right after this dispatch (retail's phase: the write
+            // is visible to every later slot of the same tick). The
+            // port used to buffet the human only, leaving a tethered
+            // rival's `knock_mag`/`knock_dir` at whatever its last
+            // damage letter armed (mc1l14 t=2262..2276 wiz 1: retail
+            // 80 flat / 447→458, port 40 / 609).
             if self.ent[i].f26 > 0 && tgt == PLAYER_TARGET {
                 let (kx, ky) = (self.ent[i].x, self.ent[i].y);
                 let dir = Self::angle_between(kx, ky, ctx.px, ctx.py).wrapping_add(0x400) & 0x7FF;
@@ -1547,6 +1593,14 @@ impl Gen {
                 // 3/9/40/43); retail PLAYS it. (An earlier note here
                 // wrongly claimed it hits the default-drop — corrected,
                 // and the mixer policy now admits 42.)
+                self.snd(42, i);
+            } else if self.ent[i].f26 > 0
+                && !crate::mc1::rivals::no_mc1_kraken_buffet_rival()
+                && self.wizard_slot_of(tgt).is_some_and(|s| s != 0)
+            {
+                let (kx, ky) = (self.ent[i].x, self.ent[i].y);
+                let dir = Self::angle_between(kx, ky, tx, ty).wrapping_add(0x400) & 0x7FF;
+                self.mc1_buffet_post = HashSilent((tgt, dir));
                 self.snd(42, i);
             }
         }
@@ -4252,6 +4306,21 @@ impl Gen {
                 // away" when the human walks into wake range. Balls
                 // only — creatures keep the distance gate (this is NOT
                 // `awake_range = 0`, which wakes the whole ecology).
+                //
+                // Retail's wake arm stamps `+48` FIRST (:64353-59,
+                // `CARPET.EXE` 0x6D7F8: `push %edx; call
+                // Distance_410CE; mov %ax,0x30(%esi)`): `edx` is
+                // `sub_42410`'s leftover `dy²`, so the word is the
+                // absolute Y-leg to the human carpet, not the
+                // distance. Write-only — nothing in the binary reads
+                // a creature's or a ball's `+48` — so it lands in the
+                // hash-silent `raw48`. Citation and the reader
+                // enumeration on [`no_mc1_wake_dy48`].
+                if !no_mc1_wake_dy48() {
+                    let dy = ctx.py.wrapping_sub(e.y) as i16 as i32;
+                    self.ent[i].raw48 =
+                        Raw48(Self::isqrt(dy.wrapping_mul(dy) as u32) as u16);
+                }
                 self.ent[i].f58 = 16;
                 self.ent[i].f59 = 0;
                 let mut s = self.ent[i].f54 as usize;
@@ -4417,6 +4486,23 @@ impl Gen {
                 // later, in the death state itself).
                 if model == 0 && matches!(role, 1..=3) {
                     self.flyer_bob(i);
+                }
+                // ...and so does the vulture's IDLE mover: sub_1B160
+                // (:22227-28, CARPET.EXE calls at 0x1B168/0x1B171) is
+                // `sub_19B10(a1x, 6); sub_196E0(a1x);` with no test
+                // between the two calls, so the core's lethal exit
+                // (`sub_424F0(a1x, 6 + 4)` :21415) returns into a wrapper
+                // that still steps, turns and ground-snaps the bird;
+                // only the re-aim after it is gated on `+70 == 6`
+                // (0x1B17C `cmp ah,6`), which `m1_idle_trailer`
+                // mirrors with its `tick70 == base` test. mc1l35
+                // t=4522 slot 65: retail moves 47087/46736/1259 →
+                // 47046/46684/1258 and turns 1832 → 1854 on the very
+                // tick `+70` goes 6 → 10; the port held the pre-tick
+                // pose. The HIT arm below has run this trailer since
+                // mc1l32 t=31567 — the DEATH arm is the same wrapper.
+                if (model, role) == (1, 0) && !no_mc1_vulture_death_mover() {
+                    self.m1_idle_trailer(i, base);
                 }
                 // ...and m5's regen trailer runs on the DEATH tick
                 // too: the fatal hit returns out of the shared core
@@ -4643,6 +4729,19 @@ impl Gen {
                 // See [`Gen::militia_chase_wanted_tail`].
                 if (model, role) == (4, 2) && !no_hit_trailers() && !no_m4_chase_wanted_trailer() {
                     self.militia_chase_wanted_tail(i, base);
+                }
+                // ...and so is the wyvern WANDER wrapper's house hunt
+                // (sub_20710 :26033-58): `sub_19D70(a1x, 96)` returns
+                // out of its damage prologue and the wrapper tests
+                // `+70 == 97` and nothing else, so a non-promoting hit
+                // tick still elects the nearest dwelling. mc1l34
+                // t=14669 slot 8. See [`no_mc1_wyvern_house_hunt_on_hit`].
+                if (model, role) == (16, 1)
+                    && self.ent[i].tick70 == base + 1
+                    && !no_hit_trailers()
+                    && !no_mc1_wyvern_house_hunt_on_hit()
+                {
+                    self.wyvern_house_hunt(i, base);
                 }
                 return;
             }
@@ -4896,7 +4995,24 @@ impl Gen {
             } else {
                 v26 - (ordinal as i16 % v26) + 4
             };
-            if model != 6 {
+            // ⭐ THE KRAKEN HEAD STAMPS `+56 = 96` LIKE THE WORMS DO
+            // (round 154, w154e). All three multipart ctors write it
+            // on the HEAD: m0 `sub_38030` :44615, m3 `sub_384B0`
+            // :44842 and m6 `sub_389E0` :45057 — `CARPET.EXE` file
+            // 0x512A4 (VA 0x38AAC) `66 C7 43 38 60 00` = `mov word
+            // [ebx+0x38],0x60`, between the `+36 = 0` and `+28 = 1`
+            // stores. The segments then `qmemcpy` the head and
+            // overwrite their own `+56` with `4·+80` (:45086), so the
+            // head's 96 is never read back — `+56` is an unnamed
+            // `stub2eb` in the record and the only class-5 reader in
+            // the whole listing is the segment follow's `-+56` at
+            // :21125, on the SEGMENT's own copy. A write-only ctor
+            // stamp: it moves no graded lane (mc1l15 / mc1l49 hold
+            // END either way) and only the raw shadow's `(5,6) f56`
+            // lane (852,694 free-run rows / 15 takes in round 153's
+            // census; mc1l49 28,342 rows / 28 slots, mc1l15 268 / 2).
+            // `MGC_NO_MC1_KRAKEN_HEAD_F56=1` restores the old skip.
+            if model != 6 || !no_mc1_kraken_head_f56() {
                 e.f56 = 96;
             }
         }
@@ -5138,5 +5254,31 @@ mod tests {
             "the early return leaves the disguise filter standing — no stamp at all"
         );
         assert_eq!(g.ent[mound].f126, 20, "and no rooting either");
+    }
+
+    /// The kraken ctor `sub_389E0` stamps `+56 = 96` on the HEAD like
+    /// its two worm siblings (:45057, `CARPET.EXE` file 0x512A4 `mov
+    /// word [ebx+0x38],0x60`); the segments overwrite their copy with
+    /// `4·+80` (:45086). Ungraded lane — the raw shadow's `(5,6) f56`
+    /// (852,694 free-run rows / 15 takes in round 153's census).
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_MC1_KRAKEN_HEAD_F56=1` — the head
+    /// reads 0.
+    #[test]
+    fn the_kraken_head_stamps_plus56_96_like_the_worms() {
+        let mut g = flat_gen();
+        let head = g.spawn_creature(6, 100 << 8, 100 << 8, 100).unwrap();
+        assert_eq!((g.ent[head].class64, g.ent[head].model65), (5, 6));
+        assert_eq!(g.ent[head].f56, 96, "the head's +56 is the ctor's 96");
+        let seg = g.ent[head].f54 as usize;
+        assert_ne!(seg, 0, "two segments hang off +54");
+        assert_eq!(
+            g.ent[seg].f56,
+            4 * g.ent[seg].f80,
+            "a segment's +56 is its own 4·+80, not the copied 96"
+        );
+        // Control: the worm head carries the same stamp.
+        let worm = g.spawn_creature(0, 120 << 8, 120 << 8, 100).unwrap();
+        assert_eq!(g.ent[worm].f56, 96);
     }
 }

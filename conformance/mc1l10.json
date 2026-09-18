@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l10",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 19380,
+   "file": "the-pair-importer-seeds-the-win-latch-from-the-record.mgcr",
+   "source": "mc1l10",
+   "note": "THE PAIR IMPORTER SEEDS THE WIN LATCH AND THE STREAK COUNTER FROM THE RECORD (round 154, w154g rider, MGC_NO_MC1_WIN_LATCH_IMPORT): sub_415C0 (:52119-38, CARPET.EXE 0x59DB8-0x59E7A) runs every frame for every in-play wizard with a bound castle and has NO already-won gate \u2014 share <= goal resets +13323 to 0, < 16 bumps it, else ORs +13325 |= 2; the bit is cleared only by the (11,4) win trigger (sub_59B80 :67310, 0x72408 `and $0xfd`), which stores nothing to +13323. The pair importer re-seeded every pair with completed=false / win_streak=0, so a pair opening with retail's latch up ran the trigger's walk with nothing to consume: the (5,11) genie missing at 19381, trigger slot 3 flags 1025 vs 1, free stack + spawn_count[11] off. Now seeded from RetailWizardMc1::status & 2 / ::win_streak. Sim half: MGC_NO_MC1_WIN_STREAK_PAST_LATCH (the counter outlives the latch; the consume leaves it parked). Ledger ROUND 154 154-10."
+  }
+ ]
+}

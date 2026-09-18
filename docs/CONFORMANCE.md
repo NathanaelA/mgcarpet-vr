@@ -1270,12 +1270,21 @@ on mc1l11/l16/l42 the MC1 phase byte read one low and on mc1l6 two
 low (every level record one tick young; `rand` DIFF). The banner says
 `CORRECTED BY THE LCG` when it happened. `terrain-check` shares it.
 
-MC1 seats the human THE WAY RETAIL DOES (round 153): the carpet's
-pinned record first, the carried book's tokens next in acquisition
-order (read off record 0), the rivals after — `sub_44D30`'s order.
-`MGC_INIT_NATIVE_LAYOUT=1` builds the app's own layout instead (no
-pooled carpet, rivals first, book last), which is what moved eight of
-the eleven DIFFERENT MC1 `terrain-check` rows (ledger §ROUND 153).
+MC1 seats the human THE WAY RETAIL DOES: the carpet's pinned record
+first (the constructor's, round 154 — `MGC_NO_MC1_NATIVE_HUMAN_RECORD=1`
+restores the pre-ruling layout for an A/B), the carried book's tokens
+next in acquisition order (read off record 0), the rivals after —
+`sub_44D30`'s order. The old layout (no pooled carpet, rivals first,
+book last) is what moved eight of the eleven DIFFERENT MC1
+`terrain-check` rows (ledger §ROUND 153, landed in §ROUND 154). The
+tokens themselves are minted the way `sub_44D30`'s list walk mints
+them (round 154, w154d): the human's through the ground-jar ctor AT
+THE WIZARD, map-linked, OWNED bit set (`MGC_NO_MC1_HUMAN_TOKEN_CTOR=1`
+restores the bare unlinked mint), each rival's book in `byte_99B88`
+order (`MGC_NO_MC1_RIVAL_BOOK_ORDER=1` restores ascending spell id),
+and the human token's `+70` as `3·spell` in a strict world
+(`MGC_NO_MC1_HUMAN_TOKEN_STRICT_STATE=1` restores the unconditional
+native byte).
 
 - the tick-top BUCKET CHAINS link by link (`+0` → `chain_next` vs the
   port's `TickChain`s; `bucket chains: N link(s) compared` is the

@@ -119,6 +119,9 @@ pub struct RawShadowMc1 {
     /// (`f26` on class 12, `f28` on (10,41), the castle's `f59`) are
     /// compared under their own names; the comparator skips those.
     pub f48: u16,
+    /// The castle workers' `+42` castle link ([`Ent::link42`]) —
+    /// compared on (10,41)/(10,42) only (w154j); 0 elsewhere.
+    pub f42: u16,
     /// `+78`..`+84` — the sprite half-height and the collision extents.
     pub f78: u16,
     pub f80: u16,
@@ -783,6 +786,12 @@ impl World {
         self.g.castle_alert = wiz.castle_alert;
         self.g.player_alert = wiz.player_alert;
         self.g.balloon_alert = wiz.balloon_alert;
+        // The HUD alert cadence's clock and gate: the block's frame
+        // counter as of THIS boundary (the parity the draw after the
+        // next tick blinks on) and whether the panels are drawn at all
+        // (view 0/3). See `World::mc1_alert_cadence`.
+        self.mc1_frame = wiz.frame;
+        self.mc1_hud_drawn = matches!(wiz.view, 0 | 3);
         self.g.kills = wiz.kills;
         self.g.shots = wiz.shots;
         self.g.hits = wiz.hits;
@@ -796,8 +805,11 @@ impl World {
         for i in 1..8 {
             self.g.rival_ents[i] = st.wizards[i].play_index;
             self.g.rival_wanted[i] = st.wizards[i].aggro;
+            // The rival's +308 house tally (the human's seats above).
+            self.g.rival_banked_houses[i] = st.wizards[i].banked_houses;
         }
         self.g.rival_ents[0] = 0;
+        self.g.rival_banked_houses[0] = 0;
         // The ESTABLISHED-castle register (wizext+50) imports RAW —
         // pool slots map 1:1 — so a bound-at-plant level-0 castle
         // and a stale/cleared bind both arrive exactly as recorded.
@@ -1266,8 +1278,26 @@ impl World {
             Some((wiz.duel_victim, wiz.duel_count, wiz.duel_hold))
         };
         self.won = false;
-        self.completed = false;
-        self.win_streak = 0;
+        // ⭐ THE WIN LATCH AND ITS STREAK COUNTER ARE IMPORTED STATE
+        // (round 154, w154g). `+13323` (the counter) and `+13325 & 2`
+        // (the latch) live in the wizard record, not in a tick
+        // mailbox: the (11,4) win trigger fires off the latch on the
+        // NEXT record's walk (`sub_59B80` :67304), and the post-walk
+        // objective pass counts on from the parked/partial counter.
+        // Unseeded, every pair that opened with retail's latch up ran
+        // the trigger's walk with no win to consume — mc1l10
+        // 19380→19381 (the (5,11) genie missing, trigger slot 3
+        // `flags` 1025 vs 1) — and every boundary read `win_streak
+        // retail k port 1` (the round-153 census's 268,342-row pair
+        // lane / 37 takes). `MGC_NO_MC1_WIN_LATCH_IMPORT=1` restores
+        // the unseeded pair.
+        if no_mc1_win_latch_import() {
+            self.completed = false;
+            self.win_streak = 0;
+        } else {
+            self.completed = wiz.status & 2 != 0;
+            self.win_streak = wiz.win_streak;
+        }
         self.prev_fire = (false, false);
         self.accel_veto = (false, false);
         self.rival_deaths.clear();
@@ -1409,6 +1439,7 @@ impl World {
                     f66: e.f66,
                     f67: e.f67,
                     f48: e.raw48.0,
+                    f42: e.link42.0,
                     f78: e.f78,
                     f80: e.f80,
                     f82: e.f82,
@@ -1536,6 +1567,12 @@ impl World {
             scalars.push((
                 "castle_scan",
                 self.rival_castle(r.ent).map_or(0, |c| c as i64),
+            ));
+            // The rival's +308 house tally — an unmodelled census row
+            // until round 154 (w154i); now the census fills it.
+            scalars.push((
+                "banked_houses",
+                self.g.rival_banked_houses[r.slot as usize] as i64,
             ));
             arrays.push(("balloon_reg", breg(r.ent)));
             arrays.push(("guard_reg", greg(r.ent)));
@@ -1800,6 +1837,8 @@ impl World {
                 "f42",
                 if e.class64 == 12 {
                     some(untr(e.f144))
+                } else if e.class64 == 10 && matches!(e.model65, 41 | 42) {
+                    some(e.link42.0 as i64)
                 } else {
                     None
                 },
@@ -5055,6 +5094,20 @@ pub(crate) fn no_mc2_freed_row_import() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FREED_ROW_IMPORT").is_some())
 }
 
+/// A/B kill-switch for THE MC1 WIN LATCH + STREAK COUNTER IMPORT
+/// (round 154, w154g): set `MGC_NO_MC1_WIN_LATCH_IMPORT` to restore
+/// the pre-dig pair, which re-seeded every pair with `completed =
+/// false` and `win_streak = 0` — so a pair that opened with retail's
+/// `+13325 & 2` up ran the (11,4) win trigger's walk with nothing to
+/// consume (mc1l10 19380→19381: the (5,11) genie missing, trigger
+/// slot 3 `flags` 1025 vs 1), and every boundary's `win_streak` read
+/// one off the port's fresh count. The seat reads `RetailWizardMc1::
+/// status` bit 2 and `::win_streak` (`+13323`) straight off record N.
+pub(crate) fn no_mc1_win_latch_import() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WIN_LATCH_IMPORT").is_some())
+}
+
 /// A/B kill-switch for the `byte[3] & 0x10` whirlwind GRAB-latch
 /// import: set `MGC_NO_MC2_GRAB_IMPORT` to restore the pre-dig
 /// behaviour, where an imported victim always arrived UNGRABBED.
@@ -5479,6 +5532,7 @@ pub(crate) fn import_ent_mc2(
         lease2e: crate::engine::features::Lease2e(r.f2e),
         // MC1-only lane (the ungated `sub_14E60` token read).
         raw48: crate::engine::features::Raw48(0),
+        link42: crate::engine::features::Link42(0),
         morph_cry: crate::engine::features::MorphCry(0),
         // ⭐ THE SUMMIT CONTROLLERS' WIDE @0x10. `f26` below keeps its
         // class-wide `as i16` seat (which TRUNCATES retail's 72,620 to
@@ -6605,6 +6659,13 @@ fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
         // owned-token slot. `f26` above only homes it while the record
         // is still a class-12 manifestation.
         raw48: crate::engine::features::Raw48(r.f48),
+        // The castle workers' `+42` castle link (w154j) — lifted on
+        // the (10,41) leveler and the (10,42) painter, the two records
+        // retail mints with it; class 12's `+42` is the owner, homed
+        // in `f144` above.
+        link42: crate::engine::features::Link42(
+            if r.class64 == 10 && matches!(r.model65, 41 | 42) { r.f42 } else { 0 },
+        ),
         // MC2-only lane (the two summit controllers' wide @0x10).
         summit10: crate::engine::features::Summit10(0),
         // Port-only sound cadence, not a retail word — see `MorphCry`.

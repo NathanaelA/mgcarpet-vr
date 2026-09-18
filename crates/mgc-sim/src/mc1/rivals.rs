@@ -37,7 +37,7 @@
 //! (armed by a rival's own village offenses), so villages turn their
 //! defenders on any hostile wizard (see docs/DEVIATIONS.md).
 
-use crate::engine::features::Gen;
+use crate::engine::features::{Gen, HashSilent};
 use crate::engine::world::{LifeState, World};
 use crate::mc1::behavior::BEHAVIOR;
 use crate::mc1::mobs::PLAYER_TARGET;
@@ -608,6 +608,210 @@ pub(crate) fn no_mc1_invis_word48() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_INVIS_WORD48").is_some())
 }
 
+/// A/B toggle for THE RIVAL KILL'S TALLY HOME (round 154, w154f; round
+/// 153 finding #5): set `MGC_NO_MC1_RIVAL_KILL_NO_TALLY` to restore the
+/// pre-dig `rival_death`, which bumped the human's creature-kill
+/// counter (`Type_160+359`) when the human killed a rival wizard "for
+/// parity with the creature track". Retail's rival death (:55488-97)
+/// credits the killer's PER-VICTIM tally `+30 + 2 * victim.+48`
+/// (CARPET.EXE 0x46100-0x46111 `mov 0x7503(%edx,%eax,4),%edx` … `incw 0x1e(%edx,%eax,2)`, and no `0x167` store anywhere in `sub_45FC0`) and nothing else; `+359` has exactly
+/// one writer, the creature death handoff `sub_1A6C0` (:21840-50),
+/// which the class-3 wizard never reaches. Witness mc1l49 t=9641:
+/// rival 620 dies to the human's fireball, retail `kills` 49 flat,
+/// the port 50 — and one high for the rest of the take.
+pub(crate) fn no_mc1_rival_kill_no_tally() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_KILL_NO_TALLY").is_some())
+}
+
+/// A/B toggle for THE RIVAL'S LEVEL-START MINT ORDER (round 154,
+/// w154d; round 153 finding #3): set `MGC_NO_MC1_RIVAL_BOOK_ORDER` to
+/// restore the pre-dig `spawn_rival` loop, which minted the book in
+/// ascending spell id. Retail's `sub_3DD50` grant loop (:49213-54,
+/// CARPET.EXE VA 0x3DEF8 `mov 0x9b88(%esi),%al` … 0x3E03A `cmp
+/// $0x18,%esi`) runs for EVERY wizard, human and AI, and fills the
+/// `+532` acquisition list in `byte_99B88` order (`DISPLAY_ORDER`,
+/// file 0x9F380: `0,3,2,16,1,14,4,12,6,9,7,8,15,18,17,19,13,5,11,10,
+/// 20..23`); `sub_44D30`'s mint then walks the LIST (:54882-905), so
+/// the token slots — and the free stack under everything popped
+/// after them — follow book order. `init-check` read the id-order
+/// mint as wiz `owned` 442 rows on 21 takes, the `slot disagreements`
+/// and the free-stack DIFF on 12 (mc1l49: 17 rows per rival × 7).
+/// The human's half landed in 154-1 (`grant_level_book`); the
+/// respawn re-grant is list-driven already (:54884-923).
+pub(crate) fn no_mc1_rival_book_order() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_BOOK_ORDER").is_some())
+}
+
+/// A/B toggle for THE RIVAL EMIT'S INVENTED `+36` WRITE (round 154,
+/// w154b): set `MGC_NO_MC1_RIVAL_EMIT_PITCH_MIRROR` to restore the
+/// pre-dig [`World::rival_emit`], which stamped the bolt's `+36`
+/// (target pitch) with the caster's pitch. Retail's sixteen token
+/// machines (:65029-66420, one routine for human and AI) write the
+/// bolt's `+30/+32` and never `+36` (fireball :65070-71, CARPET.EXE
+/// VA 0x56188-0x56197 `mov 0x1e(%ebp),%ax; mov %ax,0x1e(%ebx); mov
+/// 0x20(%ebp),%ax; mov %ax,0x20(%ebx)` — no `0x24(%ebx)` store in
+/// the function). The human arm never had the write. Shadow lane
+/// `(9,x) f36`: the possess lob holds retail's 0 for its whole
+/// flight (mc1l2 t=2380-91 slot 108, port 242); the fireball's
+/// tracker mirrors `+32 → +36` on its first flight tick, so its rows
+/// are birth-boundary only.
+pub(crate) fn no_mc1_rival_emit_pitch_mirror() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_EMIT_PITCH_MIRROR").is_some())
+}
+
+/// A/B toggle for THE NATIVE HUMAN SEAT (round 154, the player's
+/// ruling on round 153's finding #1): set `MGC_NO_MC1_NATIVE_HUMAN_RECORD`
+/// to restore the pre-ruling layout — no pooled carpet, the rivals'
+/// records first, the human's book minted after them by the app. The
+/// MC1 twin of `mc2::rivals::no_mc2_native_human_record`. See
+/// [`World::mc1_spawn_human_record`].
+/// A/B toggle for THE MARKER-LESS ORIGIN SEAT (round 154, the player's
+/// ruling): set `MGC_NO_MC1_MARKERLESS_ORIGIN_SEAT` to restore the
+/// pre-ruling fallback, which seated a rival with no `(3,4+colour)`
+/// THING row at the HUMAN's start marker. Retail seats it at the
+/// zeroed `str_9177[colour]` = (0, 0) — see [`World::spawn_rival`].
+pub(crate) fn no_mc1_markerless_origin_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_MARKERLESS_ORIGIN_SEAT").is_some())
+}
+
+pub(crate) fn no_mc1_native_human_record() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_NATIVE_HUMAN_RECORD").is_some())
+}
+
+/// A/B toggle for **THE POST-SPAWN TRUCE WALKS THE TICK-TOP CLASS-3
+/// ROSTER** (round 154, w154c — the MC1 twin of round 147's
+/// `MGC_NO_MC2_RIVAL_TRUCE_ROSTER` + round 141's
+/// `MGC_NO_MC2_HUMAN_RESPAWN_TRUCE`): set `MGC_NO_MC1_TRUCE_ROSTER`
+/// to restore the pre-dig port, where all THREE call paths of
+/// `sub_44D30`'s truce loop ran a flat loop over `self.rivals`
+/// (the rival spawn tail stamped every already-seated rival, the
+/// rival respawn every OTHER rival, the human respawn every
+/// non-eliminated rival).
+///
+/// `sub_44D30` (:54802, the wizard (re)init — ONE routine for the
+/// level-start seat :48633, the Space respawn :48633 case 0xF and
+/// the AI respawn :55616) closes with (:55037-41):
+/// ```text
+/// for (jx = var_u32_36462[0]; jx > pool; jx = jx->next)
+///   if (jx->id24 != v2x->id24 && jx->model65 <= 1)
+///     jx->wizext->str_456[v2x->wizext->var_48].hate = -24609;
+/// ```
+/// `var_u32_36462[0]` is BUCKET 0 of the tick-top sweep
+/// (:52253-62): class 3, `actLife >= 0`, `flags & 0x10 == 0`,
+/// sampled ONCE per tick — the port's [`Gen::wiz_chain`]. Shipped
+/// `CARPET.EXE` (file = VA + 0x187F8):
+/// ```text
+///   5dab6  8b 80 6e 8e 00 00        mov  0x8e6e(%eax),%eax   ; AE408+36462 = bucket[0] head
+///   5dabe  66 8b 50 18 / 66 3b 53 18  mov 0x18(%eax),%dx ; cmp 0x18(%ebx),%dx  ; id24 != mine
+///   5dac8  8a 48 41 / 84 c9 / 74 05 / 80 f9 01 / 75 21   ; model65 == 0 || == 1
+///   5daeb  66 c7 84 11 cc 01 00 00 df 9f  movw $0x9fdf,0x1cc(%ecx,%edx,1)  ; +460 + 8·colour
+///   5daf5  8b 00                    mov  (%eax),%eax        ; jx = jx->next (+0)
+///   5daf7..5db05                    cmp against pool base; ja loop
+/// ```
+/// Two consequences, both measured on mc1l14:
+/// 1. **LEVEL-START SEATING.** Every wizard is seated inside the
+///    first tick's command processor (:48633), whose bucket-0 chain
+///    was built before any wizard record existed — the walk visits
+///    nobody. The flat loop stamped every already-seated rival: the
+///    round-153 `init-check` census's 105 `hate` rows / 22 takes
+///    (port 38652..40927 vs retail NEUTRAL 24607).
+/// 2. **A RESPAWN WHILE OTHER WIZARDS ARE DEAD.** mc1l14 t=1344:
+///    rival 2 (ent 524) respawns; the human (ent 504, alive) takes
+///    `hate[2]` 513 → 40927 in retail, but rivals 1 (ent 519, life
+///    −2420, state 3) and 3 (ent 528, life −560, state 3) are in
+///    their dead-wait, off bucket 0, and take NOTHING — the port
+///    stamped both (754 free-run rows on this take alone; the
+///    round-153 census's 35,724 rows / 11 takes).
+/// The human respawn path (`World::player_respawn`'s amnesty) had the
+/// same flat loop with an `!eliminated` guard — a dead rival is not
+/// eliminated and still took the truce there.
+pub(crate) fn no_mc1_truce_roster() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TRUCE_ROSTER").is_some())
+}
+
+/// A/B toggle for **THE DEAD-WAIT DISPATCH CLEARS THE KNOCK
+/// MAGNITUDE EVERY TICK** (round 154, w154c — the MC1 twin of round
+/// 147's `MGC_NO_MC2_DEAD_WAIT_KNOCK_CLEAR`): set
+/// `MGC_NO_MC1_DEAD_WAIT_KNOCK_CLEAR` to restore the pre-dig port,
+/// where a landed wizard (rival OR human) kept whatever `+22` the
+/// death fall had not yet bled off for the whole wait.
+///
+/// `sub_46480` (:55594, the class-3 STATE-3 handler for every
+/// wizard) opens with `*(wizext + 22) = 0` (:55601) ABOVE its
+/// AI/human fork (`13332 == 1`, :55605) — shipped `CARPET.EXE` file
+/// 0x5EC7F `8b 83 a0 00 00 00` = `mov 0xa0(%ebx),%eax` / 0x5EC85
+/// `66 c7 40 16 00 00` = `movw $0x0,0x16(%eax)`, the FIRST two
+/// instructions after the prologue, with `cmpb $0x1,0x3414(%esi)`
+/// only at 0x5ECA4. `+24` (the bearing) is NOT in that handler —
+/// only the respawn's `sub_44D30` clears it (:54871).
+///
+/// The fall (`sub_45FC0` :55434) runs the mover, which bleeds the
+/// knock 4/tick (:55204-18), so a short fall lands with 16..76
+/// still standing. WITNESS mc1l14: rival 2 (ent 524) dies t=926 with
+/// `+22` 80, lands t=927 (80 → 76, one fall step), and t=928 — the
+/// first state-3 tick — retail reads 0 where the port held 76 until
+/// the t=1344 respawn (416 rows). The HUMAN: dies t≈1394, the fall
+/// bleeds 60 → 56 → 52, lands t=1396, t=1397 retail 0, port 52 until
+/// the t=1414 respawn — the SAME statement, the human arm (the
+/// round-153 census's free-run human residue, 4,259 rows / 19
+/// takes; the pair-mode +4 is the round-147 harness artifact and is
+/// NOT this).
+pub(crate) fn no_mc1_dead_wait_knock_clear() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DEAD_WAIT_KNOCK_CLEAR").is_some())
+}
+
+/// A/B toggle for **THE KNOCK BEARING IS STORED RAW** (round 154,
+/// w154c — the MC1 twin of round 147's `MGC_NO_MC2_KNOCK_DIR_RAW`,
+/// a rider on the dead-wait law): set `MGC_NO_MC1_KNOCK_DIR_RAW` to
+/// restore the `& 0x7FF` the port applied at both homes of
+/// `sub_46540`'s hit arm (:55714 — the rival intake in
+/// [`World::rival_mail_intake`] and the human's in
+/// `World::player_mail_block` / the pinned-pair twin). Retail stores
+/// `sub_42150`'s return verbatim, and that return is 2048 when the
+/// source sits a hair to the −x side and far to the −y side
+/// (`angle_of`'s `2048 − lut(−dx, −dy)` quadrant with a zero LUT
+/// entry); the consumer masks (`polar_step`, `sub_41EC0`), so the
+/// store is the only observable. WITNESS mc1l10 t=4503-4505, rival
+/// 2: retail 2048, port 0 (the "MC1's own arm is unaudited" note at
+/// the human's homes was the lead).
+pub(crate) fn no_mc1_knock_dir_raw() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_KNOCK_DIR_RAW").is_some())
+}
+
+/// A/B toggle for **THE KRAKEN BUFFET DRAGS ANY WIZARD** (round 154,
+/// w154j — the lead w154c left): set `MGC_NO_MC1_KRAKEN_BUFFET_RIVAL`
+/// to restore the port's human-only arm. `sub_1C4F0`'s ON tick
+/// (:23223-28, the counter `+26` in 1..=41 of its 132-tick cycle)
+/// writes the TARGET wizard's record through `+146`'s `+160` pointer
+/// — `+24 = sub_42150(kraken+72, target+72)` with `(hi + 4) & 7`
+/// (bearing + 0x400, 11-bit), `+26 = 256`, `+22 = 80` — for whichever
+/// record `+146` names: CARPET.EXE 0x1C6E6 `call sub_42150`, 0x1C6EB
+/// `add $0x4,%ah`, 0x1C6EE `mov 0xa0(%edi),%edx`, 0x1C6F4 `and
+/// $0x7,%ah`, 0x1C6F7 `mov %ax,0x18(%edx)`, 0x1C701 `movw
+/// $0x100,0x1a(%eax)`, 0x1C719 `movw $0x50,0x16(%eax)`; no class or
+/// owner test anywhere between the counter compare (0x1C6D1) and the
+/// stores. The port's arm was `tgt == PLAYER_TARGET` only, so a rival
+/// riding a kraken tether kept the knock its last damage letter armed
+/// (mc1l14 t=2262..2276 wiz 1: retail `knock_mag` 80 flat, `knock_dir`
+/// 447→458 re-bearing every tick; port 40 / 609). The rival's live
+/// mover never spends the knock (`sub_14EB0`), so the observable is
+/// the wizext pair itself plus the corpse drift of a rival killed
+/// while tethered. The `+26 = 256` store has no port register and no
+/// lifted lane (`mgcr::Wizard` lifts +22/+24 only); it stays
+/// unmodelled, as before.
+pub(crate) fn no_mc1_kraken_buffet_rival() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_KRAKEN_BUFFET_RIVAL").is_some())
+}
+
 /// ⭐⭐⭐ **THE RIVAL'S CHARGE MOVE IS THE WHOLE EMIT FAMILY'S, NOT
 /// FOUR SPELLS' — the same law the HUMAN's arm already carries
 /// (`crate::engine::world`'s `cast_projectile` :10385), never landed
@@ -1093,7 +1297,8 @@ impl World {
 
     /// ⭐ THE HUMAN'S OWN POOL RECORD, seated where retail seats it —
     /// the MC1 twin of [`World::mc2_spawn_human_record`] (round 112),
-    /// added in round 153 for `init-check`'s native build.
+    /// added in round 153 for `init-check`'s native build and wired
+    /// into the constructor in round 154 (the player's ruling).
     ///
     /// Retail's level start is the FIRST tick's command processor:
     /// `sub_3DD50` (:49154) arms a join command per wizard and the
@@ -1104,23 +1309,28 @@ impl World {
     /// book's class-12 tokens (:54882-905) and the AI's starting
     /// castle — so the human's carpet is the first wizard pop, his
     /// tokens follow it, and every rival record lands below them.
-    /// The native port keeps the human out of the pool and the app
-    /// grants his book AFTER `set_wizards`, so every wizard-minted
+    /// The native port kept the human out of the pool and the app
+    /// granted his book AFTER `set_wizards`, so every wizard-minted
     /// record sat 1 + (book size) slots off and every slot-seeded law
     /// downstream (`rand = slot + global`, `f63 % n` cadences, which
-    /// free slot a painter pops) ran on the wrong slot — mc1l20's
-    /// `init-check` read the rivals 22 slots low with the brain blocks
-    /// uncompared.
+    /// free slot a painter pops) ran on the wrong slot — `terrain-check`
+    /// read 11 DIFFERENT takes, of which EIGHT (mc1l10/13/15/16/20/22/
+    /// hwl2/l49, the "first-tick runtime family" since round 114) are
+    /// this layout and nothing else (round 153 §Finding #1).
     ///
     /// THE REPRESENTATION IS THE IMPORT'S ([`World::retail_import_mc1`]):
     /// the slot stays CLASS 0, a pinned record whose `rand` lane is
     /// the live per-entity stream, the pose the runner's input
     /// anchored at the slot by the walk (`mc1_carpet_slot != 0` takes
-    /// the certified in-walk arm). A world with no marker keeps
-    /// slot 0. NOT wired into `new_for_game` — the app's native seat
-    /// is the player's ruling (docs/CONFORMANCE-FINDINGS.md §ROUND 153).
+    /// the certified in-walk arm, which native play now runs too). A
+    /// world with no marker keeps slot 0. The constructor seats it;
+    /// the book goes through [`World::grant_level_book`] BEFORE
+    /// `set_wizards`. Set `MGC_NO_MC1_NATIVE_HUMAN_RECORD=1` for A/B.
     pub fn mc1_spawn_human_record(&mut self) {
-        if matches!(self.game(), crate::ids::GameId::Mc2) || self.mc1_carpet_slot != 0 {
+        if no_mc1_native_human_record()
+            || matches!(self.game(), crate::ids::GameId::Mc2)
+            || self.mc1_carpet_slot != 0
+        {
             return;
         }
         let Some((mx, my)) = self.start_markers[0] else {
@@ -1149,11 +1359,24 @@ impl World {
 
     fn spawn_rival(&mut self, slot: u8, cfg: RivalConfig) {
         // Start marker: class 3, model 4+slot (tile-center position,
-        // :44003); fall back to the human's start marker cell.
-        let marker = self.start_markers[slot as usize].or(self.start_markers[0]);
-        let Some((mx, my)) = marker else { return };
-        let x = (mx << 8).wrapping_add(128);
-        let y = (my << 8).wrapping_add(128);
+        // :44003). ⚖ A MARKER-LESS WIZARD SEATS AT THE ORIGIN (round
+        // 154, the player's ruling "as faithful as possible"):
+        // `sub_40550` memsets `str_9177[]` with the pool at level init
+        // (:51488) and `sub_44D30` reads `str_9177[wizard]` unconditionally
+        // (:54845), so a colour no THING row names is seated at (0, 0,
+        // ground + 0x100) — mc1l24 authors `player_count` 5 with no
+        // `(3,8)` marker and retail's rival 4 sits at record 0 at
+        // x 0 / y 65520 / z 258 (one settle tick of flight from the
+        // origin). The port fell back to the HUMAN's marker.
+        // `MGC_NO_MC1_MARKERLESS_ORIGIN_SEAT=1` restores the fallback.
+        let (x, y) = match self.start_markers[slot as usize] {
+            Some((mx, my)) => ((mx << 8).wrapping_add(128), (my << 8).wrapping_add(128)),
+            None if no_mc1_markerless_origin_seat() => {
+                let Some((mx, my)) = self.start_markers[0] else { return };
+                ((mx << 8).wrapping_add(128), (my << 8).wrapping_add(128))
+            }
+            None => (0, 0),
+        };
         let z = (self.g.ground_z(x, y) as i16).wrapping_add(256);
         let Some(i) = self.g.spawn_class3(1, x, y, z) else {
             return;
@@ -1170,8 +1393,17 @@ impl World {
         self.g.ent[i].f140 = 1000;
         let mut r = Rival::new(slot, i as u16, &cfg);
         // Level-start book (:49222): pregrant && allowed, as resolved
-        // by the app into cfg.book.
-        for s in 0..SPELL_COUNT {
+        // by the app into cfg.book — walked in BOOK order
+        // (`byte_99B88`), the order `sub_3DD50` fills the acquisition
+        // list in (:49213-54) and the mint walks (:54882-905). The
+        // slots follow the walk; `known`/`owned` are sets and do not
+        // care. See [`no_mc1_rival_book_order`].
+        let order: Vec<usize> = if no_mc1_rival_book_order() {
+            (0..SPELL_COUNT).collect()
+        } else {
+            crate::mc1::spells::DISPLAY_ORDER.iter().map(|&s| s as usize).collect()
+        };
+        for s in order {
             if cfg.book[s] {
                 r.known[s] = true;
                 if let Some(m) = self.mint_manifestation(s, i as u16) {
@@ -1187,14 +1419,55 @@ impl World {
         if cfg.castle_level > 0 && r.known[16] {
             self.spawn_starting_castle(&mut r, cfg.castle_level);
         }
-        // Everyone hates a newcomer a little (:55037-41).
-        for other in &mut self.rivals {
-            other.hate[slot as usize] = HATE_RESPAWN;
+        // The post-spawn truce (:55037-41): every OTHER wizard ON THE
+        // TICK-TOP BUCKET-0 ROSTER takes the elevated-but-decaying
+        // 40927 toward this newcomer. At level-start seating that
+        // roster is EMPTY — the chain was built before any wizard
+        // record existed — so nothing is stamped.
+        // `MGC_NO_MC1_TRUCE_ROSTER=1` restores the flat loop.
+        if no_mc1_truce_roster() {
+            for other in &mut self.rivals {
+                other.hate[slot as usize] = HATE_RESPAWN;
+            }
+        } else {
+            self.mc1_truce_roster(slot as usize, i as u16);
         }
         // The team resolver for owner recolors (balls/balloons/flags).
         self.g.rival_ents[slot as usize] = i as u16;
         self.rivals.push(r);
         self.entities_dirty = true;
+    }
+
+    /// `sub_44D30`'s truce loop (:55037-41, shipped `CARPET.EXE` file
+    /// 0x5DAB6..0x5DB05): walk bucket 0 of the tick-top sweep
+    /// ([`Gen::wiz_chain`] — class 3, `actLife >= 0`, `flags & 0x10
+    /// == 0`, sampled ONCE per tick) and stamp `hate[colour] =
+    /// (u16)-24609` = [`HATE_RESPAWN`] on every member whose model is
+    /// 0 (the human) or 1 (a rival), skipping the record whose `+24`
+    /// id matches the respawner's. A wizard in its dead-wait is off
+    /// the roster and takes no truce; at level-start seating the
+    /// roster is still empty. The human's own ledger (model 0) has
+    /// no port home, so only the rival members are written; a
+    /// castle (model 2) on the same chain is skipped by the model
+    /// test exactly as retail skips it.
+    ///
+    /// ONE routine, THREE call paths ([`Self::spawn_rival`], the
+    /// respawn tail of [`Self::rival_respawn`], and the human's
+    /// `World::player_respawn` amnesty) — see
+    /// [`no_mc1_truce_roster`].
+    pub(crate) fn mc1_truce_roster(&mut self, colour: usize, own_ent: u16) {
+        if colour >= 8 {
+            return;
+        }
+        for c in 0..self.g.wiz_chain.visible_len() {
+            let j = self.g.wiz_chain.list[c] as usize;
+            if j == own_ent as usize {
+                continue;
+            }
+            if let Some(r) = self.rivals.iter_mut().find(|r| r.ent as usize == j) {
+                r.hate[colour] = HATE_RESPAWN;
+            }
+        }
     }
 
     /// A rival-owned class-12 manifestation (the shared sub_3BF70
@@ -1336,6 +1609,24 @@ impl World {
         })
     }
 
+    /// The rival's ESTABLISHED castle as retail resolves it: `pool +
+    /// 164 * wizext[+50]` with an INDEX-NONZERO test alone — no class,
+    /// model, life, owner or flags test, so a register naming a slot the
+    /// pool has since re-minted resolves to whatever lives there now.
+    /// Every MC1 rival reader of the castle takes this form (the Home
+    /// predicates and handler, the mana-hunt anchor, the cast-16 split,
+    /// the castle-required token gate, the dead-wait and the respawn);
+    /// none scans. `MGC_NO_MC1_HOME_CASTLE_REGISTER=1` restores the
+    /// [`Self::rival_castle`] pool scan on all of them. See
+    /// [`crate::engine::features::no_mc1_home_castle_register`].
+    pub(crate) fn rival_castle_reg(&self, ri: usize) -> Option<usize> {
+        if crate::engine::features::no_mc1_home_castle_register() {
+            return self.rival_castle(self.rivals[ri].ent);
+        }
+        let reg = self.wiz_castle_reg(self.rivals[ri].slot) as usize;
+        (reg != 0 && reg < self.g.ent.len()).then_some(reg)
+    }
+
     /// Read-only AI diagnostic dump (no state mutation, not hashed) — for
     /// "follows target, casts nothing" style rival-AI investigations.
     #[doc(hidden)]
@@ -1387,10 +1678,37 @@ impl World {
     /// Class-3 model-1 pool dispatch: resolve the rival record; a
     /// level-authored husk with no record stands and renders (the
     /// pre-rivals behavior).
+    /// Drain [`Gen::mc1_buffet_post`] — the kraken buffet's write on a
+    /// POOL wizard's knock pair (see [`no_mc1_kraken_buffet_rival`]):
+    /// `+24 = bearing`, `+22 = 80`. Called by the walk right after the
+    /// kraken's own dispatch, so the value stands for every later slot
+    /// of the tick, retail's phase. A target with no rival record (an
+    /// authored husk) takes nothing — retail's `+160` there is whatever
+    /// the level left, not a wizext the port models.
+    pub(crate) fn mc1_buffet_apply(&mut self) {
+        let HashSilent((tgt, dir)) = std::mem::take(&mut self.g.mc1_buffet_post);
+        if tgt == 0 {
+            return;
+        }
+        if let Some(ri) = self.rivals.iter().position(|r| r.ent == tgt) {
+            self.rivals[ri].knock_dir = dir;
+            self.rivals[ri].knock_mag = 80;
+        }
+    }
+
     pub(crate) fn rival_entity_tick(&mut self, i: usize) {
         let Some(ri) = self.rivals.iter().position(|r| r.ent as usize == i) else {
             return;
         };
+        // ⭐ `sub_46480`'s FIRST statement (:55601, shipped file
+        // 0x5EC85 `movw $0x0,0x16(%eax)`): every state-3 dispatch —
+        // eliminated husk, human-driven watch, countdown or castle-
+        // less — wipes the knock MAGNITUDE before its AI/human fork.
+        // The bearing (+24) is left standing; only the respawn clears
+        // it. See [`no_mc1_dead_wait_knock_clear`].
+        if self.g.ent[i].tick70 == 3 && !no_mc1_dead_wait_knock_clear() {
+            self.rivals[ri].knock_mag = 0;
+        }
         if self.rivals[ri].eliminated {
             // ⭐ NOT INERT. An eliminated wizard's record still enters
             // the state-3 handler every tick, and `sub_46480`'s ELSE
@@ -1792,7 +2110,10 @@ impl World {
         };
         if let Some((ax, ay)) = attacker {
             let (vx, vy) = (self.g.ent[i].x, self.g.ent[i].y);
-            self.rivals[ri].knock_dir = Gen::angle_between(ax, ay, vx, vy) & 0x7FF;
+            // :55714 stores `sub_42150`'s return RAW (it can be 2048;
+            // the mover masks) — see [`no_mc1_knock_dir_raw`].
+            let raw = Gen::angle_between(ax, ay, vx, vy);
+            self.rivals[ri].knock_dir = if no_mc1_knock_dir_raw() { raw & 0x7FF } else { raw };
             self.rivals[ri].knock_mag = ((dmg.max(0) / 10) as i16).clamp(0, 80);
         }
         self.rivals[ri].regen_stall = 16;
@@ -2743,6 +3064,11 @@ impl World {
             e.f69 = 2;
             e.dest_x = t.0;
             e.dest_y = t.1;
+            // …and `+154 = sub_11F50(+150)` (:65899-903): the ground
+            // under the projected site, the human arm's twin.
+            if !crate::engine::world::no_mc1_bolt_dest_stamp() {
+                self.g.ent[b].site_z = self.g.ground_z(t.0, t.1) as i16;
+            }
         }
         // The charge move (:65910-11): the ball banks the owner's
         // accumulated meter and zeroes it.
@@ -2888,9 +3214,11 @@ impl World {
             return false; // a2[3] — the owner is dying
         }
         let req = self.spells()[spell].castle_req;
+        // :64922-23 — `!wizext+50 || req > pool[wizext+50].+140`: the
+        // register, index test alone.
         if req != 0
             && !self
-                .rival_castle(r.ent)
+                .rival_castle_reg(ri)
                 .is_some_and(|c| self.g.ent[c].f140.max(0) as u32 >= req)
         {
             return false;
@@ -3165,6 +3493,12 @@ impl World {
         // `target_yaw` torrent. `MGC_NO_MC1_CASTLE_ARM_REGISTERS=1`
         // restores the pre-dig gates.
         let castle = self.rival_castle(self.rivals[ri].ent);
+        // ⭐ The two HOME arms (2 and 9) resolve the castle off the
+        // wizext+50 REGISTER with an index test alone (`sub_14310`
+        // :18486-90, `sub_14DC0` :18755-61) — a register that names a
+        // re-minted slot still sends retail "home" to it. See
+        // [`crate::engine::features::no_mc1_home_castle_register`].
+        let home = self.rival_castle_reg(ri);
         let build_open = if castle_arm_registers() {
             let m16 = self.rivals[ri].owned[16] as usize;
             self.g.castle_reg[self.rivals[ri].slot as usize] == 0
@@ -3186,7 +3520,7 @@ impl World {
         // writes the target itself (:18489-90 — `+146` = the
         // established castle from wizext+50, `+148` = its signature);
         // this transition is NOT targetless.
-        if let Some(c) = castle
+        if let Some(c) = home
             && self.g.ent[i].act_life < (self.g.ent[i].max_life / 2) as i32
         {
             self.set_rival_state(ri, AiState::Home, c as u16);
@@ -3281,7 +3615,7 @@ impl World {
         // 9. Idle (sub_14DC0 :18749). ⭐ The HOME leg stamps the
         // castle (:18760-61); only the CRUISE leg (:18756) writes
         // nothing but the brain byte.
-        if let Some(c) = castle
+        if let Some(c) = home
             && self.g.ent[i].act_life < self.g.ent[i].max_life as i32
         {
             self.set_rival_state(ri, AiState::Home, c as u16);
@@ -3809,6 +4143,37 @@ impl World {
         self.g.castle_reg[slot as usize & 7]
     }
 
+    /// `sub_47DD0` (:56617-73, CARPET.EXE file 0x605C8-0x606B4) on the
+    /// record `pc` the respawning wizard's `wizext+50` register names —
+    /// ONE retail routine for both columns: `sub_44D30`'s tail
+    /// (0x4527A `mov 0x32(%eax),%di; test %di,%di; je`, 0x452B1 its
+    /// ONLY caller) runs it for the human and every rival alike. It
+    /// prices the token of the record's OWNER (`pool[+24]`, `+70 <=
+    /// 1u`, `wizext+676[16]` index-tested only) at the record's `+26`
+    /// through an unsigned switch whose `default:` is 0 (0x6064E `cmp
+    /// $7; ja` → `xor %edx,%edx`, no clamp) and divides by the TOKEN's
+    /// `movswl +50` (0x6069E). No class, model or `flags & 2` test.
+    pub(crate) fn mc1_respawn_reprice(&mut self, pc: usize) {
+        let (own, lvl) = (self.g.ent[pc].id24, self.g.ent[pc].f26 as u16);
+        let tok = if own == PLAYER_TARGET {
+            (self.player.state == LifeState::Alive).then_some(self.player.owned[16])
+        } else {
+            let o = own as usize;
+            (o != 0 && o < self.g.ent.len() && self.g.ent[o].tick70 <= 1)
+                .then(|| self.rivals.iter().find(|r| r.ent == own).map(|r| r.owned[16]))
+                .flatten()
+        };
+        let m = tok.unwrap_or(0) as usize;
+        if m != 0 && m < self.g.ent.len() {
+            let cap = if lvl <= 7 { Gen::CASTLE_CAP[lvl as usize] } else { 0 };
+            let div = self.g.ent[m].f50 as i32;
+            self.g.ent[m].f136 = cap;
+            if div != 0 {
+                self.g.ent[m].f140 = cap / div;
+            }
+        }
+    }
+
     /// Enemy-wizard pick (sub_145B0 :18541-91), walking the tick-top
     /// wiz chain (candidates: class-3 carpets, `+65 <= 1`, not self,
     /// not spell-12-cloaked — and nothing else per node; liveness is
@@ -3842,7 +4207,13 @@ impl World {
         let me = self.rivals[ri].ent;
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
         let my_agg = self.rivals[ri].agg as i64;
-        let my_mana = self.rivals[ri].mana as i64;
+        // ⭐ Both `+140` reads are SIGNED (CARPET.EXE 0x14719-29 `jge`):
+        // a fatal shield quarter's wrapped purse is the POOREST, not the
+        // richest — see
+        // [`crate::engine::features::no_mc1_rival_bully_signed_purse`].
+        let signed = !crate::engine::features::no_mc1_rival_bully_signed_purse();
+        let purse = move |m: u32| if signed { m as i32 as i64 } else { m as i64 };
+        let my_mana = purse(self.rivals[ri].mana);
         // Candidates in CHAIN order. The human's carpet is never a
         // pool record in the port (imports anchor the human at the
         // walk slot without materializing the entity), so the human
@@ -3898,7 +4269,7 @@ impl World {
                 self.human_pose.1,
                 self.ghost || self.mc1_invis_notice(self.player.owned[12], self.player.invisible),
                 self.player.mana_max as i64,
-                self.player.mana as i64,
+                purse(self.player.mana),
                 // :18570-72 — the target's raw +50 register + owned
                 // m16 token (sub_14E60), not the establishment latch.
                 self.wiz_castle_reg(0) == 0 && self.player.owned[16] != 0,
@@ -3930,7 +4301,7 @@ impl World {
                     e.y,
                     self.mc1_invis_notice(o.owned[12], o.invisible),
                     o.mana_max as i64,
-                    o.mana as i64,
+                    purse(o.mana),
                     // :18570-72 — raw +50 register + owned token, as
                     // for the human above.
                     self.wiz_castle_reg(oslot) == 0 && o.owned[16] != 0,
@@ -4214,8 +4585,10 @@ impl World {
             return false;
         }
         let me = self.rivals[ri].ent;
+        // :18664-67 — the anchor is `pool + 164 * wizext[+50]`, the
+        // wizard himself when the register is 0 (index test alone).
         let anchor = self
-            .rival_castle(me)
+            .rival_castle_reg(ri)
             .map(|c| (self.g.ent[c].x, self.g.ent[c].y))
             .unwrap_or((self.g.ent[i].x, self.g.ent[i].y));
         let mut best: Option<(u16, u32)> = None;
@@ -4505,7 +4878,15 @@ impl World {
             // Home (sub_13A70 :18204-27): cloak while fleeing; the
             // teleport-home attempt is authentically dead code.
             AiState::Home => {
-                let Some(c) = self.rival_castle(self.rivals[ri].ent) else {
+                // ⭐ The handler resolves its destination off the
+                // wizext+50 REGISTER (:18208 `164 * wizext[+50]`, an
+                // index test alone) — the same read as the two
+                // selector arms that enter Home — and then gates on
+                // the SIGNATURE (:18224 `sub_15440(a1, v1)`: sig(reg)
+                // == +148) before aiming. See
+                // [`crate::engine::features::no_mc1_home_castle_register`].
+                let reg_read = !crate::engine::features::no_mc1_home_castle_register();
+                let Some(c) = self.rival_castle_reg(ri) else {
                     // Castle-less Home (:18209-19): cloak + the Cruise
                     // speed logic, and the state STAYS Home — the
                     // cascade is what moves it on.
@@ -4515,6 +4896,11 @@ impl World {
                 };
                 let (cx, cy) = (self.g.ent[c].x, self.g.ent[c].y);
                 self.rival_cast(ri, i, 12);
+                if reg_read && self.target_sig(c as u16) != self.rivals[ri].target_sig {
+                    // :18224-25 — a stale signature returns with no
+                    // aim and no speed write.
+                    return;
+                }
                 let cz = self.g.ent[c].z;
                 self.rival_approach(ri, i, cx, cy, Some(cz), 256, 2048);
                 // ⭐ NO state write on a full purse of life. The whole
@@ -4667,7 +5053,27 @@ impl World {
         // boundary itself releases; the port's old strict `>` held
         // one extra tick, which under the +100/tick floor pushed
         // every early-Vodor fireball one tick late).
-        {
+        // ⭐ SIGNED (CARPET.EXE 0x16036 `sar`/`jle`, twin 0x16316): on
+        // the fatal tick the purse is wrapped negative and retail
+        // LATCHES — see
+        // [`crate::engine::features::no_mc1_rival_poverty_signed_purse`].
+        if !crate::engine::features::no_mc1_rival_poverty_signed_purse() {
+            let r = &mut self.rivals[ri];
+            let (mana, max) = (r.mana as i32, r.mana_max as i32);
+            let quarter = max / 4;
+            if quarter > mana {
+                r.poverty = true;
+            } else if r.poverty {
+                let v3 = quarter.wrapping_add(6000);
+                let still_poor = if v3 >= max { max / 2 > mana } else { v3 > mana };
+                if !still_poor {
+                    r.poverty = false;
+                }
+            }
+            if r.poverty {
+                return None;
+            }
+        } else {
             let r = &mut self.rivals[ri];
             let quarter = r.mana_max / 4;
             if r.mana < quarter {
@@ -4851,7 +5257,15 @@ impl World {
         } else {
             def.possess_mana
         };
-        if r.mana < cost {
+        // ⭐ SIGNED (`jl`, CARPET.EXE 0x15B8C and every sibling case):
+        // a purse the fatal tick wrapped negative refuses — see
+        // [`crate::engine::features::no_mc1_rival_cast_signed_purse`].
+        let short = if crate::engine::features::no_mc1_rival_cast_signed_purse() {
+            r.mana < cost
+        } else {
+            (r.mana as i32) < cost as i32
+        };
+        if short {
             return false;
         }
         // ALREADY-ACTIVE gate: a token still carrying burst (+48, our
@@ -5068,10 +5482,19 @@ impl World {
         let Some(m) = resolved else {
             return false;
         };
-        if self.g.ent[m].f26 != 0 || self.rivals[ri].mana < self.rival_castle_price(ri) {
+        // The purse test is SIGNED (`jl`, CARPET.EXE 0x1582E) — see
+        // [`crate::engine::features::no_mc1_rival_cast_signed_purse`].
+        let (purse, price) = (self.rivals[ri].mana, self.rival_castle_price(ri));
+        let short = if crate::engine::features::no_mc1_rival_cast_signed_purse() {
+            purse < price
+        } else {
+            (purse as i32) < price as i32
+        };
+        if self.g.ent[m].f26 != 0 || short {
             return false;
         }
-        if self.rival_castle(self.rivals[ri].ent).is_some() {
+        // :19194 `if (wizext+50)` — the raw register word.
+        if self.rival_castle_reg(ri).is_some() {
             // Established castle → THE UPGRADE CHAIN (:19196-97): arm
             // the token (+48 = +50); the debit, the (9,10) castle
             // ball and its (10,43) upgrade-token ride all run at the
@@ -5192,7 +5615,18 @@ impl World {
         e.id24 = owner;
         e.f30 = yaw;
         e.f32 = pitch;
-        e.f36 = pitch;
+        // The aim pair ONLY. No token machine in the block writes
+        // `+36` (grep `+ 36)` over :64900-66420: none) — the port's
+        // `+36 = pitch` here was an invention, and on a lob the
+        // flight never overwrites it: retail's possess lob carries
+        // `+36 = 0` for its whole life (mc1l2 t=2380-91 slot 108,
+        // port 242), the fireball for its birth boundary (t=2 slot
+        // 197, port 1988) until the tracker's miss-arm mirror lands.
+        // Round 153's `(9,1) f36` 108k free / 30 takes and `(9,0)
+        // f36`. See [`no_mc1_rival_emit_pitch_mirror`].
+        if no_mc1_rival_emit_pitch_mirror() {
+            e.f36 = pitch;
+        }
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         // +140 carries the per-burst-tick debit quantum (cost/count —
         // the token ctor's stamp, corpus: fireball token 200/5 = 40 on
@@ -5247,6 +5681,14 @@ impl World {
                 e.f44 = 2000;
                 e.f69 = 25;
             }
+            // Volcano 10/9 (:65460-61) and undead army 10/36
+            // (:65953-54) — the token machine's own pair, the human
+            // twin's note in `cast_projectile`.
+            8 | 17 if !crate::engine::world::no_mc1_emit_detonation_pair() => {
+                let e = &mut self.g.ent[pr];
+                e.f68 = 10;
+                e.f69 = if s == 8 { 9 } else { 36 };
+            }
             15 => self.g.ent[pr].f69 = 23,
             // :66129-30 — the token machine's own f68/f69 stamp.
             20 => {
@@ -5277,6 +5719,20 @@ impl World {
         } else if s == 3 {
             // Possess zeroes WITHOUT stamping (:65246).
             self.wiz_charge[ws] = 0;
+        }
+        // The dest triple on every arm but the duel's (stamped above):
+        // the SAME token machines the human runs, off the caster's
+        // pool record as the walk holds it — `+72/+76` raw (not the
+        // lifted muzzle `z`), projected along `+30/+32` (the `yaw` /
+        // `pitch` this arm was handed ARE that record's pair). mc1l2
+        // t=2 slot 197 / t=2380 slot 108. Tabled on
+        // [`Gen::mc1_stamp_bolt_dest`].
+        if s != 11 {
+            let c = {
+                let e = &self.g.ent[i];
+                (e.x, e.y, e.z)
+            };
+            self.g.mc1_stamp_bolt_dest(pr, c, yaw, pitch, s);
         }
         self.entities_dirty = true;
     }
@@ -5472,9 +5928,14 @@ impl World {
         let killer = self.g.ent[i].f38;
         if let Some(k) = self.owner_slot_of_source(killer) {
             self.kill_tally[k as usize][self.rivals[ri].slot as usize] += 1;
-            // A rival kill feeds the human's counter too (parity
-            // with the creature kill counter track).
-            if k == 0 {
+            // ⚠ The rival kill does NOT feed the human's `+359`
+            // creature counter: retail's :55488-97 writes the
+            // per-victim `+30` tally above and nothing else, and
+            // `sub_1A6C0`'s `+359++` is a class-5 death handoff a
+            // wizard never runs (mc1l49 t=9641, retail 49 vs port
+            // 50). The old "parity with the creature track" bump
+            // survives only under the switch.
+            if k == 0 && no_mc1_rival_kill_no_tally() {
                 self.g.kills = self.g.kills.saturating_add(1);
             }
         }
@@ -5780,7 +6241,9 @@ impl World {
             self.rival_watch_track(i);
             return;
         }
-        if self.rival_castle(self.rivals[ri].ent).is_none() {
+        // :55609 `if (wizext+50)` — the raw register word: a register
+        // naming a re-minted slot still respawns the rival.
+        if self.rival_castle_reg(ri).is_none() {
             // The FINAL-death broadcast (retail etext 62 via the
             // opcode-0x1D elimination arm, :48812-25: "<Name> has
             // been eliminated from the realm.", periods=100 — MC1
@@ -5822,7 +6285,9 @@ impl World {
         // retail SACRIFICES 0x20400 victims ascending (hw:50910;
         // cleared again at the fn tail, hw:51124).
         self.g.rebuild_recycle(0x20400);
-        let Some(c) = self.rival_castle(self.rivals[ri].ent) else {
+        // :54861-64 — the position is `str_29795[wizext+50]`'s, the
+        // register read with no validation.
+        let Some(c) = self.rival_castle_reg(ri) else {
             // Even the castle-less early exit disarms like retail's
             // fn tail (hw:51124 runs on every path).
             self.g.mc2_recycle.stack.clear();
@@ -5901,7 +6366,17 @@ impl World {
                 let e = &self.g.ent[c];
                 (e.f26 > 0 && e.flags & 2 != 0).then_some(c)
             };
-            if let Some(pc) = priced {
+            if let Some(pc) = priced
+                && !crate::engine::features::no_mc1_respawn_reprice_owner()
+            {
+                // `sub_47DD0` (:56617-73) prices the token of the
+                // CASTLE'S OWNER — `pool[castle.+24]`, gated `+70 <=
+                // 1u`, its `wizext+676[16]` index-tested only — at the
+                // castle's `+26` through a switch whose `default:` is
+                // 0, and divides by the TOKEN's own `+50`. See
+                // [`crate::engine::features::no_mc1_respawn_reprice_owner`].
+                self.mc1_respawn_reprice(pc);
+            } else if let Some(pc) = priced {
                 let e = &self.g.ent[pc];
                 let cap = Gen::CASTLE_CAP[(e.f26.max(0) as usize).min(7)];
                 let m = self.rivals[ri].owned[16] as usize;
@@ -5990,12 +6465,21 @@ impl World {
         // Re-seat the +140 mana mirror with the base pool.
         self.g.ent[i].f140 = 1000;
         // Everyone else's ledger toward the respawner: the elevated-
-        // but-decaying truce value (:55037-41).
+        // but-decaying truce value (:55037-41) — on the TICK-TOP
+        // BUCKET-0 ROSTER, not the rival vector: a wizard still in
+        // its own dead-wait is off `var_u32_36462[0]` and takes no
+        // truce (mc1l14 t=1344). `MGC_NO_MC1_TRUCE_ROSTER=1` restores
+        // the flat every-other-rival loop.
         let slot = self.rivals[ri].slot as usize;
-        for (oj, o) in self.rivals.iter_mut().enumerate() {
-            if oj != ri {
-                o.hate[slot] = HATE_RESPAWN;
+        if no_mc1_truce_roster() {
+            for (oj, o) in self.rivals.iter_mut().enumerate() {
+                if oj != ri {
+                    o.hate[slot] = HATE_RESPAWN;
+                }
             }
+        } else {
+            let own = self.rivals[ri].ent;
+            self.mc1_truce_roster(slot, own);
         }
         // hw:51124 — sub_44D30's tail disarms the recycle stack the
         // entry armed: only the respawn window itself may sacrifice.
@@ -6225,6 +6709,61 @@ mod tests {
         w
     }
 
+    /// ⚖ A MARKER-LESS WIZARD SEATS AT THE ORIGIN (round 154, the
+    /// player's ruling "as faithful as possible"): `str_9177[colour]`
+    /// is memset with the pool at level init (:51488) and `sub_44D30`
+    /// reads it unconditionally (:54845), so a colour with no
+    /// `(3,4+colour)` THING row is seated at (0, 0, ground + 0x100) —
+    /// mc1l24's rival 4 (record 0: x 0 / y 65520 / z 258 after one
+    /// settle tick). The port used to fall back to the HUMAN's marker.
+    /// Under `MGC_NO_MC1_MARKERLESS_ORIGIN_SEAT=1` the fallback returns.
+    #[test]
+    fn a_marker_less_rival_is_seated_at_the_origin_like_retail() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // Only the HUMAN's marker (3,4) is authored; colour 1 has none.
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 3,
+            model: 4,
+            x: 120,
+            y: 120,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        assert_eq!(w.start_markers[1], None, "colour 1 authors no marker");
+        let mut cfgs: [Option<RivalConfig>; 8] = Default::default();
+        cfgs[1] = Some(RivalConfig {
+            aggression: 200,
+            accuracy: 255,
+            tempo: 255,
+            castle_level: 0,
+            book: [false; SPELL_COUNT],
+            allowed: [false; SPELL_COUNT],
+        });
+        w.set_wizards(&cfgs, 2);
+        let r = w.rivals.iter().find(|r| r.slot == 1).expect("rival 1 seated");
+        let e = &w.g.ent[r.ent as usize];
+        let ground = w.g.ground_z(0, 0) as i16;
+        assert_eq!(
+            (e.x, e.y),
+            (0, 0),
+            "the zeroed str_9177[1] seats the rival at the origin, not at the human's (120,120)"
+        );
+        assert_eq!(e.z, ground.wrapping_add(256), "ground + 0x100, sub_44D30 :54838-42");
+    }
+
     fn rebound_world() -> World {
         let planes = Planes {
             height: vec![100; 0x10000],
@@ -6269,6 +6808,81 @@ mod tests {
 
     fn away() -> PlayerPose {
         PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0, 0.0, 0.0)
+    }
+
+    /// THE RIVAL'S LEVEL-START BOOK IS MINTED IN BOOK ORDER (round
+    /// 154, w154d; round 153 finding #3). `sub_3DD50`'s grant loop
+    /// (:49213-54, CARPET.EXE 0x3DEF8 `mov 0x9b88(%esi),%al` …
+    /// 0x3E03A `cmp $0x18,%esi`) walks `byte_99B88` for EVERY wizard
+    /// and appends each granted spell to the `+532` acquisition list
+    /// in THAT order; `sub_44D30`'s mint (:54882-905) then walks the
+    /// list, so a rival holding {0, 1, 3, 16} lists and mints 0, 3,
+    /// 16, 1 — Fireball, Possess, Castle, Heal — not 0, 1, 3, 16.
+    /// mc1l49 record 0: seven rivals × 17 `owned` rows, the pool's
+    /// slot census 119 slots off, and on mc1l20/mc1l22 the free stack
+    /// under everything popped after the rivals. `init-check` mc1l49:
+    /// wiz 154 rows → 35, slots 119 differ → 0.
+    ///
+    /// The list is the witness (slot numbering is the pool's
+    /// business). `MGC_NO_MC1_RIVAL_BOOK_ORDER=1` must fail the
+    /// order assert.
+    #[test]
+    fn the_rival_book_is_minted_in_book_order() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 3,
+            model: 5,
+            x: 120,
+            y: 120,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        let mut book = [false; SPELL_COUNT];
+        for s in [0, 1, 3, 16] {
+            book[s] = true;
+        }
+        let mut cfgs: [Option<RivalConfig>; 8] = Default::default();
+        cfgs[1] = Some(RivalConfig {
+            aggression: 200,
+            accuracy: 255,
+            tempo: 255,
+            castle_level: 0,
+            book,
+            allowed: book,
+        });
+        w.set_wizards(&cfgs, 2);
+        let r = &w.rivals[0];
+        let owned = |s: usize| r.owned[s] as i32;
+        assert!(
+            [0, 1, 3, 16].iter().all(|&s| owned(s) != 0),
+            "all four minted: {:?}",
+            r.owned
+        );
+        assert_eq!(
+            &r.acq[..5],
+            &[owned(0), owned(3), owned(16), owned(1), 0],
+            "the acquisition list is filled in `byte_99B88` order (:49213-54)"
+        );
+        // The mint walks the list, so the pool slots follow it too
+        // (a fresh pool pops ascending): 0 < 3 < 16 < 1.
+        assert!(
+            owned(0) < owned(3) && owned(3) < owned(16) && owned(16) < owned(1),
+            "slots follow the walk: {:?}",
+            &r.acq[..4]
+        );
     }
 
     /// ⭐⭐⭐ **RETAIL'S `+48` IS JUST A WORD IN A 164-BYTE RECORD, AND
@@ -6393,6 +7007,72 @@ mod tests {
 
     fn rebound_bit(w: &World, ri: usize) -> bool {
         w.g.ent[w.rivals[ri].ent as usize].flags & 0x8000 != 0
+    }
+
+    /// ⭐ THE RIVAL'S BOLT IS BORN HOLDING THE SAME DEST TRIPLE AS
+    /// THE HUMAN'S, AND NO `+36` (round 154, w154b). The token
+    /// machines are ONE routine for both columns (`sub_56090`
+    /// :65074-76 fireball, `sub_56AF0` :65474-77 volcano — CARPET.EXE
+    /// VA 0x561B7-0x561E2 / 0x56C0D), read off the caster's pool
+    /// record as the walk holds it: `+72/+76` raw (NOT the lifted
+    /// muzzle z this arm is handed), projected along `+30/+32`. And
+    /// the machine writes the bolt's `+30/+32` only (VA 0x56188-97):
+    /// the port's `+36 = pitch` was invented — round 153's `(9,1) f36`
+    /// 108k free rows / 30 takes (mc1l2 t=2380-91 slot 108, retail 0
+    /// for the lob's whole life).
+    ///
+    /// Corpus: mc1l2 t=2 slot 197 (rival 300's fireball dest (36378,
+    /// 5825, 3253) = (37760, 21872, 254) + 0x4000 along (2020, 1988));
+    /// the whole `(9,x) dest_*` family on mc1l2 (44,877 free rows) and
+    /// mc1l49 (208k) gone, graded lanes unmoved (l49 horizon 34,600
+    /// both arms).
+    ///
+    /// NON-VACUITY: `MGC_NO_MC1_BOLT_DEST_STAMP=1` fails (a) and (b)
+    /// at 0/0/0; `MGC_NO_MC1_RIVAL_EMIT_PITCH_MIRROR=1` fails (a)'s
+    /// `+36`; `MGC_NO_MC1_EMIT_DETONATION_PAIR=1` fails (b)'s pair.
+    #[test]
+    fn rival_emit_stamps_the_dest_triple_off_the_record_and_never_f36() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let raw = {
+            let e = &w.g.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let muzzle_z = raw.2.wrapping_add(w.g.ent[i].f78 as i16);
+        assert_ne!(muzzle_z, raw.2, "the muzzle lift is non-zero (non-vacuous z)");
+        let (yaw, pitch) = (300u16, 1990u16);
+        // (a) the fireball: pitched 0x4000 off the RAW record, `+36` untouched.
+        w.rival_emit(ri, i, 0, raw.0, raw.1, muzzle_z, yaw, pitch);
+        let bolt = (1..w.g.ent.len())
+            .find(|&p| w.g.ent[p].class64 == 9 && w.g.ent[p].model65 == 0)
+            .expect("the fireball arm mints its (9,0)");
+        let mut want = raw;
+        Gen::polar_step(&mut want, yaw, pitch, 0x4000);
+        let e = &w.g.ent[bolt];
+        assert_eq!(
+            (e.dest_x, e.dest_y, e.site_z),
+            want,
+            "rival fireball: `+150/+152/+154` = record raw axis stepped 0x4000 along the aim"
+        );
+        assert_eq!((e.f30, e.f32), (yaw, pitch), "the aim pair lands in +30/+32");
+        assert_eq!(e.f36, 0, "no token machine writes the bolt's +36");
+        // (b) the volcano lob: flat 4096 + the ground under the dest,
+        // and the machine's own `+68/+69 = 10/9` (VA 0x56B90/0x56B94).
+        w.rival_emit(ri, i, 8, raw.0, raw.1, muzzle_z, yaw, pitch);
+        let lob = (1..w.g.ent.len())
+            .find(|&p| w.g.ent[p].class64 == 9 && w.g.ent[p].model65 == 4)
+            .expect("the volcano arm mints its (9,4)");
+        let mut flat = raw;
+        Gen::polar_step(&mut flat, yaw, 0, 4096);
+        let gz = w.g.ground_z(flat.0, flat.1) as i16;
+        let e = &w.g.ent[lob];
+        assert_eq!(
+            (e.dest_x, e.dest_y, e.site_z),
+            (flat.0, flat.1, gz),
+            "rival volcano: flat 4096 projection, z = the ground under it"
+        );
+        assert_eq!((e.f68, e.f69), (10, 9), "volcano `+68/+69` = (10,9) at the mint");
     }
 
     /// ⭐⭐⭐ **THE RIVAL'S CHARGE MOVE IS THE WHOLE EMIT FAMILY'S,
@@ -6896,6 +7576,120 @@ mod tests {
             w.rivals[0].mana < pre,
             "the mirror debit never reconciled into Rival::mana"
         );
+    }
+
+    /// THE DEFLECTION STORES THE REVERSED PITCH TO BOTH WORDS (round
+    /// 154, w154k — [`crate::mc1::combat::no_mc1_deflect_pitch_mirror`]):
+    /// `v14 = -(sub_42240(0,+32) * sub_42210(0,+32)); BYTE1(v14) &= 7;
+    /// +36 = v14; +32 = v14` (:62727-32 / :62867-72, CARPET.EXE VA
+    /// 0x52963 / 0x52D2E). mc1hwl0 t=4494 slot 820: a (9,16) at pitch
+    /// 40 deflects off a Rebound-shielded rival and retail reads
+    /// `+32 = +36 = 2008`; the port left `+36` at 40. Both port arms
+    /// (a pool deflector, the human) are driven here; the pre-dig
+    /// value is planted in `+36` so a missed store is visible.
+    #[test]
+    fn the_deflection_mirrors_the_reversed_pitch_into_f36() {
+        use crate::mc1::mobs::MobCtx;
+        let mut w = rebound_world();
+        for _ in 0..64 {
+            w.tick(away(), PlayerCommand::default());
+            if w.rivals[0].mana > 2000 {
+                break;
+            }
+        }
+        let me = w.rivals[0].ent as usize;
+        w.g.ent[me].flags |= 0x8000;
+        w.g.ent[me].f140 = 1000;
+        let (wx, wy) = (60u16 << 8, 60u16 << 8);
+        let wz = (w.g.ground_z(wx, wy) as i16).wrapping_add(400);
+        w.g.move_relink(me, wx, wy, wz);
+        let ctx = MobCtx {
+            px: 10,
+            py: 10,
+            pz: 200,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        // ---- the pool arm: a human bolt off the rival's shield ------
+        let bolt = w.g.spawn_fireball(wx, wy, wz).expect("bolt slot");
+        w.g.move_relink(bolt, wx, wy, wz);
+        {
+            let e = &mut w.g.ent[bolt];
+            e.id24 = PLAYER_TARGET;
+            e.f146 = 0;
+            e.flags |= 2; // acquire spent, untargeted: no homing step before the hit
+            e.f126 = 0;
+            e.f140 = 400;
+            e.f32 = 40;
+            e.f36 = 40;
+        }
+        w.g.proj_tick(bolt, &ctx);
+        {
+            let e = &w.g.ent[bolt];
+            assert_eq!(e.id24, w.rivals[0].ent, "premise: the pool arm deflected");
+            assert_eq!(e.f32, 2008, "the live pitch is reversed (-40 & 0x7FF)");
+            assert_eq!(
+                e.f36, 2008,
+                "the deflection stores the reversed pitch to +36 as well (:62731/0x52D2E)"
+            );
+        }
+        // …and the fold is retail's `-(sign·dist) & 0x7FF`: a pitch
+        // already "negative" comes back positive, 1024 is its own
+        // mirror.
+        w.g.ent[me].f140 = 1000;
+        for (pitch, want) in [(2008u16, 40u16), (1024, 1024), (0, 0)] {
+            let b = w.g.spawn_fireball(wx, wy, wz).expect("bolt slot");
+            w.g.move_relink(b, wx, wy, wz);
+            {
+                let e = &mut w.g.ent[b];
+                e.id24 = PLAYER_TARGET;
+                e.f146 = 0;
+                e.flags |= 2;
+                e.f126 = 0;
+                e.f140 = 4;
+                e.f32 = pitch;
+                e.f36 = 7;
+            }
+            w.g.proj_tick(b, &ctx);
+            assert_eq!(w.g.ent[b].id24, w.rivals[0].ent, "premise: deflected at pitch {pitch}");
+            assert_eq!(w.g.ent[b].f32, want, "live pitch at {pitch}");
+            assert_eq!(w.g.ent[b].f36, want, "target pitch at {pitch}");
+        }
+        // ---- the human arm: a rival bolt off the carpet's Rebound ----
+        w.g.player_rebound = true;
+        let (px, py, pz) = (80u16 << 8, 80u16 << 8, 3000i16);
+        let hctx = MobCtx {
+            px,
+            py,
+            pz,
+            pmana: 5000,
+            ..ctx
+        };
+        let bolt = w.g.spawn_fireball(px, py, pz).expect("bolt slot");
+        w.g.move_relink(bolt, px, py, pz);
+        {
+            let e = &mut w.g.ent[bolt];
+            e.id24 = w.rivals[0].ent;
+            e.f146 = 0;
+            e.flags |= 2;
+            e.f126 = 0;
+            e.f140 = 400;
+            e.f32 = 100;
+            e.f36 = 100;
+        }
+        w.g.proj_tick(bolt, &hctx);
+        {
+            let e = &w.g.ent[bolt];
+            assert_eq!(e.id24, PLAYER_TARGET, "premise: the human arm deflected");
+            assert_eq!(e.f32, 1948, "the live pitch is reversed");
+            assert_eq!(e.f36, 1948, "+36 mirrors it on the human arm too (0x52D2E is one store)");
+        }
     }
 
     /// `sub_16890`'s default arm casts NOTHING (remc1 :19815-52 /
@@ -8477,6 +9271,100 @@ mod tests {
     /// stays 1 and `war[6]` stays 1 across the whole transition. Both
     /// arms are pinned, so the test still means something under
     /// `MGC_NO_MC1_RESPAWN_CLEAR_LIST=1`.
+    /// ⭐ THE POVERTY LATCH READS THE PURSE SIGNED (`sub_16030` /
+    /// `sub_16310` heads, CARPET.EXE 0x16036 / 0x16316 — see
+    /// [`crate::engine::features::no_mc1_rival_poverty_signed_purse`]).
+    /// A fatal shield quarter leaves the purse wrapped negative while
+    /// the brain's state handler still runs; retail latches (and a
+    /// standing latch HOLDS), the `u32` read released it.
+    #[test]
+    fn the_poverty_latch_reads_a_wrapped_purse_as_poor() {
+        let mut w = possess_world();
+        let ri = 0;
+        let wrapped = (-400i32) as u32;
+        let law = !crate::engine::features::no_mc1_rival_poverty_signed_purse();
+        // An un-latched rival on the fatal tick.
+        w.rivals[ri].mana_max = 20_000;
+        w.rivals[ri].mana = wrapped;
+        w.rivals[ri].poverty = false;
+        let pick = w.rival_attack_pick(ri, true);
+        if law {
+            assert!(w.rivals[ri].poverty, "−400 < 20000/4 (`jle` at 0x1604F): the latch sets");
+            assert_eq!(pick, None, "a latched picker holds");
+        } else {
+            assert!(!w.rivals[ri].poverty, "the u32 arm reads ~4.29e9: never poor");
+        }
+        // A STANDING latch on the fatal tick (both pickers' release leg).
+        for vs_wizard in [true, false] {
+            w.rivals[ri].mana = wrapped;
+            w.rivals[ri].poverty = true;
+            let pick = w.rival_attack_pick(ri, vs_wizard);
+            if law {
+                assert!(w.rivals[ri].poverty, "−400 is below the release line: the latch holds");
+                assert_eq!(pick, None);
+            } else {
+                assert!(!w.rivals[ri].poverty, "the u32 arm released the latch");
+            }
+        }
+        // Ordinary purses are untouched by the law: the boundary
+        // itself releases (q + 6000 = 11000 < max: the `v3 > +140` leg).
+        w.rivals[ri].mana = 11_000;
+        w.rivals[ri].poverty = true;
+        let _ = w.rival_attack_pick(ri, true);
+        assert!(!w.rivals[ri].poverty, "reaching q + 6000 releases in both arms");
+        w.rivals[ri].mana = 4_999;
+        let _ = w.rival_attack_pick(ri, true);
+        assert!(w.rivals[ri].poverty, "under max/4 latches in both arms");
+    }
+
+    /// ⭐ THE BULLY ARM READS BOTH PURSES SIGNED (`sub_145B0`
+    /// :18570-72, CARPET.EXE 0x14719-29 `add; cmp; jge` — see
+    /// [`crate::engine::features::no_mc1_rival_bully_signed_purse`]).
+    /// A wrapped-negative candidate is the poorest wizard alive; a
+    /// wrapped-negative picker bullies nobody.
+    #[test]
+    fn the_bully_arm_reads_wrapped_purses_signed() {
+        let mut w = possess_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let law = !crate::engine::features::no_mc1_rival_bully_signed_purse();
+        w.g.rebuild_wiz_chain();
+        w.human_bucket_alive = true;
+        w.player.invisible = false;
+        w.player.owned[12] = 0;
+        // The human is an unbound castle-knower (:18570-71) …
+        w.player.owned[16] = 1;
+        assert_eq!(w.wiz_castle_reg(0), 0);
+        // … never hated, never at war: only the bully leg can elect him.
+        w.rivals[ri].hate[0] = 0;
+        w.rivals[ri].war[0] = false;
+        w.rivals[ri].owned[16] = 0; // the picker's own self-test passes
+        let e = &w.g.ent[i];
+        w.human_pose = (e.x, e.y, e.z);
+        // 1. The CANDIDATE's purse is wrapped (a corpse's held shortfall).
+        w.player.mana = (-400i32) as u32;
+        w.rivals[ri].mana = 5_000;
+        w.rivals[ri].state = AiState::Cruise;
+        let picked = w.rival_pick_wizard_target(ri, i);
+        assert_eq!(
+            picked, law,
+            "−400 + 32·(255−200) = 1360 < 5000 bullies the corpse; the u32 arm reads ~4.29e9"
+        );
+        // 2. The PICKER's own purse is wrapped (its fatal tick).
+        w.player.mana = 0;
+        w.rivals[ri].mana = (-400i32) as u32;
+        w.rivals[ri].state = AiState::Cruise;
+        let picked = w.rival_pick_wizard_target(ri, i);
+        assert_eq!(
+            picked, !law,
+            "0 + 1760 < −400 is false in retail; the u32 arm read the picker as rich"
+        );
+        // Ordinary purses: the bully leg is unchanged.
+        w.rivals[ri].mana = 5_000;
+        w.rivals[ri].state = AiState::Cruise;
+        assert!(w.rival_pick_wizard_target(ri, i), "1760 < 5000 bullies in both arms");
+    }
+
     #[test]
     fn the_respawn_clears_the_knock_direction_and_keeps_war_and_poverty() {
         let mut w = rebound_world();
@@ -8562,5 +9450,241 @@ mod tests {
                 "the pre-dig arm billed nothing when the spawn refused"
             );
         }
+    }
+
+    // ---- round 154, w154c: the three round-147 MC2 laws, MC1 twins ---
+
+    /// Three rivals (slots 1..3, start markers model 5/6/7 at three
+    /// tiles), each with a level-1 starting castle so a dead one has a
+    /// dead-wait to sit in rather than an elimination.
+    fn three_rival_world() -> World {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let th = |model: u16, x: u16, y: u16| Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 3,
+            model,
+            x,
+            y,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let things = vec![th(5, 120, 120), th(6, 100, 100), th(7, 80, 80)];
+        let mut w = World::new(planes, &things, 1, assets());
+        let mut book = [false; SPELL_COUNT];
+        book[0] = true;
+        book[16] = true;
+        let mut cfgs: [Option<RivalConfig>; 8] = Default::default();
+        for slot in 1..4 {
+            cfgs[slot] = Some(RivalConfig {
+                aggression: 200,
+                accuracy: 255,
+                tempo: 255,
+                castle_level: 1,
+                book,
+                allowed: book,
+            });
+        }
+        w.set_wizards(&cfgs, 4);
+        assert_eq!(w.rivals.len(), 3, "fixture: three rivals seated");
+        w
+    }
+
+    /// Put a rival into its dead-wait by hand: state 3, life below
+    /// zero, the countdown parked high so it does not respawn during
+    /// the test. The next tick-top sweep drops it off bucket 0.
+    fn park_dead(w: &mut World, ri: usize, countdown: i16) {
+        let i = w.rivals[ri].ent as usize;
+        let e = &mut w.g.ent[i];
+        e.tick70 = 3;
+        e.act_life = -100;
+        e.f26 = countdown;
+    }
+
+    /// ⭐⭐⭐ THE POST-(RE)SPAWN TRUCE WALKS THE TICK-TOP BUCKET-0
+    /// ROSTER (`sub_44D30` :55037-41, `CARPET.EXE` 0x5DAB6..0x5DB05),
+    /// on the two RIVAL call paths. (1) Level-start seating walks an
+    /// EMPTY chain, so every ledger starts NEUTRAL; the flat loop
+    /// left the triangular `hate[j > slot] = 40927` residue
+    /// (init-check mc1l14: 3 rows, mc1l20/l10: 1 each). (2) A rival
+    /// in its dead-wait is off bucket 0 and takes NO truce when
+    /// another colour respawns — mc1l14 t=1344 in miniature (rivals
+    /// 1 and 3 dead, the human alive; retail stamped the human alone).
+    ///
+    /// Fails under `MGC_NO_MC1_TRUCE_ROSTER=1` at BOTH asserts.
+    #[test]
+    fn the_mc1_truce_walks_the_tick_top_roster_on_both_rival_paths() {
+        let mut w = three_rival_world();
+        // (1) SEATING: the chain the constructor's spawns walked was
+        //     empty — nothing elevated anywhere.
+        for r in &w.rivals {
+            assert_eq!(
+                r.hate,
+                [HATE_NEUTRAL; 8],
+                "slot {}: level-start seating walks an empty roster",
+                r.slot
+            );
+        }
+        // Settle so bucket 0 is built and populated.
+        for _ in 0..8 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        // (2) RESPAWN WITH A DEAD SPECTATOR: rival 2 (slot 2) parks
+        //     dead; rival 1 (slot 1) dies with its countdown at zero
+        //     so the very next dead-wait tick respawns it. Rival 3
+        //     stays alive as the positive control.
+        park_dead(&mut w, 1, 2000);
+        park_dead(&mut w, 0, 0);
+        // One tick: the sweep rebuilds bucket 0 without rivals 1 and 2,
+        // rival 1's dead-wait reaches 0 and `rival_respawn` runs its
+        // truce loop against THAT roster.
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[w.rivals[0].ent as usize].tick70,
+            1,
+            "fixture: rival 1 respawned this tick"
+        );
+        // Slot 3 walks ABOVE slot 1, so its own alive tick has already
+        // decayed the stamp by `256 - agg` = 56 by the boundary.
+        assert_eq!(
+            w.rivals[2].hate[1],
+            HATE_RESPAWN - 56,
+            "the LIVE spectator (slot 3) takes the truce toward the respawner              (then its own dispatch's decay, the same tick)"
+        );
+        assert_eq!(
+            w.rivals[1].hate[1], HATE_NEUTRAL,
+            "a rival in its dead-wait is off bucket 0 and takes NO truce \
+             (mc1l14 t=1344: retail 24607, the flat loop's 40927)"
+        );
+    }
+
+    /// ⭐ `sub_46480`'s FIRST statement (:55601, `CARPET.EXE` file
+    /// 0x5EC85 `movw $0x0,0x16(%eax)`): every state-3 dispatch wipes
+    /// the knock MAGNITUDE, above its AI/human fork; the bearing
+    /// (+24) stands until the respawn. mc1l14 t=928: rival 2 lands
+    /// with 76 still in `+22` and retail's first dead tick reads 0.
+    ///
+    /// Fails under `MGC_NO_MC1_DEAD_WAIT_KNOCK_CLEAR=1`.
+    #[test]
+    fn the_mc1_dead_wait_clears_the_knock_magnitude_every_tick() {
+        let mut w = rebound_world();
+        park_dead(&mut w, 0, 500);
+        w.rivals[0].knock_mag = 76;
+        w.rivals[0].knock_dir = 609;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            (w.rivals[0].knock_mag, w.rivals[0].knock_dir),
+            (0, 609),
+            "the first state-3 tick zeroes +22 and leaves +24 standing"
+        );
+        // …and every dead tick, not just the first: a knock posted
+        // onto the corpse is gone by the next boundary.
+        w.rivals[0].knock_mag = 40;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.rivals[0].knock_mag, 0, "wiped again on the next dead tick");
+        assert_eq!(
+            w.g.ent[w.rivals[0].ent as usize].tick70,
+            3,
+            "fixture: still in the dead-wait (the countdown is parked)"
+        );
+    }
+
+    /// THE RIVAL KILL'S TALLY HOME (round 154, w154f; round 153
+    /// finding #5). Retail's touchdown (:55488-97) credits the killer's
+    /// per-victim `+30` tally and nothing else — `+359` (the creature
+    /// kill counter) has one writer, `sub_1A6C0` (:21840-50), a class-5
+    /// death handoff. mc1l49 t=9641: rival 620 dies to the human,
+    /// retail `kills` 49 flat, the port 50.
+    ///
+    /// Fails under `MGC_NO_MC1_RIVAL_KILL_NO_TALLY=1`.
+    #[test]
+    fn a_rival_kill_credits_the_tally_and_not_the_creature_counter() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let slot = w.rivals[ri].slot as usize;
+        w.g.ent[i].f38 = PLAYER_TARGET;
+        w.g.kills = 5;
+        w.rival_death_impact(ri, i);
+        assert_eq!(w.kill_tally[0][slot], 1, "the killer's per-victim +30 tally");
+        assert_eq!(w.g.kills, 5, "+359 is the creature handoff's alone");
+    }
+
+    /// The knock BEARING is stored raw at :55714 — `sub_42150` can
+    /// return 2048 (the `2048 − ATAN[0]` quadrant: the source a hair
+    /// to +x and far to +y of the victim), and retail keeps it
+    /// (mc1l10 t=4503, rival 2: retail 2048, port 0). The mover masks.
+    ///
+    /// Fails under `MGC_NO_MC1_KNOCK_DIR_RAW=1` (the port's `& 0x7FF`
+    /// folds 2048 to 0).
+    /// THE KRAKEN BUFFET DRAGS ANY WIZARD (round 154, w154j): an ON
+    /// tick of `sub_1C4F0`'s counter writes the TARGET record's wizext
+    /// `+24 = bearing + 0x400`, `+22 = 80` through `+146`'s `+160`
+    /// pointer (CARPET.EXE 0x1C6EE/0x1C6F7/0x1C719), no owner test.
+    /// A rival tethered by a kraken takes the pair at the kraken's
+    /// walk slot; the human's own register is untouched. Fails under
+    /// `MGC_NO_MC1_KRAKEN_BUFFET_RIVAL=1` (the human-only arm).
+    #[test]
+    fn the_kraken_buffet_drags_a_rival_wizard_too() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let r = w.rivals[ri].ent as usize;
+        let (rx, ry) = (w.g.ent[r].x, w.g.ent[r].y);
+        let g = w.g.ground_z(rx.wrapping_add(2 << 8), ry) as i16;
+        let k = w
+            .g
+            .spawn_creature(6, rx.wrapping_add(2 << 8), ry, g)
+            .expect("a kraken head");
+        assert!(k > r, "fixture: the kraken walks AFTER the rival's slot");
+        // CHASE (base 36 + 2) on the rival, counter mid-cycle (5 → 6,
+        // an ON tick), awake.
+        w.g.ent[k].tick70 = 38;
+        w.g.ent[k].f146 = r as u16;
+        w.g.ent[k].f26 = 5;
+        w.g.ent[k].f58 = 64;
+        w.rivals[ri].knock_mag = 0;
+        w.rivals[ri].knock_dir = 0;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[k].f26, 6, "fixture: the counter stepped into an ON tick");
+        let (kx, ky) = (w.g.ent[k].x, w.g.ent[k].y);
+        let (rx, ry) = (w.g.ent[r].x, w.g.ent[r].y);
+        let want = Gen::angle_between(kx, ky, rx, ry).wrapping_add(0x400) & 0x7FF;
+        assert_eq!(w.rivals[ri].knock_mag, 80, "+22 = 80 on the tethered rival");
+        assert_eq!(w.rivals[ri].knock_dir, want, "+24 = kraken→rival bearing + 0x400");
+        assert_eq!(w.g.player_knock, (0, 0), "the human's register is not the target's");
+        assert_eq!(w.g.mc1_buffet_post.0, (0, 0), "the post is drained at the kraken's slot");
+    }
+
+    #[test]
+    fn the_mc1_knock_bearing_is_stored_raw() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let (vx, vy) = (w.g.ent[i].x, w.g.ent[i].y);
+        let src = w.g.new_event().expect("a source record");
+        w.g.ent[src].x = vx.wrapping_add(1);
+        w.g.ent[src].y = vy.wrapping_add(300);
+        assert_eq!(
+            Gen::angle_between(vx.wrapping_add(1), vy.wrapping_add(300), vx, vy),
+            2048,
+            "fixture: this geometry is the 2048 return"
+        );
+        w.g.ent[i].mail[0] = (100, src as u16);
+        w.rival_damage_intake(ri, i);
+        assert_eq!(
+            w.rivals[ri].knock_dir, 2048,
+            "+24 takes sub_42150's return verbatim, 2048 included"
+        );
+        assert_eq!(w.rivals[ri].knock_mag, 10, "+22 = amount / 10");
     }
 }

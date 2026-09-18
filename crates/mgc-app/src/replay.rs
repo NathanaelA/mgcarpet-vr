@@ -184,6 +184,12 @@ impl ReplayFile {
                     .map(|v| v as i32),
                 mc2_turn: pin_u64(p, "mc2_turn") as u32,
                 mc2_carpet_stall: pin_bool(p, "mc2_carpet_stall"),
+                mc1_frame: pin_u64(p, "mc1_frame") as u32,
+                // Older pins predate the key: the HUD was drawn.
+                mc1_hud_drawn: p
+                    .get("mc1_hud_drawn")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
                 mc1_v14: pin_bool(p, "mc1_v14"),
                 accel_veto: {
                     let a = p.get("accel_veto").and_then(|v| v.as_array());
@@ -1088,6 +1094,8 @@ impl PortRecorder {
                         "mc1_acq": pin.mc1_acq,
                         "mc2_turn": pin.mc2_turn,
                         "mc2_carpet_stall": pin.mc2_carpet_stall,
+                        "mc1_frame": pin.mc1_frame,
+                        "mc1_hud_drawn": pin.mc1_hud_drawn,
                         "mc1_v14": pin.mc1_v14,
                         "accel_veto": [pin.accel_veto.0, pin.accel_veto.1],
                         "pending_teleport": pin.pending_teleport

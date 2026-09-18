@@ -1,0 +1,30 @@
+{
+ "dir": "fixtures/mc1l27",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 10701,
+   "file": "the-rival-goes-home-to-his-register-whatever-lives-in-the-slot.mgcr",
+   "source": "mc1l27",
+   "note": "THE RIVAL GOES HOME TO HIS wizext+50 REGISTER, WHATEVER LIVES IN THE SLOT (round 155, w155a law 1, MGC_NO_MC1_HOME_CASTLE_REGISTER): every MC1 rival castle reader takes pool + 164*wizext[+50] with a nonzero-index test only - idle HOME leg sub_14DC0 :18749-61 (CARPET.EXE file 0x2D5C6 reg read / 0x2D5FB jbe / 0x2D610 +146 / 0x2D617 +148), flee-home sub_14310 :18480-90 (0x2CB1F/0x2CB54/0x2CB69/0x2CB70); no class, life or owner test. mc1l27 pair 10701->10702: wiz 4 (slot 606) register 937 - the rival built his castle into 937 at t=10626 on a dry-pool tick and the round-151 stale-recycle victim class re-minted the human's (10,0) fire over it; retail chase 937, the port's pool scan (rival_castle: lowest (3,2) with id24 == ent) found none and hunted mana ball 864. Ledger ROUND 155 w155a law 1."
+  },
+  {
+   "t": 10709,
+   "file": "the-home-handler-checks-the-registers-signature.mgcr",
+   "source": "mc1l27",
+   "note": "sub_13A70's SIGNATURE GATE ON THE REGISTER'S SLOT (round 155, w155a law 1, MGC_NO_MC1_HOME_CASTLE_REGISTER): the Home handler (:18204-27, file 0x2C26E reg read, 0x2C29F jbe) calls sub_15440 (0x2C2E2) and on a mismatch (0x2C2EC je) returns with no +34 aim and no approach. mc1l27 pair 10709->10710: wiz 4 homes on stale register 937 (now a human (10,0) fire, signature changed); retail writes no aim, target_yaw 1361; the port without the gate aimed at the slot, 1304. Ledger ROUND 155 w155a law 1."
+  },
+  {
+   "t": 11784,
+   "file": "the-mana-hunt-anchor-is-the-castle-register.mgcr",
+   "source": "mc1l27",
+   "note": "THE MANA-HUNT ANCHOR IS THE REGISTER (round 155, w155a law 1, MGC_NO_MC1_HOME_CASTLE_REGISTER): sub_14B10 :18664-67 scores mana balls from pool[wizext+50] (the wizard himself when the register is 0), not from a scanned castle. mc1l27 pair 11784->11785: retail chase 763 (a (5,0)), port 125. Ledger ROUND 155 w155a law 1."
+  },
+  {
+   "t": 37366,
+   "file": "the-magnet-homes-on-graves-too.mgcr",
+   "source": "mc1l27",
+   "note": "THE MANA MAGNET HOMES ON GRAVES TOO (round 156, w156a, MGC_NO_MC1_MAGNET_HOMES_ON_GRAVES): sub_54520 case 0x11 (CARPET.EXE VA 0x548FF, file 0x6D0F7) walks the whole tick-top ball roster (+36466: m39 balls AND m40 graves) behind the +58 gate alone (0x6D10C cmpb $0,0x3a / je), scores with sub_54A90(0x71,0x71), keeps the unsigned best (jae) - no model, class, owner or claim test. mc1l27 pair 37366->37367: the human's magnet bolt 836 elects the (10,40) grave 258 in retail; the port's m39-only filter chose ball 546. The impact scan sub_11C00 stays m39-only. Ledger ROUND 156 w156a."
+  }
+ ]
+}

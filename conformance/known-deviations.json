@@ -502,6 +502,45 @@
    ],
    "note": "RETAIL'S OWN CORRUPTION — A LEVEL-250 CASTLE (round 152, dig w152k, 2026-09-18). The (10,18) volcano eruption handover writes `+26 = 250` into the PREVIOUS erupting slot with only a `slot != 0` test (combat.rs `+26 = 250`, retail :28779 — ported blind, both columns agree on the write). Twice on this take that slot had been RE-MINTED: (1) t=25646 slot 917 = the human's (10,17) blast ring -> radius 250; at 25647 retail's `sub_11410(250,250)` indexes the 32-entry ring header `dword_AD008[250]` (static VA 0xAD5E4, OUT OF BOUNDS), walks 6,938 cells (13,877 LCG draws on 917 vs the port's 1 — `ring_cells` is empty for lo > 31), the first cell reads (-1,-1) and takes the only free slot 785 as a (10,0) fire where the port's later mint put a (10,13) smoke — 12 rows (785 x11, 917 rand), a permanent floor, not derivable without a memory image. (2) t=30711 onward: wiz 3's castle 964 at (32768,0) carries `+26 = 250` = LEVEL 250; retail's level-250 reads land OOB in the build/quota tables (extents 3328 -> 640, the balloon fleet culled, a (10,39) drop minted at 981) while the port's `build_tab[lvl % len]`/quota arms give 2432/3584 and keep spawning (3,3) balloons re-heading every other tick — the 2-tick head cadence of the 445 LOCAL heads is that one root's residue (free stack 191: NOT a dry-pool seizure). Retail then froze at the take's end (the player's 'one of them froze'; see the round-151 `MGC_OVERRUN` note). The two REAL port laws underneath were landed the same dig and are pinned: `MGC_NO_MC1_RIVAL_CASTLE_TOKEN_REGISTER` (fixture mc1l26/the-rival-castle-tokens-split-reads-the-register, cut from THIS take at 25107) and `MGC_NO_MC1_AABB_SIGNED_EXTENTS` (`sub_118C0` loads +80/+82/+84 with `movswl`; the 48000 = -17536 ring extents reached castle 978 across the y seam only in the port). The twin mc1l26 is CERTIFIED END. Same class as `mc1l48-search-ring-heap-damage`. ⚖ `deviation` on the main session's reading of that precedent — the player may flip it to `open` (mc1l6 precedent) to keep the take uncertified. Ledger docs/CONFORMANCE-FINDINGS.md §ROUND 152.",
    "t_min": 25646
+  },
+  {
+   "id": "mc1l34-row0-shim-101-audio-handle",
+   "status": "deviation",
+   "takes": [
+    "mc1l34"
+   ],
+   "kind": "field",
+   "class": 5,
+   "fields": [
+    "z"
+   ],
+   "slots": [
+    348
+   ],
+   "ticks": [
+    1678
+   ],
+   "note": "RETAIL OOB READ — ROW-0 SHIM BYTE {101} IS dword_CC144, THE HANDLE OF THE LAST DIGITAL SAMPLE STARTED (round 155, w155c). `dword_CC144 = sub_6535C(dword_CC140, …)` (:57032, :69895) — its value follows live audio timing and changes within the take (t=1658 retail holds cells (100,0)/(101,0) where no smoothing order reaches 81; at t=7467 both smooth). Seeded t=1658; the one graded row (pair 1678->1679) is slot 348's z at t=1679 (retail 2540, port 2538). Shim index i = IDA CC0DF + i (the gate's operands are data-object-relative, CARPET.EXE file 0x4E8E9 `mov 0x3c0df(%ebx),%dl`): smooth_cell's row-0 neighbour-type check reads one byte past the type table, and a building's construction epilogue (smooth_perimeter, f70 51->52) touching row 0 across the y wrap either smooths or holds the cell on that byte's class. ⚖ PLAYER RULING (2026-09-18): OOB reads are not modelled faithfully — registered deviation. Ledger docs/CONFORMANCE-FINDINGS.md §ROUND 155 155-9 / 155-11."
+  },
+  {
+   "id": "mc1l34-row0-shim-225-sound-table-heap-pointer",
+   "status": "deviation",
+   "takes": [
+    "mc1l34"
+   ],
+   "kind": "field",
+   "fields": [
+    "z"
+   ],
+   "slots": [
+    133,
+    439
+   ],
+   "ticks": [
+    20264,
+    28930
+   ],
+   "note": "RETAIL OOB READ — ROW-0 SHIM BYTE {225} IS THE LOW BYTE OF dword_CC1C0, THE LOADED SOUND TABLE'S END POINTER (round 155, w155c; file 0xA06C4 holds {&CC154, &CC1C0} beside \"snds0-0.tab\"). A heap address, per session: mc1l34 needs it PLAIN (retail smooths cells (224..225,0) at 9378/17130/23963) where mc1l7/mc1l21 pinned it BUILDING (round 152's `MGC_NO_MC1_ROW0_SHIM_16_23_24_31_225`, kept). A {225}-plain probe took mc1l34 to 2 segments. Graded rows (pairs 20264->20265, 28930->28931): slot 133 z at t=20265 (4711 vs 4710), slot 439 z at t=28931 (4725 vs 4727). Shim index i = IDA CC0DF + i (the gate's operands are data-object-relative, CARPET.EXE file 0x4E8E9 `mov 0x3c0df(%ebx),%dl`): smooth_cell's row-0 neighbour-type check reads one byte past the type table, and a building's construction epilogue (smooth_perimeter, f70 51->52) touching row 0 across the y wrap either smooths or holds the cell on that byte's class. ⚖ PLAYER RULING (2026-09-18): OOB reads are not modelled faithfully — registered deviation. Ledger docs/CONFORMANCE-FINDINGS.md §ROUND 155 155-9 / 155-11."
   }
  ]
 }

@@ -66,6 +66,51 @@ pub(crate) fn no_mc1_house_flag_extents() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HOUSE_FLAG_EXTENTS").is_some())
 }
 
+/// A/B toggle for THE LIVE HOUSE'S ONE-TICK HIT REGISTER (round 154,
+/// w154e): set `MGC_NO_MC1_HOUSE_HIT_REGISTER` to restore the pre-dig
+/// intake in [`Gen::tick_building_live`] — `f40` latched forever after
+/// the first hit, the ch0 src cleared before the life test, the ch0
+/// amount never cleared. Citation at the write sites.
+pub(crate) fn no_mc1_house_hit_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HOUSE_HIT_REGISTER").is_some())
+}
+
+/// A/B toggle for THE LOAD PASS'S AREA MAIL (round 155, w155e): set
+/// `MGC_NO_MC1_LOAD_PASS_AREA_MAIL` to restore the pre-dig load-time
+/// fixpoint, whose terrain deformers (the `(10,9)` hill, the `(10,11)`
+/// digger, the `(10,51)` ridge head) skipped their ch0 area write when
+/// no runtime `MobCtx` was in hand ("nothing observable survives it").
+///
+/// ⭐ SOMETHING DOES SURVIVE IT: THE HOUSE'S MAILBOX. Retail's load
+/// loop `sub_36620_369E0` (:43181) dispatches the SAME handler table
+/// (`dword_96902[..].data6`) as the runtime, and the digger
+/// `sub_25670` (:28379) calls `sub_127E0(a1x, 0, v2)` (:28400)
+/// unconditionally — CARPET.EXE VA 0x256B8-0x256DC `f6 43 10 02` /
+/// `66 8b 43 2c` / `b9 19 00 00 00 … f7 f9` / `50 6a 00 53` /
+/// `e8 ff d0 fe ff` (= `call 0x127E0`). The level's `(10,45)` dwellings
+/// are ALREADY in the pool by then (dispatched and `sub_36DF0`-fixed up
+/// in table order, linked, `+16 & 8`, `+28 & 1`), sitting in state 51,
+/// whose construction handler never reads `+90/+94` — so every canyon
+/// digger's 200 + 8 + 8 (= 216: life 2, full `+44` on the first tick,
+/// `+44 / 25` once `+16 & 2` is set) ACCUMULATES there (the area
+/// protocol adds while a source is pending) and the house's first
+/// state-52 tick (`sub_29640` :31070) drains the whole bill at once.
+/// WITNESS mc1l36 record 0: house slot 68 `(10,45)` at tile (53,226),
+/// south of the `(10,31)` canyon node at (54,217), dead at settle 2
+/// with `mail0 = (4536, 9)` = 21 × 216 from canyon head 9 (`+38 = 9`),
+/// neighbours 65 / 67 at `act_life` 920 / 704 = 2000 − 5 × 216 /
+/// 2000 − 6 × 216; mc1l34 slot 272 at 488 = 2000 − 7 × 216 and houses
+/// 268 / 270 collapsed. The collapse evacuations are the retail-only
+/// `(5,4)` + `(5,12)` pairs (`spawn_count[4]`), the crater types
+/// 48/51 are `sub_28FE0`'s repaint. No human record exists at load
+/// (it is seated after GenerateFeatures), so the out-of-pool player
+/// arm is skipped ([`Gen::area_write_opt`] with `ctx = None`).
+pub(crate) fn no_mc1_load_pass_area_mail() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_LOAD_PASS_AREA_MAIL").is_some())
+}
+
 /// Cells in the 256x256 terrain grid.
 const GRID: usize = 0x10000;
 
@@ -595,6 +640,25 @@ pub(crate) struct Ent {
     /// wholesale, so a plain `u16` here would move every golden with
     /// zero behaviour change.
     pub(crate) raw48: Raw48,
+    /// ⭐ THE CASTLE WORKERS' `+42` — THE CASTLE'S OWN SLOT (round 154,
+    /// w154j). Retail mints the (10,42) painter and the (10,41) leveler
+    /// with `+71 = castle +26`, `+24 = castle +24` and **`+42 = the
+    /// castle's slot`** (`sub_47020` :56104-11, `sub_47080` :56124-33,
+    /// the upgrade commit :56484-91), and the workers resolve their
+    /// castle through that link — the painter's shake suspend
+    /// (`sub_285C0` :30520 `castle[+42]->+50`) and finish (:30697-709
+    /// `+59 = 5`), the leveler's shake gate (`sub_28200` :30333) and
+    /// finish (:30419-27 `+59 = 2`, `+154 = 32·current`). The port
+    /// re-derived the castle by SITE (`castle_at_site`, the lowest
+    /// live castle at the worker's `(x, y)`), which agrees with the
+    /// link wherever exactly one live castle stands on the site and
+    /// serves the wrong record where two do (a razed-and-rebuilt site
+    /// under a different slot, a TRANSFORM-parked castle). Stamped at
+    /// the three mints, lifted by the conformance importer from the
+    /// recorded `+42`, consumed by [`Gen::castle_of_worker`]. Zero =
+    /// unlinked (a pre-field save; the resolve falls back to the scan).
+    /// Hash-silent and off the wire like [`Raw48`].
+    pub(crate) link42: Link42,
     /// ⭐ THE SUMMIT CONTROLLERS' 32-BIT `dword_0x10_16`. The (10,18)
     /// eruption vortex and its (10,91) apocalypse-rain sibling are the
     /// only two records in MC2 whose @0x10 arc counter is allowed to
@@ -818,6 +882,63 @@ impl std::ops::IndexMut<usize> for CastleReg {
     }
 }
 
+/// The rivals' claimed-house tallies (see [`Gen::rival_banked_houses`]).
+/// Hash-SILENT like [`CastleReg`]: a tick-top rebuild consumed within
+/// the same tick, whose every consequence rides hashed entity lanes.
+#[derive(Default, Clone)]
+pub(crate) struct RivalHouses(pub(crate) [i32; 8]);
+
+impl std::hash::Hash for RivalHouses {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
+impl std::ops::Index<usize> for RivalHouses {
+    type Output = i32;
+    fn index(&self, i: usize) -> &i32 {
+        &self.0[i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for RivalHouses {
+    fn index_mut(&mut self, i: usize) -> &mut i32 {
+        &mut self.0[i]
+    }
+}
+
+/// `MGC_NO_MC1_OWNER_HOUSE_TALLY=1` restores the pre-dig (round 154,
+/// w154i) castle-side house reads: the overflow ejector
+/// [`Gen::castle_eject`] read the HUMAN's [`Gen::banked_houses`] for
+/// EVERY castle, and the fleet dispatcher [`Gen::castle_balloons`]
+/// summed the owner's (10,45) records LIVE at the castle's own slot.
+///
+/// Retail's two readers both resolve THE CASTLE'S OWNER and read the
+/// tick-top census snapshot: `sub_47130` (:56185, `CARPET.EXE` VA
+/// 0x47133 `movswl 0x18(%ebx)` → ×164 → `0x7503(%edx,%eax,4)` = the
+/// owner's wizext → VA 0x47164 `mov 0x134(%edx),%ecx` = +308, `add
+/// 0x8c`, `cmp 0x88`, `jle` ⇒ `houses + stored > cap` ⇒ spill =
+/// stored − cap) and `sub_47400` (:56363, VA 0x4740B `movswl
+/// 0x18(%edx)` → `+0x7463` → its +160, then VA 0x47571 `mov
+/// 0x134(%edx),%eax; add; cmp 0x88(castle); jge` ⇒ `houses + stored
+/// >= cap` ⇒ every balloon homes). `+308` itself is written ONLY by
+/// the census `sub_48230` (:56863 zero per wizard, :56895 accumulate
+/// each (10,45)'s +140 through `sub_48340`'s +144 owner resolve),
+/// which runs at the tick top (:52327) before every entity tick.
+///
+/// Both pre-dig reads were measured INERT on the corpus (39 takes): the
+/// ejector's house term cannot change its decision for a non-negative
+/// tally (spill = stored − cap needs stored > cap, which alone
+/// satisfies the test), and the live sum parts from the snapshot on ONE
+/// boundary — mc1hwl2 t=13604, house 6 reclaimed by the human at a
+/// slot below castle 943 (snapshot 2048 + 8753 >= 10000 says full, the
+/// live sum 0 says hunt) — where rival 429's balloon 997 had no ball to
+/// hunt and stayed home either way. The law is record-fidelity: one
+/// tally per owner, one reader shape, and the rival `banked_houses`
+/// wizard-shadow lane it makes comparable (0 rows on mc1l5 / mc1hwl2).
+pub(crate) fn no_mc1_owner_house_tally() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_OWNER_HOUSE_TALLY").is_some())
+}
+
 /// The pool's SCRATCH slot — retail's `str_29795[0]` /
 /// `Entities_EA3E4[0]`, the always-present entity 0 that routines
 /// borrow to run a handler on a synthetic event without allocating
@@ -973,6 +1094,17 @@ pub(crate) struct Gen {
     /// DIRECT struct writes in the original — spawn grace does NOT
     /// wipe them, so even the invincible dev player gets dragged.
     pub(crate) player_knock: (u16, i16),
+    /// The kraken buffet's write on a POOL wizard (w154j): `sub_1C4F0`
+    /// :23223-28 stores the TARGET record's wizext `+24 = bearing +
+    /// 0x400`, `+26 = 256`, `+22 = 80` through `+146`'s `+160` pointer
+    /// for ANY target (CARPET.EXE 0x1C6EE `mov 0xa0(%edi),%edx` — no
+    /// class test; 0x1C6F7/0x1C701/0x1C719 the three stores). The
+    /// human's arm lands on [`Gen::player_knock`] directly; a RIVAL's
+    /// wizext lives on `World::rivals`, so the arm posts `(target ent,
+    /// bearing)` here and the walk drains it right after the kraken's
+    /// own dispatch (`World::tick_arm_creature`) — retail's phase. Always
+    /// `(0, 0)` between dispatches: not on the wire, hash-silent.
+    pub(crate) mc1_buffet_post: HashSilent<(u16, u16)>,
     /// The player's pending forced HEADING delta, 11-bit engine
     /// angle. The whirlwind's wizard arm (`sub_33340` EF:24296+) does
     /// not merely shove the flyer: EVERY branch that touches a victim
@@ -1161,23 +1293,47 @@ pub(crate) struct Gen {
     /// The wizard's danger-music countdown (Type_160 v_46): armed to
     /// 100 by processed hits (sub_46540's blocks call sub_46520) and
     /// by a projectile acquiring the player as target (:64013); the
-    /// player tick decrements it and switches the music mode on
-    /// v_46 > 0 (:55282-92 → sub_20D00).
+    /// carpet MOVER `sub_455D0` decrements it at the carpet's walk
+    /// slot and switches the music mode on v_46 > 0 (:55282-92 →
+    /// sub_20D00) — flight (state 0) and the fall (state 2) only, the
+    /// dead-wait holds it (`no_mc1_danger_walk_seat`). MC2's twin
+    /// still decrements in the tick tail.
     pub(crate) player_danger: i16,
-    /// The claimed-house mana tally (wizext u32_308), stashed by the
-    /// per-tick census — the castle overflow ejector's trigger reads
-    /// houses + stored vs capacity (sub_47130 :56185-89).
+    /// The HUMAN's claimed-house mana tally (wizext u32_308), stashed
+    /// by the per-tick census — the castle overflow ejector's trigger
+    /// reads houses + stored vs capacity (sub_47130 :56185-89). The
+    /// rivals' twins live in [`Gen::rival_banked_houses`]; every
+    /// castle-side reader goes through [`Gen::owner_houses`].
     pub(crate) banked_houses: i32,
+    /// The RIVALS' claimed-house tallies (wizext u32_308, one per
+    /// player slot like [`Gen::rival_ents`]; `[0]` is unused — the
+    /// human's is [`Gen::banked_houses`]). Rebuilt from zero by every
+    /// tick-top census (`sub_48230` :56863 zeroes each wizard's, :56895
+    /// accumulates each (10,45)'s +140 into `pool[+144].+160->+308`),
+    /// seeded by the conformance import. Hash-SILENT and save-silent on
+    /// the [`CastleReg`] precedent: the census runs BEFORE every reader
+    /// (the castle tick's ejector and fleet dispatch), so a restored or
+    /// imported world never observes a stale value, and every
+    /// consequence (ejected ball births, a recalled balloon's +146)
+    /// rides hashed entity lanes. See [`no_mc1_owner_house_tally`].
+    pub(crate) rival_banked_houses: RivalHouses,
     /// "Castle under attack" HUD flash (Type_160+391 = 4, :56698) —
-    /// armed by every processed castle hit, decremented per tick.
+    /// armed by every processed castle hit, decremented by the HUD
+    /// DRAW on every other frame (`World::mc1_alert_cadence`,
+    /// `sub_22E50` :27217-20) while the castle panel is drawn.
     pub(crate) castle_alert: u8,
     /// "You are being attacked" HUD flash (Type_160+392 = 4,
     /// :55679/:55692/:55723) — armed by every processed player hit /
-    /// steal / grip, decremented per tick. The SELF sub-panel's alert.
+    /// steal / grip, decremented by the HUD draw on every other frame
+    /// (`sub_22E50` :27347-50). The SELF sub-panel's alert.
     pub(crate) player_alert: u8,
     /// Balloon-under-attack HUD flash (Type_160+393 = 4, :56826) —
-    /// armed by a processed hit on an own balloon, decremented per
-    /// tick. The balloon sub-panel's alert.
+    /// armed by a processed hit on an own balloon. ⚠ DEAD IN RETAIL:
+    /// the arm writes through the balloon's own `+160`, the
+    /// allocator's static sink, never the owner's player block, so the
+    /// real `+393` never leaves 0 (`no_mc1_balloon_alert_sink`). The
+    /// balloon sub-panel's alert; decremented by the HUD cadence
+    /// (`World::mc1_alert_cadence`) while the castle register is set.
     pub(crate) balloon_alert: u8,
     /// The full-screen palette flash armed by `sub_44BE0` — see
     /// [`PalFlash`]. Hash-silent (presentation).
@@ -1298,6 +1454,16 @@ pub(crate) struct Gen {
     /// trail nodes + blasts, is the hashed retail state) and never
     /// saved (cleared on load).
     pub(crate) bolt_fx: BoltFx,
+    /// THE SHOT-STATS AIM LATCH: the class-9 record's `+146` as it
+    /// stood at the handler's DISPATCH ENTRY, stamped by `proj_tick`
+    /// and read by `proj_explode`'s `hits` test — every retail flight
+    /// handler computes the aimed record's pointer as its first
+    /// statement (`sub_52ED0` :62952-54 and its siblings) and hands
+    /// that, not the live `+146`, to `sub_526C0` (:62608-11). Live
+    /// only inside one `proj_tick`; hash- and save-silent like
+    /// [`Gen::bolt_fx`]. `MGC_NO_MC1_HIT_STAT_AIM_LATCH` reverts the
+    /// read to the live word.
+    pub(crate) mc1_aim_latch: HashSilent<u16>,
     /// ⭐ THE LIGHTNING BEAM'S DEFERRED IMPACT — see
     /// [`Gen::mc2_lightning_beam_tick`]. Retail's beam marches through
     /// `sub_66610` (EF:63583), which walks, tests the blocker and calls
@@ -2410,6 +2576,33 @@ fn mc1_no_row0_shim_16_23_24_31_225() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_16_23_24_31_225").is_some())
 }
 
+/// `MGC_NO_MC1_ROW0_SHIM_109=1` drops shim byte {109} back to PLAIN,
+/// restoring the pre-dig smoother on the row-0 cells x=108 and x=109.
+/// Round 155, dig w155c. ⭐ **THE FIRST SHIM BYTE WITH AN IDENTITY.**
+/// The gate's stored operands are data-object-relative (CARPET.EXE
+/// `sub_360C0` file 0x4E8E9 `mov 0x3c0df(%ebx),%dl` = IDA CC0DF), so
+/// shim index i is IDA `CC0DF + i`, and {109} is the low byte of
+/// `dword_CC14C` — the sound card's I/O PORT that the digital-driver
+/// init parses from the sound config (`fscanf(file, "%s = %s %x %d %d",
+/// …, &dword_CC14C, &dword_CC150, &dword_CC1BC)`, then `dword_CC134 =
+/// dword_CC14C`). Port 0x220 ⇒ low byte 0x20 = 32, building-classed
+/// (6..=0x22). Its COPY `dword_CC134` is shim {85}, pinned building
+/// by mc1l37 + mc1l49 in round 119 with no identity — the same value
+/// read through a second address. Static for the recording machine.
+/// Witnesses, mc1l34 (each on a height plane hdiff 0 entering the
+/// tick, `MGC_PLANE_DIFF`): t=7467, dwelling 642's construction
+/// epilogue (f70 51 -> 52, `smooth_perimeter`): (107,0) and (110,0)
+/// smooth bit-exactly (pin {107, 108} and {110, 111} plain) while
+/// retail holds (108,0) 80 and (109,0) 81 where the port averaged
+/// 79/80 — {109} forced — the seed of the t=8370 `(5,12)slot481:z`
+/// head; t=13901/14018 hold (109,0) again; t=34929 holds (108,0) at
+/// 84 (the port wrote 78) — the seed of the t=36040 `(5,4)slot842:z`
+/// head.
+fn mc1_no_row0_shim_109() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_109").is_some())
+}
+
 /// `MGC_NO_MC1_ROW0_SHIM_227=1` drops shim byte {227} back to PLAIN,
 /// restoring the pre-dig smoother on the row-0 cells x=226 and x=227.
 /// See [`Gen::OOB_TYPE_SHIM`].
@@ -2492,6 +2685,26 @@ pub(crate) fn no_beam_unlink() -> bool {
 pub(crate) fn no_mc1_acq_list_full() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ACQ_LIST_FULL").is_some())
+}
+
+/// `MGC_NO_MC1_NATIVE_JAR_KNOWN_STAMP=1` restores the pre-dig NATIVE
+/// jar poll, which had no "already known" stamp (round 154, w154k).
+/// Retail's `sub_55A40_55F70` (:64784-97) sets bit 0 of `+16` on a
+/// ground jar whose spell the local human already owns, on every
+/// poll tick (`+63 & 3 == 0`, :64772-77), with no distance test —
+/// the sticky marker the painter's owned-jar draw filter reads. The
+/// strict-retail arm of [`World::class12_tick`] carried it; the
+/// native arm ran only the overlap pickup, so a level whose authored
+/// jars duplicate the carried book held them at `flags 4` where
+/// retail reads 5 from the first poll on (`init-check` mc1l10 slot 2,
+/// mc1l13 99, mc1l20 28/29, mc1l21 326/437, mc1hwl2 392 — one row
+/// per such jar). CARPET.EXE VA 0x55AAB-B7 the phase gate, 0x55ACD-
+/// 0x55B14 the walk (`cmpb $0,0x41(%edi)`; `cmpl $0,0xc(%edi)`; the
+/// local-player word; `test $0x1,%bh`; `cmpw $0x0,0x2a4(%edx,%eax,2)`;
+/// `or $0x1,%cl; mov %cl,0x10(%ebp)`).
+pub(crate) fn no_mc1_native_jar_known_stamp() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_NATIVE_JAR_KNOWN_STAMP").is_some())
 }
 
 /// `MGC_NO_MC1_REGRANT_ZERO_ENTRY=1` restores the pre-dig respawn
@@ -3599,6 +3812,77 @@ pub(crate) fn no_mc1_win_streak_pre_test() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WIN_STREAK_PRE_TEST").is_some())
 }
 
+/// `MGC_NO_MC1_WIN_STREAK_PAST_LATCH=1` restores the pre-dig port
+/// (round 154, w154g), whose banked-share streak counter FROZE once
+/// the win latched and was ZEROED by the (11,4) win trigger's consume.
+///
+/// Retail's counter and latch are two fields with two lifetimes.
+/// `sub_415C0_41900` (:52119-38, shipped `CARPET.EXE` file = VA +
+/// 0x187F8) runs for every in-play wizard (`+13329 != 0`, 0x59DD8)
+/// with a bound castle (`wizext+50`, 0x59E01) on EVERY frame the
+/// `0x110` flags are clear — there is no "already won" test anywhere
+/// in it: `share <= goal` ⇒ `+13323 = 0` (0x59E73 `movw $0x0,
+/// 0x340b(%ebx)`); else `< 16` ⇒ `+13323 + 1` (0x59E58/0x59E67-6A);
+/// else `+13325 |= 2` (0x59E5E `orb $0x2,0x340d(%ebx)`). The bit is
+/// only ever OR'd on here and only ever cleared by the win trigger
+/// (`sub_59B80` :67310, 0x72408 `and $0xfd,%bl`), which stores
+/// NOTHING to `+13323` (0x72378-0x72433: the one `0x340d` store, no
+/// `0x340b`). So (a) past the latch the counter keeps running — parks
+/// at 16 while the share holds, resets to 0 when it drops, and the
+/// latch stays set either way (the level is still won; SPACE still
+/// ends it, :20082 → case 0x1B); and (b) a consumed win re-latches on
+/// the same frame's post-walk objective pass (`DrawAndEventsInGame`
+/// :41668-71: `sub_3C9D0` then `sub_415C0`) if the share is still
+/// over, because the counter is still 16.
+///
+/// The port gated `objective_mc1` on `!completed` and had the trigger
+/// zero `win_streak` — the round-153 census's two shapes: free-run
+/// `retail 0 port 16` (mc1l49 t=44474..58562, 8,291 rows: the share
+/// dropped after the t=40720 latch and the port's counter sat frozen)
+/// and `retail 16 port 1` (mc1l10 t=19381: the genie trigger consumed
+/// the win at walk 19380 and the port restarted the count from zero;
+/// retail's record 19381 still reads `status 2` because the post-walk
+/// pass re-OR'd it off the parked 16). Player-visible natively: on a
+/// scripted level the port UN-WON the level at the trigger's consume
+/// and demanded a fresh 17-frame hold before SPACE would end it.
+pub(crate) fn no_mc1_win_streak_past_latch() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WIN_STREAK_PAST_LATCH").is_some())
+}
+
+/// `MGC_NO_MC1_RESPAWN_KEEPS_REGEN=1` restores the pre-dig port
+/// (round 154, w154g), whose MC1 respawn zeroed the human's regen
+/// stall (`regen_delay`, retail `u32_383`) and rate register
+/// (`life_rate`, retail `u16_341`).
+///
+/// `sub_44D30_45070`'s Type_160 re-arm (:54866-73) is seven stores in
+/// the shipped `CARPET.EXE` (file = VA + 0x187F8):
+/// ```text
+///   5d645  66 89 42 30              mov  %ax,0x30(%edx)        ; var_48 = wizard idx
+///   5d64f  66 c7 80 4b 01 00 00 64  movw $0x64,0x14b(%eax)     ; u16_331 = 100 (grace)
+///   5d65e  c7 80 5f 01 00 00 d0 07  movl $0x7d0,0x15f(%eax)    ; u32_351 = 2000
+///   5d66e  66 c7 40 0c 00 00        movw $0x0,0xc(%eax)        ; v_12
+///   5d67a  66 c7 40 18 00 00        movw $0x0,0x18(%eax)       ; v_24
+///   5d686  66 c7 40 1a 00 00        movw $0x0,0x1a(%eax)       ; v_26
+///   5d692  66 c7 40 16 00 00        movw $0x0,0x16(%eax)       ; v_22
+///   5d6a3  66 c7 40 10 00 00        movw $0x0,0x10(%eax)       ; v_16 (the listing drops this one)
+/// ```
+/// No `0x17f` (+383) and no `0x155` (+341) store exists in the
+/// routine (0x5D528-0x5D888). The stall the fatal hit armed
+/// (`sub_46540` :55725 `+383 = 16`) rides the corpse untouched — the
+/// regen tail's `actLife >= 0` fork (:55381) never reaches the
+/// decrement — and the new life spends it over its first 16 frames
+/// with the rate register still holding the pre-death selection.
+/// Round-153 census: `regen_stall retail 16 port 0` 1,849 free rows /
+/// 28 takes = 16 rows per respawn, `life_rate retail 5 port 0` one row
+/// per respawn (mc1l20 t=19033, mc1l10 t=1473, mc1l48 ×26, mc1l49
+/// ×19). Shadow-only: the respawn seats `actLife = maxLife` (:55029)
+/// under a 100-frame grace, so the graded `life` lane cannot move.
+pub(crate) fn no_mc1_respawn_keeps_regen() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RESPAWN_KEEPS_REGEN").is_some())
+}
+
 /// `MGC_NO_MC1_ERUPTION_COUNTER_REREAD=1` restores the pre-dig
 /// behaviour where `eruption_tick` cached `+26` at function entry and
 /// used that one value for the blast gate, the death gate and the
@@ -4616,6 +4900,271 @@ impl std::hash::Hash for Raw48 {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
+/// [`Ent::link42`]'s hash opt-out — the castle workers' `+42` castle
+/// link. Hash-silent OUTRIGHT for the same reason [`Raw48`] is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Link42(pub u16);
+
+impl std::hash::Hash for Link42 {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// A/B toggle for **THE CASTLE WORKERS FOLLOW THEIR `+42` LINK**
+/// (round 154, w154j): set `MGC_NO_MC1_WORKER_CASTLE_LINK` to restore
+/// the site scan ([`Gen::castle_at_site`]) at all four consumers —
+/// the painter's shake suspend and finish, the leveler's shake gate
+/// and finish. Retail: `sub_47020` :56104-11 / CARPET.EXE 0x47041
+/// `mov %al,0x47(%ebx)` (+71), 0x47047 `mov %ax,0x18(%ebx)` (+24),
+/// 0x4705F `mov %ax,0x2a(%ebx)` (+42 = `(castle − pool) / 164`);
+/// `sub_47080` the same three stores at 0x470A1/0x470A7/0x470BF; the
+/// upgrade commit :56486 `*(v2+42) = v1`. The consumers dereference
+/// the link with no class test (`sub_285C0` :30520, `sub_28200`
+/// :30333/:30419-27). The link is also the shadow's `f42` lane on
+/// (10,41)/(10,42) — the switch does not affect the stamp, only the
+/// resolve.
+pub(crate) fn no_mc1_worker_castle_link() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WORKER_CASTLE_LINK").is_some())
+}
+
+/// A/B toggle for **THE RIVAL CAST GATE READS THE PURSE SIGNED** (round
+/// 155, w155b): set `MGC_NO_MC1_RIVAL_CAST_SIGNED_PURSE` to restore the
+/// unsigned `mana < cost` at the two port homes of retail's rival cast
+/// gate — readiness `sub_15A00` (`rival_cast_ready`) and the
+/// castle commit `sub_155F0` case 0x10 (`rival_cast_castle`). Every
+/// mana test in both functions is `mov 0x8c(%ebx),%reg` /
+/// `cmp 0x88(%tok),%reg` / **`jl`** — a SIGNED compare of the wizard's
+/// `+140` purse against the token's `+136` price: readiness case 0x10
+/// unbound arm CARPET.EXE VA 0x15B80-0x15B8C (file 0x2E378:
+/// `8b 83 8c 00 00 00 3b 86 88 00 00 00 0f 8c a1 01 00 00`), the bound
+/// arm 0x15BF0, the default arm 0x15D1C (`7c 09`), and every other case
+/// (0x15A36/0x15A86/0x15AD6/0x15C8D); the commit's case 0x10 VA
+/// 0x15822-0x1582E (file 0x2E01A: `8b 93 8c 00 00 00 3b 90 88 00 00 00
+/// 0f 8c 72 01 00 00`) and its cases 0/0xF 0x15664, 3/7/… 0x15761,
+/// 0x158D2. A purse the fatal tick's shield quarter wrapped NEGATIVE
+/// (`sub_46540` :55703 RAW subtract, preserved by the death return)
+/// therefore refuses EVERY cast; the port's `u32` purse read it as
+/// ~4.29e9 and passed. Witness mc1l31 t=29686: rival 729 dies (life
+/// 80 → −320, purse 0 − 1600/4 = −400) and the port's castle-less rival
+/// still ran the free plant (`sub_373F0(+150, 3, 2)`), popping a
+/// `(3,2)` at 955 whose first dispatch popped a `(10,42)`; the two
+/// extra pops shifted both lightning beams' segment chains (slots
+/// 963/983) two slots down the free stack — the `(10,23)` endpoint
+/// blast landed in 646 instead of 648.
+pub(crate) fn no_mc1_rival_cast_signed_purse() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_CAST_SIGNED_PURSE").is_some())
+}
+
+/// A/B toggle for **THE POVERTY LATCH READS THE PURSE SIGNED** (round
+/// 156, w156b — the third home of the `MGC_NO_MC1_RIVAL_CAST_SIGNED_PURSE`
+/// convention): set `MGC_NO_MC1_RIVAL_POVERTY_SIGNED_PURSE` to restore
+/// the `u32` compares in [`crate::World::rival_attack_pick`]'s latch.
+/// Retail's two attack pickers `sub_16030` (caller 0x13E5C, the wizard
+/// attack `sub_13DD0`) and `sub_16310` (caller 0x13D4B, the castle raid
+/// `sub_13CA0`) open with byte-identical latch heads — CARPET.EXE VA
+/// 0x16036 (file 0x2E82E): `8b 83 88 00 00 00` `mov 0x88(%ebx),%eax`
+/// (the `+136` ceiling), `89 c2 c1 fa 1f c1 e2 02 1b c2 c1 f8 02` (the
+/// SIGNED `/4`, `sar` with the negative bias), `3b 83 8c 00 00 00 7e 11`
+/// = `cmp 0x8c(%ebx),%eax; jle` — **signed** `max/4 > +140` latches;
+/// the release leg 0x16072-0x1609C is `add $0x1770` / `cmp %esi,%eax;
+/// jge` / `cmp 0x8c(%ebx),%eax; jg` / `sar $1` / `jg` — all signed
+/// (twin 0x16316-0x1637C). The purse is negative in retail exactly on
+/// the FATAL tick: the shield-quarter debit (`sub_46540` :55703) is a
+/// raw subtract, the death arm returns from `sub_132B0` before the
+/// floor (:17980-83 vs :18017), and the brain's state handler still
+/// runs (`rival_dispatch_tail`). Retail then LATCHES (−400 < max/4);
+/// the port's `u32` read the wrapped purse as ~4.29e9 and RELEASED a
+/// standing latch — and `+406` survives the respawn (`sub_44D30` never
+/// clears it), so the reborn rival attacked while retail's still saved.
+pub(crate) fn no_mc1_rival_poverty_signed_purse() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_POVERTY_SIGNED_PURSE").is_some())
+}
+
+/// A/B toggle for **THE BULLY ARM READS BOTH PURSES SIGNED** (round
+/// 156, w156b — the fourth home of the signed-purse convention): set
+/// `MGC_NO_MC1_RIVAL_BULLY_SIGNED_PURSE` to restore the `u32`-widened
+/// purses in [`crate::World::rival_pick_wizard_target`]'s bully leg.
+/// Retail `sub_145B0` :18570-72 (sole caller 0x1376F) — CARPET.EXE VA
+/// 0x14700-0x14729 (file 0x2CEF8): `mov 0xa0(%esi),%eax; mov $0xff,%edx;
+/// movswl 0x20a(%eax),%eax; sub %eax,%edx; mov %edx,%eax; shl $5,%eax`
+/// (`32·(255−agg)`), `8b 93 8c 00 00 00` (candidate `+140`), `8b 8e 8c
+/// 00 00 00` (own `+140`), `01 d0 39 c8 7d 1b` = `add; cmp; jge` — a
+/// **signed** `cand + 32·(255−agg) < mine`. A purse wrapped negative by
+/// a fatal shield quarter (the corpse holds it until the respawn
+/// re-mint) is POORER than everyone in retail — an unbound,
+/// castle-knowing corpse is a bully victim, and the dying picker's
+/// own negative purse bullies no one; the port's `u32` widened both
+/// to ~4.29e9 and inverted both.
+pub(crate) fn no_mc1_rival_bully_signed_purse() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_BULLY_SIGNED_PURSE").is_some())
+}
+/// A/B toggle for **THE VULTURE'S IDLE MOVER RUNS ON ITS DEATH TICK**
+/// (round 155, w155d): set `MGC_NO_MC1_VULTURE_DEATH_MOVER` to restore
+/// the pre-dig `Inbox::Dead` arm, which demoted a `(5,1)` in IDLE to
+/// its DEATH state and returned without the wrapper's mover trailer.
+/// Retail: m1's IDLE wrapper `sub_1B160` :22227-28 is `sub_19B10(a1x,
+/// 6); sub_196E0(a1x);` — CARPET.EXE 0x1B165 `push 6; push ebx; call
+/// 0x19B10` (0x1B168) then 0x1B170 `push ebx; call 0x196E0` (0x1B171)
+/// with NO test between them, and only the re-aim below is gated `cmp
+/// ah,6; jne` (0x1B17C). The shared core's lethal exit (`sub_19B10`
+/// :21363 `actLife < 0` → :21379 `v7 = a2 + 4` → :21415 `sub_424F0(a1x,
+/// v7)`) returns INTO the wrapper, so the dying tick
+/// still steps, turns toward `+34` and ground-snaps. mc1l35 t=4522
+/// slot 65: retail x 47087→47046, y 46736→46684, z 1259→1258, `+30`
+/// 1832→1854 with `+70` 6→10; the port held the pre-tick pose. The
+/// HIT arm already ran this trailer (mc1l32 t=31567); the DEATH arm
+/// did not.
+pub(crate) fn no_mc1_vulture_death_mover() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_VULTURE_DEATH_MOVER").is_some())
+}
+
+/// A/B toggle for **THE HUMAN'S TOKEN IS ITS `+42`, NOT THE REGISTER**
+/// (round 155, w155d — the converse of `MGC_NO_MC1_TOKEN_OWNER_TAG`):
+/// set `MGC_NO_MC1_TOKEN_TAG_FIRST` to restore the pre-dig
+/// `mc1_token_is_players`, which ran a class-12 token's human arm only
+/// while `player.owned[spell]` named it. Every retail token machine
+/// resolves its caster from the token's own `+42` and never reads the
+/// `+676` register — `sub_56380` (speed, dispatch row 0x06 :4964)
+/// :65141-44: `if (+48 > 0) { v1 = pool[+42]; if (v1 > pool) … }`,
+/// CARPET.EXE 0x56386 `cmpw $0,0x30(%ebx); jle` / 0x56393 `mov
+/// 0x2a(%ebx),%ax` → ×164 + 0x7463 → `call sub_55DD0` (0x563C6). The
+/// register is rebuilt BLIND every tick (`sub_45C10`) from the
+/// acquisition list, so a recycled acq slot can steal `owned[m]`
+/// from a live token. mc1l35 t=45279→45280: slot 111 (the human's
+/// spell-13 acq entry) is re-minted as a `(10,2)`, `owned[2]` 75 →
+/// 111, and retail's token 75 (`+42` 117) keeps its `+48` countdown
+/// (218 → 217), its mid-burst regen pin (mana parked at 641725) and
+/// its 4-tick `(10,2)` contrail through t=45331 — 52 reset heads
+/// (`player.mana` +321 and a missing `(10,2)` every 4th tick).
+pub(crate) fn no_mc1_token_tag_first() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TOKEN_TAG_FIRST").is_some())
+}
+
+/// A/B toggle for **THE RIVAL GOES HOME TO HIS CASTLE REGISTER,
+/// WHATEVER LIVES IN THE SLOT** (round 155, w155a): set
+/// `MGC_NO_MC1_HOME_CASTLE_REGISTER` to restore the pool scan
+/// ([`crate::World::rival_castle`] — lowest live `(3,2)` with `+24` =
+/// the rival) in the selector's two HOME arms AND the Home handler.
+/// Retail's flee-home predicate `sub_14310` (`reference/remc1/
+/// sub_main.cpp` :18480-90) and the idle HOME leg `sub_14DC0`
+/// (:18749-61) both resolve the castle as `pool + 164 * wizext[+50]`
+/// with an INDEX-NONZERO test alone — CARPET.EXE file 0x2CB1F `mov
+/// 0xa0(%ebx),%edx; mov 0x32(%edx),%dx` (wizext+50), 0x2CB54 `cmp
+/// %eax,%ecx; jbe` (slot 0 = no castle), 0x2CB58.. `idiv $0xa4` →
+/// `mov %ax,0x92(%ebx)` (+146) and `call sub_15420` → +148;
+/// `sub_14DC0` carries the identical sequence at file 0x2D5C6/
+/// 0x2D5FB/0x2D610/0x2D617. The Home handler `sub_13A70` (:18204-27)
+/// reads the same register (file 0x2C26E `mov 0xa0(%ebx),%eax; mov
+/// 0x32(%eax),%si`, 0x2C29F `cmp %eax,%esi; jbe` = castle-less arm),
+/// casts 12 (0x2C2D8), then gates on the SIGNATURE — 0x2C2E2 `call
+/// 0x2DC38` (`sub_15440`: `sub_15420(slot) == +148`), 0x2C2EC `je` →
+/// return 0 with no `+34` aim (0x2C30E) and no `sub_15470` approach.
+/// No class, model, life or owner test anywhere: the register
+/// outlives the castle it named, and the stamped `+148` is the
+/// signature of whatever lived in the slot on the pick tick.
+///
+/// The port's scan finds no `(3,2)` once the ESTABLISHED slot has been
+/// re-minted, so the rival falls through the ladder to the mana hunt
+/// where retail flies "home" to whatever now lives in the slot.
+/// Witnesses: mc1l27 t=10702 (wiz 4's register 937 is the HUMAN's
+/// `(10,0)` fire — round 151's stale-recycle victim ate the castle;
+/// retail `chase 937`, port `864` a mana ball), mc1l27 t=10709 (the
+/// signature gate: without it `target_yaw 1361 vs 1304`), mc1l35
+/// t=23419 (register 633, again a human `(10,0)`; port aimed at the
+/// human wizard 117).
+pub(crate) fn no_mc1_home_castle_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HOME_CASTLE_REGISTER").is_some())
+}
+
+/// A/B toggle for **THE UPGRADE SPACE TEST WALKS THE TICK-TOP CLASS-3
+/// ROSTER** (round 155, w155a): set `MGC_NO_MC1_UPGRADE_SPACE_CHAIN`
+/// to restore the live-pool scan (`class 3 model 2 && !0x400`) in
+/// [`Gen::castle_upgrade_space_ok`]'s castle-overlap loop. Retail's
+/// `sub_12D10` (:17643-53) walks `var_u32_36462[0]` — CARPET.EXE
+/// 0x2B536 `mov 0x1e408,%ebx; mov 0x8e6e(%ebx),%ebx` (the +36462
+/// CLASS-3 head, [`Gen::wiz_chain`]), 0x2B547 `cmpb $0x2,0x41(%ebx)`
+/// (model 2), 0x2B54D `cmp %edi,%ebx; je` (not self), 0x2B553 `call
+/// sub_11950` (0x2A148 — the THREE-axis `sub_118C0` box test with
+/// `movswl` extents and a 16-bit `sub %ax` difference), 0x2B574 `mov
+/// (%ebx),%ebx` to the pool sentinel. The roster's membership is the
+/// tick-top sweep's (:52253): `actLife >= 0 && (flags & 0x10) == 0` —
+/// so a RAZED castle (`act_life = -1`, still `(3,2)`, `+70 = 4`, no
+/// `0x400`) is invisible to retail's space test and blocked the
+/// port's. The z axis is tested too (`+78`/`+84`), where the port
+/// tested x/y only.
+///
+/// Witness mc1l34 t=2447: wiz 1's keep 896 sits at the ORIGIN, level
+/// 1; the human's razed keep 712 at (60672,60672) `act_life -1` is
+/// 4864 wrapped units away against a level-2 reach of 3328+1664 =
+/// 4992. Retail admits the Upgrade (ai_state 13 → 1, `+146` 374 →
+/// 896); the port's pool scan refused and left him hunting mana
+/// (25 `slot 860 chase` heads t=2447..3194). Same routine on all
+/// three retail call paths: the selector's Upgrade arm (:18426), the
+/// cast-16 bound arm (:19315) and the level-up commit (:56055).
+pub(crate) fn no_mc1_upgrade_space_chain() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_UPGRADE_SPACE_CHAIN").is_some())
+}
+
+/// A/B toggle for **THE RIVAL RESPAWN'S RE-PRICE TAKES THE CASTLE
+/// OWNER'S TOKEN** (round 155, w155a): set
+/// `MGC_NO_MC1_RESPAWN_REPRICE_OWNER` to restore the pre-dig stamp
+/// (the RESPAWNING rival's own `owned[16]`, `CASTLE_CAP[f26.clamp(0,
+/// 7)]`, `/ 101`). Retail's rival respawn calls `sub_47DD0(pool[
+/// wizext+50])` (`reference/remc1/sub_main.cpp` :55034-35), and
+/// `sub_47DD0` (:56617-73) never looks at the caller: it resolves
+/// `pool[castle.+24]`, requires that record's `+70 <= 1u`, takes ITS
+/// `wizext+676[16]` (index test alone), prices it from the castle's
+/// `+26` by a `switch` whose `default:` is 0 (no clamp — a level
+/// outside 0..7 writes 0), and divides by the TOKEN's `+50`.
+///
+/// It only matters when the register names a slot the pool re-minted
+/// (the stale-recycle victim class): mc1l35 t=23648, wiz 1 respawns
+/// on register 633 — the HUMAN's `(10,0)` fire, `+26` 0 — so retail
+/// re-prices the HUMAN's castle token 26 to 5000/49 and leaves wiz
+/// 1's freshly minted token 50 at the ctor 1000/9; the port stamped
+/// token 50 5000/49 and left 26 at 30000000/297029.
+pub(crate) fn no_mc1_respawn_reprice_owner() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RESPAWN_REPRICE_OWNER").is_some())
+}
+
+/// A/B toggle for **THE HUMAN'S RESPAWN RE-PRICE IS THE RIVAL'S**
+/// (round 156, w156c): set `MGC_NO_MC1_HUMAN_RESPAWN_REPRICE` to
+/// restore the human arm's own stamp (gated on the register record's
+/// `flags & 2`, level clamped `.max(0).min(7)`, `/ 101`). Retail has
+/// ONE respawn, `sub_44D30` (:54802): the human reaches it from the
+/// command processor's Space arm (case 0xF :48620-33, call at VA
+/// 0x3CC7D), every rival from the dead-wait `sub_46480` (:55616, VA
+/// 0x464DA) — its only two callers — and its tail (:55034-36) is `v28 =
+/// wizext+50; if (v28) sub_47DD0(pool[v28])` — CARPET.EXE VA 0x4527A
+/// `mov 0x32(%eax),%di`, 0x45281 `test %di,%di; je`, 0x452B1 `call
+/// sub_47DD0` (its ONLY caller by `e8 rel32`), no flags test.
+/// `sub_47DD0` (:56617-73, VA 0x47DD0-0x47EBC) prices the OWNER's
+/// token (`pool[+24]`, `+70 <= 1u`, `wizext+676[16]` index test) by
+/// an unsigned `+26` switch whose `default:` is 0 (0x47E56 `cmp
+/// $7,%dx; ja` → 0x47EA2 `xor %edx,%edx`) and divides by the TOKEN's
+/// `movswl +50` (0x47EA6). Round 155 landed this on the rival arm
+/// ([`no_mc1_respawn_reprice_owner`]); the human arm kept the old
+/// gate + clamp + `/101`. Both arms now share
+/// `World::mc1_respawn_reprice`.
+///
+/// Replay-neutral on every witnessed human respawn (130 across 36 MC1
+/// takes, all a live own `(3,2)`, flags 14, level 1..7, token `+50`
+/// 101 — the two arms agree there); it only differs when the register
+/// names a stale-recycle re-mint (the r151 victim class), which no
+/// take has yet shown for the human. Pinned by unit.
+pub(crate) fn no_mc1_human_respawn_reprice() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HUMAN_RESPAWN_REPRICE").is_some())
+}
+
 /// [`Ent::summit10`]'s hash opt-out — retail's 32-bit
 /// `dword_0x10_16` on the two SUMMIT CONTROLLERS, given its own home
 /// so the arc counter stops being clipped by the `i16` [`Ent::f26`].
@@ -4704,6 +5253,61 @@ pub(crate) fn no_mc1_token_raw48() -> bool {
 pub(crate) fn no_mc1_token_raw48_native() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TOKEN_RAW48_NATIVE").is_some())
+}
+
+/// A/B toggle for **THE WAKE ARM'S `+48` STAMP** (round 154, dig
+/// w154a): set `MGC_NO_MC1_WAKE_DY48` to restore the pre-dig awake
+/// pass, which armed `+58 = 16` and left [`Ent::raw48`] at 0 on every
+/// creature and mana ball — the round-153 raw-shadow census's largest
+/// lane (726,669 pair rows / 39 takes, 21M+ free rows: `(5,x) f48` on
+/// EVERY creature model and `(10,39)`/`(10,40)`).
+///
+/// ⭐ WHAT `+48` IS ON A CREATURE OR A BALL: **the absolute Y-distance
+/// to the human carpet, sampled on the tick the record wakes** — a
+/// write-only scratch with NO reader. `sub_54F80` (:64300, the
+/// per-record half of the tick-top awake pass `sub_54F00` :64266)
+/// takes its wake arm at :64353-59 when `+58 == 0 && +59 == 0`:
+/// `v5 = sub_42410(rec+72, carpet+72)` (planar `dx²+dy²`), `if (v5 <
+/// 37748736)` (24.0 tiles, the same gate the port already has),
+/// `+48 = Distance_410CE(…)`, `+58 = 16`, followers `+58 = 18`.
+///
+/// The listing writes `Distance_410CE_4140E(v4)` with `v4` the
+/// carpet SLOT — a decompiler artifact. The shipped bytes
+/// (`CARPET.EXE` file 0x6D7E3-0x6D80C, VA 0x54FE3-0x5500C):
+/// `e8 28 d4 fe ff  call sub_42410` · `3d 00 00 40 02  cmp
+/// $0x2400000,%eax` · `7d 64  jge` · **`52  push %edx`** · `e8 d0 c0 fe
+/// ff  call Distance_410CE` · `66 89 46 30  mov %ax,0x30(%esi)` · `c6
+/// 46 3a 10  movb $0x10,0x3a(%esi)`. `Distance_410CE` (VA 0x410CE,
+/// file 0x598C6) is the Newton integer sqrt and reads its argument
+/// off the STACK (`8b 4d 08  mov 0x8(%ebp),%ecx`), so the argument is
+/// whatever `edx` holds after `sub_42410` returns — and `sub_42410`
+/// (VA 0x42410, file 0x5AC08) computes `dy = carpet.y − rec.y` as
+/// `cwtl; mov %eax,%edx; imul %eax,%edx` and never touches `edx`
+/// again: **`edx = dy²`**. So `+48 = isqrt(dy²) = |dy|`, the y-leg
+/// alone. Witnesses: mc1l15 t=3817 slot 473 (5,15) `+48 0 → 2881`
+/// with `+58 0 → 16`, creature y 14720, carpet y 11839 before its
+/// move that tick (the pass runs at tick head, before the walk) —
+/// 14720 − 11839 = 2881; mc1l15 t=1229 slot 275 (10,39) `+48 0 →
+/// 1158`, ball y 14554, carpet y 15712 → 1158 (the planar distance
+/// would have been 1458).
+///
+/// ⚠ NO READER. Every `+48` read in `CARPET.EXE`'s code segment was
+/// enumerated by `0x30(%reg)` operand and mapped onto the listing's
+/// address banners: the rival brain (`sub_13DD0`..`sub_16310`), the
+/// human command processor (`sub_17C20`, `sub_448E0`), the mover
+/// (`sub_46840`), the HUD/minimap/blit (`sub_23940`, `sub_3C800`,
+/// `sub_48710`, `Blit_599B0`) all read the WIZARD record's `+48` (the
+/// player index, `*(rec+160)+48`) or a class-12 token's `+48` through
+/// `sub_14E60`; `sub_24DA0`'s reads are the (10,42) leveler's own
+/// (`+48 += v28`, :30336, already homed); the token handlers
+/// (`sub_559A0`..`sub_58400`) read their own record. The creature
+/// handler range VA 0x193EE-0x22880 has only `0x30(%esp)` stack
+/// slots. The value is therefore never consumed: this law closes a
+/// shadow lane, not a behavioural hole, and lands in the hash-silent
+/// [`Ent::raw48`] so no golden moves.
+pub(crate) fn no_mc1_wake_dy48() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WAKE_DY48").is_some())
 }
 
 /// A/B toggle for the SUMMON-LEASE LANE SPLIT (dig 98-Q20): set
@@ -4835,6 +5439,7 @@ impl Gen {
             erupting: 0,
             plume: 0,
             player_knock: (0, 0),
+            mc1_buffet_post: HashSilent((0, 0)),
             player_spin: PlayerSpin::default(),
             player_whirl: PlayerWhirl::default(),
             ww_walk_published: HashSilent(false),
@@ -4858,6 +5463,7 @@ impl Gen {
             hits: 0,
             player_danger: 0,
             banked_houses: 0,
+            rival_banked_houses: RivalHouses::default(),
             castle_alert: 0,
             player_alert: 0,
             balloon_alert: 0,
@@ -4880,6 +5486,7 @@ impl Gen {
             mc2_ladder_sync: Mc2LadderMail::default(),
             mc2_castle_lock_mail: Mc2LockMail::default(),
             bolt_fx: BoltFx::default(),
+            mc1_aim_latch: HashSilent(0),
             mc2_beam_defer: BeamDefer::default(),
             mc2_pred_axis: Mc2PredAxis::default(),
             mc2_steal_mail: Mc2StealMail::default(),
@@ -6944,10 +7551,11 @@ impl Gen {
 
     /// str_255998 (:4856) dispatch by byte 70. `ctx` = the player
     /// context at RUNTIME (None during the load fixpoint): the
-    /// terrain deformers broadcast ch0 damage + the loop-10 rumble,
-    /// which only matter — and only have a listener — once the world
-    /// runs (deliberate: the original's load pass broadcasts into the
-    /// half-built pool too, but nothing observable survives it).
+    /// terrain deformers broadcast ch0 damage + the loop-10 rumble.
+    /// The rumble needs a listener; the damage does NOT — the load
+    /// pass bills the half-built pool too, and the state-51 dwellings'
+    /// mailboxes carry it into the first live tick (round 155, see
+    /// [`no_mc1_load_pass_area_mail`]).
     pub(crate) fn tick(&mut self, i: usize, ctx: Option<&crate::mc1::mobs::MobCtx>) {
         match self.ent[i].tick70 {
             9 => self.tick_hill(i, ctx),
@@ -6995,10 +7603,15 @@ impl Gen {
                 self.ent[m].id24 = own; // :28322
             }
             self.ent[i].flags |= 0x400;
-        } else if let Some(ctx) = ctx {
+        } else if ctx.is_some() || !no_mc1_load_pass_area_mail() {
+            // The load fixpoint bills the half-built pool too (see
+            // [`no_mc1_load_pass_area_mail`]); only the rumble needs a
+            // listener.
             let amt = self.ent[i].f44 as u32;
-            self.area_write(i, 0, amt, ctx, false, true);
-            self.snd(10, i);
+            self.area_write_opt(i, 0, amt, ctx, false, true);
+            if ctx.is_some() {
+                self.snd(10, i);
+            }
         }
     }
 
@@ -7030,13 +7643,16 @@ impl Gen {
             self.ent[i].flags |= 0x400;
             return;
         }
-        if let Some(ctx) = ctx {
+        // ⭐ The load fixpoint runs this write too — the canyon
+        // diggers' 216 each lands in the state-51 dwellings' mailboxes
+        // (see [`no_mc1_load_pass_area_mail`]).
+        if ctx.is_some() || !no_mc1_load_pass_area_mail() {
             let amt = if self.ent[i].flags & 2 != 0 {
                 self.ent[i].f44 as u32 / 25
             } else {
                 self.ent[i].f44 as u32
             };
-            self.area_write(i, 0, amt, ctx, false, true);
+            self.area_write_opt(i, 0, amt, ctx, false, true);
         }
         let radius = (e.f80 >> 8) as i16;
         let mut upto = e.f26;
@@ -7242,11 +7858,24 @@ impl Gen {
             return;
         }
         let r = lcg32(&mut self.ent[i].rand);
-        self.dig_disc(i, 0, 1024, (r % 0xF + 10) as i16, false);
-        if let Some(ctx) = ctx {
+        let aborted = self.dig_disc(i, 0, 1024, (r % 0xF + 10) as i16, false);
+        // Retail bills (and rumbles) only on a raise that went through:
+        // `if (!(u8)sub_40D30(...)) { sub_120B0(a1x, 0, +44); sub_55370 }`
+        // (:29163-66). The port's runtime-only write ignored the return
+        // — latent, the (10,50) ridge is load-time only in every shipped
+        // level — until the load fixpoint started billing too.
+        let bill = if no_mc1_load_pass_area_mail() {
+            ctx.is_some()
+        } else {
+            !aborted
+        };
+        if bill {
+            // Load fixpoint included — [`no_mc1_load_pass_area_mail`].
             let amt = self.ent[i].f44 as u32;
-            self.area_write(i, 0, amt, ctx, false, false);
-            self.snd(10, i);
+            self.area_write_opt(i, 0, amt, ctx, false, false);
+            if ctx.is_some() {
+                self.snd(10, i);
+            }
         }
         let (mut x, mut y) = (self.ent[i].x, self.ent[i].y);
         Self::advance(&mut x, &mut y, self.ent[i].f30, self.ent[i].f126);
@@ -7682,8 +8311,8 @@ impl Gen {
         // :30520-21 — a shaking castle (damage-response +50 armed by
         // a nearby blast) suspends the whole work body; the counter
         // has already stepped. Retail resolves the castle through the
-        // painter's +42 link; ours re-derives it by site.
-        if let Some(c) = self.castle_at_site(e.x, e.y) {
+        // painter's +42 link (`castle_of_worker`).
+        if let Some(c) = self.castle_of_worker(i) {
             if self.ent[c].f50 != 0 {
                 return;
             }
@@ -7802,17 +8431,30 @@ impl Gen {
                 }
             }
         }
-        if let Some(c) = self.castle_at_site(e.x, e.y) {
+        if let Some(c) = self.castle_of_worker(i) {
             self.ent[c].f59 = 5;
         }
         self.ent[i].flags |= 0x400;
     }
 
-    /// The castle a build worker (m41/m42) serves: retail links it by
-    /// slot in the worker's +42 — a field the port entity does not
-    /// carry — so the port re-derives it from the worker's spawn
-    /// position, which IS the castle's site corner (unique: the
-    /// placement scan enforces 8-tile spacing between castles).
+    /// The castle a build worker (m41/m42) serves — retail's `+42`
+    /// link ([`Ent::link42`]), dereferenced the way `sub_285C0` :30520
+    /// and `sub_28200` :30333 do: by slot, no class test. An unlinked
+    /// worker (0 — a pre-field save) and the kill switch fall back to
+    /// the site scan [`Gen::castle_at_site`].
+    fn castle_of_worker(&self, i: usize) -> Option<usize> {
+        let link = self.ent[i].link42.0 as usize;
+        if link != 0 && link < self.ent.len() && !no_mc1_worker_castle_link() {
+            return Some(link);
+        }
+        let e = &self.ent[i];
+        self.castle_at_site(e.x, e.y)
+    }
+
+    /// The pre-w154j castle resolve: the lowest-numbered live castle
+    /// at the worker's spawn position, which IS the castle's site
+    /// corner (unique while the placement scan's 8-tile spacing holds
+    /// and no razed-and-rebuilt or TRANSFORM-parked twin shares it).
     fn castle_at_site(&self, x: u16, y: u16) -> Option<usize> {
         (1..self.ent.len()).find(|&c| {
             let e = &self.ent[c];
@@ -7874,10 +8516,11 @@ impl Gen {
         // castle by site, exactly as the m42 painter's twin guard
         // (:30520) already does — the two agree wherever a live
         // castle stands on its own site (mc1l49 t=14822: the leveler's
-        // `+42` is 749 and `castle_at_site` finds 749).
+        // `+42` is 749 and `castle_at_site` finds 749). Since w154j
+        // the link itself is followed (`castle_of_worker`).
         let castle_shaking = !mc1_no_leveler_shake_gate()
             && self
-                .castle_at_site(e.x, e.y)
+                .castle_of_worker(i)
                 .is_some_and(|c| self.ent[c].f50 != 0);
         if counter != 0 && !castle_shaking {
             let step = (self.ent[i].f44 as i32 - self.ent[i].f28 as i16 as i32) / counter as i32;
@@ -7913,7 +8556,7 @@ impl Gen {
                 self.ent[i].f26 -= 1;
             }
         } else {
-            if let Some(c) = self.castle_at_site(e.x, e.y) {
+            if let Some(c) = self.castle_of_worker(i) {
                 self.ent[c].f59 = 2;
                 // Castle SITE z (+154) = 32 * final — the next
                 // build's datum (:30424); the entity z refreshes
@@ -8286,17 +8929,41 @@ impl Gen {
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
         let cur = self.ent[i].f26.max(0) as usize;
         let mut fits = true;
-        for j in 1..self.ent.len() {
-            let e = &self.ent[j];
-            if j != i
-                && e.class64 == 3
-                && e.model65 == 2
-                && e.flags & 0x400 == 0
-                && wd(e.x, x) < e.f80 as i32 + half_w
-                && wd(e.y, y) < e.f82 as i32 + half_h
-            {
-                fits = false;
-                break;
+        if no_mc1_upgrade_space_chain() {
+            for j in 1..self.ent.len() {
+                let e = &self.ent[j];
+                if j != i
+                    && e.class64 == 3
+                    && e.model65 == 2
+                    && e.flags & 0x400 == 0
+                    && wd(e.x, x) < e.f80 as i32 + half_w
+                    && wd(e.y, y) < e.f82 as i32 + half_h
+                {
+                    fits = false;
+                    break;
+                }
+            }
+        } else {
+            // :17649-53 — the TICK-TOP CLASS-3 ROSTER, model 2, not
+            // self, `sub_11950` (three axes, `movswl` extents, 16-bit
+            // wrapped differences). Membership is the sweep's
+            // (`actLife >= 0 && !(flags & 0x10)`): a razed keep is
+            // off the chain and cannot block. See
+            // [`no_mc1_upgrade_space_chain`].
+            let ext = |v: u16| v as i16 as i32;
+            let (z, f78, f84) = (self.ent[i].z, self.ent[i].f78, self.ent[i].f84);
+            for k in 0..self.wiz_chain.visible_len() {
+                let j = self.wiz_chain.list[k] as usize;
+                let e = &self.ent[j];
+                if j != i
+                    && e.model65 == 2
+                    && wd(e.x, x) < ext(e.f80) + ext(self.ent[i].f80)
+                    && wd(e.y, y) < ext(e.f82) + ext(self.ent[i].f82)
+                    && ((e.z as i32 + ext(e.f78)) - (z as i32 + ext(f78))).abs() < ext(e.f84) + ext(f84)
+                {
+                    fits = false;
+                    break;
+                }
             }
         }
         if fits {
@@ -8396,10 +9063,33 @@ impl Gen {
             .map(|s| s as u8)
     }
 
+    /// A castle owner's claimed-house tally as retail's castle-side
+    /// readers resolve it — `pool[castle +24].+160->+308`: the human's
+    /// [`Gen::banked_houses`], a rival's [`Gen::rival_banked_houses`]
+    /// row, 0 for an owner tag that names no wizard (retail would
+    /// dereference a null wizext there). Under
+    /// [`no_mc1_owner_house_tally`] every castle reads the human's.
+    pub(crate) fn owner_houses(&self, owner: u16) -> i32 {
+        if no_mc1_owner_house_tally() {
+            return self.banked_houses;
+        }
+        match self.owner_team(owner) {
+            Some(0) => self.banked_houses,
+            Some(t) => self.rival_banked_houses[t as usize],
+            None => 0,
+        }
+    }
+
     /// sub_37A00 (:44266): the mana BALLOON entity (class 3 m3) —
     /// life 10000, speed 48, cargo capacity 10000, behavior row 9,
     /// sprite 169. The castle dispatcher overwrites the ctor's
     /// state 7 with the working state 9 (:56355).
+    /// Test seam for [`Self::spawn_balloon`].
+    #[cfg(test)]
+    pub(crate) fn spawn_balloon_for_test(&mut self, x: u16, y: u16, z: i16, own: u16) -> usize {
+        self.spawn_balloon(x, y, z, own).expect("a balloon record")
+    }
+
     fn spawn_balloon(&mut self, x: u16, y: u16, z: i16, own: u16) -> Option<usize> {
         let i = self.new_event()?;
         {
@@ -8503,8 +9193,8 @@ impl Gen {
         // register-verified against the binary, so it keeps the live-
         // census stand-in: an empty register plus the adoption pass
         // below reproduces the old slot-order walk exactly.
-        let mc2 =
-            matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) || no_balloon_reg();
+        let is_mc2 = matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
+        let mc2 = is_mc2 || no_balloon_reg();
         let mut reg = if mc2 {
             [0u16; 3]
         } else {
@@ -8546,7 +9236,16 @@ impl Gen {
                 }
             }
         }
-        let mut house_tally = 0i64;
+        // The "castle full" test reads the OWNER's tick-top census
+        // snapshot (:56363 `pool[+24].+160->+308`), never a live sum
+        // — see [`no_mc1_owner_house_tally`]. MC2's twin (`sub_60400`)
+        // keeps the live sum until it is register-verified.
+        let snapshot_tally = !is_mc2 && !no_mc1_owner_house_tally();
+        let mut house_tally = if snapshot_tally {
+            self.owner_houses(own) as i64
+        } else {
+            0i64
+        };
         let mut orphans: Vec<usize> = Vec::new();
         for j in 1..self.ent.len() {
             let e = &self.ent[j];
@@ -8555,7 +9254,9 @@ impl Gen {
             }
             match (e.class64, e.model65) {
                 (3, 3) if e.id24 == own && !reg.contains(&(j as u16)) => orphans.push(j),
-                (10, 45) if e.f144 == own => house_tally += e.f140.max(0) as i64,
+                (10, 45) if !snapshot_tally && e.f144 == own => {
+                    house_tally += e.f140.max(0) as i64
+                }
                 _ => {}
             }
         }
@@ -8839,8 +9540,20 @@ impl Gen {
             let (amt, src) = self.ent[i].mail[0];
             self.ent[i].act_life -= amt as i32;
             // Balloon-under-attack flash (Type_160+393 = 4, :56826) —
-            // ahead of the lethal test, so the killing blow flashes too.
-            if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
+            // ahead of the lethal test. ⚠ RETAIL'S WRITE LANDS IN THE
+            // ALLOCATOR'S SINK: `*(a1+160)+393` is resolved through the
+            // BALLOON's own `+160` (CARPET.EXE 0x481F4/0x481FD), which
+            // `NewEvent_372C0` points at the static dummy `unk_B7330`
+            // (0x373BF) and only a wizard record ever re-points at its
+            // player block (:54866). Nobody draws the sink, so the
+            // human's `+393` reads 0 on every record of every take
+            // (round 153: 8,651 pair rows / 36 takes). The flash is
+            // therefore dead in retail and the port arms it only under
+            // `MGC_NO_MC1_BALLOON_ALERT_SINK` — see
+            // `crate::mc1::combat::no_mc1_balloon_alert_sink`.
+            if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET
+                && crate::mc1::combat::no_mc1_balloon_alert_sink()
+            {
                 self.balloon_alert = 4;
             }
             if self.ent[i].act_life < 0 {
@@ -9167,13 +9880,13 @@ impl Gen {
                 self.snd(10, i);
                 {
                     // Retail stamps the castle link into the painter's
-                    // +42 (:56484-91) — a field the port does not carry;
-                    // the workers re-derive their castle by SITE (unique
-                    // by the 8-tile spacing law). f146 stays 0 like the
+                    // +42 (:56484-91) — `link42`, followed by the
+                    // workers since w154j. f146 stays 0 like the
                     // recorded painters.
                     let e = &mut self.ent[p];
                     e.f71 = lvl as u8;
                     e.id24 = own;
+                    e.link42 = Link42(i as u16); // +42 = castle slot (:56486)
                     e.flags |= 0x10000; // +18 |= 1 (:56492)
                 }
                 // WAIT in sub-state 1 (the original's pure-wait
@@ -9205,6 +9918,7 @@ impl Gen {
                         let e = &mut self.ent[l];
                         e.f71 = lvl as u8;
                         e.id24 = own;
+                        e.link42 = Link42(i as u16); // +42 = castle slot (:56130)
                     }
                     self.ent[i].f59 = 6; // authentic wait state (:56132)
                 }
@@ -9237,6 +9951,7 @@ impl Gen {
                         // (sub_47020 :56104 `+71 = +26`).
                         e.f71 = lvl.min(8) as u8;
                         e.id24 = own;
+                        e.link42 = Link42(i as u16); // +42 = castle slot (:56111)
                     }
                     self.ent[i].f59 = 1; // wait for the repaint painter
                 }
@@ -9545,7 +10260,10 @@ impl Gen {
     fn castle_eject(&mut self, i: usize) {
         let stored = self.ent[i].f140;
         let cap = self.ent[i].f136;
-        let mut spill = if self.banked_houses.saturating_add(stored) > cap {
+        // The CASTLE OWNER's tally (:56185 resolves `+24` → wizext →
+        // +308), not the human's — see [`no_mc1_owner_house_tally`].
+        let houses = self.owner_houses(self.ent[i].id24);
+        let mut spill = if houses.saturating_add(stored) > cap {
             stored - cap
         } else {
             0
@@ -9798,6 +10516,26 @@ impl Gen {
     /// +86 is the sprite type field; there is no mana movement in the
     /// claim block.)
     pub(crate) fn tick_building_live(&mut self, i: usize, patches: crate::patches::WorldPatches) {
+        // ⭐ THE HOUSE'S `+40` IS A ONE-TICK ATTACKER REGISTER, NOT A
+        // LATCH (round 154, w154e). `sub_29640` (:31075) is the FIRST
+        // call of the state-52 handler `sub_28DC0` (:30783; the only
+        // caller — `CARPET.EXE` file 0x415C0 `e8 73 08 00 00`), and its
+        // first instruction after the argument load is file 0x41E3D
+        // `66 C7 40 28 00 00` = `mov word [eax+0x28],0` — BEFORE the
+        // life test and the `+94` mailbox gate. The port only ever
+        // wrote `f40 = src` on a hit and never cleared it, so from the
+        // tick after the first hit the house carried the attacker
+        // forever: mc1l2 slot 2 `f40` retail 0 / port 295 from t=5676
+        // (the tick after the documented t=5675 self-hit) to the end,
+        // 4,913 rows; round 153's census 442,171 free rows / 20 takes.
+        // Retail reads `+40` only on the hit tick itself (the
+        // :30797 `+528 = 200` wanted arm), so the stale value moved no
+        // graded lane. `MGC_NO_MC1_HOUSE_HIT_REGISTER=1` restores the
+        // latch (and the two mailbox quirks below).
+        let hit_register = !no_mc1_house_hit_register();
+        if hit_register {
+            self.ent[i].f40 = 0;
+        }
         if self.ent[i].act_life < 0 {
             // Killed directly (castle crush life = -1, :17638).
             self.ent[i].tick70 = 53;
@@ -9881,7 +10619,19 @@ impl Gen {
         }
         if self.ent[i].mail[0].1 != 0 {
             let (amt, src) = self.ent[i].mail[0];
-            self.ent[i].mail[0].1 = 0;
+            // ⭐ THE LETTER IS CONSUMED ON THE NON-LETHAL BRANCH ALONE,
+            // BOTH HALVES (round 154, w154e). :31085-91, file
+            // 0x41E6B-0x41E8D: a lethal subtract stamps `+38 = src` and
+            // returns 2 with `+90`/`+94` UNTOUCHED (the dead house at
+            // state 53 keeps its last letter — mc1l0 slot 7 t=4947-48
+            // `mail0.src` retail 630 / port 0); a survivor stamps `+40
+            // = src`, `+90 = 0` (`mov dword [edx],0`), `+94 = 0`. The
+            // port cleared the src BEFORE the life test and never the
+            // amount: mc1l2 slot 2 `mail0.amt` retail 0 / port 400 from
+            // t=5675, mc1l0 slot 7 t=4832..4945.
+            if !hit_register {
+                self.ent[i].mail[0].1 = 0;
+            }
             // A CLAIMED BUILDING IS NOT IMMUNE TO ITS OWNER. The port
             // used to return here when `src == f144` ("as if they were
             // your castle"); that clause was invented, and its own note
@@ -9900,6 +10650,9 @@ impl Gen {
                 return;
             }
             self.ent[i].f40 = src;
+            if hit_register {
+                self.ent[i].mail[0] = (0, 0);
+            }
             if self.ent[i].f26 > 2 {
                 self.ent[i].f26 -= 1;
                 let (x, y, z, f80) = {
@@ -10581,6 +11334,7 @@ impl Gen {
         s[24] = 22;
         s[31] = 22;
         s[225] = 22;
+        s[109] = 22;
         s
     };
 
@@ -10619,6 +11373,11 @@ impl Gen {
                 // [`mc1_no_row0_shim_32_39_40_48_89`].
                 if matches!(idx + 257, 32 | 39 | 40 | 48 | 89) && mc1_no_row0_shim_32_39_40_48_89()
                 {
+                    return 0;
+                }
+                // `MGC_NO_MC1_ROW0_SHIM_109=1` — see
+                // [`mc1_no_row0_shim_109`].
+                if idx + 257 == 109 && mc1_no_row0_shim_109() {
                     return 0;
                 }
 
@@ -10715,6 +11474,10 @@ impl Snap for Ent {
             // path never writes it), so it stays off the wire and the
             // snapshot version does not move.
             raw48: _,
+            // The worker→castle link: stamped at the mint, lifted at
+            // import; a pre-field save resolves by the scan (0). Off
+            // the wire like `raw48`; the version does not move.
+            link42: _,
             // The cry cadence is a SOUND lane (no graded channel) and
             // re-arms within 24 ticks of a load, so it stays off the
             // wire exactly like `raw48` and the version does not move.
@@ -10849,6 +11612,7 @@ impl Snap for Ent {
             f26: r.get()?,
             lease2e: Lease2e(r.get()?),
             raw48: Raw48(0),
+            link42: Link42(0),
             morph_cry: MorphCry(0),
             summit10: Summit10(0),
             f28: r.get()?,
@@ -11106,6 +11870,8 @@ impl Gen {
             erupting,
             plume,
             player_knock,
+            // A within-walk register — see the field doc.
+            mc1_buffet_post: _,
             // A per-tick transient the mover drains — see PlayerSpin.
             player_spin: _,
             // A per-tick transient the carpet's walk slot drains — see
@@ -11153,6 +11919,9 @@ impl Gen {
             hits,
             player_danger,
             banked_houses,
+            // Save-silent like `castle_reg` (see the field doc): the
+            // tick-top census rebuilds it before any reader runs.
+            rival_banked_houses: _,
             castle_alert,
             player_alert,
             balloon_alert,
@@ -11186,6 +11955,9 @@ impl Gen {
             mc2_castle_lock_mail: _,
             // Presentation feed, never saved — a load starts clean.
             bolt_fx: _,
+            // Transient within one class-9 dispatch — never live at a
+            // boundary.
+            mc1_aim_latch: _,
             // Transient within one beam tick — never live at a boundary.
             mc2_beam_defer: _,
             // Retail's `predictedAxis_EB398ar` is a data-segment
@@ -11545,6 +12317,52 @@ mod tests {
         assert!(ev.player);
     }
 
+    /// `sub_29640` (:31075-91, `CARPET.EXE` 0x41E3D-0x41E8D), the
+    /// live house's ch0 intake: `+40 = 0` first thing on EVERY tick,
+    /// then a survivor stamps `+40 = src` and consumes the letter
+    /// (`+90 = 0`, `+94 = 0`), while a lethal subtract stamps `+38 =
+    /// src` and returns with the letter untouched. `+40` and the
+    /// mailbox are ungraded lanes (raw shadow `(10,45) f40` /
+    /// `mail0.amt` / `mail0.src`: mc1l2 slot 2 from t=5675, mc1l0 slot
+    /// 7 t=4832..4948).
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_MC1_HOUSE_HIT_REGISTER=1` — `f40`
+    /// stays 630 on the quiet tick, the amount stays 400, and the
+    /// lethal tick reads `mail0.src` 0.
+    #[test]
+    fn a_house_s_hit_register_lives_one_tick_and_the_letter_is_consumed_by_survivors_only() {
+        let assets = synthetic_assets();
+        let mut g = Gen::new(flat_land(8), assets, 1, ChassisParams::MC1, VerbSet::MC1);
+        let b = g.new_event().unwrap();
+        g.ent[b].class64 = 10;
+        g.ent[b].model65 = 45;
+        g.ent[b].act_life = 1000;
+        g.ent[b].f26 = 1; // no militia pop-out
+        g.ent[b].f63 = 1; // off the 40-tick occupancy beat
+        // The hit tick.
+        g.ent[b].mail[0] = (400, 630);
+        g.tick_building_live(b, crate::patches::WorldPatches::RETAIL);
+        assert_eq!(g.ent[b].act_life, 600);
+        assert_eq!(g.ent[b].f40, 630, "the survivor stamps +40 = src");
+        assert_eq!(g.ent[b].mail[0], (0, 0), "…and consumes BOTH halves of the letter");
+        assert_ne!(g.ent[b].tick70, 53, "still live");
+        // The quiet tick after it.
+        g.tick_building_live(b, crate::patches::WorldPatches::RETAIL);
+        assert_eq!(g.ent[b].f40, 0, "+40 is zeroed at the top of every tick");
+        // The lethal tick: +38 latches, the letter is left standing.
+        g.ent[b].mail[0] = (700, 630);
+        g.tick_building_live(b, crate::patches::WorldPatches::RETAIL);
+        assert!(g.ent[b].act_life < 0);
+        assert_eq!(g.ent[b].tick70, 53);
+        assert_eq!(g.ent[b].f38, 630, "the killer latch");
+        assert_eq!(g.ent[b].f40, 0, "+40 was zeroed before the subtract and never restamped");
+        assert_eq!(
+            g.ent[b].mail[0],
+            (700, 630),
+            "the lethal branch returns before the mailbox clear"
+        );
+    }
+
     #[test]
     fn crater_digs_a_bowl() {
         let assets = synthetic_assets();
@@ -11575,6 +12393,44 @@ mod tests {
             .count();
         assert!(dug > 10, "canyon digs along the segment, {dug} tiles dug");
         assert_eq!(p.height[10 * 256 + 200], 100, "far tiles untouched");
+    }
+
+    /// ⭐ THE LOAD PASS BILLS THE DWELLINGS (round 155, w155e) — see
+    /// [`no_mc1_load_pass_area_mail`]. A `(10,31)` canyon authored
+    /// across a `(10,45)` house: the load fixpoint's diggers (life 2 →
+    /// 200 + 8 + 8 = 216 each) write ch0 into the state-51 house's
+    /// mailbox, the construction handler never reads it, and the
+    /// house's FIRST state-52 tick drains the whole bill — mc1l36 slot
+    /// 68 (4536 = 21 × 216, dead at settle 2, `+38` = the canyon
+    /// head). Law off, the house stands at 2000 with an empty box.
+    #[test]
+    fn the_load_pass_canyon_bills_the_state_51_dwelling() {
+        let mut g = Gen::new(flat_land(100), synthetic_assets(), 7, ChassisParams::MC1, VerbSet::MC1);
+        let mut a = thing(0, 10, 31, 128, 116);
+        a.swi_id = 1;
+        a.child = 2; // table index 2 = thing slot 1 (MC1 table base 1)
+        let mut b = thing(1, 10, 31, 128, 140);
+        b.swi_id = 1;
+        b.parent = 1;
+        let house = thing(2, 10, 45, 128, 128); // parent 0 → build type 16
+        let mut table = build_table(&[a, b, house], ChassisParams::MC1.level_table_slots, 1);
+        g.load_time_pass(&mut table);
+        let h = (1..g.ent.len())
+            .find(|&i| g.ent[i].class64 == 10 && g.ent[i].model65 == 45)
+            .expect("the house survives the load pass");
+        assert_eq!(g.ent[h].tick70, 52, "constructed");
+        assert_eq!(g.ent[h].act_life, 2000);
+        let (amt, src) = g.ent[h].mail[0];
+        if no_mc1_load_pass_area_mail() {
+            assert_eq!((amt, src), (0, 0), "switch on: the pre-dig empty box");
+            return;
+        }
+        assert!(src != 0, "the canyon digger's id rides +94");
+        assert!(amt >= 216 && amt % 216 == 0, "k × (200 + 8 + 8), got {amt}");
+        // The first live tick drains it: lethal → state 53, +38 = src.
+        g.tick_building_live(h, crate::patches::WorldPatches::RETAIL);
+        assert_eq!(g.ent[h].act_life, 2000 - amt as i32);
+        assert_eq!((g.ent[h].tick70, g.ent[h].f38), (53, src));
     }
 
     #[test]
@@ -11815,6 +12671,91 @@ mod tests {
         g.free.push(spares[2] as u16);
         g.castle_tick(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[i].f59, 1, "freed slot: the repaint painter wait");
+    }
+
+    /// THE CASTLE WORKERS FOLLOW THEIR `+42` LINK, NOT THE SITE SCAN
+    /// (round 154, w154j). `sub_47020`/`sub_47080`/the upgrade commit
+    /// stamp `+42 = the castle's own slot` (CARPET.EXE 0x4705F /
+    /// 0x470BF / :56486) and the workers dereference it (`sub_285C0`
+    /// :30520/:30697-709, `sub_28200` :30333/:30419-27). Two castle
+    /// records on ONE site — a TRANSFORM-parked twin at the lower slot
+    /// (round 151's stale-recycle class) under the live castle at the
+    /// higher — split the two resolves: the scan serves the lower
+    /// record, the link the one that minted the worker. Fails under
+    /// `MGC_NO_MC1_WORKER_CASTLE_LINK=1` (the scan), at the finish
+    /// asserts.
+    #[test]
+    fn the_castle_workers_follow_their_link_over_the_site_scan() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            VerbSet::MC1,
+        );
+        let castle_at = |g: &mut Gen, sub: u8| {
+            let i = g.new_event().unwrap();
+            let e = &mut g.ent[i];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.x = 0x8000;
+            e.y = 0x8000;
+            e.f26 = 0;
+            e.tick70 = 5;
+            e.f59 = sub;
+            i
+        };
+        let parked = castle_at(&mut g, 1); // the lower twin, parked in a pure wait
+        let live = castle_at(&mut g, 0); // the castle that mints the workers
+        assert!(live > parked, "fixture: the live castle is the HIGHER slot");
+        assert_eq!(
+            g.castle_at_site(0x8000, 0x8000),
+            Some(parked),
+            "fixture: the site scan serves the lower twin"
+        );
+        // Case 0: the upgrade commit mints the painter with the link.
+        g.castle_tick(live, crate::patches::WorldPatches::RETAIL);
+        let p = (1..g.ent.len())
+            .find(|&k| g.ent[k].class64 == 10 && g.ent[k].model65 == 42 && g.ent[k].flags & 0x400 == 0)
+            .expect("the commit painter");
+        assert_eq!(g.ent[p].link42, Link42(live as u16), "+42 = the minting castle's slot");
+        assert_eq!(g.ent[p].id24, g.ent[live].id24, "+24 = the castle's owner");
+        for _ in 0..80 {
+            if g.ent[p].flags & 0x400 != 0 {
+                break;
+            }
+            g.tick_castle_painter(p);
+        }
+        assert!(g.ent[p].flags & 0x400 != 0, "fixture: the painter finished");
+        assert_eq!(g.ent[live].f59, 5, "the finish hands THE LINKED castle to sub-state 5");
+        assert_eq!(g.ent[parked].f59, 1, "the lower twin is untouched");
+        // Case 5: the leveler carries the link too, and its finish
+        // writes the linked castle's sub-state and site z.
+        g.castle_tick(live, crate::patches::WorldPatches::RETAIL);
+        let l = (1..g.ent.len())
+            .find(|&k| g.ent[k].class64 == 10 && g.ent[k].model65 == 41 && g.ent[k].flags & 0x400 == 0)
+            .expect("the leveler");
+        assert_eq!(g.ent[l].link42, Link42(live as u16), "+42 on the leveler");
+        g.ent[parked].site_z = 12345;
+        for _ in 0..80 {
+            if g.ent[l].flags & 0x400 != 0 {
+                break;
+            }
+            g.tick_castle_leveler(l);
+        }
+        assert!(g.ent[l].flags & 0x400 != 0, "fixture: the leveler finished");
+        assert_eq!(g.ent[live].f59, 2, "the leveler's finish lands on the linked castle");
+        assert_eq!(g.ent[parked].site_z, 12345, "the twin's site z is not rewritten");
+        // Case 3: the repaint painter is stamped the same way.
+        g.ent[live].f59 = 3;
+        g.castle_tick(live, crate::patches::WorldPatches::RETAIL);
+        let r = (1..g.ent.len())
+            .find(|&k| g.ent[k].class64 == 10 && g.ent[k].model65 == 42 && g.ent[k].flags & 0x400 == 0)
+            .expect("the repaint painter");
+        assert_eq!(g.ent[r].link42, Link42(live as u16), "+42 on the repaint painter");
+        // An UNLINKED worker (a pre-field save) still resolves by site.
+        g.ent[r].link42 = Link42(0);
+        assert_eq!(g.castle_of_worker(r), Some(parked), "0 = fall back to the scan");
     }
 
     /// **A SHAKING CASTLE ABORTS ITS GROUND LEVELER OUTRIGHT.**
@@ -12702,6 +13643,124 @@ mod tests {
         );
     }
 
+    /// Round 154 (w154i): the castle-side house reads resolve THE
+    /// CASTLE'S OWNER and read the tick-top census snapshot
+    /// (`sub_47130` :56185 / `sub_47400` :56363 — `pool[+24].+160->
+    /// +308`). The ejector's house term is inert for a non-negative
+    /// tally (spill = stored − cap needs stored > cap), so the arm
+    /// that can be witnessed is the fleet's "castle full" test: the
+    /// SNAPSHOT decides, not the human's tally and not a live sum.
+    /// `MGC_NO_MC1_OWNER_HOUSE_TALLY=1` fails this test at the resolve
+    /// (every owner reads the human's 9000) and, past that, at "the
+    /// snapshot says full" (the pre-dig dispatcher summed the pool
+    /// live) — the kill-switch positive control.
+    #[test]
+    fn the_castle_reads_its_own_owners_house_tally() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            VerbSet::MC1,
+        );
+        let rival = 630u16;
+        g.rival_ents[2] = rival;
+        // The resolve: human → `banked_houses`, rival → its row, a tag
+        // that names no wizard → 0.
+        g.banked_houses = 9000;
+        g.rival_banked_houses[2] = 700;
+        assert_eq!(g.owner_houses(crate::mc1::mobs::PLAYER_TARGET), 9000);
+        assert_eq!(g.owner_houses(rival), 700);
+        assert_eq!(g.owner_houses(5), 0);
+
+        // A rival castle at 5000/10000 with ONE balloon and a claimed
+        // ball to hunt.
+        let c = g.new_event().unwrap();
+        {
+            let e = &mut g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = rival;
+            e.f26 = 2; // level 2: quota (1, 0)
+            e.f136 = 10_000;
+            e.f140 = 5_000;
+            e.f63 = 2; // the stagger turn (2 % 1 == 0)
+            e.x = 0x4000;
+            e.y = 0x4000;
+        }
+        let ball = g.new_event().unwrap();
+        {
+            let e = &mut g.ent[ball];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.x = 0x4000 + 400;
+            e.y = 0x4000;
+            e.f144 = rival;
+            e.f140 = 100;
+        }
+        let b = g.spawn_balloon(0x4000, 0x4000, 0, rival).unwrap();
+        g.mc1_balloon_reg.0.insert(rival, vec![b as u16]);
+
+        // The HUMAN's tally is over the cap, the rival's is not: the
+        // rival's balloon hunts the ball (retail: 0 + 5000 < 10000).
+        g.banked_houses = 9000;
+        g.rival_banked_houses[2] = 0;
+        g.rebuild_ball_chain();
+        g.castle_balloons(c);
+        assert_eq!(
+            g.ent[b].f146, ball as u16,
+            "the human's houses must not recall a rival's balloon"
+        );
+
+        // The rival's SNAPSHOT says full while the pool holds no
+        // (10,45) of his at all: the balloon homes — the read is the
+        // census snapshot, not a live sum.
+        g.banked_houses = 0;
+        g.rival_banked_houses[2] = 6000;
+        g.ent[b].f146 = 0;
+        g.rebuild_ball_chain();
+        g.castle_balloons(c);
+        assert_eq!(g.ent[b].f146, c as u16, "the snapshot says full: home");
+
+        // And the converse: live houses worth 6000 in the pool, a
+        // snapshot of 0 — the balloon hunts (the census has not seen
+        // them yet).
+        let h = g.new_event().unwrap();
+        {
+            let e = &mut g.ent[h];
+            e.class64 = 10;
+            e.model65 = 45;
+            e.x = 0x6000;
+            e.y = 0x6000;
+            e.f144 = rival;
+            e.f140 = 6000;
+        }
+        g.rival_banked_houses[2] = 0;
+        g.ent[b].f146 = 0;
+        g.rebuild_ball_chain();
+        g.castle_balloons(c);
+        assert_eq!(g.ent[b].f146, ball as u16, "a live sum is not the law");
+
+        // The ejector on the same castle: the rival's own tally under
+        // cap, the human's over — no spill; and vice versa — no spill
+        // either, because the house term never decides for a
+        // non-negative tally (stored 5000 <= cap 10000).
+        let balls_before = (1..g.ent.len())
+            .filter(|&j| g.ent[j].class64 == 10 && g.ent[j].model65 == 39)
+            .count();
+        g.banked_houses = 9000;
+        g.rival_banked_houses[2] = 0;
+        g.castle_eject(c);
+        g.banked_houses = 0;
+        g.rival_banked_houses[2] = 9000;
+        g.castle_eject(c);
+        let balls_after = (1..g.ent.len())
+            .filter(|&j| g.ent[j].class64 == 10 && g.ent[j].model65 == 39)
+            .count();
+        assert_eq!(balls_before, balls_after, "no tally spills a castle under its cap");
+        assert_eq!(g.ent[c].f140, 5_000);
+    }
+
     #[test]
     fn the_death_notice_tick_still_runs_the_dispatcher() {
         // sub_46DB0 :56003 sets `+70 = 6` on a lethal sub_47EC0 and
@@ -13277,6 +14336,34 @@ mod tests {
         }
     }
 
+    /// Round 155 (dig w155c): shim byte {109} — the low byte of
+    /// `dword_CC14C`, the sound card's I/O port (0x220 ⇒ 0x20) — see
+    /// [`mc1_no_row0_shim_109`]. mc1l34 t=7467: (107,0) and (110,0)
+    /// smooth, (108,0) and (109,0) hold. NON-VACUITY:
+    /// `MGC_NO_MC1_ROW0_SHIM_109=1` fails both skip assertions.
+    #[test]
+    fn shim_byte_109_gates_the_two_row0_cells_that_read_it() {
+        let mut g = Gen::new(
+            flat_land(100),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        for x in [106u8, 107, 108, 109, 110, 111] {
+            g.t.height[tile(x, 1)] = 118;
+        }
+        let mut probe = |x: u8| -> u8 {
+            g.smooth_cell(tile(x, 0));
+            g.t.height[tile(x, 0)]
+        };
+        // (x,0) reads shim {x, x+1}.
+        assert_eq!(probe(108), 100, "shim byte 109 skips (108,0)");
+        assert_eq!(probe(109), 100, "shim byte 109 skips (109,0)");
+        assert!(probe(107) > 100, "(107,0) smooths: shim {{107, 108}} plain");
+        assert!(probe(110) > 100, "(110,0) smooths: shim {{110, 111}} plain");
+    }
+
     /// The creature awake gate is a chassis parameter (the
     /// `--awake-range` G-class override): the faithful 0x240_0000
     /// (24 tiles, both retail engines) leaves a distant creature
@@ -13304,6 +14391,85 @@ mod tests {
         };
         assert_eq!(run(0x240_0000), 0, "40 tiles out stays asleep (faithful)");
         assert_eq!(run(i32::MAX), 16, "always-awake override arms f58");
+    }
+
+    /// The wake arm's `+48` stamp (round 154, w154a; citation on
+    /// [`no_mc1_wake_dy48`]): the tick a creature or a mana ball wakes
+    /// (`+58 = 16`), retail writes `+48 = isqrt(dy²) = |carpet.y −
+    /// rec.y|` — the Y-LEG alone, because `Distance_410CE` is handed
+    /// `sub_42410`'s leftover `edx = dy²`, not the planar sum. The
+    /// word is never read; it lives in the hash-silent `raw48`. This
+    /// pins: the y-leg (not the distance), the sign fold, the wrap
+    /// through the 16-bit map seam, that a follower segment gets no
+    /// stamp, that the countdown ticks leave the word alone, and that
+    /// an out-of-radius record is never stamped.
+    #[test]
+    fn the_wake_arm_stamps_the_y_leg_to_the_carpet_in_raw48() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        // A settled ball at (2000, 3000), pooled first so the two
+        // hand-seated creature records below cannot collide with it.
+        let b = g.spawn_mana_ball(2000, 3000, 0).unwrap();
+        g.ent[b].f58 = 0;
+        // A (5,15) creature at (0, 1000) with a follower segment.
+        let (c, s) = (b + 1, b + 2);
+        assert!(s < g.ent.len());
+        g.ent[c].class64 = 5;
+        g.ent[c].model65 = 15;
+        g.ent[c].act_life = 1000;
+        g.ent[c].x = 0;
+        g.ent[c].y = 1000;
+        g.ent[c].f54 = s as u16;
+        g.ent[s].class64 = 5;
+        g.ent[s].model65 = 15;
+        g.ent[s].act_life = 1000;
+        g.ent[s].tick70 = 120;
+        g.ent[s].x = 0;
+        g.ent[s].y = 900;
+
+        // Carpet at (300, 0): the creature's planar distance is
+        // isqrt(300² + 1000²) = 1044; retail stamps |0 − 1000| = 1000.
+        g.mob_awake_pass(&ctx_at(300, 0, 0));
+        assert_eq!(g.ent[c].f58, 16, "the creature woke");
+        assert_eq!(g.ent[c].raw48, Raw48(1000), "the Y-leg, not the distance");
+        assert_eq!(g.ent[s].f58, 18, "the follower is armed +2");
+        assert_eq!(g.ent[s].raw48, Raw48(0), "a follower gets no stamp");
+        assert_eq!(g.ent[b].f58, 16, "the ball woke");
+        assert_eq!(g.ent[b].raw48, Raw48(3000), "the ball's Y-leg (|0 − 3000|)");
+
+        // Sixteen countdown ticks leave the word alone; the 17th
+        // re-arm re-samples it from the carpet's NEW y (the sign
+        // folds: carpet above the creature reads the same magnitude).
+        for _ in 0..16 {
+            g.mob_awake_pass(&ctx_at(0, 1500, 0));
+        }
+        assert_eq!(g.ent[c].f58, 0, "drained");
+        assert_eq!(g.ent[c].raw48, Raw48(1000), "the countdown never rewrites +48");
+        g.mob_awake_pass(&ctx_at(0, 1500, 0));
+        assert_eq!(g.ent[c].f58, 16);
+        assert_eq!(g.ent[c].raw48, Raw48(500), "re-armed: |1500 − 1000|, sign folded");
+
+        // The delta is a 16-bit wrapping subtract, as `sub_42410`'s
+        // `cwtl` after the word `sub`: a creature at y = 65500 and a
+        // carpet at y = 100 are 136 apart across the seam, not 65400.
+        g.ent[c].y = 65500;
+        g.ent[c].f58 = 0;
+        g.mob_awake_pass(&ctx_at(0, 100, 0));
+        assert_eq!(g.ent[c].f58, 16, "136 apart through the seam is in radius");
+        assert_eq!(g.ent[c].raw48, Raw48(136), "wraps through the map seam");
+
+        // Out of radius: no arm, no stamp.
+        g.ent[c].y = 0;
+        g.ent[c].f58 = 0;
+        g.ent[c].raw48 = Raw48(0);
+        g.mob_awake_pass(&ctx_at(0, 7000, 0));
+        assert_eq!(g.ent[c].f58, 0, "27 tiles out stays asleep");
+        assert_eq!(g.ent[c].raw48, Raw48(0), "and is never stamped");
     }
 
     /// The mana-ball WAKE law (sub_54F80 :64352-66): a settled ball
@@ -13384,6 +14550,37 @@ mod tests {
             return j;
         }
         i
+    }
+
+    /// THE M7 VOLLEY'S ORDINAL LAW (round 154, w154j; the mc1l48
+    /// t=9830 `spawn_count[7]` row): `sub_38C60` reads the per-model
+    /// counter, stores it +1, and stamps the OLD value into `+63` —
+    /// CARPET.EXE 0x38D03 `mov 0xc(%ecx,%eax,1),%dl`, 0x38D09 `inc
+    /// %dh`, 0x38D0B `mov %dh,0xc(%ecx,%eax,1)`, 0x38D27 `mov
+    /// %dl,0x3f(%ebx)` — and `sub_38C00` (:45101-13) keys life
+    /// 2000/4000 and sprite 199/85 off that stamp's parity. Seven
+    /// births from a zero counter therefore carry `+63` 0..6 (read
+    /// 1..7 at the boundary after the walk's own clock), leave the
+    /// counter at 7, and alternate 2000/4000 from the EVEN arm. The
+    /// recorded row was the pair harness's (a consumed THING table
+    /// after a reload — `mgc-conform verify.rs`), not this ctor's.
+    #[test]
+    fn seven_m7_births_stamp_the_old_ordinal_and_leave_the_counter_at_seven() {
+        let mut g = mob_gen();
+        assert_eq!(g.spawn_count[7], 0, "fixture: a fresh counter");
+        let slots: Vec<usize> = (0..7).map(|k| g.spawn_creature(7, 0x4000 + k * 256, 0x4000, 0).unwrap()).collect();
+        assert_eq!(g.spawn_count[7], 7, "+1 per birth, stored after the read");
+        for (k, &i) in slots.iter().enumerate() {
+            let e = &g.ent[i];
+            assert_eq!(e.f63, k as u8, "+63 = the counter BEFORE the bump (slot {i})");
+            let odd = k & 1 != 0;
+            assert_eq!(e.max_life, if odd { 4000 } else { 2000 }, "life keys off the stamp's parity");
+            assert_eq!(e.act_life, e.max_life as i32, "RefillLife after the parity arm");
+            assert_eq!(e.type86, if odd { 85 } else { 199 }, "sprite keys off the same parity");
+            assert_eq!(e.f71, if odd { 1 } else { 2 }, "+71 = 1 (odd) / 2 (even)");
+            assert_eq!(e.f26, (i % 100) as i16, "+26 = slot % 100");
+            assert_eq!(e.tick70, 43, "born in WANDER (base 42 + 1)");
+        }
     }
 
     /// The painter idle length is +60 CTOR PROVENANCE, not the kill

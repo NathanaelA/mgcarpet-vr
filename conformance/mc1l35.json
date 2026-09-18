@@ -1,0 +1,24 @@
+{
+ "dir": "fixtures/mc1l35",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 4521,
+   "file": "a-dying-vulture-still-runs-its-idle-mover.mgcr",
+   "source": "mc1l35",
+   "note": "A DYING (5,1) VULTURE STILL RUNS ITS IDLE MOVER (round 155, w155d law 1, MGC_NO_MC1_VULTURE_DEATH_MOVER): m1's IDLE wrapper sub_1B160 (:22227-28) is `sub_19B10(a1x,6); sub_196E0(a1x);` with no test between the core and the mover (CARPET.EXE VA 0x1B165 push 6 / 0x1B168 call 0x19B10 / 0x1B170-71 push ebx; call 0x196E0 / 0x1B174 mov 0x46(%ebx),%ah / 0x1B17C cmp $6,%ah; jne - only the re-aim is gated on +70==6); the core's lethal exit (:21363 actLife<0 -> :21379 -> :21415 sub_424F0(a1x,10)) returns into the wrapper, so the dying bird still steps, turns and ground-snaps. mc1l35 pair 4521->4522: slot 65 (killed by the human, act_life -1, +70 6 -> 10) retail x 47087 -> 47046, heading 1832 -> 1854, z 1259 -> 1258; the port's Inbox::Dead arm returned before the mover. Ledger ROUND 155 w155d law 1."
+  },
+  {
+   "t": 23647,
+   "file": "a-stale-register-respawns-the-rival-and-reprices-the-owners-token.mgcr",
+   "source": "mc1l35",
+   "note": "A STALE REGISTER STILL RESPAWNS THE RIVAL AND sub_47DD0 RE-PRICES THE CASTLE OWNER'S TOKEN (round 155, w155a laws 1+3, MGC_NO_MC1_HOME_CASTLE_REGISTER / MGC_NO_MC1_RESPAWN_REPRICE_OWNER): the dead-wait sub_46480 :55609 `if(+50)` respawns on a nonzero register and sub_44D30 :54861-64 seats the rival at pool[+50]; the respawn's sub_47DD0(pool[+50]) (:55034, body :56617-73, file 0x605C8-0x606B4) reads pool[castle.+24] (the slot's OWNER), requires +70 in {0,1}, takes wizext+0x2C4 (owned[16]) with an index test only, prices from a switch on +26 (unsigned cmp $7; ja -> default 0, no clamp) divided by the token's movswl +50. mc1l35 pair 23647->23648: wiz 1's register names the human's (10,0) fire (+26 0); retail revives wiz 1 at the fire and re-prices the HUMAN's token 26 to 5000/49, rival token 50 stays 1000/9. The port declared the rival eliminated (13 respawn tokens missing) and re-priced his own token with .max(0).min(7) and /101. Ledger ROUND 155 w155a laws 1 and 3."
+  },
+  {
+   "t": 45279,
+   "file": "a-human-token-runs-off-its-own-tag-not-the-register.mgcr",
+   "source": "mc1l35",
+   "note": "A HUMAN TOKEN IS ITS OWN +42, NOT THE +676 REGISTER (round 155, w155d law 4, MGC_NO_MC1_TOKEN_TAG_FIRST): every retail token machine resolves its caster from the token's +42 - speed sub_56380 (:65141-44; 0x56386 cmpw $0,0x30(%ebx); jle / 0x56393 mov 0x2a(%ebx),%ax / 0x563C6 call sub_55DD0), heal sub_56270 (:65091), shield sub_566C0 (:65266) - while the +676 register is rebuilt BLIND (sub_45C10). mc1l35 pair 45279->45280: the human's acquisition slot 111 is re-minted as a (10,2) contrail and the rebuild re-points owned[2] 75 -> 111; retail's speed token 75 (+42 117, +48 218 -> 217) keeps running, pinning regen (player.mana 641725) and laying a (10,2) every 4th tick through t=45331; the port's mc1_token_is_players required owned[spell]==i and dropped it (mana 642046, 52 reset heads). Heal/shield gates take the tag too (a law on one call path is not landed). Ledger ROUND 155 w155d law 4."
+  }
+ ]
+}

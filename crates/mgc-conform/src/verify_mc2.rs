@@ -234,6 +234,11 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     // two graded rows it did show. Off by default; it grades nothing,
     // it only reports, and it must not move the UNEXPLAINED headline.
     let mut shadow = crate::shadow::Shadow::from_env()?;
+    if let Some(sh) = shadow.as_mut() {
+        // The pinned pair's mover-owned human lanes (round 147's `+4`
+        // artifact on 40/40 MC2 takes) — see `Shadow::pair_pinned`.
+        sh.pair_pinned = true;
+    }
     // `MGC_STAGE_TRACE` — the OBJECTIVE BOARD microscope, wired on
     // the PAIR path too. In the free run it shows where the port's
     // own board history parts; here the importer has just restored

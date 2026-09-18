@@ -156,6 +156,9 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     // bites a free run. Off by default — it grades nothing, it only
     // reports, and it must not move the UNEXPLAINED headline.
     let mut shadow = crate::shadow::Shadow::from_env()?;
+    if let Some(sh) = shadow.as_mut() {
+        sh.pair_pinned = true;
+    }
     let mut printed_import = false;
     // The measured-terrain accumulator (format-2 channel): a pair
     // (pt → t) must run on terrain AT pt, so each record's block is
@@ -371,6 +374,22 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         world.tick_pose_pair(pre, pose, pcmd);
                     } else {
                         world.tick(pose, pcmd);
+                    }
+                    // THE RELOAD'S THING-TABLE RESTORE, PAIR MODE
+                    // (round 154, w154j): the free run un-consumes the
+                    // one-shot dispositions at every restart re-anchor
+                    // (`replay.rs`, `World::reload_thing_table`); the
+                    // pair loop never did, so after the first life's
+                    // fire every later life's trigger fired into an
+                    // empty table — the pair re-imports the POOL, not
+                    // the port-side table. mc1l48 t=9829/15039: retail's
+                    // (11,0) slot 15 re-fires disposition 13 after each
+                    // reload (seven (5,7) births, `spawn_count[7]` 0 → 7);
+                    // the port's fire found `rows=0`, minted nothing, and
+                    // the globals lane read `spawn_count[7]` retail 7 /
+                    // port 0 — a harness row, not a counter law.
+                    if world.take_restart() && !no_pair_restart_table_reload() {
+                        world.reload_thing_table();
                     }
                     // The POSE CHANNEL: shadow-step the faithful
                     // mover and diff the human's own motion column at
@@ -1166,6 +1185,11 @@ pub(crate) fn exec_pair(
     } else {
         world.tick(pose, cmd);
     }
+    // The alt pass carries its own table across pairs — the same
+    // reload restore as the main loop (w154j).
+    if world.take_restart() && !no_pair_restart_table_reload() {
+        world.reload_thing_table();
+    }
     let pin = PinnedMc1 {
         slot: report.human_slot,
         local: pst.local_player,
@@ -1178,6 +1202,16 @@ pub(crate) fn exec_pair(
     append_charge_diffs(&mut pd, st, world, report.human_slot);
     append_sprite_diffs(&mut pd, st, world, report.human_slot);
     Ok((pd, port, report.human_slot))
+}
+
+/// A/B toggle for the pair loop's RELOAD TABLE RESTORE (round 154,
+/// w154j): set `MGC_NO_PAIR_RESTART_TABLE_RELOAD` to keep the pre-dig
+/// behaviour, where a one-shot disposition consumed in the first life
+/// stayed consumed for every later life of a restarted take (the
+/// pool is re-imported per pair; the THING table is port-side).
+fn no_pair_restart_table_reload() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_PAIR_RESTART_TABLE_RELOAD").is_some())
 }
 
 // The MC1 capture-grade law moved to the shared recovery home so the
@@ -1208,16 +1242,14 @@ pub(crate) fn build_world(
     build_world_mc1_with_book(baked, game, level, None)
 }
 
-/// [`build_world`] with the human SEATED THE WAY RETAIL SEATS HIM —
-/// the MC1 twin of `verify_mc2::build_world_mc2_with_book` (round 153,
-/// for `init-check`). `Some(book)` = the human's carried spells in
+/// [`build_world`] with the human's CARRIED BOOK granted where retail
+/// grants it — the MC1 twin of `verify_mc2::build_world_mc2_with_book`
+/// (round 153, for `init-check`). `Some(book)` = the human's spells in
 /// ACQUISITION order (read off the take's record 0): the carpet's pool
-/// record is popped first, the book's class-12 tokens next, the rivals
-/// after — `sub_44D30`'s order for wizard 0, then 1..7 (:48633). `None`
-/// keeps the app's native layout (no pooled carpet, rivals first, the
-/// book granted by the campaign machinery afterwards), which is what
-/// every other caller wants and what the round-153 census measured
-/// as 1 + (book size) slots of drift on every wizard-minted record.
+/// record is the constructor's (round 154), the book's class-12 tokens
+/// come next, the rivals after — `sub_44D30`'s order for wizard 0,
+/// then 1..7 (:48633). `None` = an empty book (a fresh level 1), which
+/// is what every other caller wants.
 pub(crate) fn build_world_mc1_with_book(
     baked: &std::path::Path,
     game: &str,
@@ -1271,9 +1303,9 @@ pub(crate) fn build_world_mc1_with_book(
         w.set_win_pct(f[0]);
     }
     if let Some(book) = human_book {
-        // Wizard 0 first: the carpet record, then his tokens in
-        // acquisition order (`sub_44D30` :54843 / :54882-905).
-        w.mc1_spawn_human_record();
+        // Wizard 0's tokens in the recorded acquisition order
+        // (`sub_44D30` :54882-905), after the constructor's carpet
+        // record (:54843) and before the rivals.
         w.grant_spells(book);
     }
     let (wizards, player_count) = rival_configs(pkg.wizards.as_ref());

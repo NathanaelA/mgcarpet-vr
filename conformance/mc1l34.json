@@ -1,0 +1,18 @@
+{
+ "dir": "fixtures/mc1l34",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 2446,
+   "file": "the-upgrade-space-test-walks-the-class3-roster.mgcr",
+   "source": "mc1l34",
+   "note": "sub_12D10 WALKS THE TICK-TOP CLASS-3 ROSTER, NOT THE POOL (round 155, w155a law 2, MGC_NO_MC1_UPGRADE_SPACE_CHAIN): the upgrade space test (:17649-53; file 0x2B536/0x2B53F mov 0x8e6e(%ebx) = the +36462 head, 0x2B547 cmpb $2,0x41, 0x2B54D not-self) walks Gen::wiz_chain, whose membership is actLife>=0 && !(flags&0x10), and calls sub_11950/sub_118C0 (file 0x2A0B8: three-axis, movswl extents, 16-bit wrapped x/y, signed z, strict <). mc1l34 pair 2446->2447: the human's RAZED keep 712 (act_life -1, still (3,2)) at (60672,60672) sits 4864 wrapped units from wiz 1's origin keep 896, inside the level-2 reach; retail's roster omits it and admits the Upgrade (ai_state 13->1, +146 374->896); the port's pool scan counted it and refused. Refutes the brief's 'origin castle' guess. Ledger ROUND 155 w155a law 2."
+  },
+  {
+   "t": 14668,
+   "file": "a-hit-wyvern-still-runs-the-wander-house-hunt.mgcr",
+   "source": "mc1l34",
+   "note": "A HIT WYVERN STILL RUNS THE WANDER WRAPPER'S HOUSE HUNT (round 155, w155c law 2, MGC_NO_MC1_WYVERN_HOUSE_HUNT_ON_HIT): the wyvern WANDER wrapper sub_20710 (:26033-58) calls sub_19D70(a1x, 96) and then tests only +70 == 97, ignoring eax (CARPET.EXE file 0x38F15 call 0x32568 = VA 0x19D70 / 0x38F1A mov 0x46(%ebx),%ah / 0x38F20 cmp $0x61,%ah), so a non-promoting hit tick still runs the dwelling hunt. mc1l34 pair 14668->14669: militia 466's bolt lands on wyvern 8 on the tick +63 % (v_26+1) == 0; retail elects dwelling 24 (+146 856 -> 24, +70 97 -> 98); the port's hit freeze returned before the hunt (chase stays 856, the human). Ledger ROUND 155 w155c law 2."
+  }
+ ]
+}

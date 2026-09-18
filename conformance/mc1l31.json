@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l31",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 29685,
+   "file": "a-dying-rivals-negative-purse-refuses-the-castle-plant.mgcr",
+   "source": "mc1l31",
+   "note": "A RIVAL'S CAST GATE READS THE PURSE SIGNED (round 155, w155b, MGC_NO_MC1_RIVAL_CAST_SIGNED_PURSE): readiness sub_15A00 (remc1/sub_main.cpp banner 00015A00) and commit sub_155F0 case 0x10 compare the wizard's +140 purse against the token's +136 price with `jl` (CARPET.EXE VA 0x15B80 file 0x2E378 `8b 83 8c 00 00 00 3b 86 88 00 00 00 0f 8c`; commit VA 0x15822 file 0x2E01A `... 0f 8c 72 01 00 00`), so a purse the fatal tick's shield quarter wrapped negative (sub_46540 :55703 RAW subtract, kept by the death return) refuses every cast. The port's u32 RivalState::mana read -400 as ~4.29e9. mc1l31 pair 29685->29686: rival 729 dies (life 80 -> -320, purse 0 - 1600/4) and the port's castle-less rival still ran the free plant (sub_373F0(+150,3,2)), popping a (3,2) at 955 whose own dispatch popped a (10,42) at 897; those two extra pops shifted lightning beams 963/983's (9,9) segment chains two slots down the free stack (retail's (10,23) endpoint blasts at 837/648, the port's at 835/646; 646/647 extra in port, 648-660 re-posed). Refutes the brief's reap-order guess: both sides free 646/647/648 at the tick-top reap. Ledger ROUND 155 w155b."
+  }
+ ]
+}

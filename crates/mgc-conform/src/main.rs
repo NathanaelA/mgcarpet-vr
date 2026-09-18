@@ -1076,7 +1076,20 @@ fn trace(args: &Args) -> i32 {
 ///   per dispatched tick, so phase = f63 − slot over the first live
 ///   slots; the MAX wins because a slot the dispatcher skipped only
 ///   reads LOWER (mc1l49: slots 1..3 = 18/18/21 → 18, the settle at
-///   which its ten craters match).
+///   which its ten craters match). A slot whose `+63` reads BELOW its
+///   own index is not a settle clock at all — round 155: mc1l34/l36
+///   seat class-5 creatures in slots 3..8 whose `+63` sits at
+///   `slot + phase − 5`, and the wrapped 254/255 won the max, the LCG
+///   ±2 search could not recover, and both takes came in as
+///   thousands of DIFFERENT terrain cells. Those reads are dropped.
+///   ⚠ And the class-5 `+63` is not a slot clock at all (w155e): every
+///   MC1 creature ctor stamps `+63 = spawn_count[model]++`, the PER-MODEL
+///   spawn ordinal (sub_main.cpp:44750-52 for m2, `*(v8 + 12)` read then
+///   `+ 1`, the same shape at :44623/:44698/:44930/:45000/:45282/…; the
+///   port's `mobs.rs` ctor `e.f63 = ordinal`), so "`slot + phase − 5`"
+///   is only the first `(5,2)` sitting in slot 5. A creature whose
+///   ordinal + phase happens to reach its slot would pass the `>= s`
+///   filter and read a LOW phase; class 5 is skipped outright.
 ///
 /// `None` when the record has no decodable state (older takes).
 fn retail_record0_phase(
@@ -1087,12 +1100,20 @@ fn retail_record0_phase(
     match family {
         mgc_formats::mgcr::Family::Mc1 => {
             let st = mgc_formats::mgcr::decode_retail_mc1(state).ok()?;
-            (1..=8usize)
-                .filter_map(|s| {
-                    let e = st.ents.get(s)?;
-                    (e.class64 != 0).then(|| e.f63.wrapping_sub(s as u8) as u32)
-                })
-                .max()
+            // Creatures (class 5) are the fallback only: their `+63` is a
+            // spawn ordinal + phase, so the slot read is approximate
+            // (mc1l11/l16/l42 seat nothing else in 1..8 and read one low;
+            // `record0_settle`'s LCG search corrects it).
+            let read = |creatures: bool| {
+                (1..=8usize)
+                    .filter_map(|s| {
+                        let e = st.ents.get(s)?;
+                        (e.class64 != 0 && (e.class64 == 5) == creatures && e.f63 as usize >= s)
+                            .then(|| (e.f63 as usize - s) as u32)
+                    })
+                    .max()
+            };
+            read(false).or_else(|| read(true))
         }
         mgc_formats::mgcr::Family::Mc2 => {
             let st = mgc_formats::mgcr::decode_retail_mc2(state).ok()?;
@@ -1264,16 +1285,12 @@ pub(crate) fn native_settled_world(
     let (mut w, pristine) = match family {
         mgc_formats::mgcr::Family::Mc1 => {
             // The human's carried book off record 0, in acquisition
-            // order, seated in `sub_44D30`'s order (carpet record,
+            // order, granted in `sub_44D30`'s order (carpet record,
             // tokens, then the rivals) — round 153's MC1 twin of the
-            // MC2 arm below. `MGC_INIT_NATIVE_LAYOUT=1` keeps the
-            // app's own layout (no pooled carpet, rivals first, book
-            // last) for the A/B.
-            let book = if std::env::var_os("MGC_INIT_NATIVE_LAYOUT").is_some() {
-                None
-            } else {
-                retail_record0_human_book_mc1(first)
-            };
+            // MC2 arm below. The seat itself is the constructor's
+            // since round 154 (`MGC_NO_MC1_NATIVE_HUMAN_RECORD=1`
+            // for the A/B).
+            let book = retail_record0_human_book_mc1(first);
             verify::build_world_mc1_with_book(&args.baked, game, level, book.as_deref())?
         }
         mgc_formats::mgcr::Family::Mc2 => {
@@ -1322,6 +1339,10 @@ pub(crate) fn native_settled_world(
         // `tick_paused`), the carpet idle at the level start.
         let (px, pz) = mc2_player_start(&args.baked, &family, level).unwrap_or((128.5, 128.5));
         let idle = mgc_sim::engine::world::PlayerCommand::default();
+        let settle_alt: f32 = std::env::var("MGC_INIT_SETTLE_ALT")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(1.0);
         // ⭐ `MGC_INIT_AUTOSAVE_AT=<n>|none` — the frame retail's
         // one-shot level-start checkpoint autosave landed on FOR THIS
         // TAKE. `sub_57640`'s only caller is the level-start palette
@@ -1382,7 +1403,24 @@ pub(crate) fn native_settled_world(
                     .fold(0u16, |m, (i, _)| m | 1 << i);
                 w.mc2_debug_sever_stagevar_watches(&st.stagevar_watch, mask);
             }
-            let alt = w.ground_height_tiles(px, pz) + 2.0;
+            // ⭐ ONE TILE UP, NOT TWO. Retail seats the carpet at the
+            // marker's tile centre, `ground + 0x100` (`sub_44D30`
+            // :54838-42; MC2 Level.cpp:1319 — the same snap both
+            // `mc1_spawn_human_record` and `mc2_spawn_human_record`
+            // take), and the settle window's idle input holds it
+            // there: mc1l20 record 0 reads the (3,0) carpet at 2480 =
+            // ground 2224 + 256. The app's `--map-settle` convention
+            // (`+ 2.0`) stood the settle pose one tile too high, and
+            // everything that reads the carpet's ALTITUDE in the
+            // settle window followed it: the (5,11) genies' ambush
+            // blink lands "at the target's altitude" (:24733), their
+            // (10,1) sparkle ring and the (10,0) fires it sheds are
+            // laid at the genie's z — round 154's "(10,0) z retail
+            // 2498 vs port 2754" lead (mc1l20 55 + 24 + 3 rows,
+            // mc1l16 34, all exactly +256) was this line, not a fire
+            // ctor (round 154, w154k). `MGC_INIT_SETTLE_ALT=<tiles>`
+            // overrides the lift for an A/B (`2.0` = the old pose).
+            let alt = w.ground_height_tiles(px, pz) + settle_alt;
             let pose = mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
             w.tick(pose, idle);
         }

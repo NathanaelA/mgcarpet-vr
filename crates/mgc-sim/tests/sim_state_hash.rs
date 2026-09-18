@@ -285,11 +285,20 @@ fn flight_tier_golden_state_hashes() {
     // b62f7fc (the rig worktree fails with these exact actuals
     // before this session's laws), so the pin belongs to that
     // commit's law, not to the session that noticed it.
+    // ⭐ ALL EIGHT re-pinned for THE NATIVE MC1 HUMAN SEAT (round
+    // 154, the player's ruling on round 153's finding #1): the
+    // constructor now pops the human's own pool record at the (3,4)
+    // marker BEFORE the book's tokens and the rivals, as retail's
+    // `sub_44D30` does for wizard 0 (:54843-46) — so the post-init
+    // pool already differs (one more live record, every later pop
+    // one slot up) and every slot-seeded stream after it. Under
+    // `MGC_NO_MC1_NATIVE_HUMAN_RECORD=1` the previous eight return
+    // byte-for-byte.
     const FAITHFUL: [u64; 4] = [
-        0x4463963d16af120c, // post-init
-        0xe76322d53e9352be, // A: 40 ticks of forward thrust
-        0x257eb2f2b839bd72, // B: 30 ticks of banked turn + strafe
-        0x4eda561bc9cc9789, // C: 40 ticks of coast
+        0xa37bf0ce9572b02b, // post-init
+        0x3109bd422f1ffcdc, // A: 40 ticks of forward thrust
+        0xef71bca5aa398c86, // B: 30 ticks of banked turn + strafe
+        0xd1edb03e84e5b325, // C: 40 ticks of coast
     ];
     // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
     // proportional camera bank no longer gates off while strafing — it
@@ -305,10 +314,10 @@ fn flight_tier_golden_state_hashes() {
     // ENHANCED re-pinned with the same ball-ctor stamps — the
     // background balls carry them under either mover.
     const ENHANCED: [u64; 4] = [
-        0x895c40c80bbd125d, // post-init
-        0x5f1b1f34c38600fe, // A
-        0x1c66f63aa1b1f768, // B: strafe+turn now banks on forward speed
-        0x5e9d8acbf05875d9, // C
+        0xaa7db5a0faa4bb22, // post-init
+        0xce8720d8d1a66c07, // A
+        0x3810b8f34d3c7498, // B: strafe+turn now banks on forward speed
+        0x72dcfeb390936e84, // C
     ];
     assert_eq!(
         (faithful, enhanced),

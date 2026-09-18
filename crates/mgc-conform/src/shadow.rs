@@ -192,6 +192,18 @@ pub(crate) struct Shadow {
     /// two mc1l0 cheat takes: the human's token mint ignores the
     /// strict encoding), so the normalization is scoped to this.
     pub(crate) native: bool,
+    /// The world under comparison is a PINNED-POSE PAIR (`verify-deltas`):
+    /// `exec_pair` ticks the human with `drive = None`, so the carpet
+    /// MOVER never runs — and four human lanes are the mover's own:
+    /// `knock_mag` (the knock bleeds 4/tick in `take_knock_step` — the
+    /// round-147 "+4 on 40/40 takes" artifact, the same shape round 154
+    /// proved on MC1's 38/38), `duel_count` / `duel_hold` (`sub_455D0`
+    /// :55249 counts the lock in the mover tail; w154g: 934 rows on
+    /// mc1l48, ZERO in the free run) and `duel_victim` (the release
+    /// test lives there too). Those rows measure the HARNESS, not the
+    /// port, so the pair comparator skips them (⚖ the player, round
+    /// 154); the FREE run (`replay`) keeps all four.
+    pub(crate) pair_pinned: bool,
     /// The UNMODELLED census's memory (`<lane>~` rows): the last retail
     /// value per (owner, lane, idx), so a row counts a TRANSITION, not
     /// a tick — a rival's hands are `0/1` on every tick of every take,
@@ -575,11 +587,18 @@ impl Shadow {
             // own encoding, not a lane (`init-check` is the only
             // native-world caller; 38 of 39 MC1 takes fired on it).
             // Scoped to `self.native`: see the field.
+            // …and an AUTHORED jar carries the bare phase (`0..=2`,
+            // `spawn_from_thing_at`'s native `base = 0`) where retail
+            // carries `3·spell + phase` (round 154, w154k: the
+            // `(12,x) f70` "retail 34 port 1" rows on mc1l10/l13/l16/
+            // l20/l21/hwl2 — one per authored jar, all exactly this).
             let gf70 = if self.native
                 && g.class == 12
                 && g.f70 >= mgc_sim::engine::world::MANIFEST_BASE
             {
                 3 * (g.f70 - mgc_sim::engine::world::MANIFEST_BASE) as i64
+            } else if self.native && g.class == 12 && g.f70 <= 2 {
+                3 * g.model as i64 + g.f70 as i64
             } else {
                 g.f70 as i64
             };
@@ -657,6 +676,12 @@ impl Shadow {
             if !rehomed48 {
                 hits.push(("f48", w.f48 as i64, g.f48 as i64));
             }
+            // The castle workers' `+42` castle link (`Ent::link42`,
+            // w154j): a compared lane on the (10,41) leveler and the
+            // (10,42) painter — retail's slot vs the port's stamp.
+            if w.class64 == 10 && matches!(w.model65, 41 | 42) {
+                hits.push(("f42", w.f42 as i64, g.f42 as i64));
+            }
             // The TILE LINKS are structural, not a lane: the port's
             // carpet lives outside the pool, so a chain that threads
             // THROUGH the human can never agree link-for-link. Skip
@@ -680,10 +705,12 @@ impl Shadow {
             // NO home for, so nothing can be compared — but a retail
             // value that is ever NON-ZERO says the lane carries state
             // the port never will. Reported under `<lane>~` with the
-            // port side printed as `—` (−1); `+42` only off class 12,
-            // where it is the token owner already homed in `f144`.
+            // port side printed as `—` (−1); `+42` off class 12 (the
+            // token owner, homed in `f144`) and off (10,41)/(10,42) (the
+            // castle link, compared above since w154j).
+            let worker = w.class64 == 10 && matches!(w.model65, 41 | 42);
             let unmodelled: [(&'static str, i64); 3] = [
-                ("f42~", if w.class64 == 12 { 0 } else { w.f42 as i64 }),
+                ("f42~", if w.class64 == 12 || worker { 0 } else { w.f42 as i64 }),
                 ("f61~", w.f61 as i64),
                 ("f62~", w.f62 as i64),
             ];
@@ -1004,6 +1031,13 @@ impl Shadow {
             self.wiz_n.entry(ws.wiz).or_default().0 += 1;
             let ent = st.ents.get(w.play_index as usize);
             for &(name, port) in &ws.scalars {
+                // The pinned pair's mover-owned human lanes (see the field).
+                if self.pair_pinned
+                    && ws.wiz == 0
+                    && matches!(name, "knock_mag" | "duel_count" | "duel_hold" | "duel_victim")
+                {
+                    continue;
+                }
                 let retail: i64 = match name {
                     "charge" => w.charge as i64,
                     "knock_dir" => w.knock_dir as i64,
@@ -1081,7 +1115,7 @@ impl Shadow {
             // ⚠ THE UNMODELLED CENSUS (round 153) — see the entity twin
             // in [`Self::compare_ents_mc1`]. The registers retail keeps
             // per wizard that the port has NO home for on this column:
-            // rivals' HUD alarms, house tally, kill/shot/hit counters,
+            // rivals' HUD alarms, kill/shot/hit counters,
             // raw hands (255 = empty) and blue-grant flags; the HUMAN's
             // hate ledger (0x601F = neutral), war flags, learn and
             // cooldown countdowns; everyone's exit-status word.
@@ -1103,7 +1137,6 @@ impl Shadow {
             } else {
                 unmodelled.extend([
                     ("danger~", 0, w.danger as i64),
-                    ("banked_houses~", 0, w.banked_houses as i64),
                     ("kills~", 0, w.kills as i64),
                     ("shots~", 0, w.shots as i64),
                     ("hits~", 0, w.hits as i64),
@@ -1145,6 +1178,13 @@ impl Shadow {
             }
             self.wiz_n.entry(ws.wiz).or_default().0 += 1;
             for &(name, port) in &ws.scalars {
+                // The pinned pair's mover-owned human lanes (see the field).
+                if self.pair_pinned
+                    && ws.wiz == 0
+                    && matches!(name, "knock_mag" | "duel_count" | "duel_hold" | "duel_victim")
+                {
+                    continue;
+                }
                 let retail: i64 = match name {
                     "charge" => p.charge as i64,
                     "cmd_speed" => p.cmd_speed as i64,

@@ -7,6 +7,18 @@
    "file": "the-rival-castle-tokens-split-reads-the-register.mgcr",
    "source": "mc1l26-froze",
    "note": "THE RIVAL CASTLE TOKEN'S CREATE/UPGRADE SPLIT READS wizext+50 (INDEX TEST ONLY): sub_57610 (remc1/sub_main.cpp:65893-908; CARPET.EXE file 0x6FEE0 `mov 0xa0(%ebp),%eax; mov 0x32(%eax),%dx; lea pool+164*edx,%esi; cmp %eax,%esi; jbe` -> create, else `+68=10, +69=43, +146=v5` -> the UPGRADE ball homing on the register's castle). No class/life/LEVEL test - the register is bound at the PLANT (:19206), so a freshly planted level-0 castle is bound and the very next cast is an upgrade. The port's rival_castle_token_tick used the stand-in rival_castle(ent).filter(f26 > 0) and minted a CREATE ball at the wizard's own site, which castle_site_ok refused (castle within 2048) and reap-flagged on its birth tick. mc1l26-froze t=25107->25108: wiz 3 plants castle 985 at 25107 (wizext+50 0 -> 985, +26 0), recasts at 25108, token 606 fires; retail's ball 953 is an upgrade ball (+68 10, +69 43, +146 985) flying with life 20; the port's was a create ball with flags 1030. The human's split already read the register (player_castle_bound) - a law on one call path. Kill switch MGC_NO_MC1_RIVAL_CASTLE_TOKEN_REGISTER. Ledger ROUND 152 w152k law 1."
+  },
+  {
+   "t": 31891,
+   "file": "a-castle-worker-follows-its-link-not-the-site-scan.mgcr",
+   "source": "mc1l26-froze",
+   "note": "A CASTLE WORKER FOLLOWS ITS +42 LINK, NOT A SITE SCAN (round 154, w154j, MGC_NO_MC1_WORKER_CASTLE_LINK): sub_47020 :56104-11 / sub_47080 :56124-33 mint the (10,42) painter / (10,41) leveler with +42 = the castle's own slot (CARPET.EXE VA 0x4705F / 0x470BF `mov %ax,0x2a(%ebx)`), and the finishes/shake gates (:30333, :30419-27, :30520, :30697-709) dereference it with no class test. The port re-derived the castle by a lowest-numbered pool scan on the worker's (x,y) (`castle_at_site`). mc1l26-froze pair 31891->31892: with the scan the leveler 879 (10,41) resolves the wrong castle record on the level-250 OOB take and is MISSING in the port at 31892; with the link (`Ent::link42`, hash-silent, lifted from +42 by the importer) the pair is clean. Found by the round-154 session-end sweep (the only moved brief row: mc1l26-froze 733 -> 732 segments), reversion probe one switch at a time. Ledger ROUND 154 154-12 / 154-14."
+  },
+  {
+   "t": 31769,
+   "file": "the-upgrade-space-test-skips-a-razed-keep-on-the-oob-take.mgcr",
+   "source": "mc1l26-froze",
+   "note": "sub_12D10 WALKS THE TICK-TOP CLASS-3 ROSTER - A SECOND WITNESS, FOUND BY THE SESSION-END SWEEP (round 155, w155a law 2, MGC_NO_MC1_UPGRADE_SPACE_CHAIN): the upgrade space test walks bucket[0] (+36462; membership actLife>=0 && !(flags&0x10)) through sub_11950/sub_118C0 (CARPET.EXE file 0x2B53F/0x2B547/0x2B54D, 0x2A0B8), so a dead keep cannot block an upgrade; the port's pool scan counted it. mc1l26-froze pair 31769->31770: retail admits the upgrade (the (10,43) upgrade token at slot 765 and a (10,13) at slot 117 are born, the (9,x) ball 862 flies on); under the pool scan both are missing and 862 is re-posed. Moved mc1l26-froze 732 -> 731 segments (roster 731 -> 730) under the registered level-250 OOB rule. Ledger ROUND 155 w155a law 2 / 155-10."
   }
  ]
 }
