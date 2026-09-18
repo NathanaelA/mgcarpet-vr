@@ -1932,6 +1932,13 @@ fn run_mc1(
     let mut stats = RStats::default();
     let mut st_prev: Option<(u64, RetailMc1)> = None;
     let mut chain: Option<(Chain, u16)> = None; // (flight chain, human slot)
+    // `MGC_OVERRUN=<n>`: after the last record, re-anchor the port ON
+    // that record and keep stepping n ticks with the last recovered
+    // input, one heartbeat line per tick — the instrument for a take
+    // whose retail side FROZE at its end (mc1l26-froze, mc1l49): does
+    // the port, holding retail's exact final state, hang the same way?
+    let overrun: Option<u64> = std::env::var("MGC_OVERRUN").ok().and_then(|v| v.parse().ok());
+    let mut overrun_input: Option<(Mc1Input, PlayerCommand)> = None;
     let mut printed_import = false;
     // MGC_CASTLE_TRACE=<t0>:<t1> — the replay-mode castle-story probe:
     // at every boundary in range, print the retail (3,2) rows beside
@@ -2144,6 +2151,7 @@ fn run_mc1(
         if rec.mc1_strafe_freeze() && ch.s.strafe != 0 {
             ch.s.strafe += 4 * ch.s.strafe.signum();
         }
+        overrun_input = Some((inp, cmd));
 
         if args.pose_only {
             // Tier-2: fresh retail world context at N, chained flight.
@@ -2692,6 +2700,31 @@ fn run_mc1(
             spec.t,
             stats.segs.last().map_or(0, |s| s.end)
         ));
+    }
+    if let (Some(n), Some((t_last, st)), Some((inp, cmd))) =
+        (overrun, st_prev.as_ref(), overrun_input)
+    {
+        let (mut ch, human_slot, active) = anchor_mc1(&mut world, &pristine, &timg, st, *t_last)?;
+        println!(
+            "== OVERRUN: anchored on the LAST record t={t_last} ({active} active, human slot \
+             {human_slot}); stepping {n} ticks with the last recovered input"
+        );
+        for i in 1..=n {
+            let t = t_last + i;
+            let started = std::time::Instant::now();
+            step_mc1(&mut world, &mut ch, inp, cmd);
+            let (free, ev) = world.debug_pool();
+            let pose = ch.pose();
+            println!(
+                "OVERRUN t={t} {:.1}ms live={} free={free} pose=({:.2},{:.2},{})",
+                started.elapsed().as_secs_f64() * 1e3,
+                ev.len(),
+                pose.x as f64 / 256.0,
+                pose.y as f64 / 256.0,
+                pose.z,
+            );
+        }
+        return Ok(stats.clean());
     }
     let mode = if args.pose_only { "pose-only" } else { "world" };
     // ⭐ A RESYNC MUST NEVER BE INVISIBLE IN A BASELINE DIFF. A plain
