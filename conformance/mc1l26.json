@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l26",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 25107,
+   "file": "the-rival-castle-tokens-split-reads-the-register.mgcr",
+   "source": "mc1l26-froze",
+   "note": "THE RIVAL CASTLE TOKEN'S CREATE/UPGRADE SPLIT READS wizext+50 (INDEX TEST ONLY): sub_57610 (remc1/sub_main.cpp:65893-908; CARPET.EXE file 0x6FEE0 `mov 0xa0(%ebp),%eax; mov 0x32(%eax),%dx; lea pool+164*edx,%esi; cmp %eax,%esi; jbe` -> create, else `+68=10, +69=43, +146=v5` -> the UPGRADE ball homing on the register's castle). No class/life/LEVEL test - the register is bound at the PLANT (:19206), so a freshly planted level-0 castle is bound and the very next cast is an upgrade. The port's rival_castle_token_tick used the stand-in rival_castle(ent).filter(f26 > 0) and minted a CREATE ball at the wizard's own site, which castle_site_ok refused (castle within 2048) and reap-flagged on its birth tick. mc1l26-froze t=25107->25108: wiz 3 plants castle 985 at 25107 (wizext+50 0 -> 985, +26 0), recasts at 25108, token 606 fires; retail's ball 953 is an upgrade ball (+68 10, +69 43, +146 985) flying with life 20; the port's was a create ball with flags 1030. The human's split already read the register (player_castle_bound) - a law on one call path. Kill switch MGC_NO_MC1_RIVAL_CASTLE_TOKEN_REGISTER. Ledger ROUND 152 w152k law 1."
+  }
+ ]
+}

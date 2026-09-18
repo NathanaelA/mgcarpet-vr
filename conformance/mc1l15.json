@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l15",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 44456,
+   "file": "a-token-fires-from-the-wizard-record-as-the-walk-holds-it.mgcr",
+   "source": "mc1l15",
+   "note": "A TOKEN FIRES FROM THE WIZARD RECORD AS THE WALK HOLDS IT, WARP INCLUDED: the vortex sub_26A60 (remc1/sub_main.cpp:29170; CARPET.EXE VA 0x26BAD push vortex+0x96 / push the wizard record / call 0x41C70) copies its destination onto the WIZARD'S POOL RECORD inside its own dispatch, and the Meteor token arm sub_56950 (:65374-; VA 0x56965 token +42 -> the caster's live record, 0x569C5 lea 0x48(%ebp) -> sub_373F0, 0x569E6 -> sub_55EF0 muzzle off the record) mints off that record at the TOKEN's slot. mc1l15 t=44457: the human flies into vortex 5 (dest 60288,49280) with a held Meteor; token 51 walks after 5 and before the carpet 422, so retail's (9,3) is born at the warped left muzzle (59822,49048,1106) and its one-shot acquire MISSES the (5,9) at 115 by range (6,121 > 5,120, chase 0); the port's mc1_cast_pose was the pre-warp settled carpet 1,450 units back, where 115 sat in the cone (chase 115, snapped 1897/2027). warp_peek_publish_at now republishes the unconsumed warp to the cast-pose register too; the meteor's dest triple (+150 = raw axis stepped 10240) is stamped as well (MGC_NO_MC1_METEOR_DEST_STAMP, shadow lane). Kill switch MGC_NO_MC1_WARP_CAST_POSE. Ledger ROUND 152 w152l."
+  }
+ ]
+}

@@ -936,7 +936,9 @@ pub struct World {
     /// peek: retail's dolmen latch is stamped at the DOLMEN's own
     /// dispatch, so a dolmen chained BELOW the warping record read
     /// the pre-warp pose and a dolmen ABOVE it read the post-warp
-    /// one. `None` = no slot attributable (MC1 arms, importer).
+    /// one — and by the MC1 walk's rival-lane republish
+    /// ([`Self::warp_peek_publish_at`]; the MC1 spell arm and the
+    /// vortex stamp it too). `None` = no slot attributable (importer).
     pending_teleport_slot: Option<u16>,
     /// The teleport spell zeroed the caster's flight TARGET speed
     /// this tick (`Type_160 v_12 = 0`, :65599/:65613; MC2
@@ -1953,6 +1955,116 @@ pub(crate) fn no_mc2_teleport_human_pose() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_TELEPORT_HUMAN_POSE").is_some())
 }
 
+/// ⭐⭐⭐ **THE SAME LAW, MC1 COLUMN — [`no_mc2_teleport_human_pose`]
+/// WAS LANDED ON ONE GAME.** MC1's `(12,10)` resolve is likewise a
+/// wizard-RECORD write inside the TOKEN's own dispatch (`sub_55EF0`'s
+/// spell-10 arm :65574-602: every leg calls `sub_41C70(v1 = the
+/// WIZARD record, dest)` — `CARPET.EXE` VA 0x56F51 `55 e8 1a ad fe ff`
+/// push %ebp / call sub_41C70 on the return leg, the axis write + tile
+/// relink — see [`World::cast_teleport`]), so a rival seated ABOVE the
+/// token reads
+/// the destination that same tick. The port's MC1 walk republished
+/// only `ctx` (the creature lanes) and left `World::human_pose` — the
+/// rival lanes' register, [`World::wizard_pos`] included — on the
+/// tick-head pose until the carpet's own dispatch consumed the warp
+/// NEXT tick.
+///
+/// WITNESS mc1l19 t=17462: the human (carpet 575, at home over castle
+/// 703 at (4136, 19992, 4100)) casts Teleport; the `(12,10)` token at
+/// slot **591** warps him back to the saved axis (31151, 14181, 706).
+/// Rival 600's think tick runs the ball election that same walk:
+/// retail sees him 4,052 units from his own claimed ball 873 —
+/// GUARDED, `sub_15340`'s 5120 disc — and takes the wild ball 788
+/// (`chase` 873 → 788, `+148` 2192 → 2107); the port's election read
+/// `human_pose` = the pre-warp pose 29,785 units off, judged 873
+/// unguarded and kept it. The boundary pose was already right (the
+/// driver's post-turn consume), which is why only the rival's `chase`
+/// row surfaced.
+///
+/// `MGC_NO_MC1_TELEPORT_HUMAN_POSE=1` restores the ctx-only peek.
+pub(crate) fn no_mc1_teleport_human_pose() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TELEPORT_HUMAN_POSE").is_some())
+}
+
+/// ⭐⭐⭐ **THE SAME LAW, THIRD REGISTER — THE MC1 TOKEN FIRES MEASURE
+/// FROM THE WIZARD RECORD AS THE WALK HOLDS IT, WARP INCLUDED.** Every
+/// class-12 launcher arm resolves its caster as `pool + 164 * token.+42`
+/// and reads THAT record's `+72/+74/+76` (the mint site and the muzzle,
+/// `sub_55EF0`) and `+30/+32` (the launch bearing) at the token's own
+/// walk slot — the meteor arm `sub_56950` (:65374-) in `CARPET.EXE`:
+/// VA 0x56965 `66 8b 50 2a` mov 0x2a(%eax),%dx → ×164 → %ebp = the
+/// caster RECORD, 0x569C5 `8d 45 48` lea 0x48(%ebp) → `call sub_373F0`
+/// (the mint at the record's position), 0x569E6 `55` push %ebp → `call
+/// sub_55EF0` (the muzzle off the record), 0x56A5F/0x56A66 `+32`/`+30`
+/// off %ebp. A LOWER-slot warp is already IN that record: the portal
+/// vortex `sub_26A60` (:29170-) closes its overlap arm with VA 0x26BAD
+/// `55 53 e8 bc b0 01 00` push %ebp (= its own `+150` dest) / push %ebx
+/// (= the WIZARD's pool record) / `call sub_41C70` — the axis copy onto
+/// the wizard at the VORTEX's dispatch, exactly like the spell-10
+/// resolve [`no_mc1_teleport_human_pose`] already carries. The port's
+/// `mc1_cast_pose` was stamped once per frame from the SETTLED carpet
+/// and never saw a same-tick warp, so a token walking between the
+/// warper and the carpet fired from where the wizard USED to be.
+///
+/// WITNESS mc1l15 t=44457 (2 segments → 1): the human, holding Meteor
+/// (token `(12,7)` at slot 51), flies into the authored `(10,34)`
+/// vortex at slot **5** at (60288, 47488); it warps him to (60288,
+/// 49280, 913). Retail's meteor 911 is minted off the WARPED record:
+/// left muzzle + one flight step = (59822, 49048, 1106), heading 1855,
+/// and its one-shot acquire MISSES (the `(5,9)` at slot 115 is 6,121
+/// units off — past `sub_54A90`'s 5,120 range) so `chase 0`, `flags
+/// 6`. The port minted at the pre-warp muzzle 1,450 units back, where
+/// slot 115 sat 4,910 units inside the cone: `chase 115`, snapped to
+/// 1897/2027, born at (60221, 47563, 1995). The boundary pose was
+/// already right (the mover consumed the warp at the carpet's slot),
+/// which is why only the bolt's ten rows surfaced.
+///
+/// `MGC_NO_MC1_WARP_CAST_POSE=1` restores the settled-frame stamp.
+pub(crate) fn no_mc1_warp_cast_pose() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WARP_CAST_POSE").is_some())
+}
+
+/// `MGC_NO_MC1_METEOR_DEST_STAMP=1` — the A/B arm for the meteor arm's
+/// dest triple (`sub_56950` :65407-09, VA 0x56A4C-0x56A6B): restore
+/// the pre-dig behaviour where the human's `(9,3)` was minted with
+/// `+150/+152/+154` left at the ctor's 0. Raw-shadow lane only — no
+/// consumer reads the meteor's dest — so this is a record-fidelity
+/// hunk, not a graded law (mc1l15 t=44457 slot 911).
+pub(crate) fn no_mc1_meteor_dest_stamp() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_METEOR_DEST_STAMP").is_some())
+}
+
+/// ⭐⭐ **THE MC1 OBJECTIVE CHECK BELONGS AT THE TICK TAIL — THE SAME
+/// CAPTURE-PHASE LAW AS THE MC1 CHEAT AND THE MC2 STAGE ENGINE.**
+///
+/// Retail's frame (`DrawAndEventsInGame_34530` :41660-41690, shipped
+/// order verified at `CARPET.EXE` VA 0x34563/0x34573/0x345A1-BC) runs
+/// `sub_3C9D0` (command pass) → `sub_415C0` (the banked-share streak
+/// that sets `13325 |= 2`) → `sub_41780` (the tick body) ×1/4/16. The
+/// recorder snapshots inside the tick function's pacing stub, BEFORE
+/// the body, so record N = tick N−1's walk + frame N's pre-tick
+/// writes. The port ran `objective_mc1` at the tick HEAD beside
+/// `recompute_mana` (which IS inside the tick body, :52327), so the
+/// latch and the walk that consumes it landed in the SAME boundary.
+///
+/// WITNESS mc1l19 t=23652: retail's record shows `status 0 → 2` with
+/// the (11,4) win trigger (slot 568) untouched (`flags 1`); record
+/// 23653 shows the trigger reaped (`flags 1025`) and its disposition's
+/// 99 `(5,9)` spawns. The port fired the trigger at 23652 (`flags
+/// 1025`, 99 extra records), then — re-seeded at 23652 with the win
+/// already consumed — never fired it at 23653 (99 missing). Both
+/// boundaries close with the tail placement; the whole 16,947-tick
+/// remainder of the take was already bit-exact past it.
+///
+/// `MGC_NO_MC1_OBJECTIVE_TAIL=1` restores the pre-walk placement.
+pub(crate) fn no_mc1_objective_tail() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_OBJECTIVE_TAIL").is_some())
+}
+
 /// `MGC_NO_MC2_TELEPORT_REGEN=1` — the second half's A/B arm: restore
 /// the pre-dig behaviour where the at-castle/at-dolmen regen probe read
 /// the carpet's PRE-warp tile on the teleport's own tick.
@@ -2040,6 +2152,42 @@ pub(crate) fn mc2_marker_probe_off() -> bool {
 pub(crate) fn mc1_teleport_mail_seat_off() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TELEPORT_MAIL_SEAT").is_some())
+}
+
+/// `MGC_NO_MC1_VORTEX_CHAIN_PEEK=1` — the A/B arm for the MC1 vortex
+/// CHAIN: restore the pre-dig behaviour where `portal_tick`'s human
+/// arm tested overlap + facing against the TICK-HEAD pose, so a second
+/// vortex sitting on the first one's destination could never fire the
+/// same tick.
+///
+/// ⭐ RETAIL'S VORTEX WARP IS A RECORD WRITE, AND THE NEXT VORTEX READS
+/// THE RECORD. `sub_26A60` (:29199-29223), `CARPET.EXE` VA 0x26B24
+/// `53 56 e8 … call 0x11950` = `sub_11950(portal, WIZARD RECORD)`
+/// (the overlap test on `+0x48..` of the record), 0x26B3B `lea
+/// eax,[ebx+0x48]` → `call 0x42150` (the bearing FROM the record's
+/// axis), and on a hit 0x26BAD `55 53 e8 … call 0x41C70` =
+/// `CopyEntityPosition(record, portal+0x96)` — the destination lands
+/// in the wizard record's `+72/+74/+76` at the PORTAL's own walk slot.
+/// Every vortex dispatched above it that tick tests the WARPED axis.
+/// mc1l20's ring of 14 `(10,34)` vortices (slots 468..481) is authored
+/// so each one's destination is ONE TILE short of the next vortex:
+/// t=25148 the carpet at (13616, 44312) heading 1015 enters 468 →
+/// (896, 55936); 469 stands at (896, 56192), one tile ahead on the
+/// same heading, and retail warps AGAIN to (56448, 43648) — the
+/// boundary pose (56482, 43725) is that plus the carpet's own step.
+/// 470 at (56448, 43392) is one tile BEHIND, outside the 0xAA cone,
+/// so the chain stops there. The port staged 468's warp in
+/// `pending_teleport` and handed 469 the tick-head pose, so it landed
+/// one hop short — and the same one-hop lag on every ring pass
+/// (t=25680/25716/25761/25801, each "the port lands where retail
+/// landed a pass ago"). The rival arm of the same handler already
+/// reads the rival's record and chains; only the out-of-pool human
+/// lane was stale. The peek honours the same "unconsumed" predicate
+/// as [`World::warp_peek_publish_at`] (a warp the carpet's own
+/// dispatch has already passed is settled).
+pub(crate) fn mc1_vortex_chain_peek_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_VORTEX_CHAIN_PEEK").is_some())
 }
 
 /// `MGC_NO_MC2_TELEPORT_SAVE_AXIS=1` — the A/B arm for the T1
@@ -2381,6 +2529,21 @@ pub(crate) fn mc1_no_shrine_latch() -> bool {
 pub(crate) fn mc2_no_shrine_latch() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SHRINE_LATCH").is_some())
+}
+
+/// `MGC_NO_MC1_REBOUND_BIT_LAG=1` restores the pre-dig arm, where the
+/// HUMAN's Rebound (spell 14) mirror was derived from the token's
+/// POST-decrement `+48 > 0`, clearing the deflection bit one tick
+/// before retail. `sub_573F0_57920` (:65774, dispatch row 0x2A;
+/// CARPET.EXE file 0x6FBE8) is `if (+48 <= 0) owner+17 &= ~0x80; else
+/// { gate ? (owner+17 |= 0x80, sub_55E80) : +48 = 1; --(+48); }` —
+/// the test is PRE-decrement, so the bit stands through the 1 → 0
+/// tick and drops on the next pass. The rival twin
+/// (`rival_rebound_token_tick`) already carried the law. Witness
+/// mc1l14 t=20608 / mc1l15 t=36816.
+pub(crate) fn mc1_rebound_bit_lag_off() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_REBOUND_BIT_LAG").is_some())
 }
 
 /// `MGC_NO_MC1_BEYOND_SIGHT_TOKEN=1` restores the pre-dig arm, where
@@ -5807,11 +5970,25 @@ impl World {
         p
     }
 
-    /// The mid-walk teleport peek (see the walk loop's note): a warp
-    /// armed by a lower walk slot republishes the human's pose to the
-    /// walkers above it — `ctx`, and on MC2 the rival lanes'
-    /// `human_pose` register too ([`no_mc2_teleport_human_pose`]).
-    fn warp_peek_publish(&mut self, ctx: &mut MobCtx) {
+    /// The mid-walk teleport peek (see the walk loop's note), at walk
+    /// slot `i`: a warp armed by a lower walk slot republishes the
+    /// human's pose to the walkers above it — `ctx`, and the rival
+    /// lanes' `human_pose` register too (MC2: [`no_mc2_teleport_human_pose`];
+    /// MC1: [`no_mc1_teleport_human_pose`]). The MC1 rival-lane
+    /// republish needs the slot: a warp the CARPET's own dispatch has
+    /// already passed (token below the carpet) is settled — free-run
+    /// consumed it, and the pinned-pair driver leaves the pending armed
+    /// for its post-turn take while `adopt_walk_pose` has already
+    /// published the recorded post-warp pose — so re-publishing the raw
+    /// destination above the carpet would UNDO that (mc1hwl0 t=20039,
+    /// fixture `the-teleport-resolve-is-a-record-write-same-tick`:
+    /// rival 473 above carpet 472 must read dest + the carpet's own
+    /// step, not the bare dest). A warp staged ABOVE the carpet
+    /// (`pending_teleport_slot` > carpet) is still unconsumed and every
+    /// higher walker reads the record it wrote (mc1l19 t=17462, token
+    /// 591 over carpet 575). Native play (`mc1_carpet_slot == 0`, the
+    /// carpet dispatched post-walk) is always below the carpet.
+    fn warp_peek_publish_at(&mut self, ctx: &mut MobCtx, i: usize) {
         if !(matches!(self.game, GameId::Mc2) && mc2_teleport_ctx_off())
             && let Some((tx, ty, alt)) = self.pending_teleport
         {
@@ -5820,7 +5997,27 @@ impl World {
             if let Some(a) = alt {
                 ctx.pz = (a * 256.0) as i16;
             }
-            if matches!(self.game, GameId::Mc2) && !no_mc2_teleport_human_pose() {
+            let republish = if matches!(self.game, GameId::Mc2) {
+                !no_mc2_teleport_human_pose()
+            } else {
+                // MC1/HW: the same record write at the token's slot —
+                // see [`no_mc1_teleport_human_pose`] (mc1l19 t=17462).
+                let cs = self.mc1_carpet_slot as usize;
+                let unconsumed = cs == 0
+                    || i < cs
+                    || self.pending_teleport_slot.is_some_and(|m| m as usize > cs);
+                // …and the TOKEN FIRES' register with it — the same
+                // record write, read by `sub_56950`'s `+42` resolve at
+                // the token's slot: [`no_mc1_warp_cast_pose`]
+                // (mc1l15 t=44457, vortex 5 under meteor token 51).
+                if !no_mc1_warp_cast_pose() && unconsumed {
+                    self.mc1_cast_pose.x = ctx.px;
+                    self.mc1_cast_pose.y = ctx.py;
+                    self.mc1_cast_pose.z = ctx.pz;
+                }
+                !no_mc1_teleport_human_pose() && unconsumed
+            };
+            if republish {
                 self.human_pose = (ctx.px, ctx.py, ctx.pz);
             }
         }
@@ -7779,7 +7976,10 @@ impl World {
         // ⚠ MC2's arm is NOT here: `sub_58F00_game_objectives` runs
         // AFTER `UpdateEntities_57730`, at the frame tail — see the
         // post-walk call site.
-        if matches!(self.g.verbs.objective, ObjectiveVerb::Mc1) {
+        // ⭐ MC1's arm is not here either any more — see the tick tail
+        // ([`no_mc1_objective_tail`]); the pre-dig placement stays
+        // reachable for the A/B.
+        if matches!(self.g.verbs.objective, ObjectiveVerb::Mc1) && no_mc1_objective_tail() {
             self.objective_mc1();
         }
 
@@ -8188,7 +8388,7 @@ impl World {
             // The port copied the TICK-TOP pose (26096, 11739, 3040) bit for
             // bit. ⚠ MC1 is bit-identical by construction: `!Mc2` and
             // `!(Mc2 && off)` agree on every non-MC2 game.
-            self.warp_peek_publish(&mut ctx);
+            self.warp_peek_publish_at(&mut ctx, i);
             // The human carpet is out-of-pool (its imported slot is
             // zeroed): the cave ambient tail fires exactly when the
             // walk crosses that recorded slot — retail's sub_5D530
@@ -10079,6 +10279,22 @@ impl World {
         {
             self.apply_cheat(c);
         }
+        // ⭐⭐ THE MC1 WIN LATCH SITS IN THE SAME GAP, right after the
+        // command pass: `DrawAndEventsInGame_34530` calls
+        // `sub_3C9D0` (the cheat/command pass) and then `sub_415C0`
+        // (the banked-share streak, :41670) BEFORE the tick body
+        // (`CARPET.EXE` VA 0x34563 `e8` call 0x3C9D0 / 0x34573 `e8`
+        // call 0x415C0 / 0x345A1-0x345BC the three gameSpeed fan-out
+        // `call 0x41780`), and the recorder's window is inside the
+        // tick function's pacing stub. So at a recorded boundary the
+        // completion latch (`13325 |= 2`) is already visible while the
+        // (11,4) win trigger that consumes it has NOT run: it fires on
+        // the NEXT record's walk. Pre-walk placement made the trigger
+        // fire on the same walk — one record early. See
+        // [`no_mc1_objective_tail`] (mc1l19 t=23652).
+        if matches!(self.g.verbs.objective, ObjectiveVerb::Mc1) && !no_mc1_objective_tail() {
+            self.objective_mc1();
+        }
 
         // ⭐ THE CLOSING CHECKPOINT — the checkpoint list used to END
         // at the tick tail, so **any write landing after it was never
@@ -10299,14 +10515,55 @@ impl World {
     /// human player only.
     fn objective_mc1(&mut self) {
         if self.win_pct > 0 && !self.completed {
+            // ⭐ THE SHARE IS `wizext+308 + pool[castle_reg].+140` (:52123-26):
+            // the HOUSE tally from the head-of-tick census (`u32_308`,
+            // written :56185-89) plus the castle's store read LIVE off
+            // the pool record — not the census's `castle_stored`
+            // snapshot. Retail's check runs after the walk (see the
+            // tail call site), so a store credited during THIS walk
+            // counts THIS frame: mc1l10 retail's streak counter goes
+            // 0 → 1 at record 19364, the walk that credits castle
+            // 270; the census-snapshot read turned over one record
+            // late (19365), and both the status bit and the win
+            // trigger followed. The pre-dig arm keeps the snapshot.
+            let banked = if no_mc1_objective_tail() {
+                self.player.banked
+            } else {
+                let store = self
+                    .player_castle_bound()
+                    .map_or(0, |c| self.g.ent[c].f140.max(0) as u32);
+                (self.g.banked_houses.max(0) as u32).wrapping_add(store)
+            };
             let over = self.player.world_mana != 0
                 && self.player_castle_bound().is_some()
-                && 100u64 * self.player.banked as u64 / self.player.world_mana as u64
+                && 100u64 * banked as u64 / self.player.world_mana as u64
                     > self.win_pct as u64;
             if over {
-                self.win_streak += 1;
-                if self.win_streak >= self.g.chassis.win_streak_ticks {
+                // ⭐ THE LATCH TESTS THE COUNTER BEFORE THE INCREMENT.
+                // `sub_415C0` (:52130-35): `if (v5 < 16) +13323 = v5 + 1;
+                // else +13325 |= 2` — CARPET.EXE 0x59E58 `66 83 f9 10 cmp
+                // cx,0x10` / 0x59E5C `7c 09 jl` (the increment arm) /
+                // 0x59E5E `80 8b 0d 34 00 00 02 or byte [ebx+0x340d],2`.
+                // The bit lands on the frame the counter is ALREADY at
+                // the threshold — the 17th consecutive over-frame — and
+                // the counter parks there. The port latched on the
+                // frame the counter REACHED it (the 16th), one frame
+                // early, so the win trigger's disposition fired a walk
+                // early: mc1l10 t=19364-19380 (castle 270's store
+                // crosses the share at record 19364; retail's `status`
+                // bit 2 lands at record 19380 and the (11,4) win trigger
+                // mints the (5,11) genie in walk 19380 → record 19381;
+                // the port minted it a record early).
+                // `MGC_NO_MC1_WIN_STREAK_PRE_TEST=1` reverts.
+                if crate::engine::features::no_mc1_win_streak_pre_test() {
+                    self.win_streak += 1;
+                    if self.win_streak >= self.g.chassis.win_streak_ticks {
+                        self.completed = true;
+                    }
+                } else if self.win_streak >= self.g.chassis.win_streak_ticks {
                     self.completed = true;
+                } else {
+                    self.win_streak += 1;
                 }
             } else {
                 self.win_streak = 0;
@@ -12280,7 +12537,11 @@ impl World {
                 // resumed world re-seeds it here.
                 self.g.mc2_pinned = crate::engine::features::Mc2Pinned(p.carpet_slot);
             }
-            _ => self.mc1_carpet_slot = p.carpet_slot,
+            _ => {
+                self.mc1_carpet_slot = p.carpet_slot;
+                // The MC1 Gen-level mirror (`Gen::mc1_human_on_wiz_chain`).
+                self.g.mc1_pinned = crate::engine::features::Mc1Pinned(p.carpet_slot);
+            }
         }
         self.g.castle_reg.0 = p.castle_reg;
         self.human_pose_prev = p.human_pose_prev;
@@ -13020,8 +13281,12 @@ impl World {
             3 | 6 | 7 | 8 | 9 | 11 | 13 | 15 | 17 | 19 => self.cast_projectile(id, p, right),
             // 10 Teleport (:65554).
             10 => self.cast_teleport(m, p),
-            // 16 Create Castle (:65862).
-            16 => self.cast_castle(p, right, None),
+            // 16 Create Castle (:65862). The mint's verdict is the
+            // token's business (`manifestation_tick`'s latch); the
+            // one-shot arms here drop it.
+            16 => {
+                self.cast_castle(p, right, None);
+            }
             // 18 Lightning Storm (:65988).
             18 => self.cast_storm(p, right),
             // 20 Wall of Fire (:66110).
@@ -13244,7 +13509,24 @@ impl World {
             // m17): rings of fires along the round SEARCH annuli +
             // its 10000 broadcast over the ring's 10-tick growth
             // (trace-confirmed, sub_25CE0).
-            7 => e.f69 = 17,
+            7 => {
+                e.f69 = 17;
+                // The meteor arm's dest triple (`sub_56950` :65407-09;
+                // CARPET.EXE VA 0x56A4C `lea 0x96(%ebx)` / 0x56A52
+                // `lea 0x48(%ebp)` / `movsl; movsw` / 0x56A5A `push
+                // $0x2800` → `call sub_41EC0`): the CASTER's raw axis
+                // projected 10240 along the live `(+30, +32)`, the
+                // possess/duel shape. Nothing reads it back on the
+                // meteor; it is a raw-shadow lane (mc1l15 t=44457
+                // slot 911: retail (54690, 40958, 2973), port 0/0/0).
+                if !no_mc1_meteor_dest_stamp() {
+                    let mut d = (p.x, p.y, p.z);
+                    Gen::polar_step(&mut d, p.heading, pitch, 10240);
+                    e.dest_x = d.0;
+                    e.dest_y = d.1;
+                    e.site_z = d.2;
+                }
+            }
             // The duel dart (:65654-64). ⚠ `+44 = 200` was the
             // (10,26) TETHER's ctor value (:47116) on the wrong
             // record: retail writes `*(v5+44) = *(a1+44)`, the
@@ -13436,6 +13718,12 @@ impl World {
             }
         }
         self.pending_speed_zero = true;
+        // The spell resolves at the MANIFESTATION's own walk slot —
+        // the walk's rival-lane republish reads it to tell a warp
+        // staged ABOVE the carpet (still a record write for every
+        // higher walker) from one the carpet's own dispatch has
+        // already passed ([`Self::warp_peek_publish_at`]).
+        self.pending_teleport_slot = Some(m as u16);
     }
 
     /// MC2 Castle Teleport (`sub_6AD60` EF:56860) — a real 3-tier
@@ -14554,7 +14842,12 @@ impl World {
     /// of the maze-castle cheese, so the muzzle is the RETAIL arm of
     /// `gameplay.patches.castle_latch_bug`; the patched arm anchors
     /// the ball (and so the scan) at the carpet.
-    pub(crate) fn cast_castle(&mut self, p: PlayerPose, right: bool, token: Option<usize>) {
+    ///
+    /// Returns whether the ball was MINTED — `sub_57610`'s `if (v3)`
+    /// (:65883): a dry pool (`sub_373F0` → 0) mints nothing, and the
+    /// token's latch, the launch stamps and the charge move all sit
+    /// inside that test.
+    pub(crate) fn cast_castle(&mut self, p: PlayerPose, right: bool, token: Option<usize>) -> bool {
         use crate::mc1::combat::PLAYER_HH;
         let z = p.z.wrapping_add(PLAYER_HH as i16);
         // The create-vs-upgrade split reads wizext+50 — the BOUND
@@ -14600,7 +14893,7 @@ impl World {
             self.g.spawn_castle_ball(bx, by, z)
         };
         let Some(pr) = spawned else {
-            return;
+            return false;
         };
         if std::env::var_os("MGC_CASTLE_PIN_TRACE").is_some() {
             eprintln!(
@@ -14766,6 +15059,7 @@ impl World {
             self.g.mc2_research_stamp(PLAYER_TARGET, stage, tier);
         }
         self.entities_dirty = true;
+        true
     }
 
     /// 18 Lightning Storm (sub_579D0 :65988): ONE class-9 m12
@@ -15462,10 +15756,15 @@ impl World {
             // (`set_dev_spells`): no hide stamp, and the pickup below
             // converts it.
             let owned_already = self.player.owned[spell] != 0 && !self.dev_minted(spell);
-            if self.player.state == LifeState::Alive
-                && owned_already
-                && self.g.ent[i].flags & 1 == 0
-            {
+            // ⭐⭐ ONE WALK, THREE JOBS, ONE VISIBILITY. The stamp, the
+            // AABB hit and the grant all read the human off the SAME
+            // bucket[0] walk (0x6E2BA..0x6E4FE), so a seizure-blanked
+            // or severed roster refuses all three this tick —
+            // [`crate::mc1::rivals::mc1_jar_poll_roster_gate`] (mc1l24
+            // t=15898: jar 577 polls on a dry-pool tick, retail holds
+            // `flags 4` until its next poll at 15902).
+            let human_on_walk = self.player.state == LifeState::Alive && self.mc1_human_on_jar_walk();
+            if human_on_walk && owned_already && self.g.ent[i].flags & 1 == 0 {
                 if std::env::var_os("MGC_ACQ_TRACE").is_some() {
                     eprintln!(
                         "[acq] t={} jar={i} spell={spell} owned={} acq={:?}",
@@ -15519,7 +15818,7 @@ impl World {
                     && ((e.z as i32 + e.f78 as i16 as i32) - (pz as i32 + PLAYER_HH)).abs()
                         < e.f84 as i32 + PLAYER_HH
             };
-            if self.player.state == LifeState::Alive && hit {
+            if human_on_walk && hit {
                 self.rival_learn_arm(spell);
             }
             // The grant-refusal scans the LIVE +532 list for a class-12
@@ -15575,7 +15874,7 @@ impl World {
             // grant.
             let acq_free = crate::engine::features::no_mc1_acq_list_full()
                 || self.mc1_acq.iter().any(|&e| e <= 0);
-            if self.player.state == LifeState::Alive && hit && !acq_holds && acq_free {
+            if human_on_walk && hit && !acq_holds && acq_free {
                 self.g.ent[i].flags |= 1;
                 self.g.ent[i].tick70 = (spell * 3) as u8;
                 // ⭐ NO eager `player.owned[spell]` write: the grant
@@ -15663,7 +15962,14 @@ impl World {
         // Pickup needs a live carpet — the original's dead wizard is
         // out of play (flag 0x20), so the fresh scatter can't be
         // re-vacuumed while lying on it.
-        if self.player.state == LifeState::Alive && !self.inert && self.g.player_overlap(i, ctx) {
+        // The same walk gate as the strict arm: a seizure-blanked or
+        // severed bucket[0] hides the carpet from `sub_55A40` on this
+        // path too (`mc1_jar_poll_roster_gate`).
+        if self.player.state == LifeState::Alive
+            && !self.inert
+            && self.mc1_human_on_jar_walk()
+            && self.g.player_overlap(i, ctx)
+        {
             // Retail arms every AI wizard's 200-tick learn timer on
             // the HIT itself (:64806-15), whether or not the grant
             // follows — the strict-retail poll above does exactly
@@ -15679,6 +15985,25 @@ impl World {
                 self.rival_learn_arm(spell);
             }
             self.try_pickup(i);
+        }
+    }
+
+    /// Is the human carpet's node reachable on THIS tick's bucket[0]
+    /// walk? Tick-top membership (`human_bucket_alive`, :52254) AND the
+    /// chain's visible prefix — a mid-tick seizure blank (`cut == 0`)
+    /// or a sever below the carpet's slot hides him, the same rule
+    /// [`crate::mc1::rivals::mc1_human_on_wiz_roster`] applies to the
+    /// wizard pick. A native world has no carpet slot, so index 0
+    /// degrades it to the blank alone. Kill switch:
+    /// [`crate::mc1::rivals::mc1_jar_poll_roster_gate`].
+    fn mc1_human_on_jar_walk(&self) -> bool {
+        if !crate::mc1::rivals::mc1_jar_poll_roster_gate() {
+            return true;
+        }
+        self.human_bucket_alive && {
+            let hs = self.mc1_carpet_slot;
+            let hpos = self.g.wiz_chain.list.partition_point(|&s| s < hs);
+            hpos < self.g.wiz_chain.cut
         }
     }
 
@@ -15804,8 +16129,33 @@ impl World {
                     self.mana_debit(self.spell_cast_cost(16));
                     let p = self.mc1_cast_pose;
                     let right = self.mc1_fire_hand(i);
-                    self.emit_spell(16, i, p, right, ctx);
-                    self.g.ent[i].f26 = SPELLS[16].count as i16 - 1; // :65885
+                    // ⭐ THE LATCH IS INSIDE `if (v3)` (:65883-85): the
+                    // debit lands FIRST (:65880 `sub_55E80`), then the
+                    // ball ctor, and only a MINTED ball writes `+48 =
+                    // +50 − 1`. On a dry pool (`sub_373F0` → 0) the
+                    // token stays at the FULL count and this whole arm
+                    // — gate, debit, mint attempt — re-runs every tick
+                    // until a slot frees or the gate refuses
+                    // (:65918-21 `+48 = 0`, the purse below `+136`).
+                    // CARPET.EXE 0x6FE73 `call sub_55E80` / 0x6FE83
+                    // `call sub_373F0` / 0x6FE90 `test eax,eax` /
+                    // 0x6FE92 `je 0x6ffe5` past the 0x6FE98 latch.
+                    // WITNESS mc1l25 t=7013-7017 slot 674 (pool 999
+                    // live): retail `+48` holds 101 for four ticks and
+                    // `+132` reads −20000 on each (mana 92885 → 12885,
+                    // four debits); t=7017 the gate fails at 12885 <
+                    // 20000 and releases. The port latched 100 after
+                    // ONE debit and the t=7026 recast then fizzled on
+                    // the stale latch (the (10,43) upgrade token and
+                    // its ball never minted). See
+                    // [`crate::engine::features::no_mc1_castle_token_dry_pool_retry`].
+                    let minted = self.cast_castle(p, right, None);
+                    if minted {
+                        self.g.snd_player(15); // the launch sound (:65914, inside `if (v3)`)
+                    }
+                    if minted || crate::engine::features::no_mc1_castle_token_dry_pool_retry() {
+                        self.g.ent[i].f26 = SPELLS[16].count as i16 - 1; // :65885
+                    }
                 }
             }
             return;
@@ -16124,7 +16474,34 @@ impl World {
             5 => self.player.beyond_sight = active,
             12 => self.player.invisible = active,
             14 => {
-                self.player.rebound = active;
+                // THE BIT OUTLIVES THE COUNTER BY ONE TICK. sub_573F0
+                // (:65774; CARPET.EXE 0x6FBE8: `cmpw $0,0x30(%esi); jle
+                // → andb $0x7f,0x11(%ebx)`) tests `+48` BEFORE the
+                // shared decrement: a live tick that passes the gate
+                // SETS the owner's +17 0x80, a refused one leaves the
+                // bit standing (`+48 = 1`, then the decrement), and the
+                // clear arm runs only on a tick that ENTERS with
+                // `+48 <= 0`. So the tick the counter falls 1 → 0 still
+                // deflects, and the bit drops the tick after. The rival
+                // twin `rival_rebound_token_tick` already has this
+                // shape; the human's arm read `active` (POST-decrement
+                // `f26 > 0`) and cleared one tick early. mc1l14
+                // t=20608: retail's +48 1 → 0, carpet flags keep 0x8000
+                // (clear at 20609) and the (9,0) at 782 deflects for 50;
+                // the port let it hit, birthed a (10,0) at 277 and kept
+                // the 50. mc1l15 t=36816 is the same shape twice (66
+                // and 174). `MGC_NO_MC1_REBOUND_BIT_LAG=1` restores the
+                // post-decrement read.
+                let bit = if mc1_rebound_bit_lag_off() {
+                    active
+                } else if !was_live {
+                    false
+                } else if gate_failed {
+                    self.player.rebound
+                } else {
+                    true
+                };
+                self.player.rebound = bit;
                 // Republish the Gen mirror MID-WALK: retail's cast
                 // reloads the token and the token's machine stamps
                 // the owner's +17 0x80 at the TOKEN's slot, so a bolt
@@ -16132,7 +16509,7 @@ impl World {
                 // t=38740: the re-cast at the carpet, the (9,0) at
                 // 949 already deflected). The tick-head derivation
                 // alone left every same-tick deflect reading stale.
-                self.g.player_rebound = active;
+                self.g.player_rebound = bit;
             }
             // 10 Teleport: the burst END repeats the target-speed
             // zero (:65613-14, `if (!life) Type_160 v_12 = 0` —
@@ -21041,6 +21418,34 @@ impl World {
         let stamp_z = crate::mc1::behavior::BEHAVIOR[self.g.ent[i].row156 as usize]
             .v_12
             .wrapping_add(self.g.ground_z(dx, dy) as i16);
+        // ⭐ THE HUMAN LANE READS THE WIZARD RECORD, WARP INCLUDED:
+        // retail's `sub_11950(portal, record)` / `sub_42150(record
+        // +0x48, …)` (0x26B24 / 0x26B3B) test the axis a lower-slot
+        // vortex or token already rewrote with `CopyEntityPosition`
+        // (0x26BAD). A warp staged this tick and not yet consumed by
+        // the carpet's own dispatch IS that record write — see
+        // [`mc1_vortex_chain_peek_off`] (mc1l20 t=25148: 468 → 469
+        // chain in ONE tick).
+        let player = if mc1_vortex_chain_peek_off() {
+            player
+        } else {
+            let cs = self.mc1_carpet_slot as usize;
+            let unconsumed = cs == 0
+                || i < cs
+                || self.pending_teleport_slot.is_some_and(|m| m as usize > cs);
+            match self.pending_teleport {
+                Some((tx, ty, alt)) if unconsumed => {
+                    let mut p = player;
+                    p.x = (tx.rem_euclid(256.0) * 256.0) as u16;
+                    p.y = (ty.rem_euclid(256.0) * 256.0) as u16;
+                    if let Some(a) = alt {
+                        p.z = (a * 256.0) as i16;
+                    }
+                    p
+                }
+                _ => player,
+            }
+        };
         if !self.inert && self.overlap(i, player) {
             let e = &self.g.ent[i];
             // The facing cone (:29208-09): sub_42150(wizard, portal)
@@ -21057,6 +21462,9 @@ impl World {
                     dy as f32 / 256.0,
                     Some(stamp_z as f32 / 256.0),
                 ));
+                // The vortex warps at its OWN walk slot (:29214) —
+                // stamped for [`Self::warp_peek_publish_at`].
+                self.pending_teleport_slot = Some(i as u16);
                 // PORTUSE — the same 22 as the teleport spell, at
                 // the portal's slot.
                 self.g.snd(22, i);
@@ -23565,6 +23973,67 @@ mod tests {
     /// behaviour) silently desyncs the port from retail by one draw
     /// per paused frame. Measured on mc1l6's 1,602-frame pause —
     /// `draws=1` on every boundary, zero pool changes.
+    /// `sub_26A60` (:29199-223; CARPET.EXE VA 0x26BAD `push vortex+0x96 /
+    /// push the wizard record / call 0x41C70`) writes a vortex's
+    /// destination onto the WIZARD'S RECORD at the vortex's own walk
+    /// slot, and the next vortex in the walk tests overlap and bearing
+    /// against THAT record. mc1l20's ring of fourteen authored
+    /// `(10,34)` vortices (slots 468..481) places each destination one
+    /// tile short of the next vortex on the same heading, so the human
+    /// chains through two per tick (t=25148: 468 → 469). The port
+    /// staged 468's warp in `pending_teleport` and handed 469 the
+    /// tick-head pose — one hop short, on every ring pass
+    /// (25148/25680/25716/25761/25801, pose-only, pair-clean ⇒ pinned
+    /// here). `MGC_NO_MC1_VORTEX_CHAIN_PEEK=1` fails the chain assert;
+    /// the single-vortex control passes in both arms.
+    #[test]
+    fn a_vortex_warp_is_a_record_write_the_next_vortex_reads() {
+        let mut w = flat_world();
+        // Vortex A at (40,40) tiles sends the carpet to (80,40); vortex
+        // B stands ONE TILE past that destination along +x, and sends
+        // on to (120,40).
+        let mut stage = |x: u16, dx: u16| -> usize {
+            let i = w.g.new_event().expect("vortex slot");
+            {
+                let e = &mut w.g.ent[i];
+                e.class64 = 10;
+                e.model65 = 34;
+                e.tick70 = 36;
+                e.act_life = 0;
+                e.f78 = 0;
+                e.f80 = 256;
+                e.f82 = 256;
+                e.f84 = 256;
+                e.dest_x = dx << 8;
+                e.dest_y = 40 << 8;
+            }
+            w.g.link(i, x << 8, 40 << 8, 100);
+            i
+        };
+        let a = stage(40, 80);
+        let b = stage(81, 120);
+        // The carpet sits on A, facing it (the 0xAA cone is measured
+        // from the carpet's heading to the bearing at the vortex).
+        let mut p = PlayerPose::level(39 << 8, 40 << 8, 100, 0);
+        p.heading = Gen::angle_between(p.x, p.y, w.g.ent[a].x, w.g.ent[a].y);
+        w.pending_teleport = None;
+        w.pending_teleport_slot = None;
+        // Control: B alone does not fire on a carpet that is not there.
+        w.portal_tick(b, p);
+        assert!(w.pending_teleport.is_none(), "control: B is a tile away from the carpet");
+        // The walk: A fires, then B reads the record A just wrote.
+        w.portal_tick(a, p);
+        assert_eq!(w.pending_teleport_slot, Some(a as u16), "A warps the record");
+        w.portal_tick(b, p);
+        assert_eq!(
+            w.pending_teleport_slot,
+            Some(b as u16),
+            "B tests the WARPED record (one tile short of B, same heading) and chains"
+        );
+        let (tx, _, _) = w.pending_teleport.unwrap();
+        assert_eq!((tx * 256.0) as u16, 120 << 8, "the boundary destination is B's");
+    }
+
     #[test]
     fn a_paused_mc1_turn_draws_once_and_touches_nothing_else() {
         let mut w = flat_world();
@@ -37121,6 +37590,45 @@ mod tests {
         assert!(!w.completed, "the win trigger must consume the win bit");
         let creatures = w.live_things().iter().filter(|t| t.class == 5).count();
         assert_eq!(creatures, 1, "the disposition spawned its stage");
+    }
+
+    /// `sub_415C0` (:52130-35): `if (v5 < 16) +13323 = v5 + 1; else
+    /// +13325 |= 2` — the latch tests the streak counter BEFORE the
+    /// increment, so the win bit lands on the SEVENTEENTH consecutive
+    /// over-frame with the counter parked at 16, not on the sixteenth.
+    /// mc1l10 t=19364-19380 (the (11,4) win trigger minted its (5,11)
+    /// genie a record early); a second witness on mc1l21 t=31226/31227
+    /// (disposition 13). `MGC_NO_MC1_WIN_STREAK_PRE_TEST=1` restores the
+    /// post-increment latch, and this test then fails at "sixteenth".
+    #[test]
+    fn the_win_latch_lands_on_the_seventeenth_over_frame() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut w = World::new(planes, &[], 1, assets());
+        let c = w.g.spawn_class3(2, 100 << 8, 100 << 8, 3200).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.castle_reg[0] = c as u16;
+        w.win_pct = 50;
+        w.player.world_mana = 1000;
+        // The share is the house tally + the castle's LIVE store
+        // (:52123-26); the pre-dig arm reads the census snapshot.
+        w.g.banked_houses = 900;
+        w.player.banked = 900;
+        let n = w.g.chassis.win_streak_ticks as usize;
+        assert_eq!(n, 16, "the retail streak length");
+        for _ in 0..n {
+            w.objective_mc1();
+        }
+        assert!(!w.completed, "the sixteenth over-frame only parks the counter at 16");
+        assert_eq!(w.win_streak as usize, n);
+        w.objective_mc1();
+        assert!(w.completed, "the seventeenth over-frame latches the win");
+        assert_eq!(w.win_streak as usize, n, "the counter never passes 16");
     }
 
     /// The kill trigger's extinction probe is `str_36382x[model]`, the
@@ -55487,11 +55995,11 @@ mod tests {
         ctx.py = top.1;
         ctx.pz = top.2;
         // Nothing armed: neither channel moves.
-        w.warp_peek_publish(&mut ctx);
+        w.warp_peek_publish_at(&mut ctx, usize::MAX);
         assert_eq!(w.human_pose, top, "no warp, no publish");
         // Teleport II to (58915, 22594, 5440).
         w.pending_teleport = Some((58915.0 / 256.0, 22594.0 / 256.0, Some(5440.0 / 256.0)));
-        w.warp_peek_publish(&mut ctx);
+        w.warp_peek_publish_at(&mut ctx, usize::MAX);
         // POSITIVE CONTROL: the creature channel (round ~140's law).
         assert_eq!((ctx.px, ctx.py, ctx.pz), (58915, 22594, 5440), "ctx reads the destination");
         // THE LAW: the rival channel reads it too.

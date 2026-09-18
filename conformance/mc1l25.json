@@ -1,0 +1,18 @@
+{
+ "dir": "fixtures/mc1l25",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 2615,
+   "file": "a-castle-ball-survives-a-dry-pool-ctor.mgcr",
+   "source": "mc1l25",
+   "note": "A CASTLE BALL SURVIVES A DRY-POOL CTOR: sub_53B50 (remc1/sub_main.cpp:63606-11; CARPET.EXE file 0x6C588 `call sub_373F0` / 0x6C590 `test eax,eax` / 0x6C592 `je` past both the owner stamp and the 0x6C59D reap) kills the landed (9,10) create-arm ball ONLY when the castle ctor returned a record. On a dry pool the ball keeps flying: it re-steers, re-lands (life frozen by the :63586 grounded short-circuit) and retries the ctor every tick until a slot frees. The port reap-flagged it (0x400) unconditionally. mc1l25 t=2616-2619 slot 778 at pool 999: retail flags hold 6 for four ticks, life parked at 17, the castle builds at 2621. Kill switch MGC_NO_MC1_CASTLE_BALL_DRY_POOL_RETRY. Ledger ROUND 152 w152e law 1."
+  },
+  {
+   "t": 7014,
+   "file": "the-castle-tokens-latch-is-inside-the-minted-branch.mgcr",
+   "source": "mc1l25",
+   "note": "THE CASTLE TOKEN'S LATCH IS INSIDE `if (v3)`: sub_57610 (remc1/sub_main.cpp:65876-921): +48 > 0 -> gate sub_55DD0 -> if +48 == +50: sub_55E80 DEBITS the full +136, v3 = sub_373F0(9,10), and only `if (v3)` writes +48 = +50-1 (CARPET.EXE 0x6FE73 call sub_55E80 / 0x6FE83 call sub_373F0 / 0x6FE90 test / 0x6FE92 je past the 0x6FE98 latch; sound 15 is inside too). On a dry pool the token stays FULL and the whole arm - gate, debit, mint - re-runs every tick until a slot frees or the gate's mana >= +136 leg fails and releases (+48 = 0, :65920). The port latched f26 = count-1 after one debit. mc1l25 t=7013-7017 slot 674 (12,16) at pool 999: retail +48 holds 101 four ticks, +132 = -20000 each (92885 -> 12885), release at 7017; the port debited once (the 20000 gap at 7015) and the t=7026 recast then fizzled on the stale latch (no (10,43) token, no ball). Kill switch MGC_NO_MC1_CASTLE_TOKEN_DRY_POOL_RETRY. Ledger ROUND 152 w152e law 2."
+  }
+ ]
+}

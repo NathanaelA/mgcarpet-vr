@@ -169,6 +169,7 @@ fn pointees(e: &RetailEntMc1, pool: usize) -> BTreeSet<u16> {
 /// by the caller).
 fn wizard_lanes(w: &RetailWizardMc1) -> Vec<(&'static str, i64)> {
     vec![
+        ("win_streak", w.win_streak as i64),
         ("status", w.status as i64),
         ("play_index", w.play_index as i64),
         ("move_bits", w.move_bits as i64),

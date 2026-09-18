@@ -1353,6 +1353,11 @@ pub struct RetailEntMc1 {
 // std array-Default cap of 32; semantics are the derive's (all zero).
 #[derive(Debug, Clone, Copy)]
 pub struct RetailWizardMc1 {
+    /// The banked-share WIN STREAK counter `var_u16_13323` (+0):
+    /// `sub_415C0` :52130-35 `if (v5 < 16) +13323 = v5 + 1; else
+    /// +13325 |= 2` — tested BEFORE the increment, so it parks at 16
+    /// and the status bit lands on the seventeenth over-frame.
+    pub win_streak: u16,
     /// Exit-status word `var_u16_13325` (+2; bit 2 = won).
     pub status: u16,
     /// `var_u8_13332_9` (+9) — the roster's AI-DRIVEN byte. Set to 1
@@ -1505,6 +1510,7 @@ pub struct RetailWizardMc1 {
 impl Default for RetailWizardMc1 {
     fn default() -> Self {
         Self {
+            win_streak: 0,
             status: 0,
             ai_flag: 0,
             play_index: 0,
@@ -1799,6 +1805,7 @@ fn decode_retail_wizard_mc1(d: &[u8], i: u16) -> RetailWizardMc1 {
         war[j] = u16_(d, t + 462 + j * 8);
     }
     RetailWizardMc1 {
+        win_streak: u16_(d, w),
         status: u16_(d, w + 2),
         ai_flag: u8_(d, w + m1::WIZ_AI_FLAG),
         play_index: u16_(d, w + m1::WIZ_PLAYINDEX),

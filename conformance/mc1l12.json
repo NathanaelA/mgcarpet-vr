@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l12",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 901,
+   "file": "a-rival-corpse-runs-the-shared-movers-wall-gate.mgcr",
+   "source": "mc1l12",
+   "note": "A RIVAL CORPSE RUNS THE SHARED MOVER'S WALL GATE: sub_45FC0 (state 2 death fall, remc1/sub_main.cpp:55463) opens with the shared mover sub_455D0 (:55110), which ends `v26 = sub_45410(a1x); if (v26) sub_41C70(...)` (:55250-52; EXE 0x5E26A). sub_45410 refuses a scratch on a type-8 wall tile (sub_11810 == 0x100) and retries the two cardinals nearest the bearing scaled by dist*(512-delta)>>9; both blocked => nothing commits. The port ran the gate for the human's fall only (Gen::player_wall_slide) and let a rival's corpse drift through the wall. mc1l12 t=901->902 slot 109 (wizard 2's corpse): retail's y freezes at 19966 for the 15-tick fall while x steps the cardinal projection (60*(512-229)>>9 = 33); the port stepped (46,39) into tile row 78. Same law at mc1l9 t=5770 and mc1l18 t=21408. Kill switch MGC_NO_MC1_RIVAL_FALL_WALL_GATE. Ledger ROUND 152 w152b."
+  }
+ ]
+}

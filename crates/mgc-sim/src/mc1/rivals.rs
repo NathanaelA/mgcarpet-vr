@@ -201,6 +201,44 @@ pub(crate) fn mc1_human_on_wiz_roster() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HUMAN_ON_WIZ_ROSTER").is_none())
 }
 
+/// ⭐⭐ **THE JAR POLL IS A BUCKET[0] WALK TOO — A BLANKED ROSTER STAMPS
+/// NOTHING, HITS NOBODY, GRANTS NOTHING.**
+///
+/// `sub_55A40_55F70` (:64729, CARPET.EXE file 0x6E238) does every one of
+/// its three human-facing jobs INSIDE one walk of `var_u32_36462[0]`
+/// (`mov 0x8e6e(%eax),%eax` at 0x6E2BA, the loop tail 0x6E4E3-0x6E4FE):
+/// the "already known" bit-0 stamp (`cmpw $0,0x2a4(%edx,%eax,2)` at
+/// 0x6E2FC, +676[model]), the AABB pickup (`call 0x2a148` = sub_11950
+/// at 0x6E315) and, after the break, the rivals' learn-timer arm. The
+/// human carpet is an ordinary node on that chain, so the mid-tick
+/// seizure blank ([`Gen::new_event`] :43885-91 nulls all four heads for
+/// the rest of the tick) and the severed-chain cut hide him from the
+/// poll exactly as [`mc1_human_on_wiz_roster`] hides him from the wizard
+/// pick. The port's poll read the out-of-pool human straight off
+/// `player.state`, so on a dry-pool tick (999 live, every spawn a
+/// sacrifice) it stamped bit 0 on a jar retail could not see the human
+/// from.
+///
+/// WITNESS mc1l24 pair 15897→15898 (and 15898→15899, 16033→16034,
+/// 16034→16035, 16037→16038, 16038→16039): rival 576 dies at 15896 and
+/// scatters jars 577..600; the recycle stack drains 413 → 337 → 217 →
+/// 118 → 12 → 0 over 15896..15901 (a spell storm at pool 999). Jars
+/// whose `+63 & 3` poll lands on 15896/15897 stamp `flags 4 → 5` in both
+/// engines (579, 578); the ones polling on 15898..15901 — 577/581/…/597
+/// at 15898, 580/584/…/600 at 15899 — hold 4 in retail and only stamp on
+/// their NEXT poll (15902/15903), when the stack is empty and nothing
+/// seizes; the port stamped every one on the first poll. Same shape on
+/// the 16032 scatter (528..549: polls on 16034..16041 refused, 16042+
+/// stamp), and on mc1l23 t=8022, mc1l21 t=10290, mc1l18 t=10552.
+///
+/// `MGC_NO_MC1_JAR_POLL_ROSTER=1` restores the pre-dig `player.state`
+/// read on both call paths (the strict-retail poll and the native
+/// `try_pickup` gate).
+pub(crate) fn mc1_jar_poll_roster_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_JAR_POLL_ROSTER").is_none())
+}
+
 /// ⭐⭐⭐ **THE OWNED REBUILD IS AN UNBOUNDED INDEXED WRITE**
 /// (`sub_45C10_45F50` :55310-19). The decompile's own original line —
 /// preserved as a comment beside the hand-converted one — is
@@ -314,6 +352,30 @@ pub(crate) fn death_sink_runs() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_DEATH_SINK").is_none())
 }
 
+/// ⭐⭐⭐ THE SHARED MOVER'S COMMIT GATE RUNS ON THE RIVAL'S DEATH FALL
+/// TOO. `sub_45FC0` (state 2, `reference/remc1/sub_main.cpp:55463`)
+/// opens with `sub_455D0`, and that mover ends in `v26 = sub_45410(a1x);
+/// if (v26) sub_41C70(a1x, &word_AE454_AE444);` (:55250-52 — EXE
+/// 0x5E26A `call 0x5DC08; test ax,ax; je +0x0E; call 0x5A468`). The
+/// gate (:55065-107) refuses any scratch whose tile is the type-8 wall
+/// (`sub_11810 == 0x100`, 0x5DC29 `cmp $0x100,%eax`) and retries the
+/// two cardinals adjacent to the move bearing, each re-seeded from the
+/// pose and scaled by `dist·(512-Δ)>>9`; both blocked ⇒ nothing
+/// commits, though the refused second cardinal stays in the scratch
+/// (the trail puff's seat) and the trailing z-floor still lifts it.
+/// The port ran the gate for the HUMAN's fall only
+/// ([`Gen::player_wall_slide`]) and let a rival's corpse drift straight
+/// through the wall. mc1l12 t=901→902 (slot 109, wizard 2's corpse):
+/// retail's y freezes at 19966 for the whole 15-tick fall while x
+/// steps 33, 35, 38 … (the cardinal-512 projection of a (46,39) step
+/// = 60·(512−229)>>9 = 33), the port stepped (46,39) into tile row 78.
+/// mc1l9 t=5769→5770 (slot 114) is the same shape at y = 37023.
+/// `MGC_NO_MC1_RIVAL_FALL_WALL_GATE=1` restores the ungated fall.
+pub(crate) fn rival_fall_wall_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_FALL_WALL_GATE").is_none())
+}
+
 /// ⭐⭐⭐ THE OWNED REGISTER HAS EXACTLY ONE WRITER IN THE WHOLE MC1
 /// BINARY — `sub_45C10_45F50` (`reference/remc1/sub_main.cpp:55304-20`,
 /// twin `remc1hw:51372`). A grep of every `+676` reference in the
@@ -350,6 +412,53 @@ pub(crate) fn death_sink_runs() -> bool {
 pub(crate) fn owned_survives_scatter() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_OWNED_SCATTER_KEEP").is_none())
+}
+
+/// ⭐ THE HOME ARM NEVER WRITES THE BRAIN BYTE. `sub_13A70`
+/// (`reference/remc1/sub_main.cpp:18204-27`, CARPET.EXE 0x13A70-0x13B94)
+/// cloaks, gates on the castle's signature (`sub_15440`, 0x13AEA) and,
+/// when it passes, stamps `+34 = angle(me → castle)` (0x13B02 `call
+/// 0x42150`, 0x13B16 `mov %ax,0x22(%ebx)`) and runs the travel helper
+/// — there is no read of `+40`/`+8` and no write of wizext `+415`
+/// anywhere in it. Retail's ONLY exits from Home are the cascade's
+/// (`sub_136C0`): the hurt re-pick every tick and the think-tick
+/// ladder, whose idle leg (:18749-62) chooses Cruise once life is
+/// full. The port's Home arm INVENTED `act_life >= max_life ⇒ Fresh`,
+/// and a Fresh rival's handler is empty — so from the heal-complete
+/// tick to the next think tick the port stopped re-aiming `+34` while
+/// retail kept tracking the castle bearing off its moving pose.
+/// WITNESS mc1l26 t=4973: slot 603 (3,1) heals to 10000/10000 in Home
+/// (target = castle 612), the port drops to Fresh, and at t=4975 the
+/// bearing crosses an ATAN rung — retail 1675, port frozen at 1674
+/// (again t=4982 1676 vs 1675, t=13970 61 vs 60); mc1l26-froze
+/// t=22198 1848 vs 1849 is the same shape. The retail row is exactly
+/// `Gen::angle_between(pose_t, castle)` on every tick of the window.
+/// `MGC_NO_MC1_HOME_KEEPS_STATE=1` restores the invented Fresh drop.
+pub(crate) fn home_keeps_state() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HOME_KEEPS_STATE").is_none())
+}
+
+/// ⭐ THE UPGRADE ARM READS `+146` UNDER THE SIGNATURE GATE. `sub_13800`
+/// (`reference/remc1/sub_main.cpp:18106-32`, CARPET.EXE 0x13800-0x13889)
+/// opens `mov 0x92(%esi),%bx` (the wizard's OWN `+146`), calls
+/// `sub_15440` (0x13839 → 0x15440: `sub_15420(castle) == +148`, the
+/// `id24 + model + class<<7` signature) and on a miss returns 0 with
+/// no write at all; on a hit it stamps `+34 = angle(me → castle)`
+/// (0x13851 `call 0x42150`, 0x13865 `mov %ax,0x22(%esi)`) and runs
+/// the travel helper. Nothing in it tests the castle's flags or `+70`,
+/// and nothing writes wizext `+415`. The port instead scanned the pool
+/// for a LIVE castle (`rival_castle`, which refuses `flags & 0x400`)
+/// and, finding none, INVENTED a drop to Fresh — so the tick a rival's
+/// castle is razed under it, retail keeps aiming at the ruin (same
+/// slot, owner, class, model ⇒ same signature) while the port's `+34`
+/// froze. WITNESS mc1l16 t=19162: castle 52 razed (flags 14 → 1038,
+/// f70 6 → 4), rival 351 in Upgrade with target 52 — retail 1521, port
+/// 1504 (the previous tick's aim). `MGC_NO_MC1_UPGRADE_SIG_GATE=1`
+/// restores the pool scan and the Fresh drop.
+pub(crate) fn upgrade_sig_gate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_UPGRADE_SIG_GATE").is_none())
 }
 
 /// A retail rival corpse KEEPS its Rebound/deflection bit (`+17`
@@ -533,6 +642,60 @@ pub(crate) fn no_mc1_invis_word48() -> bool {
 pub(crate) fn rival_charge_family() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_CHARGE_FAMILY").is_none())
+}
+
+/// ⭐⭐ THE RIVAL'S "AT OWN CASTLE" IS THE `wizext+50` REGISTER, NOT
+/// THE FIRST-COMMIT LATCH. `sub_132B0` (:17971-72; shipped `CARPET.EXE`
+/// file 0x2BBF3 `mov 0xa0(%ebx),%eax; mov 0x32(%eax),%si; test %si,%si;
+/// je` → `call 0x2a148` = `sub_11950` overlap) dereferences the
+/// register with an index test alone — no class/model/owner/latch/
+/// level test — and the regen fork at :18002-17 (file 0x2BD21-0x2BDB6:
+/// `testb $0x10,0x11(%ebx)`; `/0xc8` floored to `0x3e8`, else `/0x7d0`
+/// floored to `0x64`) spends the at-castle +1000/tick off that bool.
+/// The port resolved the castle by pool SCAN and then demanded the
+/// castle's `+16` bit 1 latch (`flags & 2`, the :56057 first-commit
+/// team-recolor stamp), which an AUTHORED castle never earns: mc1l20's
+/// slot 534 (level 3, wiz 2's keep) reads `flags 12` for the whole
+/// take while retail's `wizext+50[2] = 534` from record 0. The port
+/// therefore paid the rival the AFIELD +100/tick where retail paid
+/// +1000/tick (pairs 1→2 … 34→35: `mana 11000 vs 10100`, `13000 vs
+/// 12100`, …). The same latch-for-register stand-in gated the cast-16
+/// bound arm (:19309 `if (+50)`) and the respawn re-price (:55034
+/// `if (var_50) sub_47DD0`). `Gen::castle_reg` IS the register (bound
+/// at the authored mint :54980, the plant :19206, the commit :56484;
+/// seeded from the recorded wizext on import).
+///
+/// `MGC_NO_MC1_RIVAL_CASTLE_REGISTER=1` restores the latch-gated scan.
+pub(crate) fn rival_castle_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_CASTLE_REGISTER").is_none())
+}
+
+/// `MGC_NO_MC1_RIVAL_CASTLE_TOKEN_REGISTER=1` restores the pre-dig
+/// create-vs-upgrade split of the RIVAL's castle token, which resolved
+/// the "established castle" by pool scan filtered on `f26 > 0` where
+/// retail's `sub_57610_57B40` (`reference/remc1/sub_main.cpp` :65893-908)
+/// reads the owner's `wizext+50` REGISTER with an index test alone —
+/// CARPET.EXE 0x6FEE0 `mov 0xa0(%ebp),%eax; movzwl 0x32(%eax),%edx;
+/// lea pool+164*edx,%esi; cmp %eax,%esi; jbe <create>` (0x6FF16), else
+/// 0x6FF28 `movb $0xa,0x44(%ebx); movb $0x2b,0x45(%ebx); mov
+/// %ax,0x92(%ebx)` (+68 = 10, +69 = 43, +146 = the register). No
+/// class, life or LEVEL test: a freshly PLANTED level-0 castle (the
+/// :19206 direct plant binds the register at spawn) is already "bound",
+/// so the very next cast is an UPGRADE ball homing on it. The human's
+/// split already reads the register (`World::player_castle_bound`); the
+/// rival's token was the one call path left on the stand-in.
+///
+/// WITNESS mc1l26-froze t=25107-25108: wiz 3 (ent 603) plants castle
+/// 985 at t=25107 (`wizext+50` 0 → 985 in the same record, `+26` 0),
+/// recasts at t=25108 — retail's ball 953 is born `+68 10 +69 43 +146
+/// 985` and flies (life 21 → 20); the port minted a `+68 3 +69 2`
+/// create ball at the wizard's own site, `castle_site_ok` refused it
+/// (castle 985 within 2048) and reap-flagged it on its birth tick
+/// (`flags 4 vs 1030`, `chase 985 vs 0`, `target_yaw 1115 vs 0`).
+pub(crate) fn rival_castle_token_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_CASTLE_TOKEN_REGISTER").is_none())
 }
 
 /// Per-slot config from the level record (wizards.json), resolved by
@@ -1233,10 +1396,22 @@ impl World {
         // 3328+125, and retail flips him to the at-castle +1000/tick
         // where the port's bare `<= f80/f82` point test kept the
         // away-rate +100.
-        let castle = self.rival_castle(self.rivals[ri].ent);
-        let at_castle = castle
-            .filter(|&c| self.g.ent[c].flags & 2 != 0)
-            .is_some_and(|c| self.g.ent_overlap(i, c));
+        // ⭐⭐ …and "bound" IS the register word (`Gen::castle_reg`),
+        // dereferenced with an index test alone (:17971 `if (v14 &&
+        // sub_11950(a1, pool + 164*v14))` — file 0x2BBF9-0x2BC3B). The
+        // `flags & 2` first-commit latch the port used to demand is
+        // the :56057 team-recolor stamp, which an AUTHORED castle
+        // never earns (mc1l20 slot 534 `flags 12` all take) — so the
+        // rival sat on his own keep at the afield +100/tick. See
+        // [`rival_castle_register`].
+        let at_castle = if rival_castle_register() {
+            let reg = self.wiz_castle_reg(self.rivals[ri].slot) as usize;
+            reg != 0 && reg < self.g.ent.len() && self.g.ent_overlap(i, reg)
+        } else {
+            self.rival_castle(self.rivals[ri].ent)
+                .filter(|&c| self.g.ent[c].flags & 2 != 0)
+                .is_some_and(|c| self.g.ent_overlap(i, c))
+        };
         if at_castle {
             // Retail SETS 2 (:17975 `+331 = 2`) — a spawn grace still
             // counting is OVERWRITTEN at the own castle, not floored.
@@ -1916,7 +2091,10 @@ impl World {
         // The clock is the TICK-TOP roster's model-0 entry, so a
         // mid-tick death still clocks this tick (`human_bucket_alive`,
         // the :52254 membership sample).
-        if !self.human_bucket_alive {
+        // …and :19394-99's walk starts from the roster HEAD, so a
+        // seizure blank / a sever below the human's seat earlier this
+        // tick parks the clock too (`Gen::mc1_human_on_wiz_chain`).
+        if !self.human_bucket_alive || !self.g.mc1_human_on_wiz_chain() {
             return;
         }
         for s in 0..SPELL_COUNT {
@@ -2478,11 +2656,16 @@ impl World {
             e.f30 = yaw;
             e.f32 = pitch;
         }
-        // The wizext+50 split (:65893-908): the ESTABLISHED castle
-        // stand-in, same filter the human's cast uses.
-        let castle = self
-            .rival_castle(self.rivals[ri].ent)
-            .filter(|&c| self.g.ent[c].f26 > 0);
+        // The wizext+50 split (:65893-908): the REGISTER, index test
+        // only (CARPET.EXE 0x6FEE0-0x6FF16) — a planted level-0
+        // castle is already bound. See [`rival_castle_token_register`].
+        let castle = if rival_castle_token_register() {
+            let reg = self.wiz_castle_reg(self.rivals[ri].slot) as usize;
+            (reg != 0 && reg < self.g.ent.len()).then_some(reg)
+        } else {
+            self.rival_castle(self.rivals[ri].ent)
+                .filter(|&c| self.g.ent[c].f26 > 0)
+        };
         if let Some(c) = castle {
             let e = &mut self.g.ent[b];
             e.f68 = 10;
@@ -3900,7 +4083,12 @@ impl World {
             let human_guard = if ball_guard_excludes_own_id() && human_is_own_id {
                 None
             } else if ball_guard_is_tick_top() {
-                (self.human_bucket_alive && !self.ghost).then_some(self.human_pose)
+                // …and inside the chain's visible prefix this tick
+                // (`Gen::mc1_human_on_wiz_chain`, the seizure-blank /
+                // sever law) — `sub_15340` walks bucket[0] like the
+                // wizard pick does.
+                (self.human_bucket_alive && !self.ghost && self.g.mc1_human_on_wiz_chain())
+                    .then_some(self.human_pose)
             } else {
                 self.wizard_pos(0)
             };
@@ -4065,9 +4253,28 @@ impl World {
             // Fly home; cast 0x10 on arrival = the upgrade chain
             // (sub_13800 :18106-32).
             AiState::Upgrade => {
-                let Some(c) = self.rival_castle(self.rivals[ri].ent) else {
-                    self.rivals[ri].state = AiState::Fresh;
-                    return;
+                // ⭐ The castle is the ENTITY's own `+146` under the
+                // signature gate, never a live-castle pool scan, and a
+                // failed gate returns with NO writes (0x13843 `je` →
+                // `return 0`). A castle razed mid-flight keeps its slot,
+                // owner, class and model, so `sub_15440` still passes
+                // and retail keeps AIMING and travelling to the ruin
+                // until the think-tick cascade re-picks (mc1l16
+                // t=19162: castle 52 razed, retail `+34` 1521, the port
+                // dropped to Fresh and froze at 1504). See
+                // [`upgrade_sig_gate`].
+                let c = if upgrade_sig_gate() {
+                    let (t, sig) = (self.rivals[ri].target, self.rivals[ri].target_sig);
+                    if !self.target_alive(t, sig) {
+                        return;
+                    }
+                    t as usize
+                } else {
+                    let Some(c) = self.rival_castle(self.rivals[ri].ent) else {
+                        self.rivals[ri].state = AiState::Fresh;
+                        return;
+                    };
+                    c
                 };
                 let (cx, cy, cz) = {
                     let e = &self.g.ent[c];
@@ -4246,7 +4453,16 @@ impl World {
                 self.rival_cast(ri, i, 12);
                 let cz = self.g.ent[c].z;
                 self.rival_approach(ri, i, cx, cy, Some(cz), 256, 2048);
-                if self.g.ent[i].act_life >= self.g.ent[i].max_life as i32 {
+                // ⭐ NO state write on a full purse of life. The whole
+                // of sub_13A70 (CARPET.EXE 0x13A70-0x13B94) never
+                // touches `+415`, `+40` or `+8`: the healed rival keeps
+                // AIMING (+34 at 0x13B16) and approaching its castle
+                // every tick until the think-tick cascade re-picks
+                // (Idle's cruise leg, :18756). See
+                // [`home_keeps_state`].
+                if !home_keeps_state()
+                    && self.g.ent[i].act_life >= self.g.ent[i].max_life as i32
+                {
                     self.rivals[ri].state = AiState::Fresh;
                 }
             }
@@ -4609,11 +4825,17 @@ impl World {
         // the port's coneless commit armed the token and fired the
         // castle ball retail never cast (the t=13647 extra
         // (9,10)/(10,43) pair).
-        if s == 16
-            && let Some(c) = self
-                .rival_castle(r.ent)
+        // ⭐ The bound arm's gate is the raw register word (:19309
+        // `if (wizext+50)`), not the first-commit latch — see
+        // [`rival_castle_register`].
+        let bound = if rival_castle_register() {
+            let reg = self.wiz_castle_reg(r.slot) as usize;
+            (reg != 0 && reg < self.g.ent.len()).then_some(reg)
+        } else {
+            self.rival_castle(r.ent)
                 .filter(|&c| self.g.ent[c].flags & 2 != 0)
-        {
+        };
+        if s == 16 && let Some(c) = bound {
             let space = self.g.castle_upgrade_space_ok(c);
             let cone = ((255 - r.acc as u32) / 4 + 20) * 2048 / 360;
             let e = &self.g.ent[r.ent as usize];
@@ -5101,10 +5323,24 @@ impl World {
                 self.g.snd(46, i);
             }
         }
-        let floor = {
-            let row = &BEHAVIOR[self.g.ent[i].row156 as usize];
-            (self.g.ground_z(pos.0, pos.1) as i16).saturating_add(row.v_12)
+        // The mover's commit gate (:55250-52 → `sub_45410` :55065): a
+        // scratch on a type-8 wall tile is refused and retried along
+        // the two cardinals nearest the move bearing; both blocked ⇒
+        // NO commit (the pose stands, the refused second cardinal
+        // stays in the scratch). See [`rival_fall_wall_gate`].
+        let cur = {
+            let e = &self.g.ent[i];
+            (e.x, e.y, e.z)
         };
+        let committed = if rival_fall_wall_gate() {
+            let (ok, slid) = self.g.player_wall_slide(cur, pos);
+            pos = slid;
+            ok
+        } else {
+            true
+        };
+        let v12 = BEHAVIOR[self.g.ent[i].row156 as usize].v_12;
+        let floor = (self.g.ground_z(pos.0, pos.1) as i16).saturating_add(v12);
         // sub_455D0's own terrain keep-out lifts the moved body onto
         // the floor DURING the move — the fall's gravity + clamp
         // below only re-settle it — so a corpse drifting over RISING
@@ -5112,25 +5348,35 @@ impl World {
         // (:51546 reads the mover's position scratch). mc1hwl0
         // t=20728: the landing tick's (10,1) puff 744 and the fire
         // it seeds are born at 4956 where the pre-lift z was 4955.
+        // (:55103-05 — the gate's trailing z-floor is UNCONDITIONAL:
+        // it lifts the scratch whether or not it commits.)
         if pos.2 < floor {
             pos.2 = floor;
         }
         let puff = pos;
-        pos.2 = pos.2.saturating_add(vz);
+        // Gravity (:55468-73) and the floor (:55474-77) act on the
+        // ENTITY's pose (`a1 + 76`, `sub_11F50(a1 + 72)`): the scratch
+        // when the gate committed it, the unmoved pose when it refused.
+        let (mut body, floor) = if committed {
+            (pos, floor)
+        } else {
+            (cur, (self.g.ground_z(cur.0, cur.1) as i16).saturating_add(v12))
+        };
+        body.2 = body.2.saturating_add(vz);
         {
             let e = &mut self.g.ent[i];
             e.f46 = (vz - 2).clamp(-256, 0);
         }
-        if pos.2 < floor {
-            pos.2 = floor;
+        if body.2 < floor {
+            body.2 = floor;
         }
-        // The trail (10,1) burning puff (:55480-84).
+        // The trail (10,1) burning puff (:55480-84) — at the SCRATCH.
         if let Some(s) = self.g.spawn_effect(1, puff.0, puff.1, puff.2) {
             self.g.ent[s].flags |= 0x80;
             self.g.ent[s].id24 = self.rivals[ri].ent;
         }
-        self.g.move_relink(i, pos.0, pos.1, pos.2);
-        if pos.2 == floor {
+        self.g.move_relink(i, body.0, body.1, body.2);
+        if body.2 == floor {
             self.rival_death_impact(ri, i);
         }
         self.entities_dirty = true;
@@ -5580,9 +5826,20 @@ impl World {
         // mc1hwl0 t=20761: (12,16) slot 97 = 20000/198 under castle
         // 233's level 2, against the minted 1000/9).
         {
-            let e = &self.g.ent[c];
-            if e.f26 > 0 && e.flags & 2 != 0 {
-                let cap = Gen::CASTLE_CAP[(e.f26 as usize).min(7)];
+            // :55034 `if (var_50) sub_47DD0(pool[var_50])` — the
+            // REGISTER names the castle and the ladder prices every
+            // level, 0 included (:56640 `case 0: 5000`). See
+            // [`rival_castle_register`].
+            let priced = if rival_castle_register() {
+                let reg = self.wiz_castle_reg(self.rivals[ri].slot) as usize;
+                (reg != 0 && reg < self.g.ent.len()).then_some(reg)
+            } else {
+                let e = &self.g.ent[c];
+                (e.f26 > 0 && e.flags & 2 != 0).then_some(c)
+            };
+            if let Some(pc) = priced {
+                let e = &self.g.ent[pc];
+                let cap = Gen::CASTLE_CAP[(e.f26.max(0) as usize).min(7)];
                 let m = self.rivals[ri].owned[16] as usize;
                 if m != 0 {
                     self.g.ent[m].f136 = cap;
@@ -7681,6 +7938,11 @@ mod tests {
         let mut w = rebound_world();
         let ri = 0;
         let i = w.rivals[ri].ent as usize;
+        // Away from the keep: the authored castle is BOUND at its
+        // mint (`wizext+50`, :54980), and a rival inside its own
+        // castle's box DISCARDS its mailbox (:17975-78) — the packet
+        // below must reach the intake. See [`rival_castle_register`].
+        w.g.ent[i].x = w.g.ent[i].x.wrapping_add(0x4000);
         // Airborne, climbing, and one lethal packet in the box.
         w.g.ent[i].tick70 = 1;
         w.g.ent[i].f46 = -56;
@@ -7719,6 +7981,11 @@ mod tests {
         let mut w = rebound_world();
         let ri = 0;
         let i = w.rivals[ri].ent as usize;
+        // Away from the keep: the authored castle is BOUND at its
+        // mint (`wizext+50`, :54980), and a rival inside its own
+        // castle's box DISCARDS its mailbox (:17975-78) — the packet
+        // below must reach the intake. See [`rival_castle_register`].
+        w.g.ent[i].x = w.g.ent[i].x.wrapping_add(0x4000);
         w.g.ent[i].tick70 = 1;
         w.g.ent[i].f46 = -56;
         // Well clear of one 16/tick decay step, so the mover still
@@ -7740,6 +8007,51 @@ mod tests {
         );
     }
 
+    /// `sub_132B0`'s at-castle probe (:17971-72, CARPET.EXE file
+    /// 0x2BBF9-0x2BC3D) is `v14 = wizext+50; if (v14 && sub_11950(a1,
+    /// pool + 164*v14))` — the REGISTER word and the summed-extent
+    /// overlap, nothing else. The port used to demand the castle's
+    /// `flags & 2` first-commit latch, which an AUTHORED castle never
+    /// earns, so a rival parked on his own keep drew the afield
+    /// `/2000` floored 100 instead of the at-castle `/200` floored
+    /// 1000 (mc1l20 slot 518 from t=2, x10 under-funded for the whole
+    /// pre-upgrade phase). `MGC_NO_MC1_RIVAL_CASTLE_REGISTER=1`
+    /// restores the latch read and this test then fails.
+    #[test]
+    fn a_rival_on_its_unlatched_authored_keep_earns_the_at_castle_regen() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let reg = w.wiz_castle_reg(w.rivals[ri].slot) as usize;
+        assert!(reg != 0, "non-vacuity: the starting castle binds wizext+50");
+        assert_eq!(w.g.ent[reg].flags & 2, 0, "…and it has never committed a level-up");
+        assert!(w.g.ent_overlap(i, reg), "…and the rival sits inside its box");
+        w.rivals[ri].mana = 0;
+        w.rival_alive_tick(ri, i);
+        let at_castle = ((w.rivals[ri].mana_max / 200) as i32).max(1000);
+        assert_eq!(w.rivals[ri].mana_delta, at_castle, "the at-castle rate, not the afield 100");
+    }
+
+    /// `sub_13A70` (Home, :18204-27; CARPET.EXE 0x13A70-0x13B94,
+    /// disassembled whole) never writes the brain byte: a healed rival
+    /// keeps aiming (+34 at 0x13B16) and approaching its castle every
+    /// tick until the think-tick cascade re-picks. The port dropped it
+    /// to `Fresh` (an empty handler) the tick `act_life` reached
+    /// `max_life`, freezing +34 (mc1l26 t=4975/4982/13970, mc1l26-froze
+    /// t=22198). `MGC_NO_MC1_HOME_KEEPS_STATE=1` restores the drop and
+    /// this test then fails.
+    #[test]
+    fn a_healed_rival_at_home_keeps_its_state() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        assert!(w.rival_castle(w.rivals[ri].ent).is_some(), "non-vacuity: a castle to aim at");
+        w.rivals[ri].state = AiState::Home;
+        w.g.ent[i].act_life = w.g.ent[i].max_life as i32;
+        w.rival_state_tick(ri, i, false);
+        assert!(matches!(w.rivals[ri].state, AiState::Home), "Home writes no brain byte");
+    }
+
     /// ⭐⭐⭐ THE DEATH SCATTER DOES NOT BLANK `+676`
     /// (`sub_45FC0_46300` :55516-49 walks the `+532` ACQUISITION list
     /// and nothing else). `sub_45C10_45F50` is the register's ONLY
@@ -7757,6 +8069,11 @@ mod tests {
         let mut w = rebound_world();
         let ri = 0;
         let i = w.rivals[ri].ent as usize;
+        // Away from the keep: the authored castle is BOUND at its
+        // mint (`wizext+50`, :54980), and a rival inside its own
+        // castle's box DISCARDS its mailbox (:17975-78) — the packet
+        // below must reach the intake. See [`rival_castle_register`].
+        w.g.ent[i].x = w.g.ent[i].x.wrapping_add(0x4000);
         // One lethal packet in the box: this tick is the last LIVE
         // tick, so it runs `sub_45C10` and then dies into the fall.
         w.g.ent[i].tick70 = 1;
@@ -7819,6 +8136,11 @@ mod tests {
         let mut w = rebound_world();
         let ri = 0;
         let i = w.rivals[ri].ent as usize;
+        // Away from the keep: the authored castle is BOUND at its
+        // mint (`wizext+50`, :54980), and a rival inside its own
+        // castle's box DISCARDS its mailbox (:17975-78) — the packet
+        // below must reach the intake. See [`rival_castle_register`].
+        w.g.ent[i].x = w.g.ent[i].x.wrapping_add(0x4000);
         // A live Rebound burst on the books, its deflection bit
         // already published on the wizard entity the way the token's
         // own tick publishes it (sub_573F0 :65792).

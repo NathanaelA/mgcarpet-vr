@@ -534,10 +534,28 @@ impl Gen {
     pub(crate) fn ent_overlap(&self, a: usize, b: usize) -> bool {
         let (ea, eb) = (&self.ent[a], &self.ent[b]);
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
-        wd(ea.x, eb.x) < ea.f80 as i32 + eb.f80 as i32
-            && wd(ea.y, eb.y) < ea.f82 as i32 + eb.f82 as i32
+        // ⭐ EVERY EXTENT IS READ SIGNED, not just +78. See
+        // [`crate::engine::features::no_mc1_aabb_signed_extents`].
+        let ext = Self::aabb_ext;
+        wd(ea.x, eb.x) < ext(ea.f80) + ext(eb.f80)
+            && wd(ea.y, eb.y) < ext(ea.f82) + ext(eb.f82)
             && ((ea.z as i32 + ea.f78 as i16 as i32) - (eb.z as i32 + eb.f78 as i16 as i32)).abs()
-                < ea.f84 as i32 + eb.f84 as i32
+                < ext(ea.f84) + ext(eb.f84)
+    }
+
+    /// The AABB test's extent operand: `movswl` in both shipped
+    /// binaries (CARPET.EXE `sub_118C0` at file 0x2A0CC/0x2A0D0
+    /// `movswl 0x2(%ebx)` / `movswl 0x2(%ecx)`, 0x2A0E8/0x2A0EC for +82,
+    /// 0x2A106/0x2A10A for +84; NETHERW.EXE `sub_106C0` at 0x34EFF/
+    /// 0x34F03 and 0x34F1D/0x34F21), so an extent past 0x7FFF is
+    /// NEGATIVE and the summed box collapses.
+    #[inline]
+    pub(crate) fn aabb_ext(v: u16) -> i32 {
+        if crate::engine::features::no_mc1_aabb_signed_extents() {
+            v as i32
+        } else {
+            v as i16 as i32
+        }
     }
 
     /// sub_118C0 against the player carpet.
@@ -576,10 +594,11 @@ impl Gen {
             PLAYER_HW
         };
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
-        wd(e.x, ctx.px) < e.f80 as i32 + hw
-            && wd(e.y, ctx.py) < e.f82 as i32 + hw
+        let ext = Self::aabb_ext; // signed, like `ent_overlap`
+        wd(e.x, ctx.px) < ext(e.f80) + hw
+            && wd(e.y, ctx.py) < ext(e.f82) + hw
             && ((e.z as i32 + e.f78 as i16 as i32) - (ctx.pz as i32 + PLAYER_HH)).abs()
-                < e.f84 as i32 + PLAYER_HH
+                < ext(e.f84) + PLAYER_HH
     }
 
     /// The writer's +66/+67 target filter (-1/-1 = wildcard).
@@ -1709,9 +1728,15 @@ impl Gen {
         // 569, `heading` 260 vs 283, `target_yaw` 260 vs 283 — and
         // pair 35089→35090, slot 949 `heading` 921 vs 887. Between
         // them they gated 2,581 ticks of mc1l49.
+        // ⭐ …AND ONLY WHILE HIS SEAT IS INSIDE THE CHAIN'S VISIBLE
+        // PREFIX ([`Gen::mc1_human_on_wiz_chain`]): a seizure blank or
+        // a sever below him this tick hides him from `sub_54520`'s
+        // walk of `var_u32_36462[0]` exactly as it hides a pooled
+        // carpet (mc1l19 t=14743/45/47, the pool at 999).
         if own != PLAYER_TARGET
             && (!ctx.pdead_top || no_acquire_human_bucket0())
             && !self.player_invisible
+            && self.mc1_human_on_wiz_chain()
             && Self::dist3d(px, py, pz, ctx.px, ctx.py, ctx.pz) <= sig_gate
         {
             consider(
@@ -3474,15 +3499,38 @@ impl Gen {
             // brain (`WorldPatches::one_castle_per_wizard`). MC2's
             // arm at least reads a register; this one reads nothing.
             // Refuse the way MC2's guard does: despawn the ball.
+            // ⭐ THE CREATE ARM'S KILL IS INSIDE `if (v2)` — the ball
+            // dies ONLY when the castle ctor returned a record
+            // (sub_53B50 :63606-11; CARPET.EXE 0x6C588 `call sub_373F0`
+            // / 0x6C590 `test eax,eax` / 0x6C592 `je 0x6c5a5` skips
+            // BOTH the owner stamp and the 0x6C59D reap call). On a
+            // DRY POOL (`sub_373F0` → 0) the landed ball keeps flying:
+            // it re-steers, re-lands and retries the ctor every tick
+            // until a slot frees. No pin release on this arm (the
+            // homing arm's :63513-15 `sub_46D20` has no twin here).
+            // WITNESS mc1l25 t=2616-2619 slot 778 (pool 999 live): the
+            // grounded ball's life freezes at 17 (the :63586 short-
+            // circuit) and retail's flags hold 6 for four ticks while
+            // the port reap-flagged it at the first landing; retail
+            // builds at t=2621 when the pool has room. See
+            // [`crate::engine::features::no_mc1_castle_ball_dry_pool_retry`].
+            let mut built = true;
             if !(one_castle && self.castle_owned_by(own)) {
                 if let Some(c) = self.spawn_castle(bx, by) {
                     self.ent[c].id24 = own;
                     // Claim owner (+144) — the mana census counts the
                     // castle's stored mana into the owner's ceiling.
                     self.ent[c].f144 = own;
+                } else {
+                    built = false;
                 }
             }
-            self.ent[i].flags |= 0x400;
+            if built
+                || !mc1
+                || crate::engine::features::no_mc1_castle_ball_dry_pool_retry()
+            {
+                self.ent[i].flags |= 0x400;
+            }
         }
         false
     }

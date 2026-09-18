@@ -1228,7 +1228,14 @@ impl Gen {
         // :2388, :3940) are chase TARGET-LOSS tests, which retail
         // does read live off the victim record; they stay as they
         // are.
-        if !ctx.pdead_top && !self.player_invisible && owner != PLAYER_TARGET {
+        // …and his seat must be inside the chain's visible prefix
+        // ([`Gen::mc1_human_on_wiz_chain`] — the seizure blank / sever
+        // law, the same test the fireball acquire makes).
+        if !ctx.pdead_top
+            && !self.player_invisible
+            && owner != PLAYER_TARGET
+            && self.mc1_human_on_wiz_chain()
+        {
             let d2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py) as u32;
             if d2 <= r2 && Self::angdist(ef30, Self::angle_between(ex, ey, ctx.px, ctx.py)) < cone {
                 best = Some(PLAYER_TARGET);

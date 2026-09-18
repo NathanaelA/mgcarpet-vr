@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l14",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 20607,
+   "file": "the-rebound-bit-outlives-the-counter-by-one-tick.mgcr",
+   "source": "mc1l14",
+   "note": "THE REBOUND BIT OUTLIVES THE COUNTER BY ONE TICK: sub_573F0 (remc1/sub_main.cpp:65774, class-12 dispatch row 0x2A; CARPET.EXE file 0x6FBE8 `cmpw $0,0x30(%esi); jle -> andb $0x7f,0x11(%ebx)`) tests +48 BEFORE the shared decrement - a live tick that passes the gate SETS the owner's +17 0x80, a refused one leaves it standing, and the clear arm runs only on a tick that ENTERS with +48 <= 0. So the tick the counter falls 1->0 still deflects and the bit drops the tick after. The rival twin (rival_rebound_token_tick) already had the law; the human's manifestation_tick arm published the POST-decrement `f26 > 0` and cleared one tick early. mc1l14 t=20608: rival 38's (9,0) at slot 782 reaches the carpet as the token's +48 goes 1->0; retail deflects it (owner -> human, life 21, the human pays the 200/4 = 50 quarter), the port let it hit and birthed the (10,0) at 277. Same shape twice on mc1l15 t=36816. Kill switch MGC_NO_MC1_REBOUND_BIT_LAG. Ledger ROUND 152 w152d."
+  }
+ ]
+}

@@ -422,6 +422,9 @@ impl World {
         // class-3 dispatch position, sub_45C90) — above the spell
         // tokens, which is the cast-phase law's whole ordering.
         self.mc1_carpet_slot = human_slot;
+        // …and the Gen-level mirror the bucket[0] human-seat readers
+        // consult ([`Gen::mc1_human_on_wiz_chain`]).
+        self.g.mc1_pinned = crate::engine::features::Mc1Pinned(human_slot);
         // The cast-arm hand bits (+16 & 0x300, :55886-95) and the
         // carpet pose the token fires measure from (retail reads the
         // wizard entity's own fields at the token's walk position =

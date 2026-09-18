@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l20",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 18191,
+   "file": "the-fleet-register-is-life-only-and-class-blind.mgcr",
+   "source": "mc1l20",
+   "note": "THE FLEET REGISTER IS LIFE-ONLY AND CLASS-BLIND: sub_47400 (remc1/sub_main.cpp:56329-49) walks the owner's three balloon seats and tests exactly one thing on the seated record - CARPET.EXE VA 0x4752E `cmp ecx,ebx; jbe` (empty seat => spawn), VA 0x47536 `cmpl $0,0xc(%ebx); jge` (act_life >= 0 => the LIVE arm: retarget/tally; else the DEAD arm: cargo drop, soft-kill, seat cleared, NO spawn - the replacement comes a pass later). No class/model/owner/0x400 byte is read. The port's castle_balloons PRE-CLEARED any seat not holding a live owned (3,3) and so spawned the replacement in the same pass. mc1l20 t=18192 at pool 999: balloon 924 is sacrificed by the lightning storm into a (9,9) child with life 0; retail's castle 847 sees seat 1 life 0 >= 0 (live arm, nothing spawned), clears it at 18194 (life -2) and births the replacement (3,3) at 18196 into slot 534; the port pre-cleared the seat and minted into recycle victim 963 two passes early. Also answers DEVIATIONS.md mc2_orphan_balloon_reap item (b). Kill switch MGC_NO_MC1_BALLOON_SEAT_LIFE_ONLY. Ledger ROUND 152 w152j law 1."
+  }
+ ]
+}

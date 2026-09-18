@@ -907,6 +907,12 @@ pub(crate) struct Gen {
     /// `#[derive(Hash)]`. [`Mc2Pinned`]'s empty `Hash` impl is the
     /// opt-out, exactly as [`CrtRand`] is for the CRT stream.
     pub(crate) mc2_pinned: Mc2Pinned,
+    /// The MC1 twin of [`Gen::mc2_pinned`]: `World::mc1_carpet_slot`
+    /// mirrored below the World layer for the bucket[0] readers that
+    /// seat the out-of-pool human ([`Gen::mc1_human_on_wiz_chain`]).
+    /// 0 = native play (no pooled carpet). Save-silent and
+    /// hash-silent like the MC2 mirror.
+    pub(crate) mc1_pinned: Mc1Pinned,
     /// The castle-guard REGISTER (retail wizext+84, per OWNER): 34
     /// positional guard-slot entries the fleet dispatch walks
     /// (`sub_47400` :56412-47). The register lives on the WIZARD and
@@ -2284,6 +2290,17 @@ fn no_mc2_seize_blank() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SEIZE_BLANK").is_some())
 }
 
+/// `MGC_NO_MC1_HUMAN_SEAT_CUT=1` restores the pre-dig pre-passes in
+/// which the out-of-pool human answered a bucket[0] walk (the fireball
+/// muzzle acquire, the creature wizard scan, the balloon-guard
+/// election, the learn clock) even after a mid-tick seizure had
+/// blanked the roster head or a NewEvent reuse had severed the chain
+/// below his seat. See [`Gen::mc1_human_on_wiz_chain`].
+pub(crate) fn no_mc1_human_seat_cut() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HUMAN_SEAT_CUT").is_some())
+}
+
 /// `MGC_NO_TRIGGER_ROSTER_BLANK=1` restores the pre-dig
 /// [`World::balloon_probe`], whose out-of-pool human answered the
 /// class-3 roster walk even after a mid-tick seizure had blanked the
@@ -2353,6 +2370,44 @@ fn mc1_no_row0_shim_119() -> bool {
 fn mc1_no_row0_shim_47_55_76_85() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_47_55_76_85").is_some())
+}
+
+/// `MGC_NO_MC1_ROW0_SHIM_16_23_24_31_225=1` drops shim bytes {16, 23,
+/// 24, 31, 225} back to PLAIN, restoring the pre-dig smoother on the
+/// row-0 cells x=15..16, 22..24, 30..31 and 224..225. See
+/// [`Gen::OOB_TYPE_SHIM`] and [`Gen::smooth_cell`]. Round 152, dig
+/// w152g — four witnesses, every byte FORCED by a neighbour that
+/// smooths bit-exactly in the same epilogue:
+///   {16} — mc1l13 t=753, the same-tick collapse of villages 59
+///     (row 39, x 1..16, y 253..5) and 60 (row 34, x 10..30,
+///     y 236..0), whose footprints share x 10..16 across the y seam.
+///     Retail smooths (14,0) 99 -> 127 (pins {14, 15} plain) but
+///     leaves (15,0) and (16,0) at their pre-value 123 in BOTH passes
+///     where the port averaged them to 128/127; the row-255/1/2
+///     neighbours then re-average one unit high — eleven height cells
+///     that `replay` never grades, standing under all four of the
+///     take's z heads (builder 75 at (16,1) t=3274, (9,1) 629 t=9826,
+///     emu 430 t=14844, archer 996 t=20166).
+///   {23, 24} — mc1l13 t=13049, village 367's collapse (row 26,
+///     x 20..28, y 246..0). (21,0) smooths 1115/9 = 123 and (25,0)
+///     1111/9 = 123 exactly as retail (pins {21, 22, 25, 26} plain);
+///     retail holds (22,0)/(23,0)/(24,0) at 124 where every 3x3 sum
+///     is 1113 (= 123), so {23} and {24} are both building-classed.
+///   {31} — mc1l13 t=17175, castle 821's construction epilogue
+///     (`smooth_perimeter`, f70 51 -> 52). (29,0) smooths 122 -> 121 in
+///     both columns (pins {29, 30} plain); retail holds (30,0) at 123
+///     where the port wrote 122, cascading into (30,1)/(31,1).
+///   {225} — mc1l7 t=1584, the castle level-down fake collapse in
+///     pool slot 0 (row 2, x 208..228, y 254..18). (223,0) smooths
+///     73 -> 75 in both columns (pins {223, 224} plain); retail holds
+///     (224,0) at 90 and (225,0) at 84 where the port averaged 77/75,
+///     and the row-1 cascade under it is the balloon 489's z 2816 vs
+///     2817 at t=3005.
+/// With all five, mc1l13 (32,717 ticks) and mc1l7 (26,432 ticks) run
+/// bit-exact to END with `MGC_PLANE_DIFF` hdiff 0 on every tick.
+fn mc1_no_row0_shim_16_23_24_31_225() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_16_23_24_31_225").is_some())
 }
 
 /// `MGC_NO_MC1_ROW0_SHIM_227=1` drops shim byte {227} back to PLAIN,
@@ -3465,6 +3520,85 @@ pub(crate) fn no_mc1_castle_ball_stepback_moves_ball() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_BALL_STEPBACK_MOVES_BALL").is_some())
 }
 
+/// `MGC_NO_MC1_CASTLE_BALL_DRY_POOL_RETRY=1` restores the pre-dig
+/// create-arm landing that reap-flagged the (9,10) castle ball whether or
+/// not the castle ctor returned a record. Retail's `sub_53B50_53E90`
+/// (`reference/remc1/sub_main.cpp` :63606-11) puts the owner stamp AND
+/// the `sub_41E80` reap call inside `if (v2)` — CARPET.EXE 0x6C588 `e8`
+/// → `sub_373F0`, 0x6C590 `85 c0 test eax,eax`, 0x6C592 `74 11 je
+/// 0x6c5a5` (the epilogue) — so on a DRY POOL the landed ball simply
+/// lives on, re-steers, re-lands and retries the ctor every tick until a
+/// slot frees. WITNESS mc1l25 t=2616-2619 slot 778 (999 live): retail
+/// flags hold 6 with the life frozen at 17 (the grounded short-circuit);
+/// the castle finally builds at t=2621. The homing arm (`sub_53980`
+/// :63505-15) already carried its own `if (v10)` with the pin release;
+/// this is the create arm's twin, which releases nothing.
+pub(crate) fn no_mc1_castle_ball_dry_pool_retry() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_BALL_DRY_POOL_RETRY").is_some())
+}
+
+/// `MGC_NO_MC1_AABB_SIGNED_EXTENTS=1` restores the pre-dig AABB test
+/// that widened the six extent operands (+80/+82/+84 of both parties)
+/// UNSIGNED. Retail's `sub_118C0` (`reference/remc1/sub_main.cpp`
+/// :16963, the primitive under `sub_11950` pair overlap and the player
+/// probe) loads every one of them `movswl` — CARPET.EXE file 0x2A0CC
+/// `0f bf 53 02 movswl 0x2(%ebx),%edx`, 0x2A0D0 `0f bf 41 02 movswl
+/// 0x2(%ecx),%eax`, `lea (%edx,%eax,1),%esi`, then `cmp %esi,%eax; jge
+/// <miss>` against the wrapped-16-bit |Δx| (0x2A0D7-0x2A0E6); +82 at
+/// 0x2A0E8/0x2A0EC, +84 at 0x2A106/0x2A10A. MC2's `sub_106C0`
+/// (NETHERW.EXE 0x34EFF/0x34F03, 0x34F1D/0x34F21) is the same shape.
+/// Only +78 was ported signed. An extent past 0x7FFF is therefore
+/// NEGATIVE in retail and the summed box can never admit anything.
+///
+/// WITNESS mc1l26-froze t=25647 (pool at 999): the human's (10,17)
+/// blast ring at slot 917 carries `+26` = 250 (a stale-alias write by
+/// the (10,18) at 949 on t=25646, reproduced by the port), so its
+/// `sub_37130(768·250/4)` extents are 48000 = −17536 signed; the ch0
+/// castle pre-pass of `sub_120B0` finds no castle in retail, while the
+/// port's unsigned box (48000 + 640) reached castle 978 at (16384, 0)
+/// across the y seam and posted 300 (`act_life 39750 vs 39450`).
+pub(crate) fn no_mc1_aabb_signed_extents() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_AABB_SIGNED_EXTENTS").is_some())
+}
+
+/// `MGC_NO_MC1_CASTLE_TOKEN_DRY_POOL_RETRY=1` restores the pre-dig
+/// castle-token fire that latched `+48 = +50 − 1` whether or not the
+/// ball was minted. Retail's `sub_57610_57B40` (:65876-921) is gate →
+/// `sub_55E80` debit → `sub_373F0(…, 9, 10)` → `if (v3) { +48 = +50 − 1;
+/// stamps; sound 15 }` — CARPET.EXE 0x6FE73 `call sub_55E80` (the
+/// debit), 0x6FE83 `call sub_373F0`, 0x6FE90 `85 c0 test eax,eax`,
+/// 0x6FE92 `0f 84 4d 01 00 00 je 0x6ffe5` (the epilogue, past the
+/// 0x6FE98 `+48 = +50 − 1` latch and every stamp) — so on a
+/// DRY POOL the token stays FULL and the whole arm re-runs next tick,
+/// debiting the full `+136` again, until a slot frees or the gate's
+/// `mana >= +136` leg fails and releases (`+48 = 0`, :65920). WITNESS
+/// mc1l25 t=7013-7017 slot 674 (999 live): retail `+48` holds 101 for
+/// four ticks, `+132` = −20000 on each, purse 92885 → 12885, release at
+/// 7017; the port paid once, latched 100, and the t=7026 recast fizzled
+/// on the stale latch (the upgrade ball and its (10,43) never minted).
+pub(crate) fn no_mc1_castle_token_dry_pool_retry() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_TOKEN_DRY_POOL_RETRY").is_some())
+}
+
+/// `MGC_NO_MC1_WIN_STREAK_PRE_TEST=1` restores the pre-dig banked-share
+/// win latch that fired on the frame the streak counter REACHED
+/// `win_streak_ticks`. Retail's `sub_415C0_41900`
+/// (`reference/remc1/sub_main.cpp` :52130-35) tests the counter BEFORE
+/// the increment — `if (v5 < 16) +13323 = v5 + 1; else +13325 |= 2` —
+/// CARPET.EXE 0x59E58 `cmp cx,0x10` / 0x59E5C `jl` (increment) / 0x59E5E
+/// `or byte [ebx+0x340d],2`: the bit lands on the 17th consecutive
+/// over-frame with the counter parked at 16, one frame later than the
+/// port's `+= 1; >= 16`. WITNESS mc1l10 t=19380/19381: the (11,4) win
+/// trigger (slot 3) fires its disposition — the (5,11) genie at slot 1 —
+/// one walk early in the port (record 19380 vs retail's 19381).
+pub(crate) fn no_mc1_win_streak_pre_test() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_WIN_STREAK_PRE_TEST").is_some())
+}
+
 /// `MGC_NO_MC1_ERUPTION_COUNTER_REREAD=1` restores the pre-dig
 /// behaviour where `eruption_tick` cached `+26` at function entry and
 /// used that one value for the blast gate, the death gate and the
@@ -3684,6 +3818,40 @@ pub(crate) fn no_castle_paint_phase() -> bool {
 pub(crate) fn no_balloon_reg() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_BALLOON_REG").is_some())
+}
+
+/// `MGC_NO_MC1_BALLOON_SEAT_LIFE_ONLY=1` restores the pre-dig
+/// register PRE-CLEAR in [`Gen::castle_balloons`] (a seat whose
+/// record is no longer a live own `(3,3)` was blanked BEFORE the walk,
+/// so the walk spawned a replacement in the SAME pass).
+///
+/// ⭐ RETAIL'S FLEET REGISTER IS CLASS-BLIND. `sub_47400` (:56329-49)
+/// reads the seat's record and tests ONE thing — `CARPET.EXE` VA
+/// 0x4752E `39 cb / 0f 86` (`cmp ecx,ebx; jbe` → empty seat ⇒ spawn)
+/// then VA 0x47536 `83 7b 0c 00 / 7d 27` (`cmpl $0,0xc(%ebx); jge`) —
+/// `act_life >= 0` ⇒ the LIVE arm (retarget on the stagger turn if
+/// `+70 == 9`, tally `+140`/`+136` into wizext+294/+290), otherwise
+/// the DEAD arm (`call 0x27690` cargo drop, `call 0x41E80` soft-kill,
+/// `movw $0,0x34(%eax)` = clear the seat, jmp LABEL_27 — no spawn,
+/// the replacement is a pass LATE). No class, model, owner or `0x400`
+/// byte is read anywhere in the walk. So a seat whose balloon was
+/// SACRIFICED by a dry-pool `NewEvent_372C0` and re-minted as some
+/// other class keeps its seat while the new occupant's life is >= 0,
+/// and is cleared (without a spawn) on the first pass after that
+/// record's life goes negative.
+///
+/// MEASURED mc1l20 t=18192 (pool at n=999, 322 lightning births in one
+/// tick): rival 518's register `[346, 924, 0]`; balloon 924 is
+/// sacrificed at slot 375's storm into a `(9,9)` child with life 0.
+/// Castle 847 (< 904) dispatches after the storm: retail keeps seat 1
+/// (life 0 >= 0), spawns nothing; at 18194 the child is reaped residue
+/// (life −2) ⇒ dead arm, seat cleared; at 18196 the replacement `(3,3)`
+/// is born at slot 534. The pre-clear blanked seat 1 at 18192 and
+/// minted a balloon into recycle victim 963 (retail's next sacrifice,
+/// which retail never popped), then again at 18194 into 950.
+pub(crate) fn no_mc1_balloon_seat_life_only() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_BALLOON_SEAT_LIFE_ONLY").is_some())
 }
 
 /// The per-owner mana-balloon register (see [`Gen::mc1_balloon_reg`]).
@@ -3933,7 +4101,7 @@ impl std::hash::Hash for SlotGens {
 /// death's ejected ball gets its first magnet ch4 stamp one tick
 /// AFTER the teardown, mc1l0 t=1831→1832). Derived per tick —
 /// hash-silent like [`SlotGens`].
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub(crate) struct TickChain {
     pub list: Vec<u16>,
     /// THE SEVERED CHAIN (ledger §THE SEVERED BALL CHAIN): retail's
@@ -3946,6 +4114,21 @@ pub(crate) struct TickChain {
     /// walk head; `usize::MAX` = intact. Reset at the tick-top
     /// rebuild, lowered only by [`Gen::new_event`].
     pub cut: usize,
+}
+
+impl Default for TickChain {
+    /// An unbuilt chain is INTACT (`cut == usize::MAX`), never blanked:
+    /// the live tick-top rebuild sets exactly this, and a bare `Gen`
+    /// (a unit rig that never ran a tick) must read the same — the
+    /// derived `Default` gave `cut = 0`, which is the seizure blank's
+    /// own signature ([`Gen::wiz_roster_head_blanked`],
+    /// [`Gen::mc1_human_on_wiz_chain`]).
+    fn default() -> Self {
+        Self {
+            list: Vec::new(),
+            cut: usize::MAX,
+        }
+    }
 }
 
 impl TickChain {
@@ -4184,6 +4367,16 @@ impl std::hash::Hash for CrtRand {
 pub(crate) struct Mc2Pinned(pub u16);
 
 impl std::hash::Hash for Mc2Pinned {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// [`Gen::mc1_pinned`]'s hash opt-out — the MC1 twin of [`Mc2Pinned`]
+/// (`World::mc1_carpet_slot` is hash-quiet too, `state_hash` lists it
+/// as `mc1_carpet_slot: _`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Mc1Pinned(pub u16);
+
+impl std::hash::Hash for Mc1Pinned {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
@@ -4630,6 +4823,7 @@ impl Gen {
             mc2_recycle: Mc2Recycle::default(),
             m27_v34_slot: M27V34Slot(None, false, None, None),
             mc2_pinned: Mc2Pinned(0),
+            mc1_pinned: Mc1Pinned(0),
             mc1_guard_reg: Mc1GuardReg::default(),
             mc1_balloon_reg: Mc1BalloonReg::default(),
             rand: seed,
@@ -5291,6 +5485,45 @@ impl Gen {
     /// lives inside `for (i = var_u32_36462[0]; i > pool; …)`.
     pub(crate) fn wiz_roster_head_blanked(&self) -> bool {
         self.wiz_chain.cut == 0 && !no_trigger_roster_blank()
+    }
+
+    /// ⭐⭐⭐ **THE OUT-OF-POOL HUMAN'S SEAT ON BUCKET[0] IS THE CHAIN'S
+    /// VISIBLE PREFIX — FOR EVERY READER, NOT ONLY THE WIZARD PICK.**
+    ///
+    /// Retail's human carpet is an ordinary class-3 record on
+    /// `var_u32_36462[0]` (slot order, :52253-62), so the seizure
+    /// blank (`NewEvent_372C0` :43885-91 — `CARPET.EXE` VA 0x372EE
+    /// `6a 50` push 0x50 / `05 1e 8e 00 00` add eax,0x8e1e / `e8` call
+    /// memset, then `c7 80 72 8e 00 00 00 00 00 00` and its three twins
+    /// `movl $0,0x8e72/0x8e76/0x8e6e/0x8e7a(%eax)`: the 20 per-model
+    /// heads at wizext+36382 and all four class heads, BEFORE the
+    /// victim's unlink `e8 86 aa 00 00` (sub_41DD0) and its class
+    /// byte clear `c6 43 40 00`) and the severed-chain law hide him
+    /// from every walk
+    /// later in the tick exactly as they hide a pooled carpet. The
+    /// port seats him OUTSIDE each chain walk, so each such pre-pass
+    /// needs this test. Same index rule as the wizard pick's
+    /// [`crate::mc1::rivals::mc1_human_on_wiz_roster`]: his index in
+    /// retail's chain is the number of port-list members below his
+    /// slot, compared against `cut` measured in the port's list.
+    ///
+    /// WITNESS mc1l19 t=14743/14745/14747: the pool is at 999 and the
+    /// human's spell storm seizes four live `(2,1)` records (slots 2-5)
+    /// every tick; rival 600's fireballs (slots 991/957/960, born the
+    /// same ticks) run `sub_54520` over a NULL class-3 head and MISS —
+    /// retail `chase 0`, `+34 = +30`; the port's pre-pass still saw the
+    /// human at 3,400 units, 69/113 off-axis, locked him (`chase 575`)
+    /// and turned the 34-step (`heading` 79 → 113). The bolts two ticks
+    /// either side (14741 → creature 25, 14749 → the human) acquire in
+    /// both engines, because no seizure ran below them those ticks.
+    /// `MGC_NO_MC1_HUMAN_SEAT_CUT=1` reverts.
+    pub(crate) fn mc1_human_on_wiz_chain(&self) -> bool {
+        if no_mc1_human_seat_cut() {
+            return true;
+        }
+        let hs = self.mc1_pinned.0;
+        let hpos = self.wiz_chain.list.partition_point(|&s| s < hs);
+        hpos < self.wiz_chain.cut
     }
 
     /// The flag mask a recycle-stack rebuild scans for, per game:
@@ -8291,14 +8524,26 @@ impl Gen {
         // first empty index in slot order — the fill order retail's
         // own spawns produce, and the recovery that keeps an orphaned
         // fleet (castle death, cf. docs/DEVIATIONS.md) steerable.
-        for k in 0..3 {
-            let s = reg[k] as usize;
-            if s == 0 {
-                continue;
-            }
-            let e = &self.ent[s];
-            if e.class64 != 3 || e.model65 != 3 || e.id24 != own || e.flags & 0x400 != 0 {
-                reg[k] = 0;
+        //
+        // ⭐ EXCEPT THAT RETAIL'S SEAT TEST IS LIFE-ONLY AND CLASS-BLIND
+        // (`sub_47400` :56329-49, `CARPET.EXE` 0x47536 `cmpl $0,0xc(%ebx)`
+        // is the only read; see [`no_mc1_balloon_seat_life_only`]): a
+        // seat whose balloon was sacrificed and re-minted as another
+        // class STANDS while that record's life is >= 0, and is cleared
+        // by the dead arm below — a pass late, no spawn — once it is
+        // not. The pre-clear spawned the replacement the same pass, on
+        // the dry-pool tick, into the recycle victim retail never
+        // popped (mc1l20 t=18192 slot 963, t=18194 slot 950).
+        if no_mc1_balloon_seat_life_only() {
+            for k in 0..3 {
+                let s = reg[k] as usize;
+                if s == 0 {
+                    continue;
+                }
+                let e = &self.ent[s];
+                if e.class64 != 3 || e.model65 != 3 || e.id24 != own || e.flags & 0x400 != 0 {
+                    reg[k] = 0;
+                }
             }
         }
         let mut house_tally = 0i64;
@@ -10331,6 +10576,11 @@ impl Gen {
         s[40] = 22;
         s[48] = 22;
         s[89] = 22;
+        s[16] = 22;
+        s[23] = 22;
+        s[24] = 22;
+        s[31] = 22;
+        s[225] = 22;
         s
     };
 
@@ -10356,6 +10606,13 @@ impl Gen {
                 // `MGC_NO_MC1_ROW0_SHIM_227=1` — see
                 // [`mc1_no_row0_shim_227`].
                 if idx == -30 && mc1_no_row0_shim_227() {
+                    return 0;
+                }
+                // `MGC_NO_MC1_ROW0_SHIM_16_23_24_31_225=1` — see
+                // [`mc1_no_row0_shim_16_23_24_31_225`].
+                if matches!(idx + 257, 16 | 23 | 24 | 31 | 225)
+                    && mc1_no_row0_shim_16_23_24_31_225()
+                {
                     return 0;
                 }
                 // `MGC_NO_MC1_ROW0_SHIM_32_39_40_48_89=1` — see
@@ -10960,6 +11217,8 @@ impl Gen {
             // Re-seeded by `World::new` / the strict import beside
             // `mc2_carpet_slot`; never a save-boundary datum.
             mc2_pinned: _,
+            // Same opt-out, MC1 side.
+            mc1_pinned: _,
             mc1_guard_reg,
             mc1_balloon_reg,
             // Rebuilt at every tick top — never saved.
@@ -12972,6 +13231,50 @@ mod tests {
             102,
             "shim bytes 120 and 121 are plain: (121,0) smooths"
         );
+    }
+
+    /// Round 152 (dig w152g): shim bytes {16, 23, 24, 31, 225}, each
+    /// forced by a same-epilogue neighbour that smooths bit-exactly in
+    /// retail — see [`mc1_no_row0_shim_16_23_24_31_225`]. NON-VACUITY:
+    /// `MGC_NO_MC1_ROW0_SHIM_16_23_24_31_225=1` fails every skip
+    /// assertion below (they all become smooths above 100).
+    #[test]
+    fn shim_bytes_16_23_24_31_and_225_gate_the_row0_cells_that_read_them() {
+        let mut g = Gen::new(
+            flat_land(100),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        // Raised row-1 cells under every candidate: a smoothed (x,0)
+        // averages above 100 (102 with one raised neighbour, 104 with
+        // two), a skipped one stays at exactly 100.
+        for x in [14u8, 15, 16, 17, 21, 22, 23, 24, 25, 26, 29, 30, 31, 32, 223, 224, 225, 226] {
+            g.t.height[tile(x, 1)] = 118;
+        }
+        let mut probe = |x: u8| -> u8 {
+            g.smooth_cell(tile(x, 0));
+            g.t.height[tile(x, 0)]
+        };
+        // (x,0) reads shim {x, x+1}: a building byte at k skips
+        // (k-1,0) and (k,0); the plain-paired cells beside it smooth.
+        // ((32,0) and (226,0) are NOT witnesses: {32} and {227} are
+        // building-classed from earlier rounds.)
+        for (k, skips, smooths) in [
+            (16u8, &[15u8, 16][..], &[14u8, 17][..]),
+            (23, &[22, 23], &[21, 25]),
+            (24, &[23, 24], &[21, 25]),
+            (31, &[30, 31], &[29]),
+            (225, &[224, 225], &[223]),
+        ] {
+            for &x in skips {
+                assert_eq!(probe(x), 100, "shim byte {k} skips ({x},0)");
+            }
+            for &x in smooths {
+                assert!(probe(x) > 100, "({x},0) smooths: its shim pair is plain (pins {k})");
+            }
+        }
     }
 
     /// The creature awake gate is a chassis parameter (the

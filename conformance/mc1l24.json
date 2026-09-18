@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l24",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 15897,
+   "file": "the-jar-poll-walks-the-blanked-roster.mgcr",
+   "source": "mc1l24",
+   "note": "THE JAR POLL WALKS THE BLANKED ROSTER: sub_55A40 (remc1/sub_main.cpp:64729, CARPET.EXE file 0x6E238) does the 'already known' bit-0 stamp, the AABB pickup and the rival learn arm inside ONE walk of bucket[0], and the human carpet is an ordinary node of that chain - so NewEvent_372C0's sacrifice arm (:43885-91, empty free stack + recycle pop nulls the four roster heads for the rest of the tick) hides the human from every jar polled later that tick: no stamp, no hit, no grant. The port modelled the blank for the wizard pick (mc1_human_on_wiz_roster) and the balloon probe but the jar poll read the out-of-pool human off player.state on both call paths. mc1l24 t=15898: rival 576 dies at 15896 scattering jars 577..600 at pool 999; the jars whose f63&3 poll lands on a sacrifice tick hold flags 4 in retail, the port stamped 5. Kill switch MGC_NO_MC1_JAR_POLL_ROSTER. Ledger ROUND 152 w152a."
+  }
+ ]
+}

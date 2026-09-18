@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l16",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 19161,
+   "file": "the-upgrade-arm-aims-at-the-signature-not-a-live-castle.mgcr",
+   "source": "mc1l16",
+   "note": "THE UPGRADE ARM AIMS BY SIGNATURE, NEVER BY A LIVE-CASTLE POOL SCAN: sub_13800 (remc1/sub_main.cpp:18106-32; CARPET.EXE 0x13800-0x13889, file +0x187F8) reads the wizard's OWN +146 (0x13809), gates it on sub_15440 (0x13839: sub_15420(castle) == +148, sig = id24 + model65 + class64<<7) and on a miss returns with NO writes; on a hit writes +34 = angle_between (0x13865) and turns 512/2048. No flags/+70 test and no brain-byte write. The port scanned the pool for a castle refusing flags & 0x400 and on None INVENTED `state = Fresh; return`. mc1l16 t=19162: castle 52 is RAZED that tick (flags 14 -> 1038, f70 6 -> 4) - same slot/owner/class/model = same signature - so retail keeps aiming at the ruin (target_yaw 1521) while the port froze at 1504. Sibling law the same session: the Home arm's invented `Fresh` on full life (sub_13A70 :18204-27 never writes the brain byte; mc1l26 t=4975/4982/13970, MGC_NO_MC1_HOME_KEEPS_STATE). Kill switch MGC_NO_MC1_UPGRADE_SIG_GATE. Ledger ROUND 152 w152f."
+  }
+ ]
+}
