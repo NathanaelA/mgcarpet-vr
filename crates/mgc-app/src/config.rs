@@ -1051,6 +1051,24 @@ pub struct GameplayPatches {
     /// end of its own dispatch, within the tick. Player-ruled
     /// 2026-09-18 as the explicit opt-out of retail's sweep.
     pub mc2_immediate_reap: PatchArm,
+    /// THE STALE RECYCLE VICTIM (MC1). `retail`: when the pool runs
+    /// dry the allocator sacrifices the slots listed at the last death
+    /// landing without re-checking what lives in them now, so a slot
+    /// freed and re-minted since — mc1l26: a castle's ground-leveler,
+    /// one tick from finishing — is eaten, and that castle is parked
+    /// mid-transformation for the rest of the level (immune, stuck at
+    /// its level, its dead balloon immortal, its owner unbanishable).
+    /// `patched` (default): a listed slot that is no longer a victim
+    /// is skipped. Player-ruled 2026-09-18.
+    pub mc1_recycle_victim_revalidate: PatchArm,
+    /// THE ORPHANED CASTLE TRANSFORM (MC1). `retail`: a castle waiting
+    /// on a painter/leveler that no longer exists waits forever.
+    /// `patched` (default): it takes the leveler's own abort exit and
+    /// settles next tick. Never fires while a worker stands at the
+    /// site, so a healthy transformation keeps its full length.
+    /// Player-ruled 2026-09-18 as the sanity check behind
+    /// `mc1_recycle_victim_revalidate`.
+    pub mc1_castle_transform_watchdog: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -1074,6 +1092,8 @@ impl Default for GameplayPatches {
             mc2_orphan_balloon_reap: PatchArm::Patched,
             mc2_house_flag_color: PatchArm::Patched,
             mc2_immediate_reap: PatchArm::Patched,
+            mc1_recycle_victim_revalidate: PatchArm::Patched,
+            mc1_castle_transform_watchdog: PatchArm::Patched,
         }
     }
 }
@@ -1101,6 +1121,8 @@ impl GameplayPatches {
             mc2_orphan_balloon_reap: PatchArm::Retail,
             mc2_house_flag_color: PatchArm::Retail,
             mc2_immediate_reap: PatchArm::Retail,
+            mc1_recycle_victim_revalidate: PatchArm::Retail,
+            mc1_castle_transform_watchdog: PatchArm::Retail,
         }
     }
 
@@ -1389,7 +1411,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 33;
+const DEFAULTS_VERSION: u64 = 34;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

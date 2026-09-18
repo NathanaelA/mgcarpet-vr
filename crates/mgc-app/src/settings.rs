@@ -2177,6 +2177,67 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc1_recycle_victim_revalidate",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc1_recycle_victim_revalidate",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc1_recycle_victim_revalidate.on(),
+                faithful: false,
+            },
+            desc: "When the MC1 entity pool runs dry, retail sacrifices the \
+                   slots it listed as expendable at the last death — without \
+                   checking what lives in them now. A slot re-used since (a \
+                   castle's ground-leveler, a projectile) is eaten, and a \
+                   castle whose leveler dies that way is parked mid-transform \
+                   for the rest of the level: immune, stuck at its level, its \
+                   dead balloon immortal, its owner unbanishable. Patched, a \
+                   listed slot that is no longer expendable is skipped.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc1_recycle_victim_revalidate =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "The dry-pool sacrifice eats whatever the listed slot holds, as retail.",
+                    "A listed slot that is no longer expendable is skipped (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc1_castle_transform_watchdog",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc1_castle_transform_watchdog",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc1_castle_transform_watchdog.on(),
+                faithful: false,
+            },
+            desc: "An MC1 castle mid-transformation waits for its painter or \
+                   ground-leveler to finish; if that worker is destroyed from \
+                   outside, retail waits forever. Patched, a castle waiting on \
+                   a worker that no longer exists takes the leveler's own abort \
+                   exit and settles next tick. Never fires while a worker \
+                   stands at the site, so healthy transformations keep their \
+                   full length.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc1_castle_transform_watchdog =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "A castle whose worker is gone waits forever, as retail.",
+                    "A castle whose worker is gone settles next tick (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2442,8 +2503,10 @@ mod tests {
         // mc2_phantom_castle 2026-09-10, dual_wield_muzzle and
         // one_castle_per_wizard 2026-09-15, mc2_wyvern_alliance_brain
         // and mc2_orphan_balloon_reap 2026-09-16, mc2_house_flag_color
-        // 2026-09-17, mc2_immediate_reap 2026-09-18.
-        assert_eq!(patches, 18, "all eighteen patches ship on");
+        // 2026-09-17, mc2_immediate_reap 2026-09-18,
+        // mc1_recycle_victim_revalidate + mc1_castle_transform_watchdog
+        // 2026-09-18 (round 151).
+        assert_eq!(patches, 20, "all twenty patches ship on");
     }
 
     #[test]

@@ -1180,6 +1180,13 @@ pub(crate) struct Gen {
     /// register's telemetry; the app logs increases). The original
     /// keeps no such count — it is observability, not behavior.
     pub(crate) exhausted: u32,
+    /// Ticks on which an MC1 castle sat in a TRANSFORM wait with no
+    /// worker at its site (`castle_tick`'s watchdog predicate,
+    /// [`crate::patches::WorldPatches::mc1_castle_transform_watchdog`]).
+    /// Counted in BOTH arms — the retail arm measures how often normal
+    /// play would trip the patch (the corpus answer: never, outside the
+    /// mc1l26 seizure) — and hash-silent: telemetry, not behavior.
+    pub(crate) castle_watchdog_fired: HashSilent<(u32, u64)>,
     /// The per-game chassis constant set ([`crate::chassis`]); fixed
     /// at construction, never rebranched on.
     pub(crate) chassis: ChassisParams,
@@ -1606,11 +1613,20 @@ pub(crate) struct Mc2Recycle {
     /// Victims seized so far (the `exhausted` counter's twin —
     /// observability, not behavior; the original keeps no such count).
     pub(crate) seized: u32,
+    /// [`crate::patches::WorldPatches::mc1_recycle_victim_revalidate`]
+    /// mirrored here (a MODE like `refill`, set by `World::set_patches`
+    /// — the allocator has no ctx to read it from): a popped victim is
+    /// seized only if its CURRENT flags still carry the mask the stack
+    /// was armed with (`victim_mask`); a re-minted slot is skipped.
+    pub(crate) revalidate: bool,
+    /// Stale entries the revalidating pop skipped (telemetry).
+    pub(crate) skipped_stale: u32,
 }
 
 impl std::hash::Hash for Mc2Recycle {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // `refill` is a MODE and `seized` telemetry — hash-silent.
+        // `refill`/`revalidate` are MODES and `seized`/`skipped_stale`
+        // telemetry — hash-silent.
         if !self.stack.is_empty() {
             self.stack.hash(state);
         }
@@ -4653,6 +4669,7 @@ impl Gen {
             balloon_alert: 0,
             pal_flash: PalFlash::default(),
             exhausted: 0,
+            castle_watchdog_fired: HashSilent((0, 0)),
             sounds: Vec::new(),
             terrain_dirty: false,
             chassis,
@@ -4995,12 +5012,28 @@ impl Gen {
     /// still name a slot the port has since freed.
     fn mc2_recycle_pop(&mut self) -> Option<u16> {
         let mut refilled = false;
+        let mask = self.victim_mask();
         loop {
             while let Some(s) = self.mc2_recycle.stack.pop() {
                 let Some(e) = self.ent.get(s as usize) else {
                     continue;
                 };
                 if s != 0 && e.class64 != 0 {
+                    // ⭐ THE STALE VICTIM (`mc1_recycle_victim_revalidate`,
+                    // patches.rs). MC1's stack names SLOT NUMBERS armed
+                    // at the last death landing and is never purged on
+                    // free (MC2's is — `free_entity`), so a slot freed
+                    // and re-minted since is still on it and retail's
+                    // bare seizure eats whatever lives there now
+                    // (mc1l26 t=27343: a castle's ground-leveler, one
+                    // tick from the finish that alone returns the castle
+                    // to SETTLED). Patched: a victim that no longer
+                    // carries the mask is skipped, as if purged.
+                    if self.mc2_recycle.revalidate && e.flags & mask == 0 {
+                        self.mc2_recycle.skipped_stale =
+                            self.mc2_recycle.skipped_stale.saturating_add(1);
+                        continue;
+                    }
                     self.mc2_recycle.seized = self.mc2_recycle.seized.saturating_add(1);
                     return Some(s);
                 }
@@ -5258,6 +5291,18 @@ impl Gen {
     /// lives inside `for (i = var_u32_36462[0]; i > pool; …)`.
     pub(crate) fn wiz_roster_head_blanked(&self) -> bool {
         self.wiz_chain.cut == 0 && !no_trigger_roster_blank()
+    }
+
+    /// The flag mask a recycle-stack rebuild scans for, per game:
+    /// MC1's death-landing rebuild takes the sacrificable bit OR the
+    /// reap flag (`0x20400`, mc1/rivals.rs), MC2's `sub_49F90` the
+    /// sacrificable bit alone (`0x2_0000`).
+    pub(crate) fn victim_mask(&self) -> u32 {
+        if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+            0x2_0000
+        } else {
+            0x20400
+        }
     }
 
     pub(crate) fn rebuild_recycle(&mut self, mask: u32) {
@@ -8678,7 +8723,7 @@ impl Gen {
     /// settled tick (:55997/:56014) and the pure waits (:56073-78) —
     /// the flag rides the painted tower; the build-site datum lives
     /// in f28 (+154).
-    pub(crate) fn castle_tick(&mut self, i: usize, _patches: crate::patches::WorldPatches) {
+    pub(crate) fn castle_tick(&mut self, i: usize, patches: crate::patches::WorldPatches) {
         // ACTION 6, the LEVELER (sub_470E0 :56138). Lethal damage does
         // NOT downgrade on the tick it lands: `sub_47EC0` returning 2
         // only parks the castle here (:56003 `+70 = 6`) and the tick
@@ -8754,6 +8799,35 @@ impl Gen {
         if matches!(self.ent[i].f59, 1 | 4 | 6) {
             let (x, y) = (self.ent[i].x, self.ent[i].y);
             self.ent[i].z = self.ground_z(x, y) as i16;
+            // ⭐ THE ORPHANED WAIT (`mc1_castle_transform_watchdog`,
+            // patches.rs). A wait sub-state is left ONLY by its
+            // worker's finish — the (10,42) painter writes 5, the
+            // (10,41) leveler writes 2 (`finish_castle_painter`,
+            // `tick_castle_leveler`) — so a wait whose worker is gone
+            // is a wait forever: no damage read, no upgrade, no fleet
+            // pass, the owner respawning at it for the rest of the
+            // level (mc1l26 slot 623 from t=27344, the leveler eaten
+            // by the dry pool's stale-victim seizure). The worker is
+            // minted in the same dispatch that enters the wait and
+            // reap-flags itself only AFTER writing the next sub-state,
+            // so in normal play one always stands here — flagged or
+            // not, it counts. Patched: take the leveler's own shake
+            // exit (:30333 else arm), sub-state 2, which this same
+            // dispatch consumes into SETTLED; the terrain keeps
+            // whatever the worker had done.
+            let orphaned = !(1..self.ent.len()).any(|w| {
+                let e = &self.ent[w];
+                e.class64 == 10 && matches!(e.model65, 41 | 42) && e.x == x && e.y == y
+            });
+            if orphaned {
+                let (n, first) = self.castle_watchdog_fired.0;
+                let t = crate::DEBUG_TICK.load(std::sync::atomic::Ordering::Relaxed);
+                self.castle_watchdog_fired.0 =
+                    (n.saturating_add(1), if n == 0 { t } else { first });
+                if patches.mc1_castle_transform_watchdog {
+                    self.ent[i].f59 = 2;
+                }
+            }
         }
         match self.ent[i].f59 {
             // Level-up (sub_47960 :56461, case 0 :56053-72): the
@@ -10831,6 +10905,8 @@ impl Gen {
             // state: a save taken mid-flash restores mid-flash.
             pal_flash,
             exhausted,
+            // Telemetry, never saved (a load starts the count afresh).
+            castle_watchdog_fired: _,
             // Fixed at construction and identity-checked above; the
             // `&'static [u8]` inside `chassis` is why they cannot
             // simply ride along.
@@ -15403,5 +15479,157 @@ mod tests {
              their pre-smoother heights; (228,0) and (229,0) read only \
              plain shim bytes and take the 3x3 averages 304/9 and 295/9"
         );
+    }
+
+    /// **THE STALE RECYCLE VICTIM** (`mc1_recycle_victim_revalidate`,
+    /// mc1l26 t=27343-44). MC1's recycle stack names SLOT NUMBERS
+    /// armed at a death landing and is never purged on free, so a slot
+    /// that was a sacrificable puff then and is a castle worker now is
+    /// still listed — and retail's dry-pool seizure eats the worker.
+    /// Retail arm: the live non-victim is seized (the bare `class != 0`
+    /// test). Patched: it is skipped and the pop moves on to the next
+    /// listed slot that still carries the mask.
+    #[test]
+    fn the_dry_pool_seizure_revalidates_a_stale_recycle_victim() {
+        let run = |revalidate: bool| {
+            let mut g = Gen::new(
+                flat_land(8),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                VerbSet::MC1,
+            );
+            // Two expendable puffs, then a landing arms the stack.
+            let puff_a = g.new_event().unwrap();
+            let puff_b = g.new_event().unwrap();
+            for &p in &[puff_a, puff_b] {
+                let e = &mut g.ent[p];
+                e.class64 = 10;
+                e.model65 = 13;
+                e.flags |= 0x20000;
+            }
+            g.rebuild_recycle(g.victim_mask());
+            assert!(g.mc2_recycle.stack.contains(&(puff_a as u16)));
+            assert!(g.mc2_recycle.stack.contains(&(puff_b as u16)));
+            // puff_a dies, is freed, and its slot is re-minted as a
+            // castle ground-leveler (no sacrificable bit). The stack
+            // still names the slot.
+            g.free_entity(puff_a);
+            assert!(g.mc2_recycle.stack.contains(&(puff_a as u16)), "MC1 never purges on free");
+            // The freed slot is the free stack's top: it is re-popped
+            // first and becomes the leveler. Then occupy every other
+            // free slot by hand (`new_event` would run the seizure
+            // itself once the stack is dry).
+            let leveler = g.free.pop().unwrap() as usize;
+            assert_eq!(leveler, puff_a, "the freed slot is the next pop");
+            {
+                let e = &mut g.ent[leveler];
+                e.class64 = 10;
+                e.model65 = 41;
+                e.flags = 2;
+            }
+            while let Some(s) = g.free.pop() {
+                g.ent[s as usize].class64 = 5;
+            }
+            assert!(g.free.is_empty(), "the pool really is exhausted");
+            g.mc2_recycle.revalidate = revalidate;
+            // The next spawn must come from the recycle stack.
+            let seized = g.new_event().expect("a victim was sacrificed");
+            (
+                (g.ent[leveler].class64, g.ent[leveler].model65),
+                seized,
+                leveler,
+                puff_b,
+                g.mc2_recycle.skipped_stale,
+            )
+        };
+        // Retail: the stack pops its LOWEST slot first — puff_a's, the
+        // first allocation — and the bare seizure wipes the (10,41)
+        // now living there.
+        let (cm, seized, leveler, _, stale) = run(false);
+        assert_eq!(seized, leveler, "retail's seizure lands on the re-minted slot");
+        assert_ne!(cm, (10, 41), "…and the live leveler is gone (record wiped)");
+        assert_eq!(stale, 0);
+        // Patched: the leveler's slot no longer carries 0x20400 and is
+        // skipped; the seizure moves on to puff_b, which still does.
+        let (cm, seized, _, puff_b, stale) = run(true);
+        assert_eq!(cm, (10, 41), "the leveler survives the dry pool");
+        assert_eq!(seized, puff_b, "the seizure moved on to the live victim");
+        assert_eq!(stale, 1);
+    }
+
+    /// **THE ORPHANED TRANSFORM WAIT** (`mc1_castle_transform_watchdog`,
+    /// mc1l26 slot 623 from t=27345). A castle in the leveler wait
+    /// (`+70`=5, `+48`=6) whose (10,41) no longer exists at its site
+    /// waits forever in the retail arm — its damage mail unread, no
+    /// upgrade, no fleet pass. Patched: it takes the leveler's own
+    /// shake exit (sub-state 2) and the next dispatch settles it. With
+    /// a worker standing at the site NEITHER arm moves it — the
+    /// healthy transformation keeps its full length.
+    #[test]
+    fn an_orphaned_castle_wait_settles_only_under_the_watchdog() {
+        let run = |worker: bool, patched: bool| {
+            let mut g = Gen::new(
+                flat_land(8),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                VerbSet::MC1,
+            );
+            let (x, y) = (0x8000u16, 0x8000u16);
+            let c = g.new_event().unwrap();
+            let site_z = g.ground_z(x, y) as i16;
+            {
+                let e = &mut g.ent[c];
+                e.class64 = 3;
+                e.model65 = 2;
+                e.x = x;
+                e.y = y;
+                e.z = site_z;
+                e.site_z = site_z;
+                e.f26 = 1;
+                e.max_life = Gen::CASTLE_HP[1];
+                e.act_life = 10000;
+                e.f136 = Gen::CASTLE_CAP[1];
+                e.tick70 = 5;
+                e.f59 = 6; // waiting on the leveler
+                e.mail[0] = (200_000, 7); // the player's banked damage
+            }
+            if worker {
+                let w = g.new_event().unwrap();
+                let e = &mut g.ent[w];
+                e.class64 = 10;
+                e.model65 = 41;
+                e.x = x;
+                e.y = y;
+                e.z = site_z;
+                e.flags = 2;
+                e.tick70 = 43;
+            }
+            let patches = crate::patches::WorldPatches {
+                mc1_castle_transform_watchdog: patched,
+                ..crate::patches::WorldPatches::RETAIL
+            };
+            g.castle_tick(c, patches);
+            let after_one = (g.ent[c].tick70, g.ent[c].f59);
+            g.castle_tick(c, patches);
+            let after_two = (g.ent[c].tick70, g.ent[c].f59);
+            (after_one, after_two, g.castle_watchdog_fired.0.0)
+        };
+        // A worker at the site: the wait holds in both arms and the
+        // predicate never counts.
+        assert_eq!(run(true, false), ((5, 6), (5, 6), 0));
+        assert_eq!(run(true, true), ((5, 6), (5, 6), 0));
+        // No worker, retail: the wait holds forever; the predicate
+        // counts every tick.
+        assert_eq!(run(false, false), ((5, 6), (5, 6), 2));
+        // No worker, patched: the finish exit (sub-state 2) is taken
+        // and consumed by the same dispatch — SETTLED at once, as when
+        // retail's leveler finishes at a slot below its castle's — and
+        // the settled tick then reads the banked mail as usual.
+        let (one, two, fired) = run(false, true);
+        assert_eq!(one, (4, 0), "the orphaned wait takes the finish exit and settles");
+        assert_eq!(two, (6, 0), "…and the settled tick reads the banked lethal mail");
+        assert_eq!(fired, 1);
     }
 }

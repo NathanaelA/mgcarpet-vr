@@ -2726,6 +2726,25 @@ fn run_mc1(
         }
         return Ok(stats.clean());
     }
+    // The castle-transform watchdog's predicate is counted in the
+    // retail arm too (features.rs `castle_watchdog_fired`): a free run
+    // that reports it names a castle retail parked forever. Printed
+    // only when nonzero, to stderr under --brief (the brief line is a
+    // baseline artifact).
+    {
+        let ((n, first), (seized, stale)) = world.debug_castle_watchdog();
+        if n != 0 {
+            let line = format!(
+                "CASTLE-WATCHDOG orphaned-wait ticks={n} first t={first} (recycle victims \
+                 seized={seized}, stale skipped={stale})"
+            );
+            if args.brief {
+                eprintln!("{line}");
+            } else {
+                println!("{line}");
+            }
+        }
+    }
     let mode = if args.pose_only { "pose-only" } else { "world" };
     // ⭐ A RESYNC MUST NEVER BE INVISIBLE IN A BASELINE DIFF. A plain
     // run that crossed a permadeath seam is holding retail's state

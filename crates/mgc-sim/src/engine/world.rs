@@ -8975,7 +8975,13 @@ impl World {
                     let leveler_ran = !self.g.free.is_empty()
                         || crate::engine::features::mc1_no_leveler_pool_gate()
                         || crate::engine::features::mc1_no_leveler_pin_gate();
-                    self.g.castle_tick(i, self.patches);
+                    // `strict_retail` force-disables every patched arm.
+                    let eff = if self.strict_retail {
+                        WorldPatches::RETAIL
+                    } else {
+                        self.patches
+                    };
+                    self.g.castle_tick(i, eff);
                     // sub_46D20_47060 (:55949): the castle machine
                     // PINS (+48 = +50 − 1 = 100) or RELEASES (0) its
                     // owner's Create-Castle token — resolved through
@@ -12203,6 +12209,10 @@ impl World {
     /// the patched arms at the gated sites regardless of this set.
     pub fn set_patches(&mut self, p: WorldPatches) {
         self.patches = p;
+        // The allocator has no ctx to read the set from: mirror its
+        // one patch onto the recycle stack's mode flags (hash-silent,
+        // like `refill`). `strict_retail` worlds re-force RETAIL here.
+        self.g.mc2_recycle.revalidate = p.mc1_recycle_victim_revalidate && !self.strict_retail;
     }
 
     /// The live patch set (the app's menu view reads it back).
@@ -22859,6 +22869,19 @@ impl World {
             .iter()
             .position(|e| e.class64 == class && e.model65 == model && e.act_life >= 0)?;
         Some(self.g.mc2_block_map(i))
+    }
+
+    /// The MC1 castle-transform watchdog's telemetry: (ticks on which
+    /// a castle sat in a wait sub-state with no worker at its site,
+    /// the first such `DEBUG_TICK`), counted in both patch arms; and
+    /// the dry-pool allocator's (victims seized, stale entries the
+    /// revalidating arm skipped). The conform replay prints them.
+    #[doc(hidden)]
+    pub fn debug_castle_watchdog(&self) -> ((u32, u64), (u32, u32)) {
+        (
+            self.g.castle_watchdog_fired.0,
+            (self.g.mc2_recycle.seized, self.g.mc2_recycle.skipped_stale),
+        )
     }
 
     pub fn debug_pool(&self) -> (usize, Vec<DebugEvent>) {

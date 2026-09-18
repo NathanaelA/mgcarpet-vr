@@ -254,6 +254,49 @@ pub struct WorldPatches {
     /// later handler can dereference a corpse. MC1 runs retail's
     /// sweep in both arms (it never had the in-walk free).
     pub mc2_immediate_reap: bool,
+    /// **THE STALE RECYCLE VICTIM (MC1)** — player-ruled 2026-09-18.
+    /// When the free stack runs dry, MC1's allocator `NewEvent_372C0`
+    /// (:43885-908) sacrifices entries of the recycle stack — a list
+    /// of pool SLOT NUMBERS armed at the last death landing
+    /// (`rebuild_recycle(0x20400)`: every record then carrying the
+    /// sacrificable bit or the reap flag) and never purged when one
+    /// of those slots is freed and re-minted. The seizure re-checks
+    /// nothing, so it eats WHATEVER lives in the slot now.
+    /// `recordings/mc1l26.mgcr` t=27343: the pool hits 0 free mid
+    /// spell-storm, 128 victims go in one tick, and slot 990 — a smoke
+    /// puff when the list was built, by then Mahmoud's castle
+    /// ground-leveler (10,41) one tick from its finish — is handed to
+    /// a (9,9) spawner. The leveler's finish is the ONLY write that
+    /// returns a castle from TRANSFORM (`+70`=5, `+48`=6) to SETTLED,
+    /// so the castle parks in TRANSFORM for the rest of the level:
+    /// its damage mail is read by the settled tick alone (it banked
+    /// 915k of the player's damage unread), it cannot upgrade, its
+    /// dead balloon is never reaped (that is the settled tick's fleet
+    /// pass) and it keeps respawning its owner. Retail (conformance):
+    /// the bare seizure. Patched (default): a popped victim whose
+    /// CURRENT flags no longer carry the mask is skipped, as if it had
+    /// been purged when its old record died. MC2 purges on free
+    /// (`sub_57F20`), so the arm is a no-op there.
+    pub mc1_recycle_victim_revalidate: bool,
+    /// **THE ORPHANED CASTLE TRANSFORM (MC1)** — player-ruled
+    /// 2026-09-18, the belt to `mc1_recycle_victim_revalidate`'s
+    /// braces: the sanity check that no castle sits in TRANSFORM with
+    /// nobody working on it. A castle in a pure wait sub-state (`+48`
+    /// 1/4: waiting on its (10,42) painter; 6: on its (10,41)
+    /// leveler) whose worker no longer exists at its site takes the
+    /// same exit a blast-shake already gives the leveler (:30333's
+    /// else arm): sub-state 2, the finish, consumed into SETTLED by
+    /// the same dispatch. In normal play a worker ALWAYS stands at the site while
+    /// the castle waits — the painter/leveler are spawned in the
+    /// same dispatch that enters the wait, finish by writing the next
+    /// sub-state before they reap-flag themselves, and the reap runs
+    /// at the next tick's top — so the arm fires only when a worker
+    /// was destroyed from outside (the stale-victim seizure, or any
+    /// future hazard of that shape); it never shortens a healthy
+    /// transformation. Measured: `Gen::castle_watchdog_fired` counts
+    /// the predicate in BOTH arms, and the MC1 corpus sweep shows it
+    /// only on mc1l26 from t=27344.
+    pub mc1_castle_transform_watchdog: bool,
 }
 
 impl WorldPatches {
@@ -276,6 +319,8 @@ impl WorldPatches {
         mc2_orphan_balloon_reap: false,
         mc2_house_flag_color: false,
         mc2_immediate_reap: false,
+        mc1_recycle_victim_revalidate: false,
+        mc1_castle_transform_watchdog: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -306,5 +351,9 @@ impl WorldPatches {
         // (2026-09-17) landed retail's sweep; the player's 2026-09-18
         // ruling keeps the in-walk free as the native default.
         mc2_immediate_reap: true,
+        // Both 2026-09-18 (round 151); no port recording predates
+        // the option class they join, so LEGACY carries them off.
+        mc1_recycle_victim_revalidate: false,
+        mc1_castle_transform_watchdog: false,
     };
 }

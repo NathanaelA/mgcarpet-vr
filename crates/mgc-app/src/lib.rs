@@ -9418,6 +9418,8 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         mc2_orphan_balloon_reap: p.mc2_orphan_balloon_reap.on(),
         mc2_house_flag_color: p.mc2_house_flag_color.on(),
         mc2_immediate_reap: p.mc2_immediate_reap.on(),
+        mc1_recycle_victim_revalidate: p.mc1_recycle_victim_revalidate.on(),
+        mc1_castle_transform_watchdog: p.mc1_castle_transform_watchdog.on(),
     }
 }
 
