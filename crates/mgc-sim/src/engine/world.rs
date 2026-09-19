@@ -9258,7 +9258,12 @@ impl World {
                 // build painter (action 0x2C) and the (10,79)
                 // defender stage piece (action 0x56).
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 0x2C => {
-                    if self.g.mc2_castle_painter_tick(i) {
+                    // Patch option `mc2_building_pad_saturate`
+                    // (docs/DEVIATIONS.md): the painter's `pad + datum`
+                    // goal saturates instead of byte-wrapping.
+                    let pad_saturate = self.patches.mc2_building_pad_saturate
+            && (!self.strict_retail || crate::engine::features::force_building_patches());
+                    if self.g.mc2_castle_painter_tick_with(i, pad_saturate) {
                         self.terrain_dirty = true;
                     }
                 }
@@ -10891,7 +10896,12 @@ impl World {
         // every strict/conformance run) hands the re-paint to every
         // class-3 record — the phantom level-7 castle at the origin.
         let castle_only = self.patches.mc2_phantom_castle && !self.strict_retail;
-        if self.g.mc2_building_tick(i, human, castle_only) {
+        // Patch option `mc2_building_pad_saturate` (docs/DEVIATIONS.md):
+        // a site whose `pad + datum` passes 255 raises a flat top at the
+        // ceiling instead of retail's byte-wrapped pits.
+        let pad_saturate = self.patches.mc2_building_pad_saturate
+            && (!self.strict_retail || crate::engine::features::force_building_patches());
+        if self.g.mc2_building_tick_with(i, human, castle_only, pad_saturate) {
             self.terrain_dirty = true;
             self.entities_dirty = true;
         }

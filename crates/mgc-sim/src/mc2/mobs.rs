@@ -3837,6 +3837,21 @@ impl Gen {
         human: Option<((u16, u16, i16), u16, bool, i16)>,
         castle_only: bool,
     ) -> bool {
+        self.mc2_building_tick_with(i, human, castle_only, false)
+    }
+
+    /// [`Self::mc2_building_tick`] with the `mc2_building_pad_saturate`
+    /// PATCH arm (`pad_saturate`, see
+    /// [`crate::engine::features::building_pad_goal`]). Only the live
+    /// native dispatch passes `true`; the import-side pad replays and
+    /// every strict/conformance run keep retail's byte wrap.
+    pub(crate) fn mc2_building_tick_with(
+        &mut self,
+        i: usize,
+        human: Option<((u16, u16, i16), u16, bool, i16)>,
+        castle_only: bool,
+        pad_saturate: bool,
+    ) -> bool {
         // EF:27234-36 — the opener, ahead of everything including the
         // `IsNextEvent0A_2A_37740` carousel: on the FIRST countdown
         // tick the site swaps its sprite-derived quad for the
@@ -4196,7 +4211,7 @@ impl Gen {
                     tly.wrapping_add(dy as u8),
                 );
                 if pad != 0xff {
-                    let target = pad as i32 + base as i32;
+                    let target = crate::engine::features::building_pad_goal(pad as i32 + base as i32, pad_saturate);
                     let cur = self.t.height[t] as i32;
                     self.t.height[t] = (cur + (target - cur) / life as i32) as u8;
                     if self.t.angle[t] & 7 == 0 {

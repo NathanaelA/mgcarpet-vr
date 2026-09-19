@@ -2514,7 +2514,17 @@ impl Gen {
     /// which flips built cells' angle bit3 → bit7 (feeding the
     /// space check), signals the parent castle (f59 = 2) and
     /// despawns. Returns true when terrain changed.
+    #[cfg(test)] // the live dispatch calls `_with` (the patch arm)
     pub(crate) fn mc2_castle_painter_tick(&mut self, i: usize) -> bool {
+        self.mc2_castle_painter_tick_with(i, false)
+    }
+
+    /// [`Self::mc2_castle_painter_tick`] with the
+    /// `mc2_building_pad_saturate` PATCH arm (`pad_saturate`, see
+    /// [`crate::engine::features::building_pad_goal`]): the painter's `pad + datum`
+    /// goal saturates instead of byte-wrapping. Only the live native
+    /// dispatch passes `true`.
+    pub(crate) fn mc2_castle_painter_tick_with(&mut self, i: usize, pad_saturate: bool) -> bool {
         // First tick: seed the countdown (byte[0] bit1 latch).
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
@@ -2669,7 +2679,8 @@ impl Gen {
                     if c[1] != 0xff && in_frame {
                         let t = tile(gx, gy);
                         delta[fy as usize * w + fx as usize] =
-                            c[1] as i32 + datum - self.t.height[t] as i32;
+                            crate::engine::features::building_pad_goal(c[1] as i32 + datum, pad_saturate)
+                                - self.t.height[t] as i32;
                     }
                     if do_paint && c[0] != 0xff {
                         if no_mc2_painter_paint_first() {

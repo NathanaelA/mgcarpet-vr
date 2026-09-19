@@ -297,6 +297,79 @@ pub struct WorldPatches {
     /// the predicate in BOTH arms, and the MC1 corpus sweep shows it
     /// only on mc1l26 from t=27344.
     pub mc1_castle_transform_watchdog: bool,
+    /// **THE CRUSHED CONSTRUCTION SITE (MC1)** — player-reported
+    /// 2026-09-19 (`bug.mgcr`, mc1:34). A castle's founding and every
+    /// upgrade run the pre-clear `sub_12C50` (:17616, `CARPET.EXE`
+    /// file 0x2B4DF `movl $0xffffffff,0xc(%ebx)`), which stamps life
+    /// -1 on EVERY house of the +36470 chain inside the next-level box
+    /// — including a (10,45) still under construction (state 51). A
+    /// finished house collapses on that; the construction tick
+    /// `sub_27D30` (:29993) only tests `--life == 0` (file 0x405BC
+    /// `test ecx,ecx; je`) and divides each footprint cell's goal step
+    /// by that life, so the site never finishes (no flag, cannot be
+    /// possessed) and pushes its footprint AWAY from the goal forever,
+    /// byte-wrapping: towers of 255, pits of 0 — the "extremely tall
+    /// building with extremely deep holes". Retail witness:
+    /// `recordings/mc1l13.mgcr` slot 140 (t=520 → end). Retail
+    /// (conformance): the endless reversed flatten. Patched: a site
+    /// whose life is already <= 0 when its tick opens collapses like a
+    /// crushed finished house (state 53, `sub_28FE0`).
+    pub mc1_crushed_site_collapse: bool,
+    /// **THE OVERFLOWING BUILDING PAD (MC2)** — round 157 (w157f),
+    /// the MC2 half of the player's "similar weirdness" charge. Both
+    /// BUILD00 stampers lerp each footprint cell toward an ABSOLUTE
+    /// goal `pad + datum` (the row's pad byte plus the site's own
+    /// `position.z >> 5`) and store the result as a BYTE with no clamp:
+    /// the building's construction tick `ApplyTerrainModification_37240`
+    /// (EF:27365; `NETHERW.EXE` VA 0x373E1 `idivl 0x8(%ebx)`, byte store 0x373ED
+    /// `mov %al,0x4b4e0(%ecx)`) and the castle painter
+    /// `AddTerrainMod0A_2A_37BC0` (EF:27863/27891; VA 0x37F90 `idivl
+    /// 0x10(%ebx)`, byte store 0x37FA9). A building sited
+    /// high enough that `pad + datum > 255` wraps: its tallest cells
+    /// finish at `goal & 0xFF` — pits of 0..30 in the middle of a
+    /// 150-250 plateau — and the finished building's own z re-reads
+    /// the ground under its centre (`getTerrainAlt`, EF:27324), so the
+    /// model sinks into the pit. Retail witness: `recordings/mc2l22.mgcr`
+    /// slots 1/7/12 (the authored ridge town, t=0..21) — slot 7 (row
+    /// 43, datum 157, pad up to 127) ends with a 28-deep pit ringed by
+    /// 241s and four 0-deep gates, z 157*32 → 896. Retail
+    /// (conformance): the byte wrap. Patched: the goal saturates at
+    /// 0..=255, so the pad tops out flat at the height ceiling.
+    pub mc2_building_pad_saturate: bool,
+    /// **THE OVERFLOWING BUILDING PAD (MC1)** — round 157 (w157g), the
+    /// MC1 twin of `mc2_building_pad_saturate`. MC1's three BUILD
+    /// stampers also lerp each cell toward an ABSOLUTE `datum + pad`
+    /// (`datum = z >> 5`, pad `0/12/16/4*(lo-1)`, at most 56) and store
+    /// a byte with no clamp: the construction tick `sub_27D30` (:29993;
+    /// `CARPET.EXE` file 0x40650-0x40673 `movswl 0x20(%esp)` datum −
+    /// `movzbl` height, `idivl 0xc(%edi)`, `add`, byte store `mov
+    /// %al,0x4c1e0(%ecx)`; twins at 0x4070C/0x40753/0x4079D), and the
+    /// castle painter `sub_285C0` (:30445; goal fill file 0x410F9-0x41117
+    /// `datum + 4*(lo-1) − height` as i16, apply 0x41290-0x412B1 `idiv
+    /// +26`, byte `add`/store). The leveler `sub_28200` (:30284) that
+    /// follows EVERY painter translates the whole rect with an 8-bit
+    /// `add %cl,%ch` (file 0x40CBF/0x40D7B) — modular — and clamps only
+    /// its TARGET to 220 (file 0x40B40 `cmp $0xdc`). Retail witness
+    /// `recordings/mc1l32-new.mgcr`: castle painter slot 39 (level 1,
+    /// datum 232) wraps (239,218) (pad 40, goal 272) 254 → 0 at t=6331
+    /// and ends its paint at 16; the leveler re-minted on slot 39 at
+    /// t=6341 (`+48` current 232, `+44` target 173) then walks it 16 →
+    /// 11 → 5 → 255 → … → 213 = `272 − 59`, and (238,218) (pad 48) to
+    /// 221 = `280 − 59`. Painter slot 9
+    /// (datum 241, goal 289) does the same at t=8036. So a castle's wrap
+    /// is a TRANSIENT pit that heals when the leveler target is <= 207
+    /// and PERSISTS when it is 208..=220; a dwelling (no leveler; the
+    /// finish re-reads its z off the ground under its centre) keeps it.
+    /// Patched: the dwelling's goal saturates (the shared
+    /// [`crate::engine::features::building_pad_goal`]); the castle
+    /// painter's datum and the leveler's current AND target are capped
+    /// at `255 − (tallest pad of rows 1..=level)` (207 for every shipped
+    /// level), so the painted shape never wraps and — whenever retail's
+    /// leveler would have healed it — the castle settles on exactly
+    /// retail's final heights. A plain goal clamp on the painter would
+    /// NOT: the modular leveler then lowers the clamped 255 by the full
+    /// step (mc1l32-new (238,218): 255 − 59 = 196 where retail ends at 221).
+    pub mc1_building_pad_saturate: bool,
 }
 
 impl WorldPatches {
@@ -321,6 +394,9 @@ impl WorldPatches {
         mc2_immediate_reap: false,
         mc1_recycle_victim_revalidate: false,
         mc1_castle_transform_watchdog: false,
+        mc1_crushed_site_collapse: false,
+        mc2_building_pad_saturate: false,
+        mc1_building_pad_saturate: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -355,5 +431,9 @@ impl WorldPatches {
         // the option class they join, so LEGACY carries them off.
         mc1_recycle_victim_revalidate: false,
         mc1_castle_transform_watchdog: false,
+        // 2026-09-19 (round 157); no port take predates it.
+        mc1_crushed_site_collapse: false,
+        mc2_building_pad_saturate: false,
+        mc1_building_pad_saturate: false,
     };
 }

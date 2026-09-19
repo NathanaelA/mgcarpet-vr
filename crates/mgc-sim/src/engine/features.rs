@@ -66,6 +66,18 @@ pub(crate) fn no_mc1_house_flag_extents() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HOUSE_FLAG_EXTENTS").is_some())
 }
 
+/// PROBE, not a law (round 157): `MGC_FORCE_BUILDING_PATCHES=1` lets
+/// the three BUILD patches (`mc1_crushed_site_collapse`,
+/// `mc1_building_pad_saturate`, `mc2_building_pad_saturate`) fire in a
+/// `strict_retail` world when its patch set enables them. Only
+/// `mgc-conform`'s `MGC_REPLAY_BUILDING_PATCHES` probe installs such a
+/// set, to replay a retail witness take with the patches on. Unset,
+/// strict still pins every patch to retail.
+pub(crate) fn force_building_patches() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_FORCE_BUILDING_PATCHES").is_some())
+}
+
 /// A/B toggle for THE AUTHORED STANDING FIRE'S REAL CTOR (round 157,
 /// w157a): set `MGC_NO_MC1_CREATOR_STANDING_FIRE` to restore the pre-dig
 /// [`Gen::spawn_creator`], whose model-6 row fell to the generic
@@ -194,6 +206,39 @@ impl std::hash::Hash for Planes {
             ceiling.hash(state);
         }
     }
+}
+
+/// THE OVERFLOWING BUILDING PAD — the one goal clamp both games' BUILD
+/// stampers share. The goal a stamper lerps a footprint cell toward is
+/// ABSOLUTE: the site datum (`z >> 5`) plus the cell's pad.
+///
+/// RETAIL (`saturate == false`): no clamp, and every stamper steps
+/// `h += (goal - h) / life` and stores a BYTE, so a goal past 255 wraps
+/// and the tallest cells finish at `goal & 0xFF` — pits in a plateau.
+/// - MC2: the construction tick `ApplyTerrainModification_37240`
+///   (EF:27365; `NETHERW.EXE` VA 0x373E1 `idivl 0x8(%ebx)`, byte store
+///   0x373ED `mov %al,0x4b4e0(%ecx)`) and the castle painter
+///   `AddTerrainMod0A_2A_37BC0` (EF:27863/27891; VA 0x37F90 `idivl
+///   0x10(%ebx)`, byte store 0x37FA9). Retail witness
+///   `recordings/mc2l22.mgcr` slot 7 (row 43, datum 157, pad 127 →
+///   goal 284): a 28-deep pit ringed by 241s, and the finished
+///   building's z re-read off that pit (157*32 → 896).
+/// - MC1: the construction tick `sub_27D30` (:29993; `CARPET.EXE` file
+///   0x40650 `movswl 0x20(%esp)` = datum, 0x40655 zero-extended height,
+///   0x40666 `idivl 0xc(%edi)`, 0x40669 `add`, 0x40673 `mov
+///   %al,0x4c1e0(%ecx)`; the +12/+16/`4*(lo-1)` arms at
+///   0x40702/0x40749/0x4077C-0x40788 each end in the same byte store).
+///   MC1 pads top out at 56, so a dwelling wraps only on ground above
+///   199..243 — no retail take has one (census of all 50 MC1 takes:
+///   highest dwelling goal 222, mc1l34). MC1's castle painter wraps too
+///   (witnessed, mc1l32-new), but its patch is a DATUM cap, not this
+///   clamp — see [`Gen::castle_datum_cap`].
+///
+/// PATCHES `mc2_building_pad_saturate` (both MC2 stampers) and
+/// `mc1_building_pad_saturate` (the MC1 dwelling): the goal saturates
+/// to the height plane's range, so the pad tops out flat.
+pub(crate) fn building_pad_goal(goal: i32, saturate: bool) -> i32 {
+    if saturate { goal.clamp(0, 255) } else { goal }
 }
 
 /// One building-footprint entry from `BUILD?-0.TAB` (6 bytes on disk:
@@ -7592,6 +7637,8 @@ impl Gen {
     /// mailboxes carry it into the first live tick (round 155, see
     /// [`no_mc1_load_pass_area_mail`]).
     pub(crate) fn tick(&mut self, i: usize, ctx: Option<&crate::mc1::mobs::MobCtx>) {
+        let pad_fix =
+            |ctx: Option<&crate::mc1::mobs::MobCtx>| ctx.is_some_and(|c| (!c.strict || force_building_patches()) && c.patches.mc1_building_pad_saturate);
         match self.ent[i].tick70 {
             9 => self.tick_hill(i, ctx),
             10 => self.tick_dish(i),
@@ -7602,10 +7649,17 @@ impl Gen {
             29 => self.tick_wall_pos_x(i),
             32 => self.tick_track(i),
             34 => self.tick_canyon_head(i),
-            43 => self.tick_castle_leveler(i),
-            44 => self.tick_castle_painter(i),
+            // `mc1_building_pad_saturate` reads the runtime set too; the
+            // load fixpoint (no ctx) and `strict_retail` run retail.
+            43 => self.tick_castle_leveler_with(i, pad_fix(ctx)),
+            44 => self.tick_castle_painter_with(i, pad_fix(ctx)),
             45 => self.tick_upgrade_token(i),
-            51 => self.tick_building(i),
+            51 => {
+                // The crushed-site patch reads the runtime set; the load
+                // fixpoint (no ctx) and `strict_retail` run retail.
+                let crushed_site = ctx.is_some_and(|c| (!c.strict || force_building_patches()) && c.patches.mc1_crushed_site_collapse);
+                self.tick_building(i, crushed_site, pad_fix(ctx))
+            }
             55 => self.tick_ridge_head(i, ctx),
             // sub_253E0 rows (30, 31, 33, 54, …): pure self-kill.
             _ => self.ent[i].flags |= 0x400,
@@ -7922,7 +7976,49 @@ impl Gen {
     /// the RLE footprint toward the placement height each tick, paint
     /// every 5th tick and at life 1; on the final tick retile the full
     /// rect and become a persistent (inert) castle entity.
-    fn tick_building(&mut self, i: usize) {
+    ///
+    /// ⚠⚠ **THE COUNTDOWN IS THE ONLY EXIT, AND IT TESTS `== 0`.**
+    /// `CARPET.EXE` file 0x405A6-0x405BE (VA 0x27DAE-0x27DC6):
+    /// `mov ebx,[edi+0xC]; dec ebx; mov [edi+0xC],ebx; …; test ecx,ecx;
+    /// je 0x4090d` — the finish runs only when the decremented life is
+    /// EXACTLY zero, and every goal step divides by that same life
+    /// (`idivl 0xc(%edi)` at file 0x40666/0x4070C/0x40753/0x4079D,
+    /// result `add`ed to the height and stored as a BYTE). The one
+    /// writer that ever pushes a site's life below zero from outside is
+    /// the castle pre-clear `sub_12C50` (:17616; file 0x2B4DF `movl
+    /// $0xffffffff,0xc(%ebx)`), which walks the WHOLE +36470 house
+    /// chain — sites in construction included — and stamps -1 on every
+    /// house inside the next-level box, on the castle's founding and on
+    /// every upgrade. A finished house reads that in `sub_28DC0` and
+    /// collapses (state 53); a SITE never looks: its life runs -1, -2,
+    /// … forever, so it never finishes (never gets its flag bit, never
+    /// becomes a possessable state-52 house) and every tick it steps
+    /// each footprint cell AWAY from its goal by `(goal - h) / life`:
+    /// a cell off its goal by `d` moves to `d + d/|life|` — at least +1
+    /// a tick while `|d| >= |life|` — and the byte store wraps. Cells
+    /// above goal climb to 255 (the "table mountain"), cells below
+    /// sink to 0, and a site crushed early (large `d`) wraps through
+    /// both. RETAIL DOES THIS: `recordings/mc1l13.mgcr` slot 140, a
+    /// (10,45) site at (0xB7,0xD6) crushed by castle 144's pre-clear at
+    /// t=520 (`act_life 19 -> -1`), still in state 51 at t=32717 with
+    /// life -30802, its footprint reading 255/254/220/0/2/13 beside a
+    /// 60-75 hillside (the port replays that take `horizon=END`).
+    ///
+    /// PATCH `mc1_crushed_site_collapse` (`crushed_site`): a site whose
+    /// life is already <= 0 when its tick opens has been crushed from
+    /// outside (the countdown itself can only reach 0 by finishing).
+    /// It takes the finished house's own crushed arm — state 53, the
+    /// one-shot collapse `sub_28FE0` — instead of flattening on.
+    ///
+    /// PATCH `mc1_building_pad_saturate` (`pad_saturate`): each cell's
+    /// `datum + pad` goal saturates at 255 ([`building_pad_goal`]) —
+    /// no leveler follows a dwelling, so retail's wrap is permanent and
+    /// the finish re-reads the site z off the pit under its centre.
+    fn tick_building(&mut self, i: usize, crushed_site: bool, pad_saturate: bool) {
+        if crushed_site && self.ent[i].act_life <= 0 && self.ent[i].model65 == 45 {
+            self.ent[i].tick70 = 53;
+            return;
+        }
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as u8;
         let cy = ((e.y as u32 + 128) >> 8) as u8;
@@ -7935,7 +8031,7 @@ impl Gen {
         let x0 = cx.wrapping_sub(half_w);
         let y0 = cy.wrapping_sub(half_h);
         if life != 0 {
-            self.flatten_build_row(e.f71 as usize, cx, cy, target, life, FlattenLaw::Building);
+            self.flatten_build_row(e.f71 as usize, cx, cy, target, life, FlattenLaw::Building, pad_saturate);
             if life % 5 == 0 || life == 1 {
                 self.paint_build_row(e.f71 as usize, cx, cy);
             }
@@ -7971,6 +8067,7 @@ impl Gen {
         target: i32,
         divisor: i32,
         law: FlattenLaw,
+        pad_saturate: bool,
     ) {
         let def = self.assets.build_tab[bt % self.assets.build_tab.len()];
         let (w, h) = (def.w as u16, def.h as u16);
@@ -8013,6 +8110,7 @@ impl Gen {
                     }
                 };
                 if let Some(goal) = goal {
+                    let goal = building_pad_goal(goal, pad_saturate);
                     let hh = self.t.height[t] as i32;
                     match law {
                         FlattenLaw::Building => {
@@ -8312,7 +8410,75 @@ impl Gen {
     /// finishing at t=27431 where the kill-bit-only proxy idled 25.
     /// Only the m42 ctor ever writes +60 = 1, so model65 == 42 is
     /// the faithful ctor-provenance test.
+    #[cfg(test)] // the live dispatch calls `_with` (the patch arm)
     fn tick_castle_painter(&mut self, i: usize) {
+        self.tick_castle_painter_with(i, false)
+    }
+
+    /// The tallest pad the castle painter's goal decode
+    /// ([`Gen::fill_castle_goal_row`]) puts on any cell of build rows
+    /// `1..=level` (0 when they carry none).
+    fn castle_pad_max(&self, level: usize) -> i32 {
+        let mut max = 0;
+        for bt in 1..=level {
+            let Some(def) = self.assets.build_tab.get(bt).copied() else {
+                continue;
+            };
+            let mut rows = def.h;
+            let mut c = def.offset as usize;
+            while rows != 0 && c < self.assets.build_dat.len() {
+                let ctl = self.assets.build_dat[c] as i8;
+                c += 1;
+                if ctl == 0 {
+                    rows -= 1;
+                    continue;
+                }
+                if ctl < 0 {
+                    continue;
+                }
+                for _ in 0..ctl {
+                    let b = self.assets.build_dat.get(c).copied().unwrap_or(0);
+                    c += 1;
+                    if b >= 0xF && b % 16 != 0 {
+                        max = max.max(4 * (b as i32 % 16 - 1));
+                    }
+                }
+            }
+        }
+        max
+    }
+
+    /// PATCH `mc1_building_pad_saturate`, the CASTLE half: the highest
+    /// datum a level-`level` castle can stand on without its tallest
+    /// painted cell passing 255 — `255 − castle_pad_max` (207 for every
+    /// shipped level, row 1's pad being 48).
+    ///
+    /// ⚠ WHY A DATUM CAP AND NOT THE GOAL CLAMP ([`building_pad_goal`]).
+    /// Every painter is followed by the leveler `sub_28200` (:30284),
+    /// which TRANSLATES the whole rect by `target − current` with an
+    /// 8-bit add (`CARPET.EXE` file 0x40CBF/0x40D7B `add %cl,%ch`, byte
+    /// store 0x40CC3/0x40D7F) — modular, so it undoes a painter wrap
+    /// whenever its target (the outside-corner average, clamped only at
+    /// 220, file 0x40B40 `cmp $0xdc`) is <= 207. Retail witness
+    /// `recordings/mc1l32-new.mgcr`: painter slot 39 (level 1, datum
+    /// 232) wraps (239,218) 254 → 0 at t=6331, ends its paint at 16
+    /// (272 & 0xFF), and the leveler (current 232, target 173) walks it
+    /// 16 → 5 → 255 → 213 = 272 − 59; painter slot 9 (datum 241) again
+    /// at t=8036. A goal clamp would leave 255 for the leveler to lower
+    /// by the full 59 (196 where retail ends at 221 on (238,218)).
+    /// Capping the datum in the painter AND the leveler's current and
+    /// target instead paints a shape that never wraps and, whenever
+    /// retail's leveler would have healed the wrap, settles on exactly
+    /// retail's final heights; above 207 the castle sits lower instead
+    /// of keeping pits.
+    fn castle_datum_cap(&self, level: usize) -> i32 {
+        255 - self.castle_pad_max(level)
+    }
+
+    /// [`Gen::tick_castle_painter`] with the `mc1_building_pad_saturate`
+    /// PATCH arm (`datum_cap`, see [`Gen::castle_datum_cap`]). Only the
+    /// live runtime dispatch passes `true`.
+    fn tick_castle_painter_with(&mut self, i: usize, datum_cap: bool) {
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
             self.ent[i].f26 = 19;
@@ -8358,6 +8524,7 @@ impl Gen {
         // Row = level verbatim (retail never clamps it): level 0
         // paints nothing, which is what a bare-flag castle owns.
         let level = e.f71.min(8) as usize;
+        let target = if datum_cap { target.min(self.castle_datum_cap(level)) } else { target };
         // :30563 — the divisor is the POST-decrement counter itself.
         let divisor = (e.f26 as i32).max(1);
         // :30538-45 — the flatten is BUFFERED: one goal-delta per
@@ -8513,7 +8680,17 @@ impl Gen {
     /// 2, castle site z = 32*current, perimeter smooth depth 3,
     /// despawn — which is ALSO where a shaking castle sends it, see
     /// the `castle_shaking` gate below (:30333).
+    #[cfg(test)] // the live dispatch calls `_with` (the patch arm)
     fn tick_castle_leveler(&mut self, i: usize) {
+        self.tick_castle_leveler_with(i, false)
+    }
+
+    /// [`Gen::tick_castle_leveler`] with the `mc1_building_pad_saturate`
+    /// PATCH arm (`datum_cap`): the current AND the target are capped
+    /// at [`Gen::castle_datum_cap`], the datum the patched painter
+    /// built at, so the translation starts where the paint ended and
+    /// never lifts the towers past 255.
+    fn tick_castle_leveler_with(&mut self, i: usize, datum_cap: bool) {
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as u8;
         let cy = ((e.y as u32 + 128) >> 8) as u8;
@@ -8524,7 +8701,6 @@ impl Gen {
             self.ent[i].flags |= 2;
             self.ent[i].f26 = 10;
             let cur = e.z >> 5;
-            self.ent[i].f28 = cur as u16;
             let mut tgt = self.avg4(
                 x0.wrapping_sub(1),
                 y0.wrapping_sub(1),
@@ -8534,6 +8710,14 @@ impl Gen {
             if tgt > 220 {
                 tgt = 220;
             }
+            let cur = if datum_cap {
+                let cap = self.castle_datum_cap(e.f71.min(8) as usize);
+                tgt = tgt.min(cap as u16);
+                cur.min(cap as i16)
+            } else {
+                cur
+            };
+            self.ent[i].f28 = cur as u16;
             self.ent[i].f44 = tgt;
             if cur == tgt as i16 {
                 self.ent[i].f26 = 0;
@@ -8615,7 +8799,11 @@ impl Gen {
         // loop and the protect-bit block below both degenerate.
         let rows = rows.min(8);
         for r in 1..=rows {
-            self.flatten_build_row(r, cx, cy, target, 1, FlattenLaw::CastleInit);
+            // Retail arm only: the authored castle's FIRST tick runs the
+            // level-up commit, whose painter repaints every one of these
+            // rows toward the (patched: capped) goal and hands off to the
+            // leveler, so an init wrap is gone within that painter's run.
+            self.flatten_build_row(r, cx, cy, target, 1, FlattenLaw::CastleInit, false);
             self.paint_build_row(r, cx, cy);
         }
         let def = self.assets.build_tab[rows % self.assets.build_tab.len()];
@@ -17091,6 +17279,197 @@ mod tests {
         assert_eq!(cm, (10, 41), "the leveler survives the dry pool");
         assert_eq!(seized, puff_b, "the seizure moved on to the live victim");
         assert_eq!(stale, 1);
+    }
+
+    /// **THE CRUSHED CONSTRUCTION SITE** (`mc1_crushed_site_collapse`,
+    /// `bug.mgcr` site 673 / retail `mc1l13` slot 140). A castle
+    /// pre-clear stamps life -1 on a (10,45) still in state 51. Retail
+    /// (`sub_27D30` exits only on `--life == 0`): the site stays in
+    /// construction forever and every tick divides its goal step by the
+    /// negative life, driving the floor cells AWAY from the goal and
+    /// through the byte wrap. Patched: the crushed site takes the
+    /// finished house's crushed arm, state 53, on its next tick.
+    #[test]
+    fn a_crushed_construction_site_collapses_only_under_the_patch() {
+        let run = |patched: bool| {
+            let mut g = Gen::new(
+                flat_land(8),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                VerbSet::MC1,
+            );
+            let b = g.new_event().unwrap();
+            {
+                let e = &mut g.ent[b];
+                e.class64 = 10;
+                e.model65 = 45;
+                e.tick70 = 51;
+                e.f71 = 5; // a 4x4 row: floor code 7 inside a 0x10 ring
+                e.act_life = 30;
+                e.x = 0x4000;
+                e.y = 0x4000;
+                e.z = 32 * 20; // goal height 20 over ground 8
+            }
+            for _ in 0..10 {
+                g.tick_building(b, patched, false);
+            }
+            assert_eq!(g.ent[b].act_life, 20);
+            g.ent[b].act_life = -1; // sub_12C50's stamp (file 0x2B4DF)
+            for _ in 0..40 {
+                if g.ent[b].tick70 != 51 {
+                    break;
+                }
+                g.tick_building(b, patched, false);
+            }
+            (g.ent[b].tick70, g.ent[b].act_life, g.t.height[tile(63, 63)])
+        };
+        // Retail: still building 40 ticks later, life run down past
+        // zero, the floor cell thrown far off both ground (8) and goal
+        // (20) — the first reversed step alone wraps it (2h - goal).
+        let (state, life, h) = run(false);
+        assert_eq!(state, 51, "retail never leaves construction");
+        assert_eq!(life, -41);
+        assert!(!(8..=20).contains(&h), "floor cell pushed off its goal: {h}");
+        // Patched: collapse on the first tick after the stamp, with the
+        // footprint left where the countdown had it.
+        let (state, life, h) = run(true);
+        assert_eq!(state, 53, "the crushed site collapses");
+        assert_eq!(life, -1);
+        assert!((8..=20).contains(&h), "floor cell untouched by the crush: {h}");
+    }
+
+    /// A build table whose rows 1.. are one 3x3 footprint: floor code
+    /// 7 (goal = datum) around a centre `0x4D` (hi 4, lo 13: pad
+    /// `4*(13-1)` = 48 under both the construction and the painter
+    /// decode — the tallest pad of the shipped MC1 castle rows). Row 0
+    /// is empty, as shipped.
+    fn pad48_assets() -> FeatureAssets {
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let dat: Vec<u8> = vec![3, 7, 7, 7, 0, 3, 7, 0x4D, 7, 0, 3, 7, 7, 7, 0];
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|r| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                let d = if r == 0 { 0 } else { 3 };
+                e.push(d);
+                e.push(d);
+                e
+            })
+            .collect();
+        FeatureAssets::parse(&grid, &tab, &dat).unwrap()
+    }
+
+    /// **THE OVERFLOWING BUILDING PAD, MC1 DWELLING**
+    /// (`mc1_building_pad_saturate`). `sub_27D30` steps each cell
+    /// toward the ABSOLUTE `datum + pad` and stores a byte (`CARPET.EXE`
+    /// file 0x40669 `add` / 0x407AA `mov %al,0x4c1e0(%ecx)`): a dwelling
+    /// on ground 240 with a pad-48 cell (goal 288) finishes that cell
+    /// at 288 & 0xFF = 32 — a pit in its own roof. Patched: 255.
+    #[test]
+    fn an_mc1_dwelling_pad_wraps_in_retail_and_saturates_patched() {
+        let run = |patched: bool| {
+            let mut g = Gen::new(flat_land(240), pad48_assets(), 1, ChassisParams::MC1, VerbSet::MC1);
+            let b = g.new_event().unwrap();
+            {
+                let e = &mut g.ent[b];
+                e.class64 = 10;
+                e.model65 = 45;
+                e.tick70 = 51;
+                e.f71 = 1;
+                e.act_life = 20;
+                e.x = 0x4000;
+                e.y = 0x4000;
+                e.z = 32 * 240;
+            }
+            for _ in 0..40 {
+                if g.ent[b].tick70 != 51 {
+                    break;
+                }
+                g.tick_building(b, false, patched);
+            }
+            assert_eq!(g.ent[b].tick70, 52, "the site finished");
+            (g.t.height[tile(64, 64)], g.t.height[tile(63, 64)])
+        };
+        assert_eq!(run(false), ((288 & 0xFF) as u8, 240), "retail: the pad-48 cell wraps");
+        assert_eq!(run(true), (255, 240), "patched: it tops out, the floor is untouched");
+    }
+
+    /// **THE OVERFLOWING BUILDING PAD, MC1 CASTLE**
+    /// (`mc1_building_pad_saturate`, retail witness
+    /// `recordings/mc1l32-new.mgcr` painter slot 39, t=6321-6352). The
+    /// painter `sub_285C0` wraps a pad-48 cell over a datum above 207
+    /// (file 0x410F9-0x41117 goal fill, 0x412AF byte `add`), and the
+    /// leveler `sub_28200` then translates the rect with an 8-bit add
+    /// (file 0x40CBF), so the wrap HEALS when the leveler's target is
+    /// <= 207 and PERSISTS when it is higher. Patched (datum cap
+    /// `255 − 48 = 207` on the painter and the leveler): no wrap ever,
+    /// the SAME final heights as retail wherever retail heals, and a
+    /// castle sat lower instead of a pit where retail does not.
+    #[test]
+    fn an_mc1_castle_pad_wrap_heals_like_retail_or_sits_lower_patched() {
+        // (outside ground, patched) -> (final height plane, the centre
+        // cell's lowest value while the painter ran)
+        let run = |outside: u8, patched: bool| {
+            let mut g = Gen::new(flat_land(outside), pad48_assets(), 1, ChassisParams::MC1, VerbSet::MC1);
+            for y in 63..=65 {
+                for x in 63..=65 {
+                    g.t.height[tile(x, y)] = 232;
+                }
+            }
+            let worker = |g: &mut Gen, model: u8, act: u8| {
+                let i = g.new_event().unwrap();
+                let e = &mut g.ent[i];
+                e.class64 = 10;
+                e.model65 = model;
+                e.tick70 = act;
+                e.f71 = 1;
+                e.x = 0x4000;
+                e.y = 0x4000;
+                e.z = 32 * 232;
+                i
+            };
+            let p = worker(&mut g, 42, 44);
+            let mut low = 255u8;
+            for _ in 0..80 {
+                if g.ent[p].flags & 0x400 != 0 {
+                    break;
+                }
+                g.tick_castle_painter_with(p, patched);
+                low = low.min(g.t.height[tile(64, 64)]);
+            }
+            assert!(g.ent[p].flags & 0x400 != 0, "fixture: the painter finished");
+            let l = worker(&mut g, 41, 43);
+            for _ in 0..80 {
+                if g.ent[l].flags & 0x400 != 0 {
+                    break;
+                }
+                g.tick_castle_leveler_with(l, patched);
+            }
+            assert!(g.ent[l].flags & 0x400 != 0, "fixture: the leveler finished");
+            (g.t.height.clone(), low)
+        };
+        // Heals: outside ground 173 (mc1l32-new's leveler target).
+        let (retail, low) = run(173, false);
+        assert_eq!(retail[tile(64, 64)], 221, "retail: 280 wraps to 24, the leveler's -59 lands on 221");
+        assert!(low < 64, "retail: the centre dropped into a pit mid-paint ({low})");
+        let (patched, low) = run(173, true);
+        assert!(low >= 232, "patched: the centre never wraps ({low})");
+        assert_eq!(patched, retail, "patched: the same final heights as retail's healed wrap");
+        // Persists: outside ground 232 — the leveler's target clamps to
+        // 220 (file 0x40B40), so it lowers the rect by only 12.
+        let (retail, _) = run(232, false);
+        assert_eq!(retail[tile(64, 64)], ((280 - 12) & 0xFF) as u8, "retail: the pit stays");
+        let (patched, _) = run(232, true);
+        assert_eq!(patched[tile(64, 64)], 255, "patched: the tower tops out");
+        let yard = patched[tile(63, 64)];
+        assert!((207..232).contains(&yard), "patched: the courtyard sits lower (cap 207, edge-smoothed): {yard}");
     }
 
     /// **THE ORPHANED TRANSFORM WAIT** (`mc1_castle_transform_watchdog`,

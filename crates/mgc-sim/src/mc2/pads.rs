@@ -650,4 +650,57 @@ mod tests {
         imported.mc2_building_pad_reconstruct(j);
         assert_eq!(imported.t.height, once, "second replay must not move");
     }
+
+    /// PATCH `mc2_building_pad_saturate` — THE OVERFLOWING BUILDING
+    /// PAD. Both BUILD00 stampers lerp toward the ABSOLUTE `pad +
+    /// datum` and store a byte (`NETHERW.EXE` 0x373ED / 0x37FA9), so a
+    /// site whose goal passes 255 finishes its tallest cells at `goal &
+    /// 0xFF` — a pit (retail witness `recordings/mc2l22.mgcr` slot 7:
+    /// 28 in a 241 ring on a 157 plateau). Retail arm: the wrap; patched
+    /// arm: a flat top at 255. Both stampers, one law.
+    #[test]
+    fn an_overflowing_building_pad_wraps_in_retail_and_saturates_patched() {
+        // (a) the village building's construction (action 51): row 3
+        // is pad 40 everywhere; datum 240 → goal 280.
+        let build = |sat: bool| {
+            let mut g = flat_gen();
+            let b = place_building(&mut g, 60, 60, 3, 240 * 32);
+            for _ in 0..31 {
+                g.mc2_building_tick_with(b, None, false, sat);
+            }
+            assert_eq!(g.ent[b].tick70, 52, "the site finished");
+            // (55,55): clear of the final frame's pad-edge rings (see
+            // `building_pad_reconstruct_rebuilds_the_hut_terrace`).
+            g.t.height[tile(55, 55)]
+        };
+        assert_eq!(build(false), (280 & 0xFF) as u8, "retail: the goal byte-wraps into a pit");
+        assert_eq!(build(true), 255, "patched: the pad tops out at the ceiling");
+
+        // (b) the castle painter (10,42): level-1 row is pad 40; a
+        // castle datum of 230 → goal 270.
+        let paint = |sat: bool| {
+            let mut g = flat_gen();
+            let c = place_castle(&mut g, 100, 100, 1, 230 * 32);
+            g.mc2_spawn_castle_painter(c, true);
+            for _ in 0..4096 {
+                let mut running = false;
+                for j in 1..g.ent.len() {
+                    if g.ent[j].class64 == 10 && g.ent[j].model65 == 42 && g.ent[j].flags & 0x400 == 0 {
+                        g.mc2_castle_painter_tick_with(j, sat);
+                        running = true;
+                    }
+                }
+                if !running {
+                    break;
+                }
+            }
+            g.t.height[tile(99, 99)]
+        };
+        assert_eq!(paint(false), (270 & 0xFF) as u8, "retail: the painter's goal byte-wraps");
+        assert_eq!(paint(true), 255, "patched: the painter saturates too");
+
+        // (c) a goal inside the byte is untouched by the patch.
+        assert_eq!(crate::engine::features::building_pad_goal(42, true), 42);
+        assert_eq!(crate::engine::features::building_pad_goal(280, false), 280);
+    }
 }

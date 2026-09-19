@@ -9461,6 +9461,9 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         mc2_immediate_reap: p.mc2_immediate_reap.on(),
         mc1_recycle_victim_revalidate: p.mc1_recycle_victim_revalidate.on(),
         mc1_castle_transform_watchdog: p.mc1_castle_transform_watchdog.on(),
+        mc1_crushed_site_collapse: p.mc1_crushed_site_collapse.on(),
+        mc2_building_pad_saturate: p.mc2_building_pad_saturate.on(),
+        mc1_building_pad_saturate: p.mc1_building_pad_saturate.on(),
     }
 }
 

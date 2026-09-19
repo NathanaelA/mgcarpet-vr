@@ -161,6 +161,47 @@ old brief rows and all old terrain rows BYTE-IDENTICAL. Reversion probes on the 
 its own head (standing fire → 2 seg @4770; cast pose → 3 seg @30748; `MGC_NO_MC1_LAST_START_MARKER` → l40 DIFFERENT).
 Gate 1,368 / 0 / 4 (+1 app test); fixtures 622 / 622. Sandboxes cleaned.
 
+### 157-5 🐛 PLAYER BUG — THE CRUSHED CONSTRUCTION SITE (retail bug, faithful; PATCH `mc1_crushed_site_collapse`, w157d)
+Player take `bug.mgcr` (port, fresh `--level mc1:34 --record`): a dwelling sculpted a 1–2 tile 255-high "table
+mountain" and its flag could not be possessed. NOT an OOB read. A castle founding or upgrade runs `sub_12C50` (file 0x2B448,
+sole caller VA 0x46F35 in `sub_46F10_47250` case 0), which walks the +36470 house chain with NO state test and stamps
+act_life = -1 (0x2B4DF `c7 43 0c ff ff ff ff`) on every (10,45) in the box, including sites still in construction
+(state 51). The construction tick `sub_27D30` (file 0x40528) finishes only on `== 0` (0x405BE `je`) and steps each
+footprint cell `h += (goal-h)/life` (`idivl 0xc(%edi)`, byte store): with life negative every cell runs AWAY from its goal
+and wraps, so cells go to 255 and 0 (tall buildings with deep holes) and the finish (`flags |= 1`, state 52) never runs,
+hence the dead flag. bug.mgcr: site 673 crushed at t=6442 by castle 775, life −1097 at the end. **Retail witness: mc1l13
+slot 140, crushed at t=520 by castle 144, footprint 255/254/220/13/2/0 in retail's own terrain channel; the port replays
+it END.** Patch (native default patched, retail/strict/load pass unpatched): a model-45 site whose life is ≤ 0 when
+its tick opens goes to state 53 (collapse). `DEFAULTS_VERSION` 35, 21 patches, DEVIATIONS row + entry. Gate 1,369/0/4,
+fixtures 622/622, brief sweep 90/90 byte-identical. ✅ w157e MC1 audit: no other MC1 hole exists. The patch is unchanged. Row 0x30 is dead, with no writer of state 48 in the EXE and 0 samples in 50 takes. `sub_12C50` hits (10,45) only. Every other class-10 countdown exits on `jl`, or divides by a counter that its own gates keep >= 1 (the painter) or != 0 (the leveler). The one outside life-writer on a state-51 site in 50 takes is the pre-clear, twice on mc1l13 slot 140: t=520, then a re-stamp at t=1916. See the DEVIATIONS entry. ⏭ MC2's construction exit (w157f).
+
+### 157-6 🐛 THE OVERFLOWING BUILDING PAD, BOTH GAMES (PATCHES `mc2_building_pad_saturate` w157f, `mc1_building_pad_saturate` w157g)
+The player's follow-up: "validate other buildings … MC2 has similar weirdness".
+- **MC1, other countdowns (w157e):** no other hole; see 157-5.
+- **MC2's construction tick** exits on `<= 0` (NETHERW VA 0x3730A `jle`), so a crushed MC2 site just finishes on its partial pad, with no runaway.
+- **A different retail bug in both games:** every BUILD stamper lerps each footprint cell toward an ABSOLUTE goal `datum + pad` and stores a byte with no clamp, so a site on high ground wraps.
+  - **MC2:** construction VA 0x373E1/0x373ED and painter VA 0x37F90/0x37FA9. Retail witness **mc2l22**, the ridge town: slot 7 ends as a 28-deep pit ringed by 241s and sinks to it; the slot 907 rebuild at t=15233 repeats it.
+  - **MC1:** `sub_27D30` byte stores at file 0x40673/0x40713/0x4075A/0x407AA, painter `sub_285C0` 0x41290-0x412B1, and the leveler's modular `add %cl,%ch` (0x40CBF/0x40D7B). Pads top out at 56, not 252, so only datums above 199 overflow. Retail witness **mc1l32-new**: painter slot 39 (datum 232), cell (239,218) 254→0 at t=6331; the leveler then heals it to `goal−59 mod 256`; slot 9 repeats it at t=8036. No retail dwelling overflows (highest goal 222).
+- **The patches:**
+  - Shared helper `features.rs::building_pad_goal`.
+  - MC2 and MC1 dwellings: the goal saturates to 0..=255.
+  - MC1 castles: the painter and leveler datums are capped at `255 − tallest pad` (207), so the shape never wraps. Where retail heals, the final plane equals retail's exactly; where retail keeps a pit, the castle sits lower.
+  - Live dispatch only; retail, strict, record/replay and the load pass run retail.
+  - `DEFAULTS_VERSION` 37, 23 patches.
+- **Checks:** gate 1,372 / 0 / 4, fixtures 622/622, brief sweep 90/90 byte-identical.
+
+### 157-7 🧪 THE PATCHED A/B REPLAY OF THE THREE WITNESSES (probe `MGC_REPLAY_BUILDING_PATCHES` + `MGC_FORCE_BUILDING_PATCHES`)
+The replay world is `strict_retail`, which pins every patch to retail at the gated sites. So a plain patch-set override
+changed NOTHING: the first attempt read zero divergence on mc1l13 with the patches "on". Setting both env vars lets the
+three BUILD patches through strict. Read the footprints with `MGC_CELL_TRACE`:
+- **mc1l13** (crushed site, slot 140): retail 1/2/224 at t=560 and 1/2/13 pits at t=32716. Patched: collapse at t=521,
+  rubble at 46-59 to the end.
+- **mc1l32-new** (castle painter wrap, cells (239,218)/(238,218)): retail 254→0, 255→4, spikes, dips to 1, and the
+  leveler heals to 213/221. Patched: never wraps (≤ 255), and the leveler ends on the SAME 213/221.
+- **mc2l22** (slot 7, t=60): retail pit 25 inside a 224 ring. Patched: flat 255.
+⏭ The player wants this as a real harness: dual on/off fixtures for every patch, and a witness census of all 23 (a
+dedicated session).
+
 ## ROUND 156 (2026-09-18, vm113) — **ROUND 155's BANKED LEADS WRAPPED**: mc1l27 → END, 4 laws, 3 leads closed
 
 Opened on `56e626e` (round 155 committed by the player), gate 1,363 / 0 / 4. The player: "wrap the banked items" — the

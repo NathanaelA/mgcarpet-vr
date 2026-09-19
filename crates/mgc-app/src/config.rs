@@ -1069,6 +1069,32 @@ pub struct GameplayPatches {
     /// Player-ruled 2026-09-18 as the sanity check behind
     /// `mc1_recycle_victim_revalidate`.
     pub mc1_castle_transform_watchdog: PatchArm,
+    /// THE CRUSHED CONSTRUCTION SITE (MC1). `retail`: a castle founded
+    /// or upgraded over a dwelling that is still being built crushes
+    /// it without ending the construction, so the site never finishes
+    /// (no flag, cannot be possessed) and keeps reshaping its
+    /// footprint the wrong way for the rest of the level — towers
+    /// shooting to the height ceiling beside pits at the floor.
+    /// `patched` (default): the crushed site collapses like a crushed
+    /// finished house. Player-reported 2026-09-19.
+    pub mc1_crushed_site_collapse: PatchArm,
+    /// THE OVERFLOWING BUILDING PAD (MC2). `retail`: a building (or a
+    /// castle stage) raised on ground high enough that its pad would
+    /// pass the height ceiling wraps around instead — its tallest
+    /// parts come out as deep pits, and the finished building sinks
+    /// into the one under its centre (the ridge town of MC2 level 22).
+    /// `patched` (default): the pad tops out flat at the ceiling.
+    pub mc2_building_pad_saturate: PatchArm,
+    /// THE OVERFLOWING BUILDING PAD (MC1). `retail`: a dwelling built,
+    /// or a castle raised, on ground high enough that its tallest part
+    /// would pass the height ceiling wraps around instead — the tower
+    /// tops drop into pits while the castle rises (they climb back out
+    /// when the castle then settles, unless it stands above about 207),
+    /// and a dwelling keeps its pits and sinks into the one under its
+    /// centre. `patched` (default): a dwelling's pad tops out flat at
+    /// the ceiling, and a castle is raised no higher than its tallest
+    /// tower can stand.
+    pub mc1_building_pad_saturate: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -1094,6 +1120,9 @@ impl Default for GameplayPatches {
             mc2_immediate_reap: PatchArm::Patched,
             mc1_recycle_victim_revalidate: PatchArm::Patched,
             mc1_castle_transform_watchdog: PatchArm::Patched,
+            mc1_crushed_site_collapse: PatchArm::Patched,
+            mc2_building_pad_saturate: PatchArm::Patched,
+            mc1_building_pad_saturate: PatchArm::Patched,
         }
     }
 }
@@ -1123,6 +1152,9 @@ impl GameplayPatches {
             mc2_immediate_reap: PatchArm::Retail,
             mc1_recycle_victim_revalidate: PatchArm::Retail,
             mc1_castle_transform_watchdog: PatchArm::Retail,
+            mc1_crushed_site_collapse: PatchArm::Retail,
+            mc2_building_pad_saturate: PatchArm::Retail,
+            mc1_building_pad_saturate: PatchArm::Retail,
         }
     }
 
@@ -1166,6 +1198,9 @@ impl GameplayPatches {
             mc2_wyvern_alliance_brain: PatchArm::Retail,
             mc2_orphan_balloon_reap: PatchArm::Retail,
             mc2_house_flag_color: PatchArm::Retail,
+            mc1_crushed_site_collapse: PatchArm::Retail,
+            mc2_building_pad_saturate: PatchArm::Retail,
+            mc1_building_pad_saturate: PatchArm::Retail,
             // Native MC2 freed in-walk from the first port (the sweep
             // landed 2026-09-17), so a legacy take ran the PATCHED arm
             // — `..Self::default()` supplies it.
@@ -1411,7 +1446,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 34;
+const DEFAULTS_VERSION: u64 = 37;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

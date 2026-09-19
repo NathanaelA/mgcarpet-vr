@@ -254,6 +254,29 @@ impl Chain {
     }
 }
 
+/// `MGC_REPLAY_BUILDING_PATCHES=1` (round 157): turn the three BUILD
+/// patches (`mc1_crushed_site_collapse`, `mc1_building_pad_saturate`,
+/// `mc2_building_pad_saturate`) ON over the replay's retail set, to
+/// watch what a witness take does with them live. Not a conformance
+/// arm: the graded rows after the first patched tick are the patch's
+/// effect, not port defects. Re-applied every tick because every
+/// re-anchor rebuilds the world.
+fn building_patches_probe(world: &mut World) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    // The replay world is `strict_retail`, which pins every patch to
+    // retail; the sim's `MGC_FORCE_BUILDING_PATCHES` lets these three
+    // through (set BOTH env vars).
+    if *ON.get_or_init(|| std::env::var_os("MGC_REPLAY_BUILDING_PATCHES").is_some()) {
+        let mut p = world.patches();
+        if !p.mc1_crushed_site_collapse || !p.mc1_building_pad_saturate || !p.mc2_building_pad_saturate {
+            p.mc1_crushed_site_collapse = true;
+            p.mc1_building_pad_saturate = true;
+            p.mc2_building_pad_saturate = true;
+            world.set_patches(p);
+        }
+    }
+}
+
 /// One free-run tick, MC1/HW — `Simulation::step`'s faithful path in
 /// integer space: dead/falling input override, Accelerate expiry
 /// edge, knock drain at the tick head, then `World::tick_flight` —
@@ -263,6 +286,7 @@ impl Chain {
 /// pre-move pose (the t=563 replay-wall law) — then the
 /// respawn/teleport/speed-zero mailboxes back into the carpet.
 fn step_mc1(world: &mut World, ch: &mut Chain, inp: Mc1Input, cmd: PlayerCommand) {
+    building_patches_probe(world);
     let falling = world.player_falling();
     let dead = world.player_dead();
     // Only the COMMAND handler stops at death (sub_46840 is skipped
@@ -371,6 +395,7 @@ fn book_cheat(world: &World, cheat: Option<recover::Cheat>, stats: &mut RStats) 
 }
 
 fn step_mc2(world: &mut World, ch: &mut Chain, inp: Mc1Input, cmd: PlayerCommand) {
+    building_patches_probe(world);
     let falling = world.player_falling();
     let dead = world.player_dead();
     let end_seized = world.mc2_end_pose().is_some();

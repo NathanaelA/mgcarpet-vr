@@ -2238,6 +2238,98 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc1_crushed_site_collapse",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc1_crushed_site_collapse",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc1_crushed_site_collapse.on(),
+                faithful: false,
+            },
+            desc: "An MC1 castle founded or upgraded over a dwelling still \
+                   under construction crushes it without ending the \
+                   construction: the site never finishes, its flag never \
+                   goes up, it cannot be possessed, and it keeps reshaping \
+                   its footprint the wrong way for the rest of the level \
+                   (towers at the height ceiling beside pits at the floor). \
+                   Patched, the crushed site collapses like a crushed \
+                   finished house.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc1_crushed_site_collapse =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "A crushed construction site reshapes its ground forever, as retail.",
+                    "A crushed construction site collapses (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc2_building_pad_saturate",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_building_pad_saturate",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_building_pad_saturate.on(),
+                faithful: false,
+            },
+            desc: "An MC2 building (or castle stage) raised on ground high \
+                   enough that its pad would pass the height ceiling wraps \
+                   around instead: its tallest parts come out as deep pits \
+                   and the finished building sinks into the one under its \
+                   centre (the ridge town of level 22). Patched, the pad \
+                   tops out flat at the ceiling.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_building_pad_saturate =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "An over-tall building pad wraps into pits, as retail.",
+                    "An over-tall building pad tops out flat (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc1_building_pad_saturate",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc1_building_pad_saturate",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc1_building_pad_saturate.on(),
+                faithful: false,
+            },
+            desc: "An MC1 dwelling built, or castle raised, on ground high \
+                   enough that its tallest part would pass the height \
+                   ceiling wraps around instead: a rising castle's towers \
+                   drop into pits (climbing back out when it settles, \
+                   unless the castle stands very high), and a dwelling \
+                   keeps its pits and sinks into the one under its centre. \
+                   Patched, a dwelling's pad tops out flat at the ceiling \
+                   and a castle is raised no higher than its tallest tower \
+                   can stand.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc1_building_pad_saturate =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "An over-tall building or castle wraps into pits, as retail.",
+                    "An over-tall building tops out, a castle sits lower (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2505,8 +2597,10 @@ mod tests {
         // and mc2_orphan_balloon_reap 2026-09-16, mc2_house_flag_color
         // 2026-09-17, mc2_immediate_reap 2026-09-18,
         // mc1_recycle_victim_revalidate + mc1_castle_transform_watchdog
-        // 2026-09-18 (round 151).
-        assert_eq!(patches, 20, "all twenty patches ship on");
+        // 2026-09-18 (round 151), mc1_crushed_site_collapse and
+        // mc2_building_pad_saturate 2026-09-19 (round 157), and
+        // mc1_building_pad_saturate the same round (w157g).
+        assert_eq!(patches, 23, "all twenty-three patches ship on");
     }
 
     #[test]
