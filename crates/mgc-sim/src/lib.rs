@@ -1153,8 +1153,19 @@ impl Simulation {
             // posts its mail after the step — the take is a no-op
             // when step_player_flight already consumed it (native
             // MC1 dispatches the carpet post-walk: always below).
-            if self.thrust_model == ThrustModel::Mc1
-                && let Some(base) = w.take_speed_base()
+            //
+            // ⚠⚠ BUT THE MAIL IS DRAINED ON EVERY TIER. The enhanced
+            // tier discards it — and must, because the MC2 cast
+            // thunks read an undelivered mail as the caster's live
+            // `actSpeed` (`Gen::mc2_caster_act_speed`). Left standing,
+            // the Speed token's LAST write outlived the spell for the
+            // rest of the session: a burst cancelled while reversing
+            // at Speed III left −400 behind, and every later
+            // possession bolt launched at 384 − 400 = −16, i.e.
+            // hanging in the air even from a standstill
+            // (player-reported 2026-09-19).
+            if let Some(base) = w.take_speed_base()
+                && self.thrust_model == ThrustModel::Mc1
             {
                 self.carpet.tgt_speed = base;
                 self.carpet.act_speed = base;
@@ -2256,6 +2267,38 @@ mod tests {
         assert!(
             per_tick > (96.0 + 40.0) / 256.0,
             "step + cruise per tick, not the step alone: {per_tick} tiles"
+        );
+    }
+
+    /// **THE SPEED MAIL DOES NOT OUTLIVE ITS TICK ON THE ENHANCED
+    /// TIER.** The Speed token mails its carpet-speed write through
+    /// `pending_speed_base`, and the MC2 cast thunks read an undelivered
+    /// mail as the caster's live `actSpeed`. Only the faithful tier used
+    /// to take it, so on the enhanced tier the last write stood for the
+    /// rest of the session: a burst cancelled while reversing at Speed
+    /// III left −400 behind and every later possession bolt launched at
+    /// 384 − 400 (player report 2026-09-19).
+    ///
+    /// Non-vacuity: with the driver's take gated back to the faithful
+    /// tier the mail is still `Some(-400)` after the step.
+    #[test]
+    fn enhanced_tier_drains_the_speed_mail() {
+        let w = mc2_flat_world(100);
+        let mut sim = Simulation::with_world(w);
+        sim.thrust_model = ThrustModel::Enhanced;
+        sim.flyer.x = 100.5;
+        sim.flyer.z = 100.5;
+        sim.flyer.y = 100.0 / 8.0 + 2.0;
+        sim.sync_carpet_from_flyer();
+        sim.world.as_mut().unwrap().pending_speed_base = Some(-400);
+        sim.step(&FlightInput::default());
+        let w = sim.world.as_ref().unwrap();
+        assert_eq!(w.pending_speed_base, None, "the stale mail is drained");
+        let p = world::PlayerPose::from_tiles(100.5, 14.5, 100.5, 0.0, 0.0, 0.0);
+        assert_eq!(
+            w.mc2_caster_act_speed(p),
+            0,
+            "a standstill caster casts at its own speed, not the dead burst's"
         );
     }
 
