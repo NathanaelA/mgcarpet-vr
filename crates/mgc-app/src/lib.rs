@@ -9465,6 +9465,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         mc2_building_pad_saturate: p.mc2_building_pad_saturate.on(),
         mc1_building_pad_saturate: p.mc1_building_pad_saturate.on(),
         mc1_segment_chain_revalidate: p.mc1_segment_chain_revalidate.on(),
+        volcano_register_revalidate: p.volcano_register_revalidate.on(),
     }
 }
 

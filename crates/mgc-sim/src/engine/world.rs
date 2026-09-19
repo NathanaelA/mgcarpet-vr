@@ -9151,7 +9151,7 @@ impl World {
                 // ground-vortex eruption controller (shadows MC1's
                 // state 18), 98 = the apocalypse mana rain.
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 18 => {
-                    self.g.mc2_summit18_tick(i)
+                    self.g.mc2_summit18_tick(i, &ctx)
                 }
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 98 => {
                     self.g.mc2_summit91_tick(i)
@@ -36750,6 +36750,131 @@ mod tests {
             "the blind +38 reap-flag landed on the stranger that inherited the slot"
         );
         assert_ne!(w.g.plume, fire as u16, "…and the register moved on");
+    }
+
+    /// THE STALE ERUPTION KICK (`volcano_register_revalidate`, round
+    /// 158 w158b). The eruption start's `*(prev+26) = 250` (:28779,
+    /// CARPET.EXE file 0x3E7B4 `jbe` / 0x3E7B6 `movw $0xfa,0x1a(%edx)`)
+    /// lands on whatever now holds the `erupting` register's slot. A
+    /// re-minted CASTLE takes it as its LEVEL — mc1l45-froze castle 966
+    /// 3 → 250 at t=27730, mc1l26-froze castle 984 1 → 250 at t=31424;
+    /// both takes then freeze on the level-245 downgrade. Retail arm
+    /// (and any strict run): the castle is stamped. Patched: only a
+    /// record that is still a `(10,18)` driver is kicked.
+    #[test]
+    fn the_eruption_kick_levels_a_castle_unless_patched() {
+        let run = |patched: bool, strict: bool, stale_is_castle: bool| {
+            let mut w = flat_world();
+            let mut patches = crate::patches::WorldPatches::RETAIL;
+            patches.volcano_register_revalidate = patched;
+            let ctx = MobCtx {
+                px: 0,
+                py: 0,
+                pz: 0,
+                pyaw: 0,
+                pmana: 0,
+                pmana_max: 0,
+                pdead: false,
+                pdead_top: false,
+                strict,
+                patches,
+                mc2_turn: 0,
+            };
+            // The register's slot, re-minted: a level-3 castle, or
+            // still the old (dormant-bound) volcano driver.
+            let stale = w.g.new_event().expect("stale slot");
+            {
+                let e = &mut w.g.ent[stale];
+                if stale_is_castle {
+                    e.class64 = 3;
+                    e.model65 = 2;
+                    e.f26 = 3;
+                } else {
+                    e.class64 = 10;
+                    e.model65 = 18;
+                    e.tick70 = 18;
+                    e.f26 = 60;
+                }
+            }
+            let (vx, vy) = (0x8000u16 + 0x2000, 0x8000u16);
+            let vz = w.g.ground_z(vx, vy) as i16;
+            let v = w.g.new_event().expect("volcano slot");
+            {
+                let e = &mut w.g.ent[v];
+                e.class64 = 10;
+                e.model65 = 18;
+                e.tick70 = 18;
+                e.max_life = 10000;
+                e.act_life = 10000;
+                e.f26 = 0; // eruption start, this tick
+            }
+            w.g.link(v, vx, vy, vz);
+            w.g.erupting = stale as u16;
+            w.g.effect_tick(v, &ctx);
+            assert_eq!(w.g.erupting, v as u16, "the start registers the new driver");
+            w.g.ent[stale].f26
+        };
+        assert_eq!(run(false, false, true), 250, "retail: the castle becomes level 250");
+        assert_eq!(run(true, true, true), 250, "strict pins the retail arm");
+        assert_eq!(run(true, false, true), 3, "patched: the castle keeps its level");
+        assert_eq!(run(true, false, false), 250, "patched: a real volcano is still kicked");
+        assert_eq!(run(false, false, false), 250, "retail: a real volcano is kicked");
+    }
+
+    /// The other two blind register writes under the same patch
+    /// (`volcano_register_revalidate`, round 158). (1) The plume
+    /// handover soft-kills whatever inherited the old `(10,19)`'s slot
+    /// — in mc1l45 a rival's Fireball token (t=23826), whose loss
+    /// later orphans four hovering learn tokens. (2) A stale
+    /// `erupting` register naming the slot just recycled into THIS
+    /// driver self-kicks it to 250 (mc1l49 t=29062): retail's new
+    /// volcano dies without erupting.
+    #[test]
+    fn the_volcano_registers_spare_strangers_and_self_when_patched() {
+        let run = |patched: bool, self_kick: bool| {
+            let mut w = flat_world();
+            let mut patches = crate::patches::WorldPatches::RETAIL;
+            patches.volcano_register_revalidate = patched;
+            let ctx = MobCtx {
+                px: 0,
+                py: 0,
+                pz: 0,
+                pyaw: 0,
+                pmana: 0,
+                pmana_max: 0,
+                pdead: false,
+                pdead_top: false,
+                strict: false,
+                patches,
+                mc2_turn: 0,
+            };
+            // The plume register's slot, re-minted as a stranger (a
+            // Fireball token, class 12).
+            let token = w.g.new_event().expect("token slot");
+            w.g.ent[token].class64 = 12;
+            w.g.ent[token].model65 = 0;
+            w.g.plume = token as u16;
+            let (vx, vy) = (0x8000u16 + 0x2000, 0x8000u16);
+            let vz = w.g.ground_z(vx, vy) as i16;
+            let v = w.g.new_event().expect("volcano slot");
+            {
+                let e = &mut w.g.ent[v];
+                e.class64 = 10;
+                e.model65 = 18;
+                e.tick70 = 18;
+                e.max_life = 10000;
+                e.act_life = 10000;
+                e.f26 = 0;
+            }
+            w.g.link(v, vx, vy, vz);
+            w.g.erupting = if self_kick { v as u16 } else { 0 };
+            w.g.effect_tick(v, &ctx);
+            (w.g.ent[token].flags & 0x400 != 0, w.g.ent[v].f26)
+        };
+        assert!(run(false, false).0, "retail: the stranger is soft-killed");
+        assert!(!run(true, false).0, "patched: the stranger survives");
+        assert_eq!(run(false, true).1, 251, "retail: the new driver self-kicks");
+        assert_eq!(run(true, true).1, 1, "patched: the new driver erupts normally");
     }
 
     #[test]

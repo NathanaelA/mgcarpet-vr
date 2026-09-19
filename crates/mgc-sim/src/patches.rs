@@ -393,6 +393,48 @@ pub struct WorldPatches {
     /// first link that is not a class-5 record carrying the head's
     /// `+24` (every segment is a `qmemcpy` of its head).
     pub mc1_segment_chain_revalidate: bool,
+    /// **THE STALE VOLCANO REGISTERS (MC1 AND MC2)** — round 158 (w158b), the
+    /// player-reported FREEZES (`recordings/mc1l45-froze.mgcr`, and the
+    /// older `mc1l26-froze.mgcr`). A volcano starting its eruption
+    /// (`sub_25EC0` :28778-79; `CARPET.EXE` file 0x3E7B4 `76 06` = the
+    /// only gate, `slot > pool base`; 0x3E7B6 `66 c7 42 1a fa 00`)
+    /// kicks the PREVIOUS erupting volcano dormant by writing `+26 =
+    /// 250` into whatever record now holds the global register's slot
+    /// — no class, model or life test. When that slot has been
+    /// re-minted as a CASTLE, `+26` is its LEVEL: the castle becomes
+    /// level 250. Every later downgrade reads the build table (69/78
+    /// entries) out of bounds; rows 250..246 happen to read 0 rows, but
+    /// the collapse walker `sub_28FE0` (file 0x417D8; its only exit is
+    /// the row counter at 0x418E8, decremented solely on a zero byte)
+    /// run for row 245 reads 127 rows from a garbage pointer and never
+    /// returns. Both witnesses hang on exactly that tick: mc1l45-froze
+    /// castle 966 (level 3 → 250 at t=27730, 245 in state 6 at the last
+    /// record t=28506) and mc1l26-froze castle 984 (1 → 250 at t=31424,
+    /// 245 in state 6 at t=31915). The same eruption start soft-kills
+    /// the old plume register's slot just as blindly (:28782-93) —
+    /// mc1l45 t=23826 (w158c): a rival's Fireball token, whose loss
+    /// ends in four hovering orphan learn tokens — and a stale kick
+    /// naming the new driver's own slot self-kicks it (mc1l49
+    /// t=29062). Retail (conformance): all three. Patched: the kick
+    /// lands only on a `(10,18)` other than the driver itself, the
+    /// plume kill only on a `(10,19)`.
+    ///
+    /// **MC2 twin** (w158e; renamed from `mc1_volcano_register_revalidate`
+    /// when it took this on): the ground-vortex controller `sub_32A70`
+    /// (`NETHERW.EXE` file 0x57270) has the same two blind writes
+    /// through `word_0x31`/`word_0x33`. Kick: file 0x5735A-0x57379,
+    /// `cmp Entities[0]; jbe` then `movl $0xfa,0x10(%eax)` — a 32-bit
+    /// `@0x10 = 250` into whatever holds the slot (a CASTLE's @0x10 is
+    /// its level; a self-kick stops the new vortex, whose @0x10 is
+    /// re-read at 0x5743C and 0x574CB). Kill: file 0x573BE-0x573DE,
+    /// `word_0x33` read AFTER the new `(10,19)` spawn, `call 0x7c710`
+    /// (`flags |= 0x400`) on whatever holds it — a stranger (mc2l22
+    /// t=23012: a loose `(10,39)` 1000-mana sphere, slot 986), or the
+    /// brand-new column itself when it was minted into the stale slot.
+    /// Patched: the kick lands only on a `(10,18)` other than the
+    /// driver itself, the kill only on a `(10,19)` other than the new
+    /// column. See [`crate::engine::features::Gen::mc2_summit18_tick`].
+    pub volcano_register_revalidate: bool,
 }
 
 impl WorldPatches {
@@ -421,6 +463,7 @@ impl WorldPatches {
         mc2_building_pad_saturate: false,
         mc1_building_pad_saturate: false,
         mc1_segment_chain_revalidate: false,
+        volcano_register_revalidate: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -460,5 +503,6 @@ impl WorldPatches {
         mc2_building_pad_saturate: false,
         mc1_building_pad_saturate: false,
         mc1_segment_chain_revalidate: false,
+        volcano_register_revalidate: false,
     };
 }

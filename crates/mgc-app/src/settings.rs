@@ -2359,6 +2359,39 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "volcano_register_revalidate",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.volcano_register_revalidate",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.volcano_register_revalidate.on(),
+                faithful: false,
+            },
+            desc: "A volcano (MC1 and MC2) that starts erupting knocks the \
+                   previous volcano dormant and kills the previous lava \
+                   plume or fire column by writing into their old slots \
+                   without checking what lives there now. An MC1 castle \
+                   there jumps to level 250, and a few downgrades later \
+                   the game freezes; anything else there is killed (a \
+                   rival's spell, which can end in hovering spell jars, or \
+                   a loose mana sphere), and an MC2 fire column born in the \
+                   old one's slot kills itself. Patched, the volcano only \
+                   touches its own volcano and plume.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.volcano_register_revalidate =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "An eruption can wreck whatever took the old volcano's slots (an MC1 castle freezes the game), as retail.",
+                    "An eruption only touches the previous volcano and plume (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2629,8 +2662,11 @@ mod tests {
         // 2026-09-18 (round 151), mc1_crushed_site_collapse and
         // mc2_building_pad_saturate 2026-09-19 (round 157), and
         // mc1_building_pad_saturate the same round (w157g),
-        // mc1_segment_chain_revalidate 2026-09-19 (round 158, w158a).
-        assert_eq!(patches, 24, "all twenty-four patches ship on");
+        // mc1_segment_chain_revalidate 2026-09-19 (round 158, w158a), and
+        // volcano_register_revalidate the same round (w158b; renamed
+        // from mc1_volcano_register_revalidate when w158e gave it the
+        // MC2 twin).
+        assert_eq!(patches, 25, "all twenty-five patches ship on");
     }
 
     #[test]

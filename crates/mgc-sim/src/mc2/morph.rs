@@ -490,7 +490,27 @@ impl Gen {
     /// roll past 2500 where retail holds word_0x31) stays fenced by
     /// importing the captured latch into `erupting` (conformance.rs,
     /// mgcr word_0x31).
-    pub(crate) fn mc2_summit18_tick(&mut self, i: usize) {
+    ///
+    /// ⭐ THE REGISTER WRITES ARE BLIND (round 158, dig w158e; PATCH
+    /// OPTION `volcano_register_revalidate`, shared with the MC1 twin
+    /// `eruption_tick`). `NETHERW.EXE` file 0x5735A-0x57379: the kick
+    /// is `mov 0x31(D41A0),%ax` → `Entities[ax]` → `cmp Entities[0];
+    /// jbe` → `movl $0xfa,0x10(%eax)` — a 32-bit `@0x10 = 250` into
+    /// WHATEVER holds the slot, no class/model/life test (a castle
+    /// there is levelled to 250; the new vortex's own slot self-kicks
+    /// it, and `@0x10` is RE-READ from memory afterwards — `0x5743C
+    /// mov 0x10(%ebx),%esi` for the bolt, `0x574CB cmpl $0x7f,0x10(%ebx)`
+    /// for the despawn). File 0x573BE-0x573DE: `word_0x33` is read
+    /// AFTER the new `(10,19)` spawn (and only if it succeeded), gated
+    /// only on `slot != 0`, and `call 0x7c710` (`flags |= 0x400`)
+    /// soft-kills whatever holds it — a stranger (mc2l22 t=23012: a
+    /// loose `(10,39)` 1000-mana sphere in slot 986, the register
+    /// stale since t=18692), or the brand-new column itself when it
+    /// was minted into the stale slot. The port's former
+    /// `flags & 0x400 == 0` (both writes) and `old != col` guards were
+    /// invented; the kick's `set_arc10` wrote the vortex's @0x10 home
+    /// on every class — see [`Gen::mc2_write_raw10`].
+    pub(crate) fn mc2_summit18_tick(&mut self, i: usize, ctx: &MobCtx) {
         if self.arc10(i) > 2500 {
             let r = self.ent_rand(i);
             if r % 0x64 == 0 && self.erupting == 0 {
@@ -529,15 +549,33 @@ impl Gen {
                 return;
             }
             if t == 0 {
+                // PATCH `volcano_register_revalidate` (retail bug, see
+                // the patch doc): each register write lands only on the
+                // record the register was meant to name.
+                let revalidate = ctx.patches.volcano_register_revalidate && !ctx.strict;
                 let prev = self.erupting as usize;
-                if prev != 0 && self.ent[prev].flags & 0x400 == 0 {
-                    self.set_arc10(prev, 250); // fast-expire the old vortex
+                if prev != 0
+                    && prev < self.ent.len()
+                    && (!revalidate
+                        || prev != i
+                            && self.ent[prev].class64 == 10
+                            && self.ent[prev].model65 == 18)
+                {
+                    // `movl $0xfa,0x10(%eax)` — fast-expire the old
+                    // vortex, or stamp whatever inherited its slot.
+                    self.mc2_write_raw10(prev, 250);
                 }
                 self.erupting = i as u16;
                 if let Some(col) = self.mc2_spawn_fire_spray(x, y, gz) {
                     self.ent[col].id24 = id;
                     let old = self.plume as usize;
-                    if old != 0 && old != col && self.ent[old].flags & 0x400 == 0 {
+                    if old != 0
+                        && old < self.ent.len()
+                        && (!revalidate
+                            || old != col
+                                && self.ent[old].class64 == 10
+                                && self.ent[old].model65 == 19)
+                    {
                         self.ent[old].flags |= 0x400;
                     }
                     self.plume = col as u16;
@@ -552,7 +590,13 @@ impl Gen {
             // the bolt copy is folded to 11 bits (`HIBYTE(v11) &= 7`).
             let yaw = self.ent[i].f30.wrapping_add(1280);
             self.ent[i].f30 = yaw;
-            if t == 0
+            // ⭐ RE-READ, NOT `t`: `v10 = a1x->dword_0x10_16` (file
+            // 0x5743C `mov 0x10(%ebx),%esi`) and the despawn's
+            // `cmpl $0x7f,0x10(%ebx)` (0x574CB) read memory again, so a
+            // stale kick that named THIS slot (a self-kick) mints no
+            // bolt and despawns the new vortex on its first tick.
+            let t_now = self.arc10(i);
+            if t_now == 0
                 && let Some(b) = self.mc2_spawn_bolt(x, y, gz)
             {
                 let byaw = yaw & 0x7FF; // HIBYTE(v11) &= 7 (EF:23987)
@@ -582,7 +626,7 @@ impl Gen {
                 e.dest_y = aim.1;
                 e.site_z = aim_z;
             }
-            if t >= 127 {
+            if t_now >= 127 {
                 // Retail's `dword_0x10_16++` sits OUTSIDE the pulse
                 // block (EF:23997): this despawn arm FALLS THROUGH to
                 // the counter increment (only the >2500 arm and the
@@ -627,6 +671,71 @@ impl Gen {
         // The pre-dig `saturating_add(1)` is exactly this clamp, so the
         // `f26` half is byte-identical in both arms.
         self.ent[i].f26 = v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    }
+
+    /// Write retail's raw `dword_0x10_16` (@0x10) = `v` into whatever
+    /// port field is @0x10's home for record `i`'s CURRENT class/model
+    /// — the seat `import_ent_mc2` (engine/world/conformance.rs) fills
+    /// from `r.scratch10`, arm for arm, and the one
+    /// `port_ent_lanes_mc2` publishes on the `scratch10` lane. Returns
+    /// `false` (and writes nothing) where the port has NO home for
+    /// @0x10 on that record — a registered gap: retail's store lands in
+    /// a word the port does not model.
+    ///
+    /// | record | @0x10 home | import arm |
+    /// |---|---|---|
+    /// | `(10,18)`/`(10,91)` summits | `summit10` + `f26` mirror ([`Gen::set_arc10`]) | `summit10: … matches!(r.model40, 18 \| 91)` + `_ => r.scratch10 as i16` |
+    /// | `(10,79)` defender piece | `f44` | `if r.class3f == 10 && r.model40 == 79 { … e.f44 = r.scratch10 as u16` |
+    /// | `(10,54\|69)` auras, `(9,17)` possession bolt | `f26` = `isqrt(@0x10) >> 8` (tile radius) | `(10, 54 \| 69) =>` / `(9, 17) if !no_posses_reach_root()` |
+    /// | class 15, action 78 (detached jar) | `f50` (`f26` under `MGC_NO_MC2_STOLEN_ARC_KEEPS_CAST_STATE`) | `if r.action45 == 78 { … e.f50 = r.scratch10` |
+    /// | class 15, any other action | **none** (`f26` is @0x2E) | `(15, _) => r.f2e` |
+    /// | `(5,21)` devil | **none** (`f26` is @0x44) | `(5, 21) => r.b44 as i16` |
+    /// | class 5, other | `f26` (bar the legacy StageVar2 lease arms under `MGC_NO_SUMMON_LEASE_FIELD`) | `(5, _) if !no_summon_lease_field() && r.model40 != 21 => r.scratch10` |
+    /// | everything else (castle `(3,2)`: its LEVEL) | `f26` | `_ => r.scratch10 as i16` |
+    ///
+    /// The out-of-pool human carpet's @0x10 (`Player::mc2_respawn_timer`)
+    /// has no pool slot, so no register can name it.
+    pub(crate) fn mc2_write_raw10(&mut self, i: usize, v: i32) -> bool {
+        let e = &self.ent[i];
+        let (c, m, sv2, act) = (e.class64, e.model65, e.site_z, e.tick70);
+        let lease_kind = matches!(sv2, 12 | 13 | 14 | 16 | 17);
+        match (c, m) {
+            (10, 18 | 91) => self.set_arc10(i, v),
+            (10, 79) => self.ent[i].f44 = v as u16,
+            (10, 54 | 69) => self.ent[i].f26 = (Gen::isqrt(v.max(0) as u32) >> 8) as i16,
+            (9, 17) if !crate::mc2::cast::no_posses_reach_root() => {
+                self.ent[i].f26 = (Gen::isqrt(v.max(0) as u32) >> 8) as i16
+            }
+            (15, _) => {
+                if act != 78 {
+                    return false;
+                }
+                if crate::mc2::cast::no_mc2_stolen_arc_keeps_cast_state() {
+                    self.ent[i].f26 = v as i16;
+                } else {
+                    self.ent[i].f50 = v as i16;
+                }
+            }
+            (5, 21) => return false,
+            (5, _) if !crate::engine::features::no_summon_lease_field() => {
+                self.ent[i].f26 = v as i16
+            }
+            // The legacy arms `MGC_NO_SUMMON_LEASE_FIELD` restores, in
+            // the import's order: a lease-kind record whose `f26` holds
+            // @0x2E keeps no @0x10.
+            (5, _)
+                if lease_kind
+                    && act % 8 == 7
+                    && !crate::mc2::mobs::no_summon_lease_split() =>
+            {
+                return false
+            }
+            (5, 0 | 19 | 27) if !matches!(sv2, 16 | 17) => self.ent[i].f26 = v as i16,
+            (5, 10) => self.ent[i].f26 = v as i16,
+            (5, _) if crate::mc2::mobs::no_summon_lease_split() && lease_kind => return false,
+            _ => self.ent[i].f26 = v as i16,
+        }
+        true
     }
 
     /// `sub_32CF0` (EF:24007, action 98) — the apocalypse MANA RAIN:
@@ -890,7 +999,7 @@ mod tests {
         // POSITIVE CONTROL: a fresh summit's counter steps at all.
         let fresh = g.mc2_spawn_summit18(p.0, p.1, p.2).expect("summit18");
         assert_eq!(g.arc10(fresh), 0, "the ctor's `movl $0x0,0x10`");
-        g.mc2_summit18_tick(fresh);
+        g.mc2_summit18_tick(fresh, &test_ctx(false, false));
         assert_eq!(g.arc10(fresh), 1, "the tail `dword_0x10_16++`");
 
         // A LATCHED summit past the restart gate: `erupting` holds its
@@ -900,7 +1009,7 @@ mod tests {
         g.erupting = i as u16;
         g.set_arc10(i, 32_760);
         for _ in 0..20 {
-            g.mc2_summit18_tick(i);
+            g.mc2_summit18_tick(i, &test_ctx(false, false));
         }
         assert_eq!(
             g.arc10(i),
@@ -916,6 +1025,203 @@ mod tests {
             i16::MAX,
             "`f26` keeps the saturating mirror every gate reads"
         );
+    }
+
+    fn test_ctx(patched: bool, strict: bool) -> MobCtx {
+        let mut patches = crate::patches::WorldPatches::RETAIL;
+        patches.volcano_register_revalidate = patched;
+        MobCtx {
+            px: 0,
+            py: 0,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict,
+            patches,
+            mc2_turn: 0,
+        }
+    }
+
+    /// The three arms every register test runs: retail, patched, and
+    /// patched-under-strict (which must pin retail).
+    const ARMS: [(bool, bool); 3] = [(false, false), (true, false), (true, true)];
+
+    /// A fresh `(10,18)` at its eruption start (`@0x10 == 0`).
+    fn fresh_vortex(g: &mut Gen) -> usize {
+        let (px, py) = (40u16 << 8, 40u16 << 8);
+        let z = g.ground_z(px, py) as i16;
+        let v = g.mc2_spawn_summit18(px, py, z).expect("summit18");
+        assert_eq!(g.arc10(v), 0);
+        v
+    }
+
+    /// ⭐ THE MC2 ERUPTION KICK IS BLIND AND WRITES @0x10 (round 158,
+    /// dig w158e; PATCH `volcano_register_revalidate`). `sub_32A70`'s
+    /// `movl $0xfa,0x10(%eax)` (`NETHERW.EXE` file 0x57379, gated only
+    /// by the `jbe` at 0x57377) lands on whatever holds the stale
+    /// `word_0x31` slot; a CASTLE's @0x10 is its level (`f26`). Retail
+    /// and strict: level 250. Patched: untouched. POSITIVE CONTROL: a
+    /// real old `(10,18)` is fast-expired to 250 in every arm.
+    #[test]
+    fn the_mc2_eruption_kick_levels_a_castle_unless_patched() {
+        for (patched, strict) in ARMS {
+            let mut g = flat_cave_gen();
+            let castle = g.new_event().expect("castle slot");
+            g.ent[castle].class64 = 3;
+            g.ent[castle].model65 = 2;
+            g.ent[castle].f26 = 3;
+            let v = fresh_vortex(&mut g);
+            g.erupting = castle as u16;
+            g.mc2_summit18_tick(v, &test_ctx(patched, strict));
+            assert_eq!(g.erupting, v as u16, "the start registers the new vortex");
+            let want = if patched && !strict { 3 } else { 250 };
+            assert_eq!(g.ent[castle].f26, want, "castle level, patched={patched} strict={strict}");
+
+            // POSITIVE CONTROL: the real previous vortex is kicked.
+            let mut g = flat_cave_gen();
+            let old = fresh_vortex(&mut g);
+            g.set_arc10(old, 60);
+            let v = fresh_vortex(&mut g);
+            g.erupting = old as u16;
+            g.mc2_summit18_tick(v, &test_ctx(patched, strict));
+            assert_eq!(g.arc10(old), 250, "the old vortex is fast-expired");
+        }
+    }
+
+    /// ⭐ THE MC2 COLUMN KILL IS BLIND (round 158, dig w158e). File
+    /// 0x573BE-0x573DE: `word_0x33` is read after the new `(10,19)`
+    /// spawn, gated only on `slot != 0`, and `flags |= 0x400` lands on
+    /// whatever holds it. WITNESS mc2l22 t=23012: a loose `(10,39)`
+    /// 1000-mana sphere (slot 986). Retail/strict: the sphere is
+    /// soft-killed. Patched: it survives. POSITIVE CONTROL: the real
+    /// old `(10,19)` column is killed in every arm.
+    #[test]
+    fn the_mc2_column_kill_spares_a_stranger_when_patched() {
+        for (patched, strict) in ARMS {
+            let mut g = flat_cave_gen();
+            let sphere = g.new_event().expect("sphere slot");
+            g.ent[sphere].class64 = 10;
+            g.ent[sphere].model65 = 39;
+            let v = fresh_vortex(&mut g);
+            g.plume = sphere as u16;
+            g.mc2_summit18_tick(v, &test_ctx(patched, strict));
+            assert_ne!(g.plume, sphere as u16, "the register moved on to the new column");
+            let killed = g.ent[sphere].flags & 0x400 != 0;
+            assert_eq!(killed, !patched || strict, "sphere, patched={patched} strict={strict}");
+
+            // POSITIVE CONTROL: the real previous column dies.
+            let mut g = flat_cave_gen();
+            let z = g.ground_z(40 << 8, 40 << 8) as i16;
+            let col = g.mc2_spawn_fire_spray(40 << 8, 40 << 8, z).expect("column");
+            let v = fresh_vortex(&mut g);
+            g.plume = col as u16;
+            g.mc2_summit18_tick(v, &test_ctx(patched, strict));
+            assert_ne!(g.ent[col].flags & 0x400, 0, "the old column is killed");
+        }
+    }
+
+    /// ⭐ THE NEW COLUMN KILLS ITSELF WHEN IT IS BORN IN THE STALE SLOT
+    /// (round 158, dig w158e). Retail reads `word_0x33` AFTER the spawn
+    /// (file 0x573BE) with no identity test, so when the allocator
+    /// hands the new `(10,19)` the very slot the stale register names,
+    /// `call 0x7c710` disables the brand-new column (and the register
+    /// then names it). The port's `old != col` guard was invented.
+    /// Patched: the new column lives.
+    #[test]
+    fn a_new_mc2_column_in_the_stale_slot_kills_itself_unless_patched() {
+        for (patched, strict) in ARMS {
+            let mut g = flat_cave_gen();
+            let v = fresh_vortex(&mut g);
+            // The stale slot, freed: the next allocation takes it.
+            let stale = g.new_event().expect("stale slot");
+            g.free_entity(stale);
+            g.plume = stale as u16;
+            g.mc2_summit18_tick(v, &test_ctx(patched, strict));
+            assert_eq!(g.plume, stale as u16, "the new column was minted into the stale slot");
+            assert_eq!((g.ent[stale].class64, g.ent[stale].model65), (10, 19));
+            let killed = g.ent[stale].flags & 0x400 != 0;
+            assert_eq!(killed, !patched || strict, "new column, patched={patched} strict={strict}");
+        }
+    }
+
+    /// ⭐ THE MC2 SELF-KICK (round 158, dig w158e). A stale `word_0x31`
+    /// naming the slot just recycled into THIS vortex stamps its own
+    /// `@0x10 = 250`, and retail RE-READS it (file 0x5743C for the
+    /// `(9,0)` bolt, 0x574CB for the `>= 127` despawn): no bolt, the
+    /// vortex despawns and releases the register on its first tick,
+    /// then `++` leaves 251. Patched: a normal eruption start.
+    #[test]
+    fn a_self_kicked_mc2_vortex_dies_unless_patched() {
+        for (patched, strict) in ARMS {
+            let mut g = flat_cave_gen();
+            let v = fresh_vortex(&mut g);
+            g.erupting = v as u16;
+            let bolts = |g: &Gen| {
+                g.ent.iter().filter(|e| e.class64 == 9 && e.model65 == 0).count()
+            };
+            let before = bolts(&g);
+            g.mc2_summit18_tick(v, &test_ctx(patched, strict));
+            if patched && !strict {
+                assert_eq!(g.arc10(v), 1, "patched: a normal start");
+                assert_eq!(g.ent[v].flags & 0x400, 0);
+                assert_eq!(g.erupting, v as u16);
+                assert_eq!(bolts(&g), before + 1, "the start's (9,0) bolt");
+            } else {
+                assert_eq!(g.arc10(v), 251, "retail: self-kicked, then `++`");
+                assert_ne!(g.ent[v].flags & 0x400, 0, "retail: despawned");
+                assert_eq!(g.erupting, 0, "retail: the register is released");
+                assert_eq!(bolts(&g), before, "retail: no bolt (the re-read @0x10)");
+            }
+        }
+    }
+
+    /// The @0x10 home table of [`Gen::mc2_write_raw10`] — each arm
+    /// mirrors an `import_ent_mc2` seat for `r.scratch10`.
+    #[test]
+    fn the_raw10_write_lands_on_each_class_home() {
+        let mut g = flat_cave_gen();
+        let mk = |g: &mut Gen, c: u8, m: u8| {
+            let i = g.new_event().expect("slot");
+            g.ent[i].class64 = c;
+            g.ent[i].model65 = m;
+            i
+        };
+        // Castle: `_ => r.scratch10` → f26 (its level).
+        let c = mk(&mut g, 3, 2);
+        assert!(g.mc2_write_raw10(c, 250));
+        assert_eq!(g.ent[c].f26, 250);
+        // (10,79) piece: `e.f44 = r.scratch10`; f26 is @0x4A.
+        let p = mk(&mut g, 10, 79);
+        g.ent[p].f26 = 7;
+        assert!(g.mc2_write_raw10(p, 250));
+        assert_eq!((g.ent[p].f44, g.ent[p].f26), (250, 7));
+        // (10,54) aura: the tile radius `isqrt(@0x10) >> 8`.
+        let a = mk(&mut g, 10, 54);
+        g.ent[a].f26 = 14;
+        assert!(g.mc2_write_raw10(a, (25 << 8) * (25 << 8)));
+        assert_eq!(g.ent[a].f26, 25);
+        // Class 15 off the detached arc: f26 is @0x2E — no home.
+        let j = mk(&mut g, 15, 3);
+        g.ent[j].tick70 = 10;
+        g.ent[j].f26 = 9;
+        assert!(!g.mc2_write_raw10(j, 250));
+        assert_eq!(g.ent[j].f26, 9);
+        // …on the detached arc (action 78) the counter is f50.
+        g.ent[j].tick70 = 78;
+        assert!(g.mc2_write_raw10(j, 250));
+        assert_eq!((g.ent[j].f50, g.ent[j].f26), (250, 9));
+        // (5,21) devil: f26 is @0x44 — no home.
+        let d = mk(&mut g, 5, 21);
+        g.ent[d].f26 = 4;
+        assert!(!g.mc2_write_raw10(d, 250));
+        assert_eq!(g.ent[d].f26, 4);
+        // Summit: the wide home and its f26 mirror.
+        let s = mk(&mut g, 10, 18);
+        assert!(g.mc2_write_raw10(s, 250));
+        assert_eq!((g.arc10(s), g.ent[s].f26), (250, 250));
     }
 
     /// ⭐ THE (10,91) APOCALYPSE-RAIN SUMMIT SEEDS `@0x2A` = 200 LIKE

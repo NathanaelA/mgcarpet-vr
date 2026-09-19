@@ -1103,6 +1103,20 @@ pub struct GameplayPatches {
     /// `patched` (default): the second death leaves the fire alone.
     /// Player-reported 2026-09-19.
     pub mc1_segment_chain_revalidate: PatchArm,
+    /// THE STALE VOLCANO REGISTERS (MC1 AND MC2). `retail`: a volcano
+    /// that starts erupting knocks the previous volcano dormant and
+    /// kills the previous lava plume (MC2: the previous fire column)
+    /// by writing into their old slots without checking what lives
+    /// there now: an MC1 castle there jumps to level 250 and a few
+    /// downgrades later the game freezes (the player's frozen level 26
+    /// and 45 takes); anything else there is killed (MC1 level 45: a
+    /// rival's Fireball, ending in hovering spell jars; MC2 level 22:
+    /// a loose 1000-mana sphere), and in MC2 a new fire column minted
+    /// into the old one's slot kills itself. `patched` (default): the
+    /// volcano only touches its own volcano and plume. Round 158
+    /// (renamed from `mc1_volcano_register_revalidate` when it took
+    /// MC2 on).
+    pub volcano_register_revalidate: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -1132,6 +1146,7 @@ impl Default for GameplayPatches {
             mc2_building_pad_saturate: PatchArm::Patched,
             mc1_building_pad_saturate: PatchArm::Patched,
             mc1_segment_chain_revalidate: PatchArm::Patched,
+            volcano_register_revalidate: PatchArm::Patched,
         }
     }
 }
@@ -1165,6 +1180,7 @@ impl GameplayPatches {
             mc2_building_pad_saturate: PatchArm::Retail,
             mc1_building_pad_saturate: PatchArm::Retail,
             mc1_segment_chain_revalidate: PatchArm::Retail,
+            volcano_register_revalidate: PatchArm::Retail,
         }
     }
 
@@ -1212,6 +1228,7 @@ impl GameplayPatches {
             mc2_building_pad_saturate: PatchArm::Retail,
             mc1_building_pad_saturate: PatchArm::Retail,
             mc1_segment_chain_revalidate: PatchArm::Retail,
+            volcano_register_revalidate: PatchArm::Retail,
             // Native MC2 freed in-walk from the first port (the sweep
             // landed 2026-09-17), so a legacy take ran the PATCHED arm
             // — `..Self::default()` supplies it.
@@ -1457,7 +1474,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 38;
+const DEFAULTS_VERSION: u64 = 40;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

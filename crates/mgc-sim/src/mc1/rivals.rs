@@ -8111,6 +8111,64 @@ mod tests {
         w
     }
 
+    /// ⭐ THE FULL-LIST LEARN ORPHAN IS RETAIL'S "HOVERING JAR", AND
+    /// THE NATIVE ENCODING DOES NOT DRAW IT (round 158, w158c —
+    /// player report on `recordings/mc1l45.mgcr`: "rivals started
+    /// dropping a spell jar that HOVERED in the air"). Retail's learn
+    /// expiry (`sub_15EC0` :19415-30) conjures FIRST and only then
+    /// looks for an empty `+532` seat; with all 24 taken the token is
+    /// born `flags 4` (hide bit clear → retail's painter DRAWS it),
+    /// `+42 0`, `+70 = 3*spell` (phase 0: the manifest row, never the
+    /// `sub_55A40` jar tick — no fall, no pickup poll, no decay), so it
+    /// hangs at the rival's altitude for the rest of the level.
+    /// mc1l45: rival 1 (carpet 444) mints four `(12,0)` orphans —
+    /// slots 219/182/210/118 at t=25622/26679/31234/32560, 309..735
+    /// above the ground, all alive at the take's end. The list was
+    /// full because a stale volcano plume register soft-killed the
+    /// rival's Fireball token (t=23826) and the death scatter then
+    /// re-read the recycled slot's model (a `(10,2)`) into seat 0, so
+    /// the respawn re-granted Accelerate twice and never Fireball.
+    /// Every human contact with a Fireball jar re-arms the countdown.
+    ///
+    /// Native play mints the same orphan (the retail law is
+    /// unconditional) but in the port's own `MANIFEST_BASE + spell`
+    /// encoding, which both draw filters skip — so the port never
+    /// shows the hovering jar outside a retail replay.
+    #[test]
+    fn a_full_list_learn_orphan_is_not_drawn_natively() {
+        let mut w = castle_world();
+        let ri = 0;
+        let tok = w.rivals[ri].owned[16];
+        assert!(tok != 0, "the (12,16) token stands");
+        // Every seat taken, none of them a Fireball token.
+        w.rivals[ri].acq = [tok as i32; SPELL_COUNT];
+        w.rivals[ri].learn[0] = 1;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.rivals[ri].learn[0], 0, "the countdown expired");
+        let orphan = (1..w.g.ent.len())
+            .find(|&k| {
+                let e = &w.g.ent[k];
+                e.class64 == 12 && e.model65 == 0 && e.flags & 1 == 0 && e.f144 == 0
+            })
+            .expect("the full list orphans the conjured (12,0)");
+        assert!(
+            !w.rivals[ri].acq.contains(&(orphan as i32)),
+            "the orphan joins no book"
+        );
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.rivals[ri].owned[0], 0, "and the rival still lacks Fireball");
+        // The human's own-spell hide must not be what hides it.
+        w.player.owned[0] = 0;
+        let drawn = |w: &World| {
+            w.live_poses().iter().any(|p| p.class == 12 && p.model == 0)
+                || w.live_things().iter().any(|t| t.class == 12 && t.model == 0)
+        };
+        assert!(!drawn(&w), "the native encoding draws no hovering jar");
+        // Positive control: in retail's phase-0 encoding it IS drawn.
+        w.g.ent[orphan].tick70 = 0;
+        assert!(drawn(&w), "non-vacuous: retail's `3*spell` orphan is drawn");
+    }
+
     /// ⭐⭐⭐ THE OWNED REBUILD WRITES PAST THE BOOK, INTO THE RECAST
     /// TABLE (`sub_45C10_45F50` :55310-19 — see
     /// [`owned_rebuild_overflow`]). Retail re-registers each

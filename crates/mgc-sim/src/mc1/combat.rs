@@ -5306,7 +5306,6 @@ impl Gen {
     /// No driver-level sound: eruption audio = the bombs' seeded
     /// fires (crackle 3) + the blast ring (30).
     fn eruption_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        let _ = ctx;
         let c = self.ent[i].f26;
         let (x, y, z, own) = {
             let e = &self.ent[i];
@@ -5378,7 +5377,26 @@ impl Gen {
                 // stale-bytes law as the pack-death handoff through
                 // `+52`; the `!= 0` bound is memory safety only.
                 let prev = self.erupting as usize;
-                if prev != 0 && prev < self.ent.len() {
+                // PATCH `volcano_register_revalidate` (retail bug, see
+                // the patch doc): both register writes land only on the
+                // record the register was meant to name. Retail's blind
+                // kick turns a re-minted CASTLE into a level-250 castle
+                // whose downgrade ladder reads the build table out of
+                // bounds and hangs the game at level 245 (mc1l26-froze,
+                // mc1l45-froze), and a stale register naming THIS slot
+                // self-kicks the new driver (mc1l49 t=29062); the blind
+                // plume kill below soft-kills whatever inherited the old
+                // plume's slot (mc1l45: a rival's Fireball token).
+                let revalidate = ctx.patches.volcano_register_revalidate && !ctx.strict;
+                let kick_ok = !revalidate
+                    || prev != i
+                        && prev < self.ent.len()
+                        && self.ent[prev].class64 == 10
+                        && self.ent[prev].model65 == 18;
+                let plume_ok = |g: &Self, pl: usize| {
+                    !revalidate || g.ent[pl].class64 == 10 && g.ent[pl].model65 == 19
+                };
+                if prev != 0 && prev < self.ent.len() && kick_ok {
                     self.ent[prev].f26 = 250;
                 }
                 self.erupting = i as u16;
@@ -5395,14 +5413,14 @@ impl Gen {
                     if let Some(p) = self.spawn_effect(19, x, y, g) {
                         self.ent[p].id24 = own;
                         let pl = self.plume as usize;
-                        if pl != 0 && pl < self.ent.len() {
+                        if pl != 0 && pl < self.ent.len() && plume_ok(self, pl) {
                             self.ent[pl].flags |= 0x400;
                         }
                         self.plume = p as u16;
                     }
                 } else {
                     let pl = self.plume as usize;
-                    if pl != 0 && pl < self.ent.len() {
+                    if pl != 0 && pl < self.ent.len() && plume_ok(self, pl) {
                         self.ent[pl].flags |= 0x400;
                     }
                     self.plume = match self.spawn_effect(19, x, y, g) {
