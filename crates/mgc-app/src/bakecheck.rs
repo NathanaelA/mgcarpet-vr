@@ -12,8 +12,10 @@
 //! every file it lists still on disk — an interrupted first bake
 //! otherwise leaves a partial tree whose present artifacts all look
 //! current. Any mismatch (or a missing artifact) triggers one full
-//! `bake_all` — the same orchestration the `mgc-import bake` CLI
-//! runs — into the baked tree, from game data located via (in order)
+//! `bake_all_staged` — the same orchestration the `mgc-import bake`
+//! CLI runs — which bakes beside the tree and swaps it in only when
+//! complete (a cancelled rebake leaves the old tree intact), from game
+//! data located via (in order)
 //! the config's `gamedata` path, `MGC_GAMEDATA`, or `gamedata/` in
 //! the working directory.
 
@@ -186,7 +188,7 @@ pub fn ensure_baked(level_path: &Path, config_gamedata: Option<&Path>) -> Result
         gamedata.display(),
         baked_root.display()
     );
-    let summary = mgc_import::bake::bake_all(&gamedata, baked_root)?;
+    let summary = mgc_import::bake::bake_all_staged(&gamedata, baked_root)?;
     if summary.manifest.is_empty() {
         return Err(format!(
             "no game data found under {} — nothing baked. Point `gamedata` in the\n\

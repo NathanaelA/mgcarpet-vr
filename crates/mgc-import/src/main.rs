@@ -223,9 +223,9 @@ fn level(dat_path: &Path, tab_path: &Path, index: &str) -> ExitCode {
 }
 
 fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
-    // The orchestration lives in the library (bake::bake_all) so the
-    // game shell's auto-bake shares this exact path.
-    match bake::bake_all(gamedata, out_dir) {
+    // The orchestration lives in the library (bake::bake_all_staged)
+    // so the game shell's auto-bake shares this exact path.
+    match bake::bake_all_staged(gamedata, out_dir) {
         Ok(summary) if summary.manifest.is_empty() => {
             println!(
                 "0 packages baked — no game data found under {}",

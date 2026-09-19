@@ -519,6 +519,68 @@ pub struct BakeSummary {
     pub manifest: Vec<(String, String)>,
 }
 
+/// [`bake_all`] without a gap: bake into a sibling STAGING tree
+/// (`<out_dir>.baking`) and swap it in only once it is complete, so the
+/// live tree is never half-written. A bake that is cancelled (the
+/// window closed, Ctrl-C) or fails leaves the previous tree exactly as
+/// it was — before this, a rebake wrote into the live tree member by
+/// member, and killing it mid-way left a corrupt mix of old and new
+/// files (player report 2026-09-19: a mistyped level triggers the
+/// rebake, and cancelling it at once broke the assets).
+///
+/// The swap is two renames: live → `<out_dir>.old`, staging → live.
+/// A crash between them leaves only `.old`, which the next call puts
+/// back before doing anything else. A leftover staging tree from a
+/// cancelled run is discarded and rebuilt from scratch.
+///
+/// An empty summary (no game data found) swaps nothing. A root with
+/// no name to put a sibling beside (`.`, `/`) falls back to baking in
+/// place.
+pub fn bake_all_staged(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> {
+    let abs = std::path::absolute(out_dir)
+        .map_err(|e| format!("cannot resolve {}: {e}", out_dir.display()))?;
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name().filter(|n| *n != "..")) else {
+        return bake_all(gamedata, out_dir);
+    };
+    let sibling = |suffix: &str| {
+        let mut n = name.to_os_string();
+        n.push(suffix);
+        parent.join(n)
+    };
+    let (staging, old) = (sibling(".baking"), sibling(".old"));
+    let io = |what: &str, p: &Path, e: std::io::Error| format!("cannot {what} {}: {e}", p.display());
+
+    // Recover a swap interrupted between its two renames.
+    if !abs.exists() && old.is_dir() {
+        std::fs::rename(&old, &abs).map_err(|e| io("restore", &old, e))?;
+    }
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).map_err(|e| io("clear", &staging, e))?;
+    }
+    std::fs::create_dir_all(&staging).map_err(|e| io("create", &staging, e))?;
+
+    let summary = match bake_all(gamedata, &staging) {
+        Ok(s) if !s.manifest.is_empty() => s,
+        other => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return other;
+        }
+    };
+
+    if abs.exists() {
+        if old.exists() {
+            std::fs::remove_dir_all(&old).map_err(|e| io("clear", &old, e))?;
+        }
+        std::fs::rename(&abs, &old).map_err(|e| io("retire", &abs, e))?;
+    }
+    if let Err(e) = std::fs::rename(&staging, &abs) {
+        let _ = std::fs::rename(&old, &abs);
+        return Err(io("install", &staging, e));
+    }
+    let _ = std::fs::remove_dir_all(&old);
+    Ok(summary)
+}
+
 /// Bake every game found under `gamedata` into `out_dir` — the full
 /// tree the engine consumes: level packages, environment bundles,
 /// audio/music bundles, plus `manifest.sha256`. Any subset of the
