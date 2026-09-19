@@ -1337,7 +1337,27 @@ pub(crate) fn native_settled_world(
     let planes = if settle > 0 {
         // The app's `--map-settle` driver: real ticks (not
         // `tick_paused`), the carpet idle at the level start.
-        let (px, pz) = mc2_player_start(&args.baked, &family, level).unwrap_or((128.5, 128.5));
+        // ⭐ THE SETTLE POSE IS THE WORLD'S OWN SEAT, NOT THE FIRST
+        // `(3,4)` ROW. Retail's marker thunk (`sub_37720`, CARPET.EXE
+        // file 0x4FF18) overwrites `str_9177[0]` on every row the
+        // ascending disposition-0 walk reaches, so a level that authors
+        // the human's colour twice seats him at the HIGHER row — the
+        // world ctor's `start_markers` since round 154
+        // (`no_mc1_last_start_marker`). This resolver kept `.find()`:
+        // MC1 level 40 authors `(3,4)` at row 0 (248,247) AND row 231
+        // (134,119), retail's record-0 human stands at (134,119), and
+        // the carpet idling at (248,247) never entered the `(11,0)`
+        // switch at (154,76) (`swi_sz` 64 = a ±16384 box) — so the five
+        // disposition-3 genies never spawned, blinked to the human, or
+        // burnt their five departure rings (mc1l40: type 70 · height
+        // 30 · shading 57 · angle 65). The kill switches of the seat law
+        // (`MGC_NO_MC1_LAST_START_MARKER` / `MGC_NO_MC2_…`) move this
+        // pose with it. Round 157, dig w157c.
+        let (px, pz) = w
+            .debug_start_marker(0)
+            .map(|(x, y)| (x as f32 + 0.5, y as f32 + 0.5))
+            .or_else(|| mc2_player_start(&args.baked, &family, level))
+            .unwrap_or((128.5, 128.5));
         let idle = mgc_sim::engine::world::PlayerCommand::default();
         let settle_alt: f32 = std::env::var("MGC_INIT_SETTLE_ALT")
             .ok()

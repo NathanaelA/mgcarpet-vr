@@ -66,6 +66,34 @@ pub(crate) fn no_mc1_house_flag_extents() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HOUSE_FLAG_EXTENTS").is_some())
 }
 
+/// A/B toggle for THE AUTHORED STANDING FIRE'S REAL CTOR (round 157,
+/// w157a): set `MGC_NO_MC1_CREATOR_STANDING_FIRE` to restore the pre-dig
+/// [`Gen::spawn_creator`], whose model-6 row fell to the generic
+/// "purged unticked at load" stub — a bare `new_event` (life 0, max 300,
+/// flags 8, `+44` 100, no sprite, no extents) — instead of the standing
+/// fire ctor `sub_3A730` (remc1 sub_main.cpp:46620) that
+/// [`Gen::spawn_effect`] already ports.
+///
+/// ⭐ THE STUB WAS RIGHT AT LOAD AND WRONG AT RUNTIME. Retail has ONE
+/// class-10 creator table (`str_255D0C`, remc1 :4486, the `dword_96902[10]`
+/// row :5041 that `sub_373F0_377B0` dispatches for a disposition fire,
+/// `sub_37560_37920` :43988) and its row 6 is `sub_3A730` — CARPET.EXE
+/// file 0x9D558 (table base 0x9D504 + 6*14): `f4 68 00 00 | 06 00 |
+/// 30 a7 02 00 | 01 00`, object-relative 0x2A730 = VA 0x3A730. The ctor
+/// at file 0x52F28: `movb $6,+0x46` / `movb $0xa,+0x40` / `movb $6,+0x41`
+/// / `movw $0x32,+0x2c` (f44 50) / `movl $0xf0,+0x8` (life 240) /
+/// `and $0xfffdfff7,+0x10` / `or $2,+0x12` (flags 0x20000) / link /
+/// `+0x4c = sub_11F50` (ground snap) / RefillLife / `push $0xe4` sprite
+/// 228 / `push $0x600; push $0x110` extents 272/1536 / `+0x1a = 0`.
+/// WITNESS mc1l38 t=4771: the `(11,0)` volume at slot 140 fires its
+/// disposition and mints ten authored `(10,6)` fires (slots 21-32);
+/// retail births each at life 240 / flags 0x20004 / sprite 228, the
+/// port at 0 / 8 / 300 — 40 rows, one decision.
+pub(crate) fn no_mc1_creator_standing_fire() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CREATOR_STANDING_FIRE").is_some())
+}
+
 /// A/B toggle for THE LIVE HOUSE'S ONE-TICK HIT REGISTER (round 154,
 /// w154e): set `MGC_NO_MC1_HOUSE_HIT_REGISTER` to restore the pre-dig
 /// intake in [`Gen::tick_building_live`] — `f40` latched forever after
@@ -6984,6 +7012,13 @@ impl Gen {
             0 | 1 | 5 | 13 | 14 | 17 | 23 | 25 | 36 => {
                 return self.spawn_effect(model as u8, x, y, z);
             }
+            // 6: the STANDING FIRE `sub_3A730` — the same table row a
+            // disposition fire dispatches (mc1l38 t=4771: an `(11,0)`
+            // volume mints ten authored `(10,6)` flames). See
+            // [`no_mc1_creator_standing_fire`].
+            6 if !no_mc1_creator_standing_fire() => {
+                return self.spawn_effect(6, x, y, z);
+            }
             39 => return self.spawn_mana_ball(x, y, z),
             _ => {}
         }
@@ -7255,7 +7290,7 @@ impl Gen {
                 self.refill_life(i);
                 self.set_sprite(i, 205);
             }
-            // All remaining retail models (0, 1, 5, 6, 8, 13, 14, 15,
+            // All remaining retail models (0, 1, 5, 6 [switch off], 8, 13, 14, 15,
             // 17, 23, 25, 33, 38, 39, 44, …): purged unticked, no
             // terrain writes, no global PRNG — slot churn only. Models
             // 13/14/15 draw from their (doomed) entity LCG; unobservable.

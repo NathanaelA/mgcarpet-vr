@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l38",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 4770,
+   "file": "a-disposition-fire-mints-the-real-standing-fire.mgcr",
+   "source": "mc1l38",
+   "note": "THE AUTHORED STANDING FIRE'S REAL CTOR (round 157, w157a, MGC_NO_MC1_CREATOR_STANDING_FIRE): when an (11,0) volume fires its disposition, retail spawns each class-10 THING row through sub_37560_37920 -> sub_373F0_377B0 -> dword_96902[10] = str_255D0C, whose row 6 is sub_3A730 (CARPET.EXE file 0x9D558: `f4 68 00 00 06 00 30 a7 02 00 01 00`, VA 0x3A730; ctor at file 0x52F28: life 240, +44 50, flags &0xFFFDFFF7|0x20000, ground snap, sprite 228, extents 272/1536). The port's Gen::spawn_creator sent model 6 to the generic 'purged unticked at load' stub (bare new_event: life 0, max 300, flags 8). mc1l38 pair 4770->4771: slot 140's (11,0) disposition mints ten (10,6) fires (slots 21-28, 30, 32) — 40 rows (flags/life/max_life/type86), one decision. Ledger ROUND 157 w157a."
+  }
+ ]
+}

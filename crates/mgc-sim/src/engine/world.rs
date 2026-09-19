@@ -2476,6 +2476,37 @@ pub(crate) fn mc1_no_speed_token_cast_pose() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SPEED_TOKEN_CAST_POSE").is_some())
 }
 
+/// `MGC_NO_MC1_ABOVE_CARPET_SPEED_CAST_POSE=1` restores the pre-dig
+/// cross-tick cast pose: an ABOVE-carpet speed token's `+126` write
+/// reached `mc1_cast_pose` at its walk slot, but `tick_flight`'s
+/// settled re-stamp then overwrote it with the carpet's pre-mail
+/// speed (the driver lands the mail on the carpet only after the
+/// turn), so NEXT tick's below-carpet spell token launched off the
+/// servoed pre-restore speed. A/B arm only.
+///
+/// ⭐ The other half of [`mc1_no_speed_token_cast_pose`]'s law: that
+/// one is the SAME tick below the writer, this one the NEXT tick for a
+/// writer above the carpet. Retail has no mailbox — `sub_56380_568B0`
+/// writes the wizard record at the token's own slot (burst END
+/// :65195-96, VA 0x564E6 `66 8b 86 80 00 00 00` / 0x564ED `66 89 42 0c`
+/// / 0x564FB `66 89 46 7e` = `+126 = Type_160+12 = +128`; sustain
+/// :65177-78, VA 0x5648B `66 89 46 7e`), and every emit arm reads
+/// `+126` LIVE off that record: storm `sub_579D0_57F00` :66020-21
+/// (VA 0x57A5D `66 8b 45 7e`), meteor `sub_56950_56E80` :65405-06
+/// (VA 0x569DB `66 8b 45 7e`).
+///
+/// WITNESS mc1l38 (both INHERITED heads, 4 segments → 2): the human's
+/// Accelerate token sits at slot 482, ABOVE the carpet's 479; its
+/// burst ends at t=30748 (record `+126` 160 → 80) while the carpet's
+/// own move had servoed 160 → 144. At t=30749 the below-carpet storm
+/// token mints the `(9,12)` slot 976 at 384 + 80 − 2 = 462; the port
+/// launched at 384 + 144 − 2 = 526. t=46219 is the same shape on the
+/// meteor `(9,3)` slot 930 (and its `(10,1)` trail 155).
+pub(crate) fn mc1_no_above_carpet_speed_cast_pose() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ABOVE_CARPET_SPEED_CAST_POSE").is_some())
+}
+
 /// `MGC_NO_MC1_RIVAL_V14_SEAT=1` — restores the pre-dig import, where
 /// a RIVAL's v_14 kill latch (Type_160 +14) had NO IMPORT SEAT and
 /// every imported pair started it `false`.
@@ -7455,6 +7486,18 @@ impl World {
         // mouse-flick (pitch ≈ −2, z 7 low) and skewed the spawn and
         // the homing re-aim.
         self.mc1_cast_pose = conformance::integer_pose(drive.s);
+        // An ABOVE-carpet speed token's `+126` write (burst END ±80 or
+        // the sustain 2×/3× base) is still MAILED here — the driver
+        // lands it on the carpet after this call — so the settled
+        // stamp above missed it. Retail wrote the RECORD at the
+        // token's slot; next tick's below-carpet spell token reads it
+        // live. See [`mc1_no_above_carpet_speed_cast_pose`].
+        if drive.mc2.is_none()
+            && !mc1_no_above_carpet_speed_cast_pose()
+            && let Some(base) = self.pending_speed_base
+        {
+            self.mc1_cast_pose.speed = base;
+        }
     }
 
     /// The shared turn body. `player` feeds the trigger volume probes,

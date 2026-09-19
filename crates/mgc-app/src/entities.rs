@@ -2211,8 +2211,16 @@ fn nearest_palette_index(palette: &[[u8; 4]; 256], rgb: [u8; 3]) -> u8 {
 
 /// The single-player start: the class-3 model-4 marker in BOTH games
 /// (player start #0 of 8; the original's marker spawner copies its
-/// position into the per-player start table, sub_37720 :44068 — every
-/// shipped MC2 single-player level authors exactly one). MC2's
+/// position into the per-player start table, sub_37720 :44068).
+/// ⭐ LAST ROW WINS: that thunk (CARPET.EXE file 0x4FF18) overwrites
+/// the slot with no already-set test and the disposition-0 walk runs
+/// the THING table ascending, so a level that authors the colour twice
+/// seats the human at the HIGHER row — the sim's own `start_markers`
+/// law since round 154. MC1/HW levels 40 and 69 and MC2 levels 10 and
+/// 133 author two `(3,4)` rows; this resolver kept the FIRST and flew
+/// the MC1 level-40 player from (248,247) while retail (mc1l40 record
+/// 0, the human at tile 134/119) and the sim's seat use (134,119).
+/// Round 157, dig w157c. MC2's
 /// (10, 0x52) records are cave ROOM CARVERS (GenerateEvents pass 1,
 /// remc2 Events.cpp:162-170 → PrepareEvents case 0x52 = authored box
 /// extents), NOT wizard starts — the (3, 4) marker is the only start
@@ -2222,9 +2230,13 @@ fn nearest_palette_index(palette: &[[u8; 4]; 256], rgb: [u8; 3]) -> u8 {
 /// ground height (MC2 places at terrain alt exactly — hover is flight
 /// physics, not spawn state).
 pub fn player_start(_game: GameId, things: &[Thing]) -> Option<(f32, f32)> {
+    let is_start = |t: &&Thing| t.kind == ThingKind::Entity && t.class == 3 && t.model == 4;
     things
         .iter()
-        .find(|t| t.kind == ThingKind::Entity && t.class == 3 && t.model == 4)
+        .filter(is_start)
+        .filter(|t| t.dis_id == 0)
+        .last()
+        .or_else(|| things.iter().find(is_start))
         .map(|t| (t.x as f32 + 0.5, t.y as f32 + 0.5))
 }
 
@@ -3170,6 +3182,25 @@ mod tests {
     /// Player-start resolution against the real level-000 package
     /// (self-skips without baked data): MC2 falls back to the
     /// MC1-shaped (3,4) marker — level-000 authors that one.
+    /// MC1 level 40 authors the human's `(3,4)` marker twice (THING
+    /// rows 0 and 231); retail seats him at the LATER row (mc1l40
+    /// record 0: tile 134/119). Self-skips without baked data.
+    #[test]
+    fn mc1_player_start_level_040_takes_the_last_marker() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../baked/mc1/level-040.mgcl");
+        let Ok(f) = std::fs::File::open(p) else {
+            eprintln!("skipped: baked mc1 data not present");
+            return;
+        };
+        let pkg: mgc_formats::LevelPackage = mgc_formats::mgcl::read(f).unwrap();
+        assert_eq!(
+            player_start(GameId::Mc1, &pkg.things.things),
+            Some((134.5, 119.5)),
+            "the LAST (3,4) row, not row 0's (248,247)"
+        );
+    }
+
     #[test]
     fn mc2_player_start_level_000() {
         let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

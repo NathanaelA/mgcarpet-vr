@@ -106,6 +106,61 @@ rejection streaks; the gate now counts only `dv±1` steps as tear
 suspects.) Every open entry below reproduced across all takes,
 including the 75%-torn pre-gate corpus.
 
+## ROUND 157 (2026-09-19, vm113) — **THE THIRD MC1 INTAKE**: four new takes (mc1l37-new, l38, l40, l41), ALL END, 3 laws
+
+Opened on `72be2ce` (round 156 committed by the player), gate 1,367 / 0 / 4. The player had already moved the batch into
+`recordings/` (`recordings-new/` empty); the new takes were found by diffing `recordings/mc1*` against the baseline.
+
+### 157-0 INTAKE (HEAD binary d31ad567, `replay --segmented --brief` + `terrain-check`)
+| take | ticks | seg | horizon | first signature | terrain |
+|---|---|---|---|---|---|
+| mc1l37-new | 32485 | 1 | END | - | IDENTICAL (settle 15) |
+| mc1l38 | 48216 | 4 | 4770 | (10,6)slot21:flags,life,max_life,type86 | IDENTICAL (settle 10) |
+| mc1l40 | 45815 | 1 | END | - | **DIFFERENT** type 70 · height 30 · shading 57 · angle 65 |
+| mc1l41 | 61427 | 1 | END | - | IDENTICAL (settle 6) |
+
+mc1l38's heads: t=4771 LOCAL; t=30749 and t=46219 INHERITED, one species (speed retail 462, port 526). Three Opus digs.
+⚠ `terrain-check` resolves `baked/` relative to the cwd — run it from the repo root or every take ERRORs.
+
+### 157-1 ✅ w157a — THE AUTHORED STANDING FIRE'S REAL CTOR (`MGC_NO_MC1_CREATOR_STANDING_FIRE`)
+t=4771 is NOT a level restart: slot 140's `(11,0)` volume fires its disposition, and both sides rebuild the free stack
+and spawn every THING row of that disposition. Retail spawns a class-10 row through `sub_37560_37920` → `sub_373F0_377B0`
+→ `dword_96902[10]` = `str_255D0C`, whose row 6 is `sub_3A730`, the standing fire (CARPET.EXE file 0x9D558 `f4 68 00 00
+06 00 30 a7 02 00 01 00`; ctor file 0x52F28: life 240, +44 50, flags &0xFFFDFFF7|0x20000, ground snap, sprite 228,
+extents 272/1536). `Gen::spawn_creator` routed only models 0/1/5/13/14/17/23/25/36 to `spawn_effect`; model 6 fell to
+the generic "purged unticked at load" stub (life 0, max 300, flags 8). 40 rows, one decision. Fixture
+`mc1l38/a-disposition-fire-mints-the-real-standing-fire` (new manifest; green, red under the switch).
+⏭ LEAD (unwitnessed): class-10 table rows 2, 3, 12, 19, 26, 38, 53, 55 are ported in `spawn_effect` but still stubbed
+in `spawn_creator`; an authored disposition-gated record of any of them would split the same way.
+
+### 157-2 ✅ w157b — AN ABOVE-CARPET SPEED TOKEN'S WRITE REACHES NEXT TICK'S CAST (`MGC_NO_MC1_ABOVE_CARPET_SPEED_CAST_POSE`)
+The brief's edge-wrap and carried-slot guesses were both refuted: 976 is a `(9,12)` storm carrier, 930 a `(9,3)` meteor,
+155 its `(10,1)` trail. Both launch at 384 + caster `+126` − 2. The human's Accelerate token sits at slot 482, ABOVE the
+carpet (479); its burst ends at t=30748 / 46218 (record `+126` 160 → 80). Retail's `sub_56380_568B0` writes the record at
+the token's slot (burst END VA 0x564FB `66 89 46 7e`; sustain VA 0x5648B) and the emit arms read it live (storm VA 0x57A5D,
+meteor VA 0x569DB, `66 8b 45 7e`). The port mailed it, and `tick_flight`'s settled `mc1_cast_pose` re-stamp caught the
+carpet's pre-mail servoed 144 instead. The cross-tick, above-carpet half of `MGC_NO_MC1_SPEED_TOKEN_CAST_POSE`.
+**Both INHERITED heads close.** No fixture is possible (the importer seats `mc1_cast_pose` from the record, so the pair
+is clean in both arms); a 3-record free-run slice from t−1 witnesses it. ⏭ Unit test OWED (needs an imported-carpet rig
+with the token above the carpet). Not audited: `tick_inner`'s end-of-tick stamp (native only).
+
+### 157-3 ✅ w157c — THE LAST-WINS START MARKER, ITS OTHER TWO READERS (instrument + app)
+Not a sim law. Level 40 authors the human's `(3,4)` twice (row 0 at (248,247), row 231 at (134,119)); retail's
+`sub_37720` (file 0x4FF18) overwrites unconditionally, so the higher row wins — the sim's `start_markers` since round
+154. But `native_settled_world`'s settle pose and the APP's `entities::player_start` kept `.find()` (first wins). The
+instrument's carpet idled outside the `(11,0)` switch at (154,76), so disposition 3's five `(5,11)` genies never spawned,
+blinked in or burnt their departure rings (the 70 cells = five 4×4 craters). A LAW ON ONE CALL PATH IS NOT LANDED,
+again. Instrument now reads `w.debug_start_marker(0)` (so the seat switches move it); app returns the last
+dis-0 `(3,4)` (test `mc1_player_start_level_040_takes_the_last_marker`). Duplicate markers: MC1/HW levels 40 + 69, MC2
+10 + 133 only. mc1l40 terrain DIFFERENT → IDENTICAL; init-check 665/0/0. 🎮 PLAYTEST OWED: MC1 level 40 should now start
+at (134,119), and the genie ambush should fire in the first frames.
+
+### 157-4 CLOSE
+**All four new takes END + terrain IDENTICAL; mc1l38 4 seg → END.** Sweep (90 takes, `xargs -P 20`, 4.5 min): 86 of 86
+old brief rows and all old terrain rows BYTE-IDENTICAL. Reversion probes on the combined tree: each switch reopens exactly
+its own head (standing fire → 2 seg @4770; cast pose → 3 seg @30748; `MGC_NO_MC1_LAST_START_MARKER` → l40 DIFFERENT).
+Gate 1,368 / 0 / 4 (+1 app test); fixtures 622 / 622. Sandboxes cleaned.
+
 ## ROUND 156 (2026-09-18, vm113) — **ROUND 155's BANKED LEADS WRAPPED**: mc1l27 → END, 4 laws, 3 leads closed
 
 Opened on `56e626e` (round 155 committed by the player), gate 1,363 / 0 / 4. The player: "wrap the banked items" — the
