@@ -3546,7 +3546,16 @@ impl Gen {
     /// dispatches through the m13 slot (state 79 -> death 82); gating on
     /// model65 leaves militia and settlers falling through to the corpse
     /// path, whose 400-dmg fire drives the village-churn destruction.
-    pub(crate) fn mob_death(&mut self, i: usize, base: u8) {
+    ///
+    /// `chain_revalidate` = PATCH `mc1_segment_chain_revalidate`
+    /// (docs/DEVIATIONS.md): the segment walk below stops at the first
+    /// `+54` link that no longer names a class-5 member of THIS body
+    /// (same `+24`). Retail's walk (sub_1A6C0 :21792, `CARPET.EXE` file
+    /// 0x32EB8-0x32F26: `mov 0x36(%ebx),%bx` → `call sub_424F0`, which
+    /// is a bare `mov %al,0x46(%edx)`) tests nothing but `+54 != 0`, so
+    /// a head that dies a SECOND time stamps `base + 5` onto whatever
+    /// record now occupies a reaped segment's slot.
+    pub(crate) fn mob_death(&mut self, i: usize, base: u8, chain_revalidate: bool) {
         if matches!(base / 6, 4 | 13 | 14) && self.ent[i].f26 != 0 {
             self.ent[i].flags |= 0x400;
             return;
@@ -3566,8 +3575,25 @@ impl Gen {
         if matches!(base / 6, 8 | 13) && !no_mc1_wanted_death_state() {
             self.flag_village_wanted(self.ent[i].f38);
         }
+        // ⭐ PATCH `mc1_segment_chain_revalidate` — THE KRAKEN'S
+        // PHANTOM MANA BALL (player-reported 2026-09-19,
+        // `recordings/mc1l42-new.mgcr`). The head's `+54` is never
+        // cleared when a segment's corpse drops its ball and is reaped;
+        // a pack-mate's blind `+52` write (the PACK arm of the damage
+        // prologue) can revive the head's CORPSE to chase, it dies
+        // again, and this walk then stamps `+70 = base + 5` onto the
+        // recycled slot. For the kraken (base 36) that is 41 — on a
+        // class-10 record, the MANA BALL handler — so a (10,0) corpse
+        // fire becomes a permanent, unpossessable model-0 "ball".
+        // Retail arm: the blind walk. Patched: stop at a non-member.
+        let own = self.ent[i].id24;
         let mut s = self.ent[i].f54 as usize;
         while s != 0 {
+            if chain_revalidate
+                && (self.ent[s].class64 != 5 || self.ent[s].id24 != own)
+            {
+                break;
+            }
             self.ent[s].tick70 = base + 5;
             if self.ent[s].f38 != 0 {
                 self.ent[i].f38 = self.ent[s].f38;
@@ -4351,7 +4377,13 @@ impl Gen {
         let model = s / 6;
         let role = s % 6;
         match role {
-            4 => return self.mob_death(i, base),
+            4 => {
+                return self.mob_death(
+                    i,
+                    base,
+                    ctx.patches.mc1_segment_chain_revalidate && !ctx.strict,
+                );
+            }
             5 => return self.mob_corpse(i, base),
             _ => {}
         }

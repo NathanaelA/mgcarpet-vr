@@ -1095,6 +1095,14 @@ pub struct GameplayPatches {
     /// the ceiling, and a castle is raised no higher than its tallest
     /// tower can stand.
     pub mc1_building_pad_saturate: PatchArm,
+    /// THE KRAKEN'S PHANTOM MANA BALL (MC1). `retail`: a sea monster
+    /// that is killed a second time while already dying can turn a
+    /// nearby fire into a mana ball that can never be collected or
+    /// possessed — it stays for the rest of the level, soaking up the
+    /// mana of balls dropped onto it, and the map marks it magenta.
+    /// `patched` (default): the second death leaves the fire alone.
+    /// Player-reported 2026-09-19.
+    pub mc1_segment_chain_revalidate: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -1123,6 +1131,7 @@ impl Default for GameplayPatches {
             mc1_crushed_site_collapse: PatchArm::Patched,
             mc2_building_pad_saturate: PatchArm::Patched,
             mc1_building_pad_saturate: PatchArm::Patched,
+            mc1_segment_chain_revalidate: PatchArm::Patched,
         }
     }
 }
@@ -1155,6 +1164,7 @@ impl GameplayPatches {
             mc1_crushed_site_collapse: PatchArm::Retail,
             mc2_building_pad_saturate: PatchArm::Retail,
             mc1_building_pad_saturate: PatchArm::Retail,
+            mc1_segment_chain_revalidate: PatchArm::Retail,
         }
     }
 
@@ -1201,6 +1211,7 @@ impl GameplayPatches {
             mc1_crushed_site_collapse: PatchArm::Retail,
             mc2_building_pad_saturate: PatchArm::Retail,
             mc1_building_pad_saturate: PatchArm::Retail,
+            mc1_segment_chain_revalidate: PatchArm::Retail,
             // Native MC2 freed in-walk from the first port (the sweep
             // landed 2026-09-17), so a legacy take ran the PATCHED arm
             // — `..Self::default()` supplies it.
@@ -1446,7 +1457,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 37;
+const DEFAULTS_VERSION: u64 = 38;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

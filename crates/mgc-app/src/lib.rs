@@ -9464,6 +9464,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         mc1_crushed_site_collapse: p.mc1_crushed_site_collapse.on(),
         mc2_building_pad_saturate: p.mc2_building_pad_saturate.on(),
         mc1_building_pad_saturate: p.mc1_building_pad_saturate.on(),
+        mc1_segment_chain_revalidate: p.mc1_segment_chain_revalidate.on(),
     }
 }
 

@@ -2330,6 +2330,35 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc1_segment_chain_revalidate",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc1_segment_chain_revalidate",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc1_segment_chain_revalidate.on(),
+                faithful: false,
+            },
+            desc: "An MC1 sea monster killed a second time while already \
+                   dying can turn a nearby fire into a mana ball that can \
+                   never be collected or possessed: it stays for the rest \
+                   of the level, soaks up the mana of balls dropped onto \
+                   it, and the map marks it magenta. Patched, the second \
+                   death leaves the fire alone.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc1_segment_chain_revalidate =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "A twice-killed sea monster can leave a phantom mana ball, as retail.",
+                    "A twice-killed sea monster leaves no phantom ball (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2599,8 +2628,9 @@ mod tests {
         // mc1_recycle_victim_revalidate + mc1_castle_transform_watchdog
         // 2026-09-18 (round 151), mc1_crushed_site_collapse and
         // mc2_building_pad_saturate 2026-09-19 (round 157), and
-        // mc1_building_pad_saturate the same round (w157g).
-        assert_eq!(patches, 23, "all twenty-three patches ship on");
+        // mc1_building_pad_saturate the same round (w157g),
+        // mc1_segment_chain_revalidate 2026-09-19 (round 158, w158a).
+        assert_eq!(patches, 24, "all twenty-four patches ship on");
     }
 
     #[test]

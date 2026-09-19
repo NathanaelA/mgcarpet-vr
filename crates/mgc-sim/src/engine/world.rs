@@ -26290,7 +26290,7 @@ mod tests {
             w.g.ent[m].f26 = 1; // silent-absorb flag
             w.g.ent[m].tick70 = base + 4; // walk-in DEATH slot
 
-            w.g.mob_death(m, base);
+            w.g.mob_death(m, base, false);
 
             assert_ne!(
                 w.g.ent[m].flags & 0x400,
@@ -26317,7 +26317,7 @@ mod tests {
         let m = w.g.spawn_creature(4, 0x8000, 0x8000, 800).expect("militia");
         w.g.ent[m].f26 = 0;
         w.g.ent[m].tick70 = 28;
-        w.g.mob_death(m, 24);
+        w.g.mob_death(m, 24, false);
         assert_eq!(w.g.ent[m].tick70, 29, "combat militia death must corpse");
         assert_eq!(w.g.ent[m].flags & 0x400, 0, "combat death is not silent");
 
@@ -26327,9 +26327,65 @@ mod tests {
         let g = w.g.spawn_creature(15, 0x8000, 0x8000, 800).expect("guard");
         w.g.ent[g].f26 = 7;
         w.g.ent[g].tick70 = 94;
-        w.g.mob_death(g, 90);
+        w.g.mob_death(g, 90, false);
         assert_eq!(w.g.ent[g].tick70, 95, "non-walk-in model must corpse");
         assert_eq!(w.g.ent[g].flags & 0x400, 0, "guard death is not silent");
+    }
+
+    /// PATCH `mc1_segment_chain_revalidate` (docs/DEVIATIONS.md) — the
+    /// kraken's phantom mana ball, `recordings/mc1l42-new.mgcr` slot 115
+    /// t=1033. A kraken head whose `+54` still names a segment slot that
+    /// was reaped and re-minted as a (10,0) corpse fire (carrying the
+    /// head's `+24`, as `corpse_puff` stamps it) dies again: retail's
+    /// blind walk stamps the corpse state 41 — the class-10 MANA-BALL
+    /// handler — onto the fire; the patched walk leaves it a fire.
+    #[test]
+    fn a_twice_dead_kraken_stamps_the_ball_state_on_a_recycled_fire_unless_patched() {
+        for patched in [false, true] {
+            let mut w = flat_world();
+            let h = w.g.spawn_creature(6, 0x8000, 0x8000, 0).expect("kraken");
+            let seg = w.g.ent[h].f54 as usize;
+            assert_ne!(seg, 0, "test premise: the kraken has a segment");
+            assert_eq!(w.g.ent[seg].id24, w.g.ent[h].id24, "segments carry the head's +24");
+            // The segment's corpse dropped its ball and was reaped; its
+            // slot is now the corpse fire, head link left dangling.
+            let own = w.g.ent[h].id24;
+            {
+                let e = &mut w.g.ent[seg];
+                e.class64 = 10;
+                e.model65 = 0;
+                e.tick70 = 0;
+                e.id24 = own;
+                e.f54 = 0;
+            }
+            w.g.ent[h].tick70 = 40;
+            w.g.mob_death(h, 36, patched);
+            assert_eq!(w.g.ent[h].tick70, 41, "the head itself corpses in both arms");
+            let want = if patched { 0 } else { 41 };
+            assert_eq!(
+                w.g.ent[seg].tick70, want,
+                "patched={patched}: the recycled fire's +70 (41 = mana-ball handler)"
+            );
+        }
+    }
+
+    /// Positive control for `mc1_segment_chain_revalidate`: a kraken
+    /// whose segments are all still its own corpses EVERY one in the
+    /// patched arm, exactly like retail.
+    #[test]
+    fn the_segment_chain_revalidate_still_corpses_live_segments() {
+        let mut w = flat_world();
+        let h = w.g.spawn_creature(6, 0x8000, 0x8000, 0).expect("kraken");
+        w.g.ent[h].tick70 = 40;
+        w.g.mob_death(h, 36, true);
+        let mut s = w.g.ent[h].f54 as usize;
+        let mut n = 0;
+        while s != 0 {
+            assert_eq!(w.g.ent[s].tick70, 41, "segment {s} corpses with its head");
+            n += 1;
+            s = w.g.ent[s].f54 as usize;
+        }
+        assert!(n >= 1, "test premise: at least one segment walked");
     }
 
     /// Possessing a dwelling must NOT shrink its footprint extent. The

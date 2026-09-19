@@ -370,6 +370,29 @@ pub struct WorldPatches {
     /// NOT: the modular leveler then lowers the clamped 255 by the full
     /// step (mc1l32-new (238,218): 255 − 59 = 196 where retail ends at 221).
     pub mc1_building_pad_saturate: bool,
+    /// **THE KRAKEN'S PHANTOM MANA BALL (MC1)** — player-reported
+    /// 2026-09-19 (`recordings/mc1l42-new.mgcr`: "a mana ball the map
+    /// draws with a purple dot, that cannot be possessed and stays
+    /// forever"). The death handler `sub_1A6C0` (:21792; `CARPET.EXE`
+    /// file 0x32EB8, loop body 0x32EFA-0x32F26: `call sub_424F0` =
+    /// `mov %al,0x46(%edx)`, then `mov 0x36(%ebx),%bx`) walks the
+    /// head's `+54` segment chain stamping `+70 = base + 5` with no
+    /// class, id or life test, and nothing clears a head's `+54` when
+    /// a segment's corpse drops its ball and is reaped. Witness: kraken
+    /// head 114 dies at t=1026 (segment 115 corpses with it, drops its
+    /// ball at t=1028, and slot 115 is re-minted as a (10,0) corpse
+    /// fire at t=1029); at t=1031 pack-mate 174's blind `+52` write
+    /// revives the head's CORPSE to chase (38), it dies again at
+    /// t=1032, and at t=1033 the walk stamps 41 onto the fire. Class-10
+    /// state 41 is the mana-ball handler, so slot 115 lives out the
+    /// level as a model-0 ball: ball sprites and physics, it merges
+    /// other drops' mana (0 → 1500 → 3000 → … 4888 at the end), but
+    /// every possession/collection filter wants model 39 and the map
+    /// draws a class-10 non-ball in the unowned magenta. Retail
+    /// (conformance): the blind walk. Patched: the walk stops at the
+    /// first link that is not a class-5 record carrying the head's
+    /// `+24` (every segment is a `qmemcpy` of its head).
+    pub mc1_segment_chain_revalidate: bool,
 }
 
 impl WorldPatches {
@@ -397,6 +420,7 @@ impl WorldPatches {
         mc1_crushed_site_collapse: false,
         mc2_building_pad_saturate: false,
         mc1_building_pad_saturate: false,
+        mc1_segment_chain_revalidate: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -435,5 +459,6 @@ impl WorldPatches {
         mc1_crushed_site_collapse: false,
         mc2_building_pad_saturate: false,
         mc1_building_pad_saturate: false,
+        mc1_segment_chain_revalidate: false,
     };
 }
