@@ -5308,6 +5308,55 @@ mod debuff_knock_tests {
         assert_eq!(g.ent[mine1].f36, 0, "…and that mine is still armed");
     }
 
+    /// THE HUMAN'S CHARGED MINE DRAWS GHOSTED. `sub_3A8B0`'s draw-bit
+    /// block (EF:29850-53) sets `byte[2] |= 0x80` (flags bit 23, the
+    /// sprite pass's 33%-opaque mode) on the viewer's own mine once it
+    /// has swallowed a spell — the dim, greyed "armed" look the player
+    /// remembers. An uncharged mine stays opaque, and a RIVAL's mine
+    /// never takes the bit (its arm is the Beyond-Sight hide).
+    /// NON-VACUITY: with `MGC_NO_MINE_CHARGED_GHOST=1` the test fails
+    /// at "the charged mine is ghosted".
+    #[test]
+    fn the_humans_charged_mine_draws_ghosted() {
+        const RIVAL: u16 = 343;
+        let run = |owner: u16, charge: bool| -> u32 {
+            let mut g = flat_gen();
+            let mine = g.new_event().expect("mine slot");
+            {
+                let e = &mut g.ent[mine];
+                e.class64 = 10;
+                e.model65 = 78;
+                e.tick70 = 85;
+                e.f52 = owner;
+                e.f36 = 0; // armed (retail's -1)
+                e.f71 = 1; // parked, past the arm step
+                e.act_life = 1000;
+                e.max_life = 1000;
+                e.flags |= 8;
+                e.x = 40 * 256;
+                e.y = 40 * 256;
+                e.z = 400;
+            }
+            if charge {
+                let b = g.new_event().expect("bolt slot");
+                let e = &mut g.ent[b];
+                e.class64 = 9;
+                e.model65 = 0;
+                e.id24 = owner;
+                e.f40 = 0;
+                e.x = 40 * 256;
+                e.y = 40 * 256;
+                e.z = 400;
+                assert!(g.mc2_mine_swallow(b, mine as u16), "the fireball is swallowed");
+            }
+            g.mc2_mine_tick(mine, &ctx());
+            g.ent[mine].flags & (1 << 23)
+        };
+        assert_eq!(run(PLAYER_TARGET, false), 0, "an uncharged mine is opaque");
+        assert_ne!(run(PLAYER_TARGET, true), 0, "the charged mine is ghosted");
+        assert_eq!(run(RIVAL, true), 0, "a rival's charged mine takes no ghost bit");
+    }
+
     /// ⭐⭐⭐ THE ACTION-12 BEACON BOUNTY — THE RETAIL CONSUMER OF THE
     /// LIGHTNING TWINS' `@0x34` CROSS-LINK (round 149's banked
     /// `M12_HANDLE_HOME` half).

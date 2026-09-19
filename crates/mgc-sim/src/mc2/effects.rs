@@ -49,6 +49,15 @@ fn no_mine_spawn_pos() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MINE_SPAWN_POS").is_some())
 }
 
+/// A/B toggle for THE CHARGED MINE'S GHOST LOOK (`sub_3A8B0`
+/// EF:29850-53): set `MGC_NO_MINE_CHARGED_GHOST` to restore the port's
+/// opaque charged mine. Player-reported 2026-09-19: "it's supposed to
+/// change color when it gets armed … kind of metallic grey, dim".
+fn no_mine_charged_ghost() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MINE_CHARGED_GHOST").is_some())
+}
+
 /// A/B toggle for the mine's SINK STEP (`sub_3A8B0` case 9): set
 /// `MGC_NO_MINE_SINK_STEP` to restore the post-increment counter the
 /// remc2 hand-conversion reads, against its own raw Hex-Rays and the
@@ -639,9 +648,10 @@ impl Gen {
     /// - **5** (EF:29960-30042) — the relaunch, below;
     /// - **6/7/9** (EF:30043-86) — hang, pause, sink, puff.
     ///
-    /// ⚠ NOT PORTED (cosmetic, and ungraded on the class-10 lanes):
-    /// the draw-bit block at EF:29850-61, which hides an enemy's mine
-    /// unless the viewer holds a live `SpellsEnabled[12]`.
+    /// The draw-bit block at EF:29850-61 is split: its owner arm (the
+    /// charged mine's bit-23 ghost look) is below; its enemy arm (an
+    /// enemy's mine is hidden unless the viewer holds a live
+    /// `SpellsEnabled[12]`) is presentation, in `live_poses_mc2`.
     pub(crate) fn mc2_mine_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         // EF:29793-98 — the mine belongs to its owner's life. A mine
         // whose owner has died or been reap-flagged stops drawing and
@@ -698,6 +708,21 @@ impl Gen {
             self.ent[i].act_life -= 1;
             if self.ent[i].act_life <= 0 {
                 self.ent[i].f71 = 6;
+            }
+            // EF:29850-53 — the draw-bit block's OWNER arm: on the
+            // viewer's own mine, once it has swallowed a spell
+            // (`word_0x36_54 != 0xFFFF`, our `f36 != 0`), set
+            // `byte[2] |= 0x80` — flags bit 23, which the sprite pass
+            // draws 33%-opaque (GRO:3779-3805). That translucency IS
+            // the charged mine's dim, greyed look. Case 5's
+            // `&= 0xFF7FFFFE` clears it on each relaunch tick and this
+            // re-sets it on the next. (The enemy arm — the
+            // Beyond-Sight reveal — lives in `live_poses_mc2`.)
+            if !no_mine_charged_ghost()
+                && self.ent[i].f52 == crate::mc1::mobs::PLAYER_TARGET
+                && self.ent[i].f36 != 0
+            {
+                self.ent[i].flags |= 1 << 23;
             }
             // EF:29862-72 — the mine clamps UP out of the ground, then
             // FLOATS toward ground + 1024 in +/-48 steps with a 96-unit
