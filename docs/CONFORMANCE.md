@@ -801,7 +801,9 @@ all of `+26`…`site_z`, the six damage mailboxes and the tile links.
 
 ⚠⚠ **THREE LANES ARE INVISIBLE TO BOTH GRADED CHANNELS, MEASURED IN
 ROUND 119** — they cost three digs real time each, so check this list
-before concluding "the pair lane says the port is clean":
+before concluding "the pair lane says the port is clean". (A FOURTH,
+the collapse scratch, was on this list until round 160 GRADED it — see
+**The scratch lane** below.)
 
 - **`f42`** (the owner/parent handle) IS projected by `dump-state` but is
   **NOT in `verify-deltas`' lane list** — the walk in `world.rs` jumps
@@ -821,6 +823,43 @@ before concluding "the pair lane says the port is clean":
 
 `MGC_RAW_SHADOW` is the instrument for all three; reach for it whenever a
 head classifies INHERITED.
+
+### The scratch lane (`slot0:scratch.draws`, round 160)
+
+Pool slot 0 is retail's SCRATCH record (`features::SCRATCH`): routines
+borrow it to run a handler on a synthetic event without allocating. The
+castle level-down builds its fake collapse there (:56517-24) and calls
+`sub_28FE0` synchronously, and the walk spends **the scratch record's
+own `+4` stream** — one draw per knocked wall cell, two when the
+`%50 <= 20` branch misses. Until round 160 nothing watched it, twice
+over: `charge_lane_mc1` skips slot 0 (`.enumerate().skip(1)`) and the
+pair diff skips every `class64 == 0` record, which the scratch is
+between demolishes. mc1l48's t=14326 head sat unmoved from round 118 to
+round 159 with its cause on this lane 1,204 ticks earlier.
+
+**We grade the DRAW COUNT — the per-tick LCG distance — not the value.**
+The count is shift-invariant, so a port that diverged once still reports
+the same distance afterwards: a divergence lands as ONE LOCAL head on
+the tick the walk differed, never a storm. In pair mode the two are
+equivalent (`import_ent` seeds slot 0's `+4` at every anchor), but the
+count reads as a diagnosis: `retail 0 port 8`.
+
+Scale, measured over the 57 MC1 takes: the lane moves on **2,327 ticks**
+(10-229 a take), every move an exact distance of **19 to 1,263** draws.
+The only exceptions are three `rand -> 0` steps in mc1l48 — a level
+restart memsetting the pool, which the appender skips by rule.
+
+The counts cluster by footprint (~25 / ~100 / ~315) with the spread
+inside a band coming from the `%50 <= 20` branch, so the count tests the
+walk's cell set **and every cell's branch**. That makes it a per-collapse
+SCALAR ORACLE read straight from the capture — the constrained search
+that turns reconstructing a damaged BUILD row from a guess into a fit.
+
+Kill switch `MGC_NO_MC1_SCRATCH_LANE` (the reversion probe a grading
+change owes). Instrument: `examples/scratch_lane_census_mc1.rs` prints
+what the RECORDING alone holds, with no port in the loop.
+⏭ MC2's own scratch seat (the downgrade restore, EF:61628-31) has the
+identical shape and is still ungraded.
 
 Run it in both modes, because they answer different questions:
 

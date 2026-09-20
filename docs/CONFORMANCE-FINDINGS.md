@@ -106,6 +106,130 @@ rejection streaks; the gate now counts only `dv±1` steps as tear
 suspects.) Every open entry below reproduced across all takes,
 including the 75%-torn pre-gate corpus.
 
+## ROUND 160 (2026-09-20, vm113) — **THE COLLAPSE SCRATCH LANE IS GRADED** (the last of round 159's four rulings)
+
+Opened on `0be42ef` with round 159's whole wave committed. The banked item was ruling (4) of 159-16, deferred by the
+player: *"leave the collapse scratch lane for the next session."*
+
+### 160-0 ⭐⭐⭐ THE SCRATCH LANE — POOL SLOT 0's `+4`, GRADED AS A DRAW COUNT (`slot0:scratch.draws`)
+Retail stages the castle level-down's fake collapse in the SCRATCH record (`features::SCRATCH`, entity 0, :56517-24)
+and calls `sub_28FE0` synchronously; the walk spends **that record's own** LCG stream — one draw per knocked wall cell,
+two when the `%50 <= 20` branch misses. **Nothing graded it, doubly**: `append_charge_diffs` skips slot 0 outright
+(`.enumerate().skip(1)`), the pair diff skips every `class64 == 0` record, and the scratch IS class 0 between
+demolishes. That is how mc1l48's t=14326 head sat unmoved from round 118 to round 159 while its cause rode this lane
+**1,204 ticks earlier**.
+
+**WHAT THE CAPTURE HOLDS (measured first, instrument `examples/scratch_lane_census_mc1.rs`).** Across the 57 MC1 takes
+the lane moves on **2,327 ticks** — 10 to 229 per take, against 10k-68k states, so it is cheap. Every single move
+resolves as an exact LCG distance (min **19**, max **1,263**) with THREE exceptions, all in mc1l48, all `rand -> 0`:
+that is the pool memset of a level restart, and mc1l48 is the corpus's only take with deaths. The counts cluster in
+bands (~25 / ~100 / ~315) — footprint size — with the spread inside each band coming from the `%50 <= 20` branch, so
+**the count tests the walk's cell set AND every cell's branch**, not just its geometry.
+
+**WHAT WE GRADE: THE DISTANCE, NOT THE VALUE.** The count is shift-invariant, so a port that diverged once still
+reports the same distance on every later interval: a divergence lands as **ONE LOCAL head on the tick the walk
+actually differed**, never a storm. In pair mode the two are equivalent anyway (`import_ent` seeds slot 0's `+4` from
+the capture at every anchor — round 105 moved the importer to `0..n` precisely for the scratch record), but the count
+is what reads as a diagnosis. Wired at all three comparators: the `verify-deltas` main loop, `exec_pair`, and the
+free-run loop in `replay.rs` (which samples the port's scratch BEFORE the step so its interval matches retail's
+`pst`->`st` exactly one tick). Kill switch **`MGC_NO_MC1_SCRATCH_LANE`**.
+
+### 160-1 ✅ THE COST: 94 OF 97 ROWS BYTE-IDENTICAL, AND ALL THREE THAT MOVED ARE **ONE FAMILY**
+A grading change touches every take, so the sweep ran at the landing, not at session end. Every moved row is the
+registered BUILD.DAT damage — the lane found nothing else in the whole corpus:
+- **mc1l48 `horizon 14325 -> 13121`**, `sig (5,8)slot61:z -> slot0:scratch.draws`, segments 593->598, roster 541->538,
+  devs 46->54. The head now reads **`retail 0 port 8`** — 159-11's number exactly, arrived at independently and
+  without a reconstruction. The round-118 certification blocker now names its own cause, at its true birth.
+- **mc1l6 `END -> horizon 22559`**, roster 4->2, devs 0->2: **retail drew 899, the port 895** — which IS the
+  registered deviation, behaving exactly as registered. ⚠ **CORRECTION to this entry's first draft**, which called the
+  damage image "four draws short": it is not. 159-15 had ALREADY computed the 899-vs-895 step by hand (the arithmetic
+  is in the deviation note verbatim), and 160-3 below confirms the round-159 reconstruction reproduces **899 exactly**.
+  What actually happened is narrower and more useful — see 160-3 and the corrected lesson.
+- **mc1l48-nodeath** roster 195->193, devs 27->29: two segments a rule fully explained now carry an unexcused row.
+
+⭐⭐⭐ **THE LESSON: A RULE'S SCOPE IS ONLY AS WIDE AS THE CHANNELS THAT EXISTED WHEN IT WAS WRITTEN.** mc1l6 and
+mc1l48-nodeath did not regress and nothing about them was newly discovered — their registered rules simply do not
+name a field that did not exist a day ago, so the takes stop reading END the moment the channel lands. **Every new
+graded channel can de-certify takes through rules that predate it, and that is not a regression: it is the roster
+being re-scoped.** The corollary is the one worth carrying: **a take at END is only as certified as its widest graded
+channel**, which is §159-16's own observation ("a take can be END and still be modelled wrong; only an ungraded
+channel showed it") with the conclusion it stopped short of — that the channel therefore belongs in the grade.
+
+### 160-2 ✅ PROOFS
+Reversion probe: with `MGC_NO_MC1_SCRATCH_LANE=1` all three rows return **exactly** to the pre-landing baseline, so the
+switch owns every moved row and nothing else moved. Fixture suite **625 / 625, 0 regressions** (the lane changes no
+port behaviour — the fixtures grade obs fields and could not witness it either). Gate **1,393 / 0 / 4**, including two
+new unit tests that carry the mc1l48 (0 vs 8) and mc1l6 (899 vs 895) witnesses plus the re-init rule; both go **RED**
+under the switch and green without it.
+
+### 160-3 ⭐⭐⭐ THE ORACLE **CONFIRMS BOTH RECONSTRUCTIONS EXACTLY** — NEITHER FAMILY IS AN OPEN QUESTION
+Asked whether the banked work is diggable, the main session tested it instead of estimating, using the new channel as
+the oracle. Windowed runs (`replay --from/--to` + `MGC_COLLAPSE_PROBE`, seconds each) on the two heads:
+
+**mc1l6**, t=22560, row 5, footprint x0=251 y0=7 w=35 h=35 ⇒ site **(12,24)** — the site the note names. Retail: 899.
+| `MGC_BUILD_DAT_DAMAGE=12,24:…` | draws |
+|---|---|
+| (none — shipped bytes) | 895 |
+| `2736=0x5B,2737=0x5F,2738=0x5F,2739=0x5F` | 898 |
+| `2750=0x54` alone | 896 |
+| **all five (`2750=0x54` or `0x57`)** | **899 = retail** |
+
+**mc1l48**, t=13122, row 7, x0=119 y0=51 w=48 h=48 ⇒ site **(143,75)** — Vodor's castle, and the walk prints
+`rand 0 -> 1817417080 draws=8`, digit for digit what 159-11 measured from a free run anchored at t=13937 (retail never
+drew, so slot 0 sat at 0 and the anchor re-seeded 0 — the same walk from either end). The head is now at its TRUE
+BIRTH, 816 ticks earlier. Retail: 0. The four named offsets **6569/6570/7969/7970** give **0 draws at 0x60, 0x67 AND
+0x6f** — every candidate that either zeroes the low nibble or lifts `full = 4*(lo-1)` to `>= h`.
+
+⭐ So the round-159/round-120 reconstructions are **independently confirmed by a channel that did not exist when they
+were made**, and the five/four bytes are each load-bearing (drop one and the count misses). ⭐ The count does NOT
+discriminate mc1l6's 2750 re-scribble (0x54 and 0x57 both give 899) — consistent with 159-15, where the re-scribble is
+load-bearing for the HEIGHT PLANE and not for the walk length. **A scalar oracle constrains, it does not identify.**
+
+⚖ **WHAT IS LEFT IS A RULING, NOT A DIG.** There is no law to land: the port reads the shipped, CRC-verified asset
+(RNC ucrc 0x6522) and retail read its own machine's corrupted RAM, so "fixing" the port means shipping a per-take
+table of one 1997 machine's memory damage — which is data, not behaviour. The live question is only whether the two
+rules get widened to name `slot0:scratch.draws` (restoring END with the attribution unchanged) or the takes keep
+reading their true, un-excused state.
+
+### 160-4 ⭐⭐⭐ THE DAMAGE IS **STRUCTURED IN FOOTPRINT COORDINATES** — EVIDENCE IT IS A WRITE, NOT DECAY
+Closing question from the player: *"the port draws rng, retail does no such thing; we know which ticks, we just don't
+know why — correct?"* **Not quite: three layers, and only the third is open.** (1) WHICH TICKS AND CELLS: exact.
+(2) WHY THE COUNTS DIFFER: proven — the wall arm is `if lo != 0 { full = 4*(lo-1); if height <= full { 0 } else
+{ draw } }`, and at mc1l48's cells the shipped `0x65` gives lo=5 ⇒ full=16 against height 24, so `24 > 16` FORCES the
+draw; 159-11 had already shown the terrain plane bit-identical there (0 dirty cells), leaving the byte as the only free
+variable. (3) WHY RETAIL'S IN-MEMORY BYTES DIFFER FROM THE SHIPPED FILE: **open, and never attacked.**
+⚠ The direction is NOT uniform and the earlier entries invite that misreading: mc1l48 is port 8 / retail 0, **mc1l6 is
+retail 899 / port 895** — retail draws MORE. Same wound, opposite sign, because mc1l6's damage turns EMPTY cells
+(`0x00`, lo=0, no draw) INTO drawing wall cells.
+
+**TWO NEW PIECES OF EVIDENCE (main session, this round).**
+- The reconstructed run `5B 5F 5F 5F` occurs **nowhere** in either baked build table (mc1-temperate 18,761 B and
+  mc1-arctic 20,474 B searched; not even `5F 5F 5F`) ⇒ retail was not reading a shifted or wrong region of the same
+  asset. ⚠ WEAK ALONE — the fit is not unique (0x54 and 0x57 both satisfy the count, 160-3), so a different valid fit
+  could exist in the file.
+- ⭐⭐⭐ **THE STRONG ONE: the damaged cells are structured in the CASTLE'S OWN FOOTPRINT COORDINATES, not in memory
+  order.** mc1l48's four are (143,61) (144,61) (143,89) (144,89) against a castle centred (143,75) with a 48x48
+  footprint (probe: `row=7 x0=119 y0=51 w=48 h=48` ⇒ centre 119+24=143, 51+24=75): **the centre column and centre+1,
+  at exactly ±14 rows — symmetric about the centre.** Their file offsets are 1,400 apart (= 28 rows x 50 B stride),
+  i.e. ADJACENT IN GEOMETRY, DISTANT IN MEMORY. mc1l6's five sit in one RLE row (ry=10), four contiguous plus one
+  outlier at rx 32. Shipped bytes re-confirmed: mc1l6 `55 00 00 00 00`, mc1l48 `65 55 65 55`.
+
+**Random heap decay does not land symmetrically about a castle's centre.** With 159-15's finding that byte 2750 is
+RE-SCRIBBLED mid-run (lo 4 -> 7 between two builds at the same site), the family reads as **something WRITING into the
+in-memory build table in footprint coordinates** — and if that something is a retail routine, this is a MISSING PORT
+LAW, not unreconstructable per-machine data. That would change the whole family's disposition.
+⏭ **THE DIG, WITH A CONCRETE TARGET**: find what writes to the build-table buffer in `CARPET.EXE`. Ready-made suspect —
+the OOB-castle family (159-14): a level-250 castle's SIGNED `+71` already drives retail off the end of its own tables,
+so a sibling routine writing OOB into an adjacent heap allocation is exactly this shape. NOT opened (player moved on).
+
+### 160-5 ⏭ BANKED
+The player ruled mc1l6 reads its true state rather than being excused by extending its rule — *"land as-is; dig the 4
+draws"*. **160-3 then settled the dig half the same session**: both reconstructions already reproduce retail's count
+exactly, so the round-120 family is CLOSED as a research question and open only as the rule-scope ruling. What the
+ruling preserved is still worth having: the takes read their true, un-excused state instead of a widened rule.
+⏭ Not done and not attempted: **MC2's own scratch seat** (the downgrade restore, EF:61628-31 — `no_mc2_seat_slot0`)
+has the identical shape and no channel watches it either.
+
 ## ROUND 159 (2026-09-19, vm113) — **THE MC1 FINAL-LEVEL CERTIFICATION DRILL**: the last 4 takes → ALL END, 4 laws, 1 harness law, 5 deviations
 
 Opened on `3e4c4d4` (rounds 157 + 158 committed by the player), gate 1,211 / 0 / 4, conform md5 `86c9e657`. Round 158

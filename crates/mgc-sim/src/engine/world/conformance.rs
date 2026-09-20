@@ -2720,6 +2720,20 @@ impl World {
         (f26, self.wiz_charge)
     }
 
+    /// The SCRATCH lane (round 160, banked from 159-11): pool slot 0's
+    /// `+4`. Retail stages the castle level-down's fake collapse in the
+    /// scratch record (:56517-24) and `sub_28FE0` spends THAT record's
+    /// own LCG stream — up to two draws per knocked wall cell — so the
+    /// per-tick LCG distance is retail's exact draw count for the
+    /// demolition walk. It is the only oracle that grades the walk's
+    /// cell set and each cell's `%50 <= 20` branch, and until now
+    /// nothing watched it: `charge_lane_mc1` above skips slot 0
+    /// (`.skip(1)`), the pair diff skips every class-0 record, and the
+    /// scratch is class 0 by construction. See `append_scratch_diffs`.
+    pub fn mc1_scratch_rand(&self) -> u32 {
+        self.g.ent[crate::engine::features::SCRATCH].rand
+    }
+
     /// The SPRITE lane (player-banked instrument change 2026-08-27,
     /// landed session 68): per-slot `type86` — MC1's `+86` row, MC2's
     /// `f5a` — the visual-only lane the flag-recolor bug class lives

@@ -2223,6 +2223,13 @@ fn run_mc1(
                 pst.wizards[pst.local_player as usize].view,
                 0 | 3
             ));
+            // THE SCRATCH LANE's port half (round 160). Sampled
+            // BEFORE the step so the interval matches retail's
+            // `pst` -> `st` exactly one tick, which is what makes the
+            // draw count comparable in a free run: the port has been
+            // carrying slot 0's `+4` since the anchor, so the VALUES
+            // drift, but the per-tick distance does not.
+            let port_scratch_pre = world.mc1_scratch_rand();
             if recover::paused_turn_mc1(&pst, &obs) {
                 // ⭐⭐ THE PAUSE SCREEN IS INTERACTIVE. A paused turn
                 // runs no sim, but the BIG MAP / spellbook is still
@@ -2576,6 +2583,13 @@ fn run_mc1(
                 // a wrong row here is the recolor bug class showing
                 // its face — exactly what the lane exists to catch.
                 append_sprite_diffs(&mut pd, &st, &world, slot);
+                crate::verify::append_scratch_diffs(
+                    &mut pd,
+                    pst.ents[0].rand,
+                    st.ents[0].rand,
+                    port_scratch_pre,
+                    world.mc1_scratch_rand(),
+                );
                 let dump = args.dump == Some(pt)
                     || (args.dump_first
                         && stats.seg().horizon.is_none()

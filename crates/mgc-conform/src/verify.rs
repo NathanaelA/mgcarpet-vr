@@ -514,6 +514,13 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     append_hand_diffs(&mut pd, &st, &port, pst.local_player as usize);
                     append_charge_diffs(&mut pd, &st, &world, report.human_slot);
                     append_sprite_diffs(&mut pd, &st, &world, report.human_slot);
+                    append_scratch_diffs(
+                        &mut pd,
+                        pst.ents[0].rand,
+                        st.ents[0].rand,
+                        pst.ents[0].rand,
+                        world.mc1_scratch_rand(),
+                    );
                     let pd = pd;
                     let mut tags = (roster.is_some() || !args.no_pose_alt).then(|| {
                         let rmap: BTreeMap<u16, &EntObsMc1> =
@@ -975,6 +982,97 @@ pub(crate) fn append_charge_diffs(
     }
 }
 
+/// A/B kill switch for THE SCRATCH LANE (round 160): set
+/// `MGC_NO_MC1_SCRATCH_LANE` to grade exactly as every round through
+/// 159 did, with pool slot 0's `+4` invisible. Kept for the reversion
+/// probe a grading change owes — a moved row must be attributable to
+/// this switch and nothing else.
+pub(crate) fn no_mc1_scratch_lane() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SCRATCH_LANE").is_some())
+}
+
+/// Steps from `a` to `b` on the per-record LCG (9377/9439), or `None`
+/// past `cap`. The corpus's largest single-tick collapse walk spends
+/// **1,263** draws (mc1l48; 2,327 moved ticks over the 57 MC1 takes),
+/// so 8,192 is six times the observed ceiling and still ~2 us.
+fn lcg_dist(a: u32, b: u32) -> Option<u32> {
+    const CAP: u32 = 8_192;
+    let mut r = a;
+    for n in 0..=CAP {
+        if r == b {
+            return Some(n);
+        }
+        r = r.wrapping_mul(9377).wrapping_add(9439);
+    }
+    None
+}
+
+/// THE SCRATCH LANE (banked 159-11, landed round 160). Pool slot 0 is
+/// retail's collapse scratch (`features::SCRATCH`): the castle level-
+/// down builds a fake collapse event there (:56517-24) and calls
+/// `sub_28FE0` synchronously, which spends THE SCRATCH RECORD'S OWN
+/// `+4` stream — one draw per knocked wall cell, two when the
+/// `%50 <= 20` branch misses. Nothing graded it: `append_charge_diffs`
+/// skips slot 0 outright, the pair diff skips every `class64 == 0`
+/// record, and the scratch is class 0 between demolishes — doubly
+/// invisible, which is how mc1l48's t=14326 head sat unmoved since
+/// round 118 while its cause (the registered BUILD.DAT damage forcing
+/// 8 draws retail never made) rode this lane 362 ticks earlier.
+///
+/// We grade the DRAW COUNT, not the value. The count is shift-
+/// invariant: a port that diverged once still reports the same
+/// distance on every later interval, so a divergence lands as ONE
+/// LOCAL head on the tick the walk actually differed instead of a
+/// storm. In pair mode the two are equivalent anyway — `import_ent`
+/// seeds slot 0's `+4` from the capture at every anchor — but the
+/// count is what reads as a diagnosis ("retail drew 0, port drew 8").
+///
+/// `retail_prev`/`port_prev` are the interval's start values; in the
+/// pair loop both are the imported capture, in the free-run loop the
+/// port's is its own previous post-tick value.
+pub(crate) fn append_scratch_diffs(
+    pd: &mut PairDiff,
+    retail_prev: u32,
+    retail_cur: u32,
+    port_prev: u32,
+    port_cur: u32,
+) {
+    if no_mc1_scratch_lane() {
+        return;
+    }
+    // A POOL RE-INIT IS NOT A DRAW. The scratch going to exactly zero
+    // is the level restart memsetting the pool, not a walk: mc1l48 —
+    // the corpus's only take with deaths — is the only one that does
+    // it, three times (t=8591/12424/14702), and every other move in
+    // all 57 MC1 takes resolves as a distance.
+    if retail_cur == 0 && retail_prev != 0 {
+        return;
+    }
+    let (rd, pdst) = (
+        lcg_dist(retail_prev, retail_cur),
+        lcg_dist(port_prev, port_cur),
+    );
+    // Both past the cap: nothing to say unless the raw values differ,
+    // and then we can only report that they do.
+    if rd.is_none() && pdst.is_none() && retail_cur == port_cur {
+        return;
+    }
+    if rd == pdst && rd.is_some() {
+        return;
+    }
+    let show = |d: Option<u32>, end: u32| match d {
+        Some(n) => n.to_string(),
+        None => format!(">8192 (rand {end})"),
+    };
+    pd.fields.push(FieldDiff {
+        slot: Some(0),
+        field: "scratch.draws",
+        want: show(rd, retail_cur),
+        got: show(pdst, port_cur),
+    });
+}
+
 /// The SPRITE row (player-banked 2026-08-27, graded since session 68):
 /// retail `+86` vs port `type86`, riding the raw state channel like
 /// f26/charge above. This is the castle-flag-recolor bug class's lane
@@ -1201,6 +1299,15 @@ pub(crate) fn exec_pair(
     append_hand_diffs(&mut pd, st, &port, pst.local_player as usize);
     append_charge_diffs(&mut pd, st, world, report.human_slot);
     append_sprite_diffs(&mut pd, st, world, report.human_slot);
+    // The port's scratch start IS the imported capture: `exec_pair`
+    // anchors at `pst` one line above the tick.
+    append_scratch_diffs(
+        &mut pd,
+        pst.ents[0].rand,
+        st.ents[0].rand,
+        pst.ents[0].rand,
+        world.mc1_scratch_rand(),
+    );
     Ok((pd, port, report.human_slot))
 }
 
@@ -1906,6 +2013,66 @@ impl Stats {
 #[cfg(test)]
 mod tests {
     use super::midwalk_ground;
+    use super::{PairDiff, append_scratch_diffs};
+
+    /// Advance the record LCG `n` times — the test's own oracle, so a
+    /// wrong constant in `lcg_dist` cannot agree with itself.
+    fn draw(mut r: u32, n: u32) -> u32 {
+        for _ in 0..n {
+            r = r.wrapping_mul(9377).wrapping_add(9439);
+        }
+        r
+    }
+
+    /// THE SCRATCH LANE grades the collapse walk's DRAW COUNT, and the
+    /// count alone: the port's slot-0 `+4` drifts from retail's in a
+    /// free run, so the lane must stay quiet whenever both sides spent
+    /// the same number of draws from wherever they each started.
+    #[test]
+    fn the_scratch_lane_grades_draw_count_not_value() {
+        // Same count (27) from DIFFERENT seeds — a drifted free run.
+        let mut pd = PairDiff::default();
+        append_scratch_diffs(&mut pd, 1000, draw(1000, 27), 7777, draw(7777, 27));
+        assert!(pd.fields.is_empty(), "equal draw counts must not diff");
+
+        // The mc1l48 witness (159-11): retail made ZERO draws on the
+        // damaged row where the port makes 8.
+        let mut pd = PairDiff::default();
+        append_scratch_diffs(&mut pd, 4242, 4242, 4242, draw(4242, 8));
+        assert_eq!(pd.fields.len(), 1);
+        let f = &pd.fields[0];
+        assert_eq!((f.slot, f.field), (Some(0), "scratch.draws"));
+        assert_eq!((f.want.as_str(), f.got.as_str()), ("0", "8"));
+
+        // The mc1l6 witness: 899 retail vs 895 port, four draws short.
+        let mut pd = PairDiff::default();
+        append_scratch_diffs(&mut pd, 5, draw(5, 899), 5, draw(5, 895));
+        assert_eq!(pd.fields.len(), 1);
+        assert_eq!(
+            (pd.fields[0].want.as_str(), pd.fields[0].got.as_str()),
+            ("899", "895")
+        );
+    }
+
+    /// A POOL RE-INIT IS NOT A DRAW. mc1l48 — the only corpus take
+    /// with deaths — memsets the pool three times, taking slot 0's
+    /// `+4` to exactly zero; that is a level restart, not a walk, and
+    /// grading it would storm the take with a meaningless head.
+    #[test]
+    fn the_scratch_lane_ignores_the_pool_re_init() {
+        let mut pd = PairDiff::default();
+        append_scratch_diffs(&mut pd, 3_051_930_052, 0, 3_051_930_052, 12345);
+        assert!(pd.fields.is_empty(), "rand -> 0 is a re-init, not a draw");
+        // But a walk that merely STARTS from zero still grades: the
+        // scratch is zero until the take's first demolish.
+        let mut pd = PairDiff::default();
+        append_scratch_diffs(&mut pd, 0, draw(0, 26), 0, draw(0, 24));
+        assert_eq!(pd.fields.len(), 1);
+        assert_eq!(
+            (pd.fields[0].want.as_str(), pd.fields[0].got.as_str()),
+            ("26", "24")
+        );
+    }
 
     /// The mid-walk phase pick, one cell per measured family: the
     /// oracle keeps @N only for a demonstrated late write; early,
