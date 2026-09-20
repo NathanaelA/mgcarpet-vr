@@ -2486,6 +2486,72 @@ pub(crate) fn no_castle_eject_gc() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_CASTLE_EJECT_GC").is_some())
 }
 
+/// ⚠ **MEASUREMENT DEVICE ONLY — NOT RETAIL** (dig w159h, round
+/// 159). `MGC_MC1_OOB_CASTLE_INERT=1` makes an MC1 castle whose
+/// level byte `+26` has gone OUT OF THE 8-ROW BUILD LADDER (>= 8 —
+/// only reachable through the registered `volcano_register_revalidate`
+/// corruption, `docs/DEVIATIONS.md`) INERT: quota 0 (the fleet is
+/// culled by the level-0 cull tail, which is what retail's OOB quota
+/// read did on mc1l45-froze / mc1l26-froze) and `castle_downgrade` a
+/// no-op (no HP re-lift, no ladder reset, no footprint un-stamp — the
+/// three port guards `CASTLE_HP[min(7)]`, `build_tab[lvl % len]` and
+/// `f71 = lvl0.min(8)` that keep the port alive where retail walked
+/// OOB and hung). It exists to SILENCE the registered storm so the
+/// rest of the excused tail can be classified. Retail's arm (the
+/// switch unset) stays the replay truth.
+/// Arms: `quota` (the fleet/guard quota), `teardown` (castle_downgrade's
+/// HP/ladder/un-stamp), `paint` (the m42 painter + m41 leveler).
+/// `MGC_MC1_OOB_CASTLE_INERT=1` (or `all`) turns on all three; a
+/// comma list turns on just those arms, which is how each divergence
+/// FAMILY was assigned to its guard.
+pub(crate) fn mc1_oob_castle_inert(arm: &str) -> bool {
+    static V: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let v = V.get_or_init(|| std::env::var("MGC_MC1_OOB_CASTLE_INERT").ok());
+    match v {
+        None => false,
+        Some(s) if s == "1" || s == "all" => true,
+        Some(s) => s.split(',').any(|a| a.trim() == arm),
+    }
+}
+
+/// ⭐ **THE CASTLE/BUILD ROW BYTE `+71` IS SIGNED.** The m42 painter's
+/// body (`sub_24DA0`, remc1 sub_main.cpp:30525-32 / :30538-45) reads
+/// the row as `*(char *)(a1 + 71)` and runs its per-row goal fill
+/// under a SIGNED compare — `for (i = 1; ; ++i) if (i > *(char *)(a1 +
+/// 71)) break;`. The shipped `CARPET.EXE` agrees: the four build-tab
+/// reads at file 0x40E62 / 0x40E82 / 0x40EAF / 0x40ECF (VA 0x2866A /
+/// 0x2868A / 0x286B7 / 0x286D7) are `0f be` **movsbl** `0x47(%ebp)`
+/// followed by `lea (,%edx,4); sub %edx` (×3) and `mov 0x4|0x5(%edx,
+/// %eax,2)` (×6 + w/h), and the loop test at file 0x41203 (VA
+/// 0x28A0B) is `movsbl 0x47(%ebp),%edx / mov 0x50(%esp),%al / cmp
+/// %edx,%eax / jle` — a SIGNED `i <= (char)row` continue. So a row
+/// >= 128 is NEGATIVE: the fill loop runs **zero times**, the delta
+/// buffer stays `memset`-zero and the painter writes **no height at
+/// all**. The port read `+71` as `u8` and clamped it `.min(8)`, so a
+/// corrupted castle painted a full level-8 footprint every work tick.
+/// Only reachable through the registered level-250 corruption
+/// (`volcano_register_revalidate`, docs/DEVIATIONS.md) — it is the
+/// whole `field:z` half of the mc1l45-froze / mc1l26-froze tail.
+/// ⚠ Rows 8..=127 stay UNMODELLED (retail walks build rows past the
+/// end of an 8-row table there; without a memory image the clamp is
+/// the only defensible stand-in).
+///
+/// `MGC_NO_MC1_CASTLE_ROW_SIGNED=1` restores the unsigned read.
+pub(crate) fn mc1_no_castle_row_signed() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_ROW_SIGNED").is_some())
+}
+
+/// The painter/finish build ROW, sign-extended — see
+/// [`mc1_no_castle_row_signed`].
+pub(crate) fn mc1_build_row(f71: u8) -> usize {
+    if mc1_no_castle_row_signed() {
+        f71.min(8) as usize
+    } else {
+        (f71 as i8).max(0).min(8) as usize
+    }
+}
+
 /// `MGC_NO_MC1_LEVELER_POOL_GATE=1` restores the UNGATED MC1 castle
 /// leveler: the deferred downgrade runs even on an exhausted free
 /// stack, where retail's `sub_470E0` (:56142) skips the whole teardown.
@@ -8326,28 +8392,67 @@ impl Gen {
     /// castle instance without corrupting every other build in the
     /// level, so the damage can be attributed on the take.
     fn dmg(&self, c: usize, cx: u8, cy: u8) -> u8 {
-        static P: std::sync::OnceLock<Option<((u8, u8), Vec<(usize, u8)>)>> =
+        // ⚠ w159j PROBE EXTENSION: several site groups, `;`-separated,
+        // each optionally window-scoped to a tick range
+        // (`cx,cy@t0-t1:off=hex,…`). Needed because mc1l6's damaged
+        // image is not constant in time OR in site: cell 2750 reads
+        // low-nibble 4 for the t=11733 build and 7 for the t=27748
+        // build at the SAME site (12,24).
+        #[allow(clippy::type_complexity)]
+        static P: std::sync::OnceLock<Vec<((u8, u8), (u64, u64), Vec<(usize, u8)>)>> =
             std::sync::OnceLock::new();
         let p = P.get_or_init(|| {
-            let v = std::env::var("MGC_BUILD_DAT_DAMAGE").ok()?;
-            let (site, rest) = v.split_once(':')?;
-            let (sx, sy) = site.split_once(',')?;
-            let mut out = Vec::new();
-            for kv in rest.split(',').filter(|s| !s.is_empty()) {
-                let (a, b) = kv.split_once('=')?;
-                out.push((
-                    a.trim().parse::<usize>().ok()?,
-                    u8::from_str_radix(b.trim().trim_start_matches("0x"), 16).ok()?,
-                ));
+            let Ok(v) = std::env::var("MGC_BUILD_DAT_DAMAGE") else {
+                return Vec::new();
+            };
+            let mut groups = Vec::new();
+            for g in v.split(';').filter(|s| !s.is_empty()) {
+                let Some((site, rest)) = g.split_once(':') else {
+                    continue;
+                };
+                let (site, win) = match site.split_once('@') {
+                    Some((s, w)) => {
+                        let (a, b) = w.split_once('-').unwrap_or((w, w));
+                        (
+                            s,
+                            (
+                                a.parse::<u64>().unwrap_or(0),
+                                b.parse::<u64>().unwrap_or(u64::MAX),
+                            ),
+                        )
+                    }
+                    None => (site, (0, u64::MAX)),
+                };
+                let Some((sx, sy)) = site.split_once(',') else {
+                    continue;
+                };
+                let mut out = Vec::new();
+                for kv in rest.split(',').filter(|s| !s.is_empty()) {
+                    if let Some((a, b)) = kv.split_once('=')
+                        && let Ok(o) = a.trim().parse::<usize>()
+                        && let Ok(val) = u8::from_str_radix(b.trim().trim_start_matches("0x"), 16)
+                    {
+                        out.push((o, val));
+                    }
+                }
+                if let (Ok(x), Ok(y)) = (sx.parse::<u8>(), sy.parse::<u8>()) {
+                    groups.push(((x, y), win, out));
+                }
             }
-            Some(((sx.parse().ok()?, sy.parse().ok()?), out))
+            groups
         });
-        if let Some(((sx, sy), list)) = p
-            && *sx == cx
-            && *sy == cy
-            && let Some(&(_, v)) = list.iter().find(|(o, _)| *o == c)
-        {
-            return v;
+        if !p.is_empty() {
+            let t = crate::DEBUG_TICK.load(std::sync::atomic::Ordering::Relaxed);
+            for ((sx, sy), (t0, t1), list) in p.iter() {
+                if *sx == cx
+                    && *sy == cy
+                    && t >= *t0
+                    && t <= *t1
+                    && let Some(&(_, v)) = list.iter().find(|(o, _)| *o == c)
+                {
+                    return v;
+                }
+            }
         }
         self.assets.build_dat[c]
     }
@@ -8544,7 +8649,12 @@ impl Gen {
         let target = (e.z >> 5) as i32;
         // Row = level verbatim (retail never clamps it): level 0
         // paints nothing, which is what a bare-flag castle owns.
-        let level = e.f71.min(8) as usize;
+        // ⚠ MEASUREMENT PROBE — an OUT-OF-LADDER row paints nothing.
+        let level = if mc1_oob_castle_inert("paint") && e.f71 >= 8 {
+            0usize
+        } else {
+            mc1_build_row(e.f71)
+        };
         let target = if datum_cap { target.min(self.castle_datum_cap(level)) } else { target };
         // :30563 — the divisor is the POST-decrement counter itself.
         let divisor = (e.f26 as i32).max(1);
@@ -8642,7 +8752,12 @@ impl Gen {
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as u8;
         let cy = ((e.y as u32 + 128) >> 8) as u8;
-        let level = e.f71.min(8) as usize;
+        // ⚠ MEASUREMENT PROBE — an OUT-OF-LADDER row promotes nothing.
+        let level = if mc1_oob_castle_inert("paint") && e.f71 >= 8 {
+            0usize
+        } else {
+            mc1_build_row(e.f71)
+        };
         let def = self.assets.build_tab[level % self.assets.build_tab.len()];
         let x0 = cx.wrapping_sub((def.w >> 1) as u8);
         let y0 = cy.wrapping_sub((def.h >> 1) as u8);
@@ -8715,7 +8830,12 @@ impl Gen {
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as u8;
         let cy = ((e.y as u32 + 128) >> 8) as u8;
-        let def = self.assets.build_tab[e.f71 as usize % self.assets.build_tab.len()];
+        // ⚠ MEASUREMENT PROBE — an OUT-OF-LADDER row levels nothing.
+        let def = if mc1_oob_castle_inert("paint") && e.f71 >= 8 {
+            self.assets.build_tab[0]
+        } else {
+            self.assets.build_tab[e.f71 as usize % self.assets.build_tab.len()]
+        };
         let x0 = cx.wrapping_sub((def.w >> 1) as u8);
         let y0 = cy.wrapping_sub((def.h >> 1) as u8);
         if e.flags & 2 == 0 {
@@ -9432,7 +9552,11 @@ impl Gen {
             (3, 34),
         ];
         let own = self.ent[i].id24;
-        let (bq, gq) = FLEET[self.ent[i].f26.clamp(0, 7) as usize];
+        let (bq, gq) = if mc1_oob_castle_inert("quota") && self.ent[i].f26 >= 8 {
+            (0usize, 0usize) // probe: OOB level ⇒ retail's culled fleet
+        } else {
+            FLEET[self.ent[i].f26.clamp(0, 7) as usize]
+        };
         // MC2's dispatcher twin (sub_60400 EF:61405) has not been
         // register-verified against the binary, so it keeps the live-
         // census stand-in: an empty register plus the adoption pass
@@ -10382,6 +10506,15 @@ impl Gen {
     /// same law at 3000 → 3×1000, residual 0.
     fn castle_downgrade(&mut self, i: usize) {
         let lvl0 = self.ent[i].f26;
+        // ⚠ PROBE ONLY — see [`mc1_oob_castle_inert`]. The state
+        // handback still runs (retail's OOB teardown still parks the
+        // 5-tick repaint timer, which is what mints the (10,42)); the
+        // ejector, the ladder/HP reset and the un-stamp do not.
+        if mc1_oob_castle_inert("teardown") && lvl0 >= 8 {
+            self.ent[i].f50 = 5;
+            self.ent[i].f59 = 0;
+            return;
+        }
         let (x, y, site_z) = {
             let e = &self.ent[i];
             (e.x, e.y, e.site_z)
@@ -13264,6 +13397,88 @@ mod tests {
             "PAINT_AC[5] — the PRE-step quad 10/14/14/10 vote. \
              Applying the heights first votes 1 and paints the \
              creature-blocking type 27 (0x1b) instead."
+        );
+    }
+
+    /// ⭐ **AN OUT-OF-LADDER BUILD ROW PAINTS NOTHING — `+71` IS
+    /// SIGNED.** `sub_24DA0`'s painter body loads the row with
+    /// `movsbl 0x47(%ebp)` (CARPET.EXE file 0x40E62 / 0x40E82 /
+    /// 0x40EAF / 0x40ECF, VA 0x2866A / 0x2868A / 0x286B7 / 0x286D7)
+    /// and its per-row goal fill continues under a SIGNED compare
+    /// (`movsbl 0x47(%ebp),%edx / mov 0x50(%esp),%al / cmp %edx,%eax
+    /// / jle`, file 0x41203 = VA 0x28A0B; remc1 sub_main.cpp:30538-40
+    /// `if (i > *(char *)(a1 + 71)) break;`). Row 250 is therefore
+    /// −6: the loop runs zero times, the `memset`-zero delta buffer
+    /// is never filled and the apply sweep writes NO height. The port
+    /// clamped `.min(8)` and painted a level-8 castle every work tick
+    /// — the whole `field:z` family of the mc1l45-froze /
+    /// mc1l26-froze level-250 tails. See
+    /// [`mc1_no_castle_row_signed`].
+    #[test]
+    fn an_out_of_ladder_build_row_paints_nothing() {
+        let dat: Vec<u8> = vec![
+            3, 0x51, 0x56, 0x51, 0, //
+            3, 0x51, 0x52, 0x51, 0, //
+            3, 0x51, 0x51, 0x51, 0, //
+        ];
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|_| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                e.push(3);
+                e.push(3);
+                e
+            })
+            .collect();
+        let mut grid = vec![31u8; 1024];
+        grid[15 * 32 + 15] = 0;
+        let assets = FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+
+        let paint = |row: u8| {
+            let mut g = Gen::new(
+                flat_land(10),
+                assets.clone(),
+                1,
+                ChassisParams::MC1,
+                VerbSet::MC1,
+            );
+            g.t.height[tile(16, 15)] = 14;
+            g.t.height[tile(16, 16)] = 14;
+            let before = g.t.height.clone();
+            let i = g.new_event().unwrap();
+            {
+                let e = &mut g.ent[i];
+                e.class64 = 10;
+                e.model65 = 42;
+                e.flags = 2; // init already run; NO 0x10000 kill bit
+                e.f26 = 2; // post-decrement 1 => divisor 1, paint tick
+                e.f71 = row;
+                e.x = 16 * 256;
+                e.y = 16 * 256;
+                e.z = 10 * 32;
+            }
+            g.tick_castle_painter(i);
+            (before, g)
+        };
+
+        // POSITIVE CONTROL — row 1 is in the ladder and still paints.
+        let (before, g) = paint(1);
+        assert_ne!(
+            g.t.height, before,
+            "positive control: an in-ladder row still sculpts"
+        );
+
+        // Row 250 = (signed char) -6 — retail's loop runs zero times.
+        let (before, g) = paint(250);
+        assert_eq!(
+            g.t.height, before,
+            "row 250 is NEGATIVE as a signed byte: no goal row is \
+             walked, so the painter writes no height at all"
+        );
+        assert_eq!(
+            g.t.height[tile(16, 15)],
+            14,
+            "the NE corner is untouched (the .min(8) clamp raised it \
+             to 30 — the level-8 footprint the port used to paint)"
         );
     }
 

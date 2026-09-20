@@ -239,6 +239,173 @@ seizure tests stay green. The old `MGC_NO_MC1_TRAIL_SELF_SEIZE` is kept as a syn
 head-inserted in the caller's tile before moving to tile 0 (retail links it once); `unlink`'s `player_chain`
 bookkeeping can see that transient. A `link`-level "zero on alias" would avoid it.
 
+### 159-10 ⭐⭐⭐ THE DEVIATION AUDIT (the player's question) — **A WIDE RULE *CAN* HIDE A FIXABLE LAW, AND ONE DID**
+The player asked, after the session-end sweep moved three already-certified rows: *"it probably means we registered some
+known deviations even though they were fixable. What about the rest?"* The three moved rows split TWO ways and the
+distinction is the whole answer: **mc1l26-froze went `roster` 730 → 729** — a row a REGISTERED rule was excusing turned
+out to be an ordinary port bug, closed by `MGC_NO_MC1_CASTLE_LEVELER_GROUND` with nobody looking for it — while mc1l48 /
+mc1l48-nodeath moved only in `devs` (48 → 46, 29 → 27), i.e. open unregistered heads. ⭐ **THE DETECTION ALREADY EXISTS
+AND IT IS THE BASELINE ROW, NOT THE RULE**: `brief-baseline.txt` records `roster=N`, so the session-end sweep diff is what
+caught the shrink; the roster schema has no count field and cannot notice one. **Rule census (39 rules)**: only TWO are
+WIDE (`t_min` alone, no kind/class/field/slot/tick scope) — both `*-level-250-castle-oob` — and they excuse 729 + 292
+segments wholesale. What each rule hides, measured by re-running with `--no-roster`: mc1l48 horizon 14325 → **9785** (541
+boundaries), mc1l48-nodeath 195, mc1l26-froze 729, mc1l45-froze 292, mc1l43 9, mc2l24 9, mc1l34 3. ⚠ **DEAD RULES** — the
+take grades IDENTICALLY with and without them, so they match nothing at all: mc1l0 (4 `capture` rules), mc1hwl0 (~7),
+mc2l0, mc2l4, mc2l30, mc1l32's `stuck-explosion-wedge`. A dead rule is a standing blind spot that would absorb a future
+regression of its own shape; ⚖ retiring them is a player ruling, owed. **Four digs then walked the excused rows with the
+roster OFF (159-11..159-13). The verdict: no further hidden law — but the wound attributions got much stronger, and one
+of them broke a certification blocker open.**
+
+### 159-11 ⭐⭐⭐ w159f — mc1l48's BLOCKER IS THE REGISTERED WOUND TRAVELLING DOWN AN **UNGRADED LANE**
+The take's roster-ON horizon head (**t=14326 `(5,8)` slot 61 z 1427/1421**, unmoved since round 118) is not a port defect:
+it is the registered BUILD.DAT damage carried 362 ticks by **pool slot 0's `+4` — the fake-collapse scratch LCG, which no
+graded channel watches** (`verify.rs:943` skips slot 0 via `.enumerate().skip(1)`, and `replay.rs:3867-70` skips every
+`class64 == 0` record — the scratch is doubly invisible). ⭐ **CAPTURE-BASED PROOF THAT THE DAMAGE IS RETAIL'S, WITH NO
+RECONSTRUCTION** (main session re-verified every number): at t=13938 Vodor's level-7 castle at (143,75) is demolished and
+`sub_28FE0` walks 48×48 spending slot 0's `+4`; the recording has slot 0 `rand` = **0 at t=13937 AND 0 at t=13938** —
+retail made **ZERO draws** — while the port, free-running from t=13937 with a BIT-IDENTICAL terrain plane (plane census: 0
+dirty cells), makes **8** (`MGC_COLLAPSE_PROBE`: `rand 0 -> 1817417080 draws=8`). All 8 come from exactly four cells, at
+BUILD1-0.DAT offsets **6569 (143,61), 6570 (144,61), 7969 (143,89), 7970 (144,89)** — the registered damaged-byte list
+verbatim — while controls 6550/6551/6588 carrying the same shipped `65 55` pair draw nothing. The wall arm (`CARPET.EXE`
+file 0x41AC8-0x41B5F) forces the draw: `test %dl,%dl; je` (lo==0 skips), `dec %dh` + `lea 0x0(,%ecx,4),%ecx` ⇒ **full =
+4·(lo−1)** (×4, not ×8 — the only arithmetic alternative, refuted from the bytes), `cmp; jle` → store 0, else
+`imul $0x24a1 … add $0x24df` into the record's `+4`. With h=24 on both sides and the shipped byte 0x65 (lo=5 ⇒ full=16),
+24 > 16 **forces** a draw — retail drew none, so retail's in-memory row-7 bytes are not the shipped ones. **ANCHOR BISECT
+(main session re-ran it)**: anchoring the free run at t=13937 reproduces the head; at t=13938 — one tick later, after the
+collapse — the head is GONE (horizon 14325 → 14393). Emulating just those 4 bytes with the tree's own
+`MGC_BUILD_DAT_DAMAGE` probe makes the port draw 0 like retail, drops the t=14300 height drift from 18 dirty cells to 0,
+and **displaces three of the take's 46 OPEN devs (14326, 31221, 33027) plus makes two registered rules VACUOUS**
+(`-bottom-gate` 4/4 rows, `-top-wall-pose` 2/1) — they were never independent port defects. ⏭ **RECOMMENDATION (player
+ruling owed)**: grade the scratch lane, or at least emit `LCG-distance(slot0.rand)` as a channel — the oracle already
+exists (`MGC_COLLAPSE_PROBE`) and nothing calls it in the graded path; it would have turned t=14326 into a LOCAL head at
+t=13938 with a one-line diagnosis. ⚠ that is a harness-GRADING change and owes the fixture suite. Also: the scratch draw
+count is a **per-collapse scalar oracle read straight from the capture**, which turns reconstructing retail's damaged row
+7 into a constrained search — the focused dig this family has been owed since round 120.
+⭐ Independent whole-take re-proof of the search-ring rule: **11,523 of 11,539** x/y rows are exact multiples of 160 world
+units (the ring-cell pitch) allowing the map wrap, and **all 16 exceptions are non-`(10,0)`** ⇒ identical jitter draws,
+only the ring table entry differed. Do not re-litigate that rule.
+
+### 159-14 ⭐⭐⭐ w159h — **THE ANSWER TO THE PLAYER'S QUESTION: A SECOND FIXABLE LAW *WAS* HIDING IN A WIDE RULE** (`MGC_NO_MC1_CASTLE_ROW_SIGNED`)
+**THE CASTLE BUILD ROW `+71` IS SIGNED.** Retail's m42 painter reads it as `*(char *)(a1 + 71)` and runs the per-row goal
+fill under a SIGNED compare (`for (i = 1; ; ++i) if (i > *(char *)(a1 + 71)) break;`, :30538-40; banner `//----- (00024DA0)`
+:28030). A row >= 128 is NEGATIVE, so the fill loop runs **zero times**, the memset-zero delta buffer is never filled and
+the apply sweep writes no height at all — **retail's corrupted castle paints NOTHING**. The port read `+71` as `u8` and
+clamped it `.min(8)`, so at level 250 it painted a full level-8 footprint EVERY work tick, dragging the ground under the
+castle down one height byte per tick (`z 4768 → 4736 → … → 4224`) and taking every entity that samples ground there with
+it. Main session re-verified the bytes in the shipped `CARPET.EXE` (file = VA + 0x187F8): file **0x41203 `0f be 55 47`
+= `movsbl 0x47(%ebp),%edx`**, then `8a 44 24 50` (`i`, zero-extended) / `39 d0 cmp` / `0f 8e jle` — a SIGNED compare;
+`0f be` is `movsbl`, never `movzbl`. The same quad appears at file 0x40E62 (the build-tab width/height reads) and at
+0x40A3E (the m41 leveler's twin read), so `+71` is signed throughout the family — NOT a one-call-path claim. ⭐ The port's
+own comment directly above the clamp already said **"Row = level verbatim (retail never clamps it)"**: the comment was
+right and the code contradicted it. Landed as `mc1_build_row(f71) = (f71 as i8).max(0).min(8)` at both painter sites,
+with the unit test `an_out_of_ladder_build_row_paints_nothing` carrying a POSITIVE CONTROL (row 1 still sculpts).
+**MEASURED**: mc1l45-froze 293 → **205** segments (roster 292 → **204**, `field:z` rows 460 → 282) and mc1l26-froze 730 →
+**685** (roster 729 → **684**) — **133 excused segments now do not EXIST rather than being excused** — both takes still
+END, the horizons unchanged, the 97-take sweep moving only those two rows, fixtures 625/625, gate 1,217/0/4, and the kill
+switch reproducing the old reports byte-identically. ⚠ LIMITS, stated plainly: rows 8..=127 stay unmodelled (retail walks
+off the end of an 8-row table there, which needs a memory image), and `castle_downgrade`'s `f71 = lvl0.min(8)`,
+`CASTLE_HP[min(7)]`, `FLEET[clamp(0,7)]` and the leveler's `build_tab[f71 % len]` are left alone as genuine OOB stand-ins —
+only the painter's zero-iteration loop is exactly modellable, and only that was landed.
+⭐⭐⭐ **THE LESSON, AND IT IS THE ROUND'S BIGGEST**: w159i had just certified the twin take's tail as "100 % registered
+storm, no hidden law" — a careful dig with a probe, a clean bisect and two bit-exact control windows — and it was WRONG,
+because its probe SILENCED the painter instead of asking why the painter ran at all. **A WIDE RULE HIDES ITS OWN
+MECHANISM: you cannot find a law in rows you have already agreed not to look at, and a probe that suppresses the symptom
+suppresses the evidence with it.** The two digs were briefed on twin takes for exactly this reason, and only the
+disagreement surfaced it. The rule's storm census stands; its "nothing else is in here" did not.
+⏭ w159h also leaves `MGC_MC1_OOB_CASTLE_INERT=quota|teardown|paint` in the tree as a STANDING INSTRUMENT (clearly marked a
+measurement device, never a landing) plus a 35-second re-check for the wide rules: the clean-seeded slice
+`mc1l45-froze 28060..28506` must replay BIT-EXACT under the probe. Family assignment it measured: the `quota` arm
+(`FLEET[f26.clamp(0,7)]`) alone zeroes `extra (3,3)` 379, `(5,15)` 139 — ⭐ those creatures are the castle's OWN guard
+fleet, not balloon cargo — `(10,6)` 45, `(10,13)` 26, `(10,0)` 25 and the x/y/class/model/id/life slot-allocation skew
+behind them.
+
+### 159-15 ⚖ w159j — mc1l6: THE LAST OPEN MC1 TAKE, NOW FULLY ATTRIBUTED (ruling owed)
+All four heads (pairs 11780, 22560, 27825, 28753) are ONE wound with two readers — the castle painter `sub_285C0`
+(:30445, file 0x40DB8; `goal = 4*(lo-1) + target`, the port's `fill_castle_goal_row` matching byte for byte) and the
+collapse walker `sub_28FE0` — on **five build-row-5 bytes** (dat offsets 2736-2739, 2750). The dig closed the two evidence
+gaps that kept the rule `open`: (1) a **CONTROL TAKE that grades the identical five cells** — `mc1l0-bigcastle` raises a
+castle through levels 5/6/7 at (51,243) where build rows 6/7 are all-zero, so row 5's pads survive, and retail's own truth
+channel there converges to exactly the port's shipped-byte model, 1,088 ticks with `hdiff=0`; (2) the asset is **CRC-
+verified against the ISO original** (DATA/BUILD0-0.DAT extracted from `CARPET.CD/game.gog`, RNC ulen 18761 / ucrc
+**0x6522**, matching the baked `build.dat.bin` exactly) — so the port's unpack is byte-perfect; and (3) **no byte with low
+nibble 15 exists anywhere in build rows 1..8** of either BUILD0-0 or BUILD1-0, so retail's `target+56` goal cannot come
+from the asset at any offset. Main session re-verified the collapse arithmetic independently: the recording's slot-0
+`rand` 3474761351 → 829763812 is **exactly 899 draws** of `x*9377+9439`, against the port's 895 — the four extra cells.
+With the wound emulated the take is **1 segment / 0 excess resets / 39,754 ticks / zero divergence**, and the height plane
+is bit-identical to retail's truth channel on every tick. ⚠ It also REFUTES the note's own 2026-09-09 amendment: the
+damaged image is **not** "per-instance and constant in time" — four bytes are constant across both sites and all three
+builds while byte **2750 is re-scribbled between t=11733 and t=27748** (lo 4 → 7), which is load-bearing (forcing it
+either way re-opens a head or leaves a permanent ungraded plane drift). ⚖ **RULING OWED**: flip
+`mc1l6-build-row5-dat-damage-ground-reads` from `open` to `deviation` (the take then reads END), and correct that
+amendment. The main session did NOT flip it — mc1l6's `open` status is the player's own standing ruling.
+🔧 Instrument note: `MGC_PLANE_DIFF=<t0>:<t1>` (`replay.rs:2272`) is under-used — it printed this wound's born tick and its
+exact five cells in ONE run. Any `z` head classified INHERITED should get it first.
+
+### 159-12 ✅ w159g — mc1l48-nodeath: NO HIDDEN LAW, and round 120's mechanism CORRECTED
+All 222 excused heads are residue of the same two wounds, now provable by INVARIANT rather than by argument: the ring
+family solves `Δx ≡ Δy ≡ 0 (mod 160)` in u16-wrap space **167/167**, and **30/30** LOCAL ground heads land on a tick where
+retail's own terrain channel writes that entity's own cell. The height and type planes are **BIT-PERFECT for t=1..9715**
+(`MGC_PLANE_CENSUS`); the first drift is t=9716, inside the registered top-wall rect. The brief's "(5,15) mover/steering
+law" framing is REFUTED — that pair is clean in every lane. ⭐ **CORRECTION to `mc1l48-port-repaints-razed-build-course`'s
+round-120 note**: it is NOT "retail razes, the port re-raises". Measured with `MGC_CELL_TRACE`, **both** engines raze at
+t=9716-9740 and **both** rebuild at t=9861+; the port merely PAINTS ONE INTERIOR CELL (161,61) that retail's painter
+omits, while raising both immediate neighbours (161,62)/(162,61) bit-identically — a painter bug cannot skip one interior
+cell and get its neighbours right, which argues FOR the damaged-byte attribution and against the port-defect reading the
+rule's title still carries. Scope facts: the heading heads are **FIVE, not three** (add pairs 18204 slot 984 and 20968
+slot 755); the wound is **NOT confined to the registered rects** (pair 20968's guard at (210.50, 51.96) — the port builds
+a wall at (210,50) that retail never builds, a THIRD castle site, so any rect-scoped rule keeps leaking); and pair 15047
+is a **POSE** head, which a field-only rule can never match. ⭐⭐ **BANKED REPRODUCER, main-session verified**:
+`conform slice recordings/mc1l48-nodeath.mgcr --from 9840 --to 10600` replays in ~1 s and reproduces the certification
+blocker (horizon 10580, sig `(5,15)slot539:y,heading`), while the same slice from **9880 is BIT-EXACT** ⇒ the cause is
+born in the REBUILD window [9840, 9880], not the raze. The round-120 focused dig no longer needs a 48k-tick replay.
+
+### 159-13 ✅ w159i — mc1l26-froze's 729 EXCUSED SEGMENTS: NO HIDDEN LAW, and the MECHANISM finally named
+The two windows where the storm cannot be the explanation are **bit-exact**: pairs < 25646 (25,646 clean boundaries) and
+the 5,064-tick window BETWEEN the two roots (t=25647..30709, 5,063 clean). So all 729 sit at pair 25646 and ≥ 30710. A
+sandbox probe making a level ≥ 8 castle/painter/leveler inert — provably a no-op on any sane castle (`FLEET` has 8 rungs
+and the upgrade request is gated `f26 < 7`) — collapses the tail **729 → 155 → 86** excess resets and makes t=30711..31424
+bit-exact (712 of 713 clean). ATTRIBUTION: the **balloon fleet** via `FLEET[f26.clamp(0,7)]` (`features.rs:9435`) = **574
+of 729 (78.7 %)**; the **crater** = 69 more plus the 1,728 `z` rows — the port's `(10,42)` painter reads `f71.min(8)` and
+`build_tab[lvl % len]` and stamps a REAL level-8 footprint at the corrupted origin (traced: `tile=(0,0) h 160 += 37`),
+lifting the heightmap so every crater `(10,6)` re-grounds **+32** (`combat.rs:7529` `z = ground_z + f46`) AND
+`eruption_tick`'s FAITHFUL ground-changed suicide reaps the erupting volcano 976 (`flags` retail 0 / port 1024, ×7), so
+the port stops lobbing `(10,16)` lava bombs where retail keeps going. ⭐ **those three `.clamp` / `.min` / `%` arms are
+MEMORY-SAFETY STAND-INS for retail's OOB table reads** — unfixable without a memory image of what retail read past the end
+— **but they are the mechanism of the entire tail and were never written down**. mc1l45-froze is the same shape (292 → 52
+under the same probe). ⏭ Both digs recommend SPLITTING the two wide rules by mechanism (root / fleet / crater) and bounding
+them with `t_max`; ⚖ player ruling owed.
+
+### 159-16 ⚖✅ THE THREE RULINGS LANDED (player, 2026-09-19/20) — mc1l6 CERTIFIED, 20 DEAD RULES RETIRED, BOTH WIDE RULES BOUNDED
+The player ruled on the audit: *"Let's do 1-3 here, and leave the collapse scratch lane for the next session."*
+1. **`mc1l6-build-row5-dat-damage-ground-reads`: `open` → `deviation`** on w159j's evidence (159-15). **mc1l6 now reads
+   `horizon=END`** (5 segments, roster 4, devs 0) — **the last OPEN MC1 take is closed**. The note's 2026-09-09 amendment
+   is WITHDRAWN in place: the damage is NOT "per-instance and constant in time"; four bytes (2736-2739) are constant across
+   both sites and all three builds while **byte 2750 is re-scribbled mid-run** (lo 4 → 7 between the t=11733 and t=27748
+   builds at the SAME site). ⭐⭐⭐ **THE GRADED LANES COULD NOT SETTLE IT AND THE UNGRADED PLANE DID** (main session
+   measured both arms): one value per site reaches `horizon=END` just as the two-phase image does, but leaves the height
+   plane wrong for **66 ticks from exactly t=27748 at cell (27,17)** (`MGC_PLANE_DIFF` → `hdiff=1 [(27,17,52,53)]`
+   climbing), while the two-phase image is `hdiff=0` on **every one of the 39,754 ticks**. A take can be END and still be
+   modelled wrong; only an ungraded channel showed it.
+2. **TWENTY DEAD RULES RETIRED** — measured vacuous, i.e. the take grades BYTE-IDENTICALLY with and without them: 
+   `mc1l0-cast-impacts`, `-extra`, `mc1l0-hit-flash`, `mc1l0-terrain-z`, `mc1-guard-terrain`, `mc1hwl0-terrain-z`,
+   `mc1hw-speed-contrail-missing`, `-extra`, `mc1hw-lightning-node-{life,maxlife,x,y}`, `mc1hw-fire-churn-{heading,x,y,rand}`,
+   `mc1-smoke-puff-fields`, `mc1hw-standing-fire-churn-{x,y}`, `mc1l32-stuck-explosion-wedge` (39 rules → **19**). All six
+   affected takes re-measured IDENTICAL afterwards. ⚠ Three MC2 rules that also list a DEAD take were **kept** because they
+   still list the LIVE `mc2l24`: `mc2-fire-churn-m0`, `mc2-cast-timing-fields`, `mc2-walker-ground-z` — a rule is only dead
+   when EVERY take it names is. (Take matching is exact string equality, `roster.rs:151`.) The full notes stay recoverable
+   in git history. ⭐ **A DEAD RULE IS A STANDING BLIND SPOT**: it excuses nothing today and would silently absorb a future
+   regression of its own shape.
+3. **BOTH WIDE RULES BOUNDED AND CLOSED OUT**: `t_max` added (mc1l45-froze 28505, mc1l26-froze 31914) so neither window can
+   silently grow if a take is re-cut, and each note now carries the MEASURED mechanism split, the row/segment counts as a
+   tripwire, and the 35-second re-check (`MGC_MC1_OOB_CASTLE_INERT` on the clean-seeded slice must be BIT-EXACT) to run
+   BEFORE ever widening them. ⚠ Neither can usefully be scoped by `field`/`slots`/`class`/`rect`: the residue is
+   slot-allocation skew landing on arbitrary classes across 180+ slots, so a tight scope would either re-hide the same set
+   or start failing the take. ⏭ **DEFERRED to the next session by the player: grading the collapse scratch lane** (pool
+   slot 0's `+4`, 159-11) — a harness-GRADING change that owes the full fixture suite.
+**STATE AFTER THE RULINGS**: sweep 97 rows with only mc1l6 moved, gate **1,217 / 0 / 4**, fixtures **625 / 625**, terrain
+96 IDENTICAL · 0 DIFFERENT · 1 ERROR. The only takes not at END are `mc1l48`, `mc1l48-nodeath`, `mc1l49` (player-ruled
+open, and 159-11/159-12 now hand each of them a cheap reproducer) and `mc1l32-terrainless` (no terrain plane by design).
+
 ### 159-7 ⚖ mc1l45-froze's TAIL REGISTERED (`mc1l45-froze-level-250-castle-oob`)
 The take's other 292 segments are round 158's level-250 castle freeze (castle 966 kicked at t=27730 by the stale volcano
 `erupting` register, downgrading to 245 where retail's collapse walker never returns), the same registered class as
