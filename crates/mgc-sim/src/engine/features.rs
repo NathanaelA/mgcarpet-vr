@@ -2742,6 +2742,48 @@ fn mc1_no_row0_shim_109() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_ROW0_SHIM_109").is_some())
 }
 
+/// `MGC_ROW0_SHIM_CLASS="117=build,225=plain"` — THE ROW-0 SHIM
+/// INSTRUMENT (round 162, dig w162c). Overrides the class of any
+/// [`Gen::OOB_TYPE_SHIM`] entry for one run: `plain` returns 0,
+/// `build` returns a representative 22.
+///
+/// This family has outgrown one env var per byte. The shim models
+/// retail's OOB read below the type plane (`sub_360C0`'s quad gate),
+/// and round 155 identified the bytes as the SOUND DRIVER's pointer
+/// block — {109} the card I/O port, {101} `dword_CC144` the last
+/// digital-sample handle, {117} `dword_CC154` and {225}
+/// `dword_CC1C0` the loaded sound table's BEGIN and END heap
+/// pointers. The heap pointers are 16-aligned malloc results, so
+/// their low byte is a per-SESSION value that is building-classed
+/// (6..=0x22) only when the load happened to land on 0x10 or 0x20 —
+/// which is why takes CONTRADICT each other on them and the roster
+/// carries per-take deviation rows (`mc1l34-row0-shim-*`,
+/// `mc1l43-row0-shim-*`, `mc1hwl*-row0-shim-*`). Attributing the
+/// next one means flipping one index for one take and measuring;
+/// this is that instrument.
+fn row0_shim_override(i: usize) -> Option<u8> {
+    static V: std::sync::OnceLock<Vec<(usize, u8)>> = std::sync::OnceLock::new();
+    let v = V.get_or_init(|| {
+        std::env::var("MGC_ROW0_SHIM_CLASS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|e| {
+                        let (k, c) = e.split_once('=')?;
+                        let k = k.trim().parse().ok()?;
+                        match c.trim() {
+                            "plain" => Some((k, 0u8)),
+                            "build" => Some((k, 22u8)),
+                            _ => None,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    v.iter().find(|(k, _)| *k == i).map(|(_, c)| *c)
+}
+
 /// `MGC_NO_MC1_ROW0_SHIM_227=1` drops shim byte {227} back to PLAIN,
 /// restoring the pre-dig smoother on the row-0 cells x=226 and x=227.
 /// See [`Gen::OOB_TYPE_SHIM`].
@@ -11768,6 +11810,9 @@ impl Gen {
                     return 0;
                 }
 
+                if let Some(c) = row0_shim_override((idx + 257) as usize) {
+                    return c;
+                }
                 Self::OOB_TYPE_SHIM[(idx + 257) as usize]
             } else {
                 self.t.tile_type[idx as usize]

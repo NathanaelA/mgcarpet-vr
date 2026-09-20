@@ -5853,14 +5853,53 @@ impl World {
     /// The MC1/HW WIZARD PASS — retail's sub_45C90 leg at the
     /// carpet's pool slot: the per-hand cast commands (sub_46840's
     /// tail :55825-34; the demolish word :55837-39 REPLACES them) and
-    /// the wizard mana step (:55385-421). Runs at the recorded carpet
-    /// slot under a conformance import, post-walk natively — in both
-    /// cases AFTER every spell token's own tick, which is the whole
-    /// cast-phase law: a fresh arm can never fire the same frame, and
-    /// a token's same-frame mana write (fire debit / mid-burst
-    /// zeroing) is applied by THIS step before the recompute
-    /// (l0 trace: the debit and the spawn surface on the same record,
-    /// with the delta already re-armed to +100).
+    /// the wizard mana step (:55385-421). Runs at the carpet's own
+    /// walk slot — `sub_45C90` calls `sub_46840` at :55351, INSIDE
+    /// the dispatch, before the mover.
+    ///
+    /// ⭐⭐⭐ **THE CAST PHASE IS SLOT ARITHMETIC, NOT A LAW** (round
+    /// 162, w162a). The command only ARMS (`+48 := +50`, the pure
+    /// assignment at `sub_46B00` :55893 — no fire, no spawn, no mana
+    /// write on any path); the token FIRES at its OWN walk slot, and
+    /// the pool walk is one plain ASCENDING pass. So the phase is
+    /// decided by the token's slot against the carpet's:
+    ///
+    /// * token slot **>** carpet slot ⇒ reached later in the SAME lap
+    ///   ⇒ **fires on the press tick**;
+    /// * token slot **<** carpet slot ⇒ the walk already passed it
+    ///   ⇒ **fires at arm+1**.
+    ///
+    /// ⚠⚠ THE OLD UNCONDITIONAL WORDING HERE ("a fresh arm can never
+    /// fire the same frame") WAS FALSE. It was generalised from the
+    /// only two takes in the corpus whose book sits BELOW the carpet
+    /// (mc1l0 carpet 630, book at 28/139/305; mc1l32 carpet 14, book
+    /// at 6/8/9/11 — both re-popped from the LIFO free stack after a
+    /// death). The level build pops the carpet and THEN the book, so
+    /// most shipped levels have the book ABOVE and fire same-lap; and
+    /// ONE LEVEL CAN STRADDLE (mc1l47 carpet 29, tokens 1..14 below
+    /// and 31/32/33 above), so two spells in one hand can legitimately
+    /// run different cast phases.
+    ///
+    /// RETAIL WITNESS — BOTH ARMS IN ONE TAKE, `recordings/mc1l3.mgcr`,
+    /// carpet slot 579 (verified here with `dump-state`):
+    /// ```text
+    /// ABOVE  t=6  slot 581 (12,3) f48 0, f50 3      ; unarmed
+    ///        t=7  slot 581        f48 2             ; armed to 3, FIRED, decremented
+    ///        t=7  slot 147 class64 0 -> 9, id24 579 ; the ball, SAME tick
+    /// BELOW  t=4275 slot 34 (12,4) f48 0 -> 251     ; armed FULL, nothing fired
+    ///        t=4276 slot 34        f48 251 -> 250   ; fires HERE, at arm+1
+    /// ```
+    /// A token's mana write is applied by THIS step, and that phase
+    /// moves with it: ABOVE-carpet the token stamps the delta and the
+    /// wizard pass applies it at press+1 (mc1l3 carpet 579: `f132`
+    /// 100 -> -50 at t=7 with `f140` still 1000, then `f140` 1000 ->
+    /// 950 at t=8); BELOW-carpet the debit and the spawn surface on
+    /// the same record, which is the old l0 trace.
+    ///
+    /// ⚠ FIELD-NAME TRAP: for a CLASS-12 record the port's `Ent::f26`
+    /// holds retail's **`+48`**, not `+26` (`conformance.rs`: `f26: if
+    /// r.class64 == 12 { r.f48 as i16 }`), so when reading retail
+    /// records in `dump-state` output compare **`f48` against `f50`**.
     fn mc1_wizard_pass(
         &mut self,
         alive: bool,
@@ -8801,10 +8840,12 @@ impl World {
                 wt_check!(format!("carpet_dispatch (mc2, slot {i})"));
             }
             // The MC1 twin (sub_45C90, the class-3 carpet dispatch):
-            // the wizard pass anchors at the recorded carpet slot —
-            // above every spell token, so a fresh arm can never fire
-            // the same frame and a token's mana write applies the
-            // SAME frame (the l0 trace: debit visible with the spawn).
+            // the wizard pass anchors at the carpet's walk slot. ⚠ It
+            // is NOT above every spell token — the level build pops
+            // the carpet and THEN the book, so the book is usually
+            // ABOVE it and a fresh arm DOES fire the same frame. The
+            // phase is slot-relative; see `mc1_wizard_pass` for the
+            // mc1l3 witness of both arms (round 162, w162a).
             // Retail's dispatch semantics: the at-castle test
             // (:55345-52) reads the PRE-move pose; the mailbox block
             // (:55344-78) runs BEFORE the move (sub_455D0 is the
@@ -16798,10 +16839,15 @@ impl World {
     /// sub_55E80 delta debit, suppresses regen on mid-burst ticks,
     /// and decrements LAST; the continuous/toggle effects derive from
     /// the post-decrement counter. The human's cast command only ARMS
-    /// (f26 = count) — from the wizard pass ABOVE the token slots —
-    /// so a fresh arm always fires here one frame later, which is the
-    /// corpus-pinned cast phase (257/257 l0 + 371/371 l32 arms:
-    /// spawn at arm+1).
+    /// (f26 = count) from the wizard pass at the CARPET's walk slot,
+    /// so whether a fresh arm fires here in the same lap or at arm+1
+    /// depends on THIS token's slot against the carpet's — the walk
+    /// is ascending, so above ⇒ same tick, below ⇒ arm+1. ⚠ The old
+    /// "always fires one frame later" reading was generalised from
+    /// the only two BELOW-carpet takes in the corpus (257/257 l0 +
+    /// 371/371 l32); it is not the general law. See
+    /// [`World::mc1_wizard_pass`] for the mc1l3 witness of both arms
+    /// (round 162, w162a).
     fn manifestation_tick(&mut self, i: usize, spell: usize, ctx: &MobCtx) {
         // CASTLE (16): the fresh arm fires the ball from the token
         // (sub_57610 :65862-924: gate → debit → spawn → `+48 = +50 −
@@ -24711,6 +24757,75 @@ mod tests {
         PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0, 0.0, 0.0)
     }
 
+    /// ⚖ RE-SEAT THE CONSTRUCTOR'S CARPET ABOVE THE FIXTURE'S OWN
+    /// WORLD (round 162, w162b — the fixture half of round 161's
+    /// marker-less human seat).
+    ///
+    /// `World::new` mints the human's record straight after the
+    /// level's disposition-0 THINGs, so in a SHIPPED level the carpet
+    /// is the LAST pop before the spell book and every authored
+    /// castle, dolmen, house, stone and creature walks BELOW it.
+    /// Measured on the corpus (`init-check` / `dump-state`): mc1l0
+    /// carpet **630** of 629 live (nothing above it at all), mc1l5
+    /// **650** with the standing stones under it and the book at
+    /// 651.., mc1l20 **482** just over the 470..481 vortex ring,
+    /// mc1l42 **331** just over the balloons.
+    ///
+    /// A fixture that builds its world with `new_event`/`spawn_*`
+    /// AFTER the constructor puts ALL of it ABOVE the carpet instead —
+    /// which no level does. That matters because the carpet's walk
+    /// slot is the phase of the whole command pass
+    /// ([`World::mc1_wizard_pass`]: the demolish word, the mailbox
+    /// redirect, the regen-boost probe), and because pool-slot parity
+    /// drives the castle's `f63` cadences. Call this FIRST, before the
+    /// fixture spawns anything.
+    ///
+    /// The re-seat keeps the IMPORTER's representation — a CLASS-0
+    /// reserved hole, which is what `dump-state --port` shows every
+    /// recorded carpet slot to be — not a class-3 record.
+    /// ⚖ GUARANTEE A POOLED CARPET IN BOTH ARMS OF THE A/B (round
+    /// 162). `flat_world()` and friends author no `(3,4)`, so under
+    /// `MGC_NO_MC1_MARKERLESS_HUMAN_SEAT=1` the constructor seats no
+    /// carpet at all and the fixture falls back to the post-walk
+    /// native arm — a code path no shipped level reaches. A fixture
+    /// that means to pin the ABOVE-carpet cast phase must therefore
+    /// mint the seat itself when the switch has suppressed it, so the
+    /// pool lays out identically either way. Call this BEFORE granting
+    /// the book, so the tokens land above the carpet the way retail's
+    /// level start leaves them.
+    ///
+    /// Use [`reseat_carpet_above`] instead when the fixture wants the
+    /// BELOW-carpet phase (the book under the carpet, arm+1).
+    fn seat_carpet_if_absent(w: &mut World) {
+        if w.mc1_carpet_slot != 0 {
+            return;
+        }
+        let i = w.g.new_event().expect("pool has room");
+        let rand = w.g.ent[i].rand;
+        w.g.ent[i] = crate::engine::features::Ent::default();
+        w.g.ent[i].rand = rand;
+        w.mc1_carpet_slot = i as u16;
+        w.g.mc1_pinned = crate::engine::features::Mc1Pinned(i as u16);
+    }
+
+    fn reseat_carpet_above(w: &mut World) {
+        // Under `MGC_NO_MC1_MARKERLESS_HUMAN_SEAT=1` the constructor
+        // skipped the seat entirely; burn the slot it would have taken
+        // so the fixture's own records land on the same slots in BOTH
+        // arms of the A/B.
+        let old = match w.mc1_carpet_slot as usize {
+            0 => w.g.new_event().expect("pool has room"),
+            s => s,
+        };
+        let i = w.g.new_event().expect("pool has room");
+        let rand = w.g.ent[i].rand;
+        w.g.ent[i] = crate::engine::features::Ent::default();
+        w.g.ent[i].rand = rand;
+        w.mc1_carpet_slot = i as u16;
+        w.g.mc1_pinned = crate::engine::features::Mc1Pinned(i as u16);
+        w.g.free_entity(old);
+    }
+
     /// A PAUSED MC1 turn draws the global LCG once and changes
     /// nothing else — retail's pause test is the SECOND statement of
     /// `sub_41780_41AC0` (:52197), the draw is the first.
@@ -25773,7 +25888,12 @@ mod tests {
     #[test]
     fn the_mc1_wanted_timer_decays_at_the_carpets_walk_slot() {
         let mut w = flat_world();
-        assert_eq!(w.mc1_carpet_slot, 0, "fixture: no marker seats a carpet here");
+        // ⚖ The constructor already seats the carpet (round 161's
+        // marker-less human seat), so this fixture no longer mints its
+        // own — it re-seats the real one above the level's records, the
+        // way a shipped level lays out, and straddles THAT slot.
+        reseat_carpet_above(&mut w);
+        let carpet = w.mc1_carpet_slot as usize;
         // An occupied house (f26 > 2, the arm's own gate, :30790-97)
         // that survives the hit.
         let house = |w: &mut World, x: u16, y: u16| -> usize {
@@ -25795,9 +25915,6 @@ mod tests {
             h
         };
         let lo = house(&mut w, 60, 60);
-        let carpet = w.g.spawn_class3(0, 100 << 8, 100 << 8, 3400).unwrap();
-        w.mc1_carpet_slot = carpet as u16;
-        w.g.mc1_pinned = crate::engine::features::Mc1Pinned(carpet as u16);
         let hi = house(&mut w, 70, 70);
         assert!(lo < carpet && carpet < hi, "fixture: the walk straddles the carpet");
         let pose = PlayerPose::level(100 << 8, 100 << 8, 3400, 0);
@@ -26585,6 +26702,7 @@ mod tests {
     #[test]
     fn dolmen_shrine_boosts_the_parked_human() {
         let mut w = flat_world();
+        reseat_carpet_above(&mut w);
         // away() parks the carpet at tiles (10, 10) — plant the
         // dolmen under it.
         w.g.spawn_scenery(2, 2560, 2560, 3200).expect("dolmen");
@@ -30973,7 +31091,7 @@ mod tests {
         w.g.ent[incremental].class64 = 10;
         w.g.free_entity(incremental);
 
-        w.g.mc1_rebuild_free(0);
+        w.g.mc1_rebuild_free(w.mc1_carpet_slot);
         let after = w.g.new_event().expect("pool has room");
         assert_eq!(after, lo.min(hi), "the rebuild pops the LOWEST free slot");
     }
@@ -31810,6 +31928,7 @@ mod tests {
     #[test]
     fn castle_downgrade_ejects_mana_and_demolish_razes() {
         let mut w = bare_creature_world(2);
+        reseat_carpet_above(&mut w);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
         let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
@@ -31900,6 +32019,7 @@ mod tests {
     #[test]
     fn castle_death_scatters_the_whole_bank_arithmetic_exact() {
         let mut w = bare_creature_world(2);
+        reseat_carpet_above(&mut w);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
         let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
@@ -32358,6 +32478,7 @@ mod tests {
     #[test]
     fn balloon_cull_over_quota_spills_the_cargo() {
         let mut w = bare_creature_world(2);
+        reseat_carpet_above(&mut w);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
         let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
@@ -32446,6 +32567,7 @@ mod tests {
         // Height assertions live in the real-BUILD.DAT integration test
         // (tests/spell_castle.rs).
         let mut w = flat_world();
+        reseat_carpet_above(&mut w);
         let c = w.g.spawn_castle(110 << 8, 110 << 8).unwrap();
         w.g.ent[c].id24 = PLAYER_TARGET;
         w.g.ent[c].f144 = PLAYER_TARGET;
@@ -35463,6 +35585,7 @@ mod tests {
         let lv = w.loadout();
         assert!(!lv.owned.iter().any(|&o| o), "fresh book starts empty");
         assert_eq!((lv.left, lv.right), (None, None));
+        seat_carpet_if_absent(&mut w);
         w.grant_spells(&[0, 3]);
         let lv = w.loadout();
         assert!(lv.owned[0] && lv.owned[3], "granted");
@@ -35476,22 +35599,30 @@ mod tests {
             ..Default::default()
         };
         w.tick(firing_line(), fire);
-        // THE CAST-PHASE LAW: the press only ARMS the spell token
-        // (f26 = count at the wizard pass, above the token slots);
-        // the token's own tick fires one frame later — corpus:
-        // 257/257 l0 + 371/371 l32 arms spawn at arm+1.
-        assert_eq!(count(&w, 9, 0), 0, "the press edge only arms");
+        // ⚖ THE CAST PHASE IS SLOT-RELATIVE (round 162, w162a): the
+        // press ARMS at the CARPET's walk slot and the token FIRES at
+        // its OWN, in one ascending pass. This fixture's carpet is the
+        // constructor's, with the granted book ABOVE it — retail's own
+        // level-start order — so the token is reached later in the
+        // SAME tick and fires on the press. Retail witness: mc1l3 t=7,
+        // token 581 over carpet 579, armed and fired together.
+        assert_eq!(count(&w, 9, 0), 1, "the press tick arms AND fires");
+        // ⚖ THE MANA PHASE MOVES WITH IT, THE OPPOSITE WAY. The token
+        // STAMPS the delta (sub_55E80) and the WIZARD PASS applies it —
+        // and the wizard pass already ran this tick, at the carpet's
+        // slot below. So an above-carpet token's debit surfaces at
+        // press+1: mc1l3 carpet 579 reads `f132` 100 -> -50 at t=7
+        // with `f140` still 1000, then `f140` 1000 -> 950 at t=8. (The
+        // old "debit landed with the spawn" reading is the BELOW-
+        // carpet expression, from the l0 trace.)
         assert_eq!(w.loadout().mana, 1000, "no debit at the command site");
         assert!(w.loadout().cooldown[0] > 0.0, "burst window armed");
-        w.tick(firing_line(), fire); // held: the token fires the arm
-        assert_eq!(count(&w, 9, 0), 1, "the token fires at arm+1");
-        // The debit and the spawn land TOGETHER: the token writes the
-        // delta (sub_55E80) and the wizard pass applies it the same
-        // frame (l0 trace: mana 950 on the spawn record).
+        w.tick(firing_line(), fire); // held: edge-triggered, no refire
+        assert_eq!(count(&w, 9, 0), 1, "fireball is EDGE-triggered: still one");
         assert_eq!(
             w.loadout().mana,
             800,
-            "the full 200 debit landed with the spawn"
+            "the full 200 debit surfaces at press+1"
         );
         // Fireball is EDGE-triggered (autofire is spell 23's alone):
         // holding adds nothing; a fresh press past the burst does.
@@ -36329,6 +36460,16 @@ mod tests {
         // pool (base 1000) can't fund back-to-back 1000-cost arms.
         w.set_dev_spells(true);
         w.grant_all_spells();
+        // ⚖ LAY THE BOOK OUT **BELOW** THE CARPET (round 162, w162a).
+        // The cast phase is slot-relative — arm at the carpet's walk
+        // slot, fire at the token's, one ascending pass — so a token
+        // BELOW the carpet is only reached on the NEXT lap, which is
+        // the two-phase shape this test's mc1l48 t=4899 citation
+        // records (retail's `+48` back at 251, re-armed, not fired).
+        // Re-seating the carpet above the granted book reproduces that
+        // layout; without it the tokens sit above the carpet and the
+        // burst ends in the same tick instead.
+        reseat_carpet_above(&mut w);
         let equip = PlayerCommand {
             equip_left: Some(SpellId(2)),
             equip_right: Some(SpellId(21)),
@@ -36425,6 +36566,16 @@ mod tests {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.grant_spell(SpellId(2));
+        // ⚖ LAY THE BOOK OUT **BELOW** THE CARPET (round 162, w162a).
+        // The cast phase is slot-relative — arm at the carpet's walk
+        // slot, fire at the token's, one ascending pass — so a token
+        // BELOW the carpet is only reached on the NEXT lap, which is
+        // the two-phase shape this test's mc1l48 t=4899 citation
+        // records (retail's `+48` back at 251, re-armed, not fired).
+        // Re-seating the carpet above the granted book reproduces that
+        // layout; without it the tokens sit above the carpet and the
+        // burst ends in the same tick instead.
+        reseat_carpet_above(&mut w);
         let cost = crate::mc1::spells::SPELLS[2].possess_mana;
         // The intrinsic base pool IS one cast (both are 1000), and the
         // ceiling is re-censused every tick from claimed entities, so
@@ -36977,6 +37128,7 @@ mod tests {
     fn possess_homes_on_and_claims_a_mana_ball() {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();
+        seat_carpet_if_absent(&mut w);
         w.set_dev_spells(true);
         w.grant_all_spells();
         w.player.left = Some(SpellId(3));
@@ -36993,9 +37145,15 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(count(&w, 9, 1), 0, "the press arms the token");
+        // ⚖ THE CAST PHASE IS SLOT-RELATIVE (round 162, w162a): the
+        // press ARMS at the CARPET's walk slot and the token FIRES at
+        // its OWN, in one ascending pass. This fixture's carpet is the
+        // constructor's, with the granted book ABOVE it — retail's own
+        // level-start order — so the token is reached later in the
+        // SAME tick and fires on the press. Retail witness: mc1l3 t=7,
+        // token 581 over carpet 579, armed and fired together.
+        assert_eq!(count(&w, 9, 1), 1, "the press tick arms AND launches the lob");
         w.tick(p, PlayerCommand::default());
-        assert_eq!(count(&w, 9, 1), 1, "the possess lob launched at arm+1");
         let mut claimed = false;
         for _ in 0..120 {
             w.tick(p, PlayerCommand::default());
@@ -37555,6 +37713,7 @@ mod tests {
             par3: None,
         }];
         let mut w = World::new(planes, &things, 3, assets());
+        seat_carpet_if_absent(&mut w);
         w.set_dev_spells(true);
         w.grant_all_spells();
         w.player.left = Some(SpellId(3));
@@ -37570,9 +37729,15 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(count(&w, 9, 1), 0, "the press arms the token");
+        // ⚖ THE CAST PHASE IS SLOT-RELATIVE (round 162, w162a): the
+        // press ARMS at the CARPET's walk slot and the token FIRES at
+        // its OWN, in one ascending pass. This fixture's carpet is the
+        // constructor's, with the granted book ABOVE it — retail's own
+        // level-start order — so the token is reached later in the
+        // SAME tick and fires on the press. Retail witness: mc1l3 t=7,
+        // token 581 over carpet 579, armed and fired together.
+        assert_eq!(count(&w, 9, 1), 1, "the press tick arms AND launches the lob");
         w.tick(p, PlayerCommand::default());
-        assert_eq!(count(&w, 9, 1), 1, "the possess lob launched at arm+1");
         let mut claimed = false;
         for _ in 0..120 {
             w.tick(p, PlayerCommand::default());
@@ -37751,6 +37916,17 @@ mod tests {
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.grant_all_spells();
+        // ⚖ LAY THE BOOK OUT **BELOW** THE CARPET (round 162, w162a).
+        // The cast phase is slot-relative — the press ARMS at the
+        // carpet's walk slot and the token FIRES at its own, in one
+        // ascending pass — so "one lap later", which this test is
+        // named for, is the BELOW-carpet arm. That is a real recorded
+        // phase (mc1l0 carpet 630 over its book at 28/139/305;
+        // mc1l32 carpet 14 over 6/8/9/11), and pinning it here keeps
+        // the suite covering BOTH arms: the fireball, possess and
+        // refire_gate fixtures pin the above-carpet one, where the
+        // press tick arms AND fires.
+        reseat_carpet_above(&mut w);
         w.player.left = Some(SpellId(15));
         let p = firing_line();
         let fire = PlayerCommand {
@@ -49303,6 +49479,7 @@ mod tests {
     #[test]
     fn the_at_castle_tick_rearms_grace_and_wipes_stale_mail() {
         let mut w = flat_world();
+        reseat_carpet_above(&mut w);
         let home = away();
         let c = w.g.new_event().expect("castle");
         {
@@ -49721,6 +49898,7 @@ mod tests {
     #[test]
     fn a_corpses_mailbox_accumulates_and_the_respawn_hands_it_to_the_castle() {
         let mut w = flat_world();
+        reseat_carpet_above(&mut w);
         let home = away();
         let c = w.g.new_event().expect("castle");
         {

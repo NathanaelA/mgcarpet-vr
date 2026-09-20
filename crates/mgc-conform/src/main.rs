@@ -1441,11 +1441,48 @@ pub(crate) fn native_settled_world(
         // 30 · shading 57 · angle 65). The kill switches of the seat law
         // (`MGC_NO_MC1_LAST_START_MARKER` / `MGC_NO_MC2_…`) move this
         // pose with it. Round 157, dig w157c.
+        // Round 161, w161d — the harness half of
+        // `mc1::rivals::no_mc1_markerless_human_seat`; set it to
+        // restore the pre-dig seat resolver in full.
+        let pre_w161d_seat = std::env::var_os("MGC_NO_MC1_MARKERLESS_HUMAN_SEAT").is_some();
         let (px, pz) = w
             .debug_start_marker(0)
             .map(|(x, y)| (x as f32 + 0.5, y as f32 + 0.5))
-            .or_else(|| mc2_player_start(&args.baked, &family, level))
-            .unwrap_or((128.5, 128.5));
+            // ⚠⚠ THE MC2 FALLBACK IS MC2's ONLY — IT RESOLVES THE
+            // BAKED TREE FROM THE **FAMILY**, and `Family::Mc1` names
+            // `baked/mc1` for an `mc1hw` take, so a Hidden Worlds level
+            // with no marker was seated from CARPET.EXE's level of the
+            // same NUMBER (round 161, w161d: mc1hwl5 has no `(3,4)`,
+            // and the port's settle carpet stood at mc1 level 5's
+            // marker, tile (144,33) — 144 tiles from retail's). It is
+            // redundant on MC1 anyway: `start_markers[0]` is built from
+            // the very same `(3,4)` THING, out of the right tree.
+            .or_else(|| {
+                (pre_w161d_seat || matches!(family, mgc_formats::mgcr::Family::Mc2))
+                    .then(|| mc2_player_start(&args.baked, &family, level))
+                    .flatten()
+            })
+            // ⚖ THE MC1 MARKER-LESS SEAT IS THE ORIGIN, NOT THE MAP
+            // CENTRE (round 161, w161d — the harness half of
+            // `mc1::rivals::no_mc1_markerless_human_seat`). `sub_40550`
+            // (:51488) memsets `str_9177[]` and `sub_44D30` (:54845)
+            // reads `str_9177[wizard]` unconditionally, so an MC1 level
+            // that authors no `(3,4)` row starts its human at engine
+            // (0, 0) — `HIDDEN.EXE` file 0x5daa7 / 0x59320, file = VA +
+            // 0x18D38. The map-centre stand-in put the settle carpet 126
+            // tiles away from retail's and every trigger volume near the
+            // origin missed: mc1hwl5's `(11,0)` at (2,17) carries
+            // `swi_sz` 64 (a ±16384 box) on disposition 20, and retail's
+            // origin-seated carpet trips it inside the settle window —
+            // 57 THINGs ((5,8)x33, (10,52)x23, one (5,11) genie at
+            // (2,20)) that the port never spawned.
+            .unwrap_or(
+                if matches!(family, mgc_formats::mgcr::Family::Mc1) && !pre_w161d_seat {
+                    (0.0, 0.0)
+                } else {
+                    (128.5, 128.5)
+                },
+            );
         let idle = mgc_sim::engine::world::PlayerCommand::default();
         let settle_alt: f32 = std::env::var("MGC_INIT_SETTLE_ALT")
             .ok()

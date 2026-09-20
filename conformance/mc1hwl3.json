@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1hwl3",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 694,
+   "file": "the-undead-ring-size-is-the-free-stack-length.mgcr",
+   "source": "mc1hwl3",
+   "note": "THE UNDEAD ARMY RING SIZE IS THE FREE STACK'S LENGTH, NOT LENGTH + 1: `sub_37710_37AD0` (remc1 :44061, remc1hw :40471) is three instructions - `return *(DWORD *)(base + 40) + 1;` - and `var_u32_40` is the free stack's TOP INDEX, not a count. `sub_37220_375E0` (remc1 :43838-55) initialises it to -1 and pushes with `var_u32_593[++var_u32_40]`; `NewEvent_372C0` (:43867-83) pops on `var_u32_40 >= 0` returning `var_u32_593[var_u32_40--]`. So the helper's `+ 1` IS the conversion from top-index back to LENGTH. The port already holds that length in `Vec::len()` and added a SECOND `+ 1`, so every Undead Army raised one skeleton too many. SHIPPED BYTES: CARPET.EXE file 0x4FF08 = `a1 00e40100 | 8b 40 28 | 40 | c3` (VA 0x37710 + 0x187F8); HIDDEN.EXE file 0x504C8 = `a1 f0e30100 | 8b 40 28 | 40 | c3` (VA + 0x189F8). WITNESS mc1hwl3 t=694->695, the (10,36) spawner at slot 779 with exactly 7 on the free stack: retail N=7, step 2048/7=292, headings 144/436/728/1024/1316/1608/1900 (after the bytewise +0x400 flip), purse share 10000/7=1428 and each skeleton banking `purse % share` = 4 mana; the port took N=8, step 256, headings 0/256/512/1024/1280/1536/1792 (768 missing - the EIGHTH spawn_creature starved, `free stack: len 40 -> 0` that tick), share 1250 and `10000 % 1250` = 0 mana. Seven slots (201/206/218/633/636/761/934) x {x,y,z,heading,target_yaw,mana} = the 37-row head; slot 636's ang=0 is the one angle both arms agree on, which is why only its `mana` row survives - the tell that pointed at N rather than at the spawn stamp. THE SLOT ORDER WAS NEVER WRONG: both arms mint the identical seven slots in the identical order off identical free-stack pops (`sets 0/0 missing/extra`). A LAW ON ONE CALL PATH - `sub_37710` has four runtime readers and the tree already spelled three correctly as a plain length (the m0/m6 worm guard :44586/:45028, the castle leveler's any-slot test :56142, the mana-spill ejector's cap :56194); only `undead_army_tick` carried the extra `+ 1`. Worth mc1hwl3 horizon 694 -> 8651 (12.5x) and one segment. Kill switch MGC_NO_MC1_UNDEAD_RING_POOL_DEPTH=1 restores the `+ 1` and regresses this pair. Ledger ROUND 161 (w161c)."
+  }
+ ]
+}

@@ -11,6 +11,7 @@
 //! test (`accelerate_directions_are_mutually_exclusive`): the input
 //! plumbing under test lives in lib.rs, which only these steps drive.
 
+use mgc_formats::{Thing, ThingKind};
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::World;
 use mgc_sim::mc1::spells::SpellId;
@@ -55,7 +56,25 @@ fn flat_world() -> World {
         angle: vec![5; 0x10000],
         ceiling: Vec::new(),
     };
-    World::new(planes, &[], 1, synthetic_assets())
+    // ⚖ AUTHOR THE HUMAN'S START MARKER so this fixture's pool layout
+    // does not depend on `MGC_NO_MC1_MARKERLESS_HUMAN_SEAT` (round
+    // 162): carpet at slot 1, the granted book above it — retail's
+    // own level-start order.
+    let marker = Thing {
+        slot: 0,
+        kind: ThingKind::Entity,
+        class: 3,
+        model: 4,
+        x: 16,
+        y: 16,
+        dis_id: 0,
+        swi_sz: 0,
+        swi_id: 0,
+        parent: 0,
+        child: 0,
+        par3: None,
+    };
+    World::new(planes, &[marker], 1, synthetic_assets())
 }
 
 #[test]
@@ -71,12 +90,61 @@ fn mc1_thrust_model_keeps_accelerate_through_forward_hold() {
     let boost = |sim: &Simulation| sim.world.as_ref().unwrap().accel_override();
 
     // CAST-AND-HOLD while flying forward: full boost every tick.
+    //
+    // ⚖ THE FIRST HELD TICK CARRIES NO BOOST YET, because the
+    // accelerate token sits ABOVE the carpet here (carpet slot 1, the
+    // granted book above it). The carpet's dispatch — mover included —
+    // runs at slot 1, and the token writes its pending speed register
+    // later in the SAME ascending pass, so the boost first moves the
+    // carpet on the NEXT tick. That is the phase `World`'s MC2 sibling
+    // already documents verbatim ("when the token's walk slot is ABOVE
+    // the carpet's ... the boost then first moves the carpet on the
+    // NEXT tick, which is exactly the phase the recordings show").
+    //
+    // ⚠⚠ THIS ASSERTION PINS THE PORT, AND RETAIL MAY NOT AGREE —
+    // OPEN QUESTION, DO NOT TREAT AS SETTLED (round 162).
+    //
+    // I went looking for the above-carpet witness and found one:
+    // mc1l48 carpet 681 with an Accelerate token (model 2) at slot
+    // **684**, i.e. ABOVE it. Measured with `dump-state`:
+    //
+    //   slot 684  f48: 0 through t=50, then 250 at t=51
+    //             (armed to 251 AND ticked in the same lap — the
+    //             above-carpet signature; compare the BELOW-carpet
+    //             shield mc1l3 slot 34, which sits at the full 251 on
+    //             its own arm tick and only decrements at arm+1)
+    //   carpet 681  f126: 80 at t=50 -> **240 at t=51** -> 240 at
+    //             t=52 -> 160 at t=53   (80 x3 = the boost, then the
+    //             x2 decay step), and f132 -1000 at t=51
+    //
+    // So RETAIL's carpet speed field is already tripled ON THE ARM
+    // TICK, whereas the port reports no override until the next one.
+    // The likely reconciliation is that the boosted target is written
+    // by the COMMAND at the carpet's own walk slot (:55825-33, the
+    // bounds-tested speed step) rather than by the token, which would
+    // make the boost press-tick regardless of the token's slot — but
+    // that is not established, and it would make this `None` wrong.
+    //
+    // ⭐ IT IS AN UNGRADED LANE, which is why no take reports it:
+    // replay feeds the carpet's pose as INPUT, and the port keeps the
+    // carpet OUT OF POOL as a class-0 pinned hole (`dump-state --port`
+    // on slot 681 reads f126/f128 as 0 against retail's 240/80 — the
+    // representation, not a divergence). A dedicated dig owes a
+    // verdict here.
     let hold = FlightInput {
         fire_left: true,
         thrust: 1.0,
         ..Default::default()
     };
-    for n in 0..5 {
+    sim.step(&hold);
+    assert_eq!(
+        boost(&sim),
+        None,
+        "PORT BEHAVIOUR, not a retail pin: no override on the press \
+         tick — see the mc1l48 t=51 measurement above, which shows \
+         retail's carpet speed already boosted at the arm tick"
+    );
+    for n in 1..5 {
         sim.step(&hold);
         assert_eq!(
             boost(&sim),
@@ -100,23 +168,33 @@ fn mc1_thrust_model_keeps_accelerate_through_forward_hold() {
     sim.step(&hold);
     assert_eq!(boost(&sim), Some(3.0), "re-cast re-arms the full boost");
 
-    // The resisting input is the one cancel (manual: the down cursor)
-    // — and it is TWO-PHASE like retail's: the brake press moves the
-    // boosted target and arms the mover's v_14 latch (:55766-80)
-    // while the boost still runs this tick; the token reads the latch
-    // on its next pass and ends the burst (counter = 1 → 0,
-    // :65146-50).
+    // The resisting input is the one cancel (manual: the down cursor).
+    // The mechanism is retail's two-phase one: the brake press moves
+    // the boosted target and arms the mover's v_14 latch (:55766-80),
+    // and the TOKEN reads that latch on its NEXT PASS and ends the
+    // burst (counter = 1 → 0, :65146-50).
+    //
+    // ⚖ WHETHER THAT NEXT PASS IS THIS TICK OR THE NEXT ONE IS THE
+    // SLOT-RELATIVE CAST PHASE AGAIN (round 162, w162a). The latch is
+    // armed at the carpet's walk slot; this fixture's token is ABOVE
+    // the carpet, so the walk reaches it later in the SAME tick and
+    // the burst ends immediately. The TWO-TICK observable — brake tick
+    // still boosting, burst ending one pass later — is the BELOW-
+    // carpet expression of the identical mechanism, and that is the
+    // one the corpus witnesses (mc1l48 t=4899, tokens 232/255 under
+    // carpet 681). It stays pinned in
+    // `engine::world::tests::accelerate_directions_are_mutually_exclusive`,
+    // whose fixture is deliberately laid out below-carpet.
     sim.step(&FlightInput {
         thrust: -1.0,
         ..Default::default()
     });
     assert_eq!(
         boost(&sim),
-        Some(2.0),
-        "the brake tick itself still boosts — v_14 only arms"
+        None,
+        "token above the carpet: the latch is read later in the SAME \
+         tick, so the burst ends at once"
     );
-    sim.step(&FlightInput::default());
-    assert_eq!(boost(&sim), None, "the token ends the burst one pass later");
 
     // And the refire gate clears: a fresh cast works next tick.
     sim.step(&hold);
@@ -186,3 +264,4 @@ fn enhanced_accelerate_does_not_survive_death_or_respawn() {
         speed(&sim)
     );
 }
+

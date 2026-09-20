@@ -238,6 +238,42 @@ pub(crate) fn volcano_kick_spares_token_burst() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_VOLCANO_KICK_TOKEN_LEVEL").is_none())
 }
 
+/// ⭐⭐ **`sub_37710_37AD0` RETURNS THE FREE STACK'S LENGTH, NOT ITS
+/// LENGTH PLUS ONE** (round 161, w161c). The whole body is
+/// `return *(_DWORD *)(base + 40) + 1;` (remc1 :44061 / remc1hw
+/// :40471; CARPET.EXE file 0x4FF08 `a1 00e40100 | 8b 40 28 | 40 | c3`,
+/// HIDDEN.EXE file 0x504C8 `a1 f0e30100 | 8b 40 28 | 40 | c3` — file
+/// offset = VA + 0x189F8, verified by the `e8 1f0c0100` call from
+/// `sub_26E90` at 0x3F8A4), and `var_u32_40` is the free stack's TOP
+/// INDEX, not its count: `sub_37220_375E0` (:43838-55) initialises it
+/// to **−1** and pushes with `var_u32_593[++var_u32_40]`, while
+/// `NewEvent_372C0` (:43867) pops on `var_u32_40 >= 0` and returns
+/// `var_u32_593[var_u32_40--]`. So the probe's `+ 1` converts the top
+/// index back into a LENGTH, and a port that adds a second `+ 1` to a
+/// `Vec::len()` is one too high. The tree's other three runtime
+/// readers already spell it as a plain length — the m0/m6 worm guard
+/// (`free.len() < 16`, :44586/:45028), the castle leveler's
+/// any-slot test (:56142) and the mana-spill ejector's cap
+/// (:56194) — only [`Gen::undead_army_tick`] carried the extra one.
+///
+/// WITNESS mc1hwl3 t=695 (segment 0's only head, 37 field rows over
+/// seven slots): the free stack holds exactly **7** when the (10,36)
+/// spawner ticks, so retail raises `N = 7` skeletons on a
+/// `2048/7 = 292` step from angle 0 — headings 144/436/728/1024/
+/// 1316/1608/1900 after the `+0x400` flip — and hands each one
+/// `10000 % (10000/7) = 4` mana. The port took `N = 8`, stepped by
+/// `2048/8 = 256`, paid `10000 % 1250 = 0` mana, and starved on the
+/// eighth `spawn_creature`, so it raised the same seven slots with
+/// every position, heading, target yaw and purse wrong. One decision,
+/// thirty-seven rows.
+///
+/// Set `MGC_NO_MC1_UNDEAD_RING_POOL_DEPTH=1` to restore the pre-dig
+/// `free.len() + 1`.
+pub(crate) fn undead_ring_size_is_the_free_length() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_UNDEAD_RING_POOL_DEPTH").is_none())
+}
+
 /// A/B toggle for the MC2 BALL-MERGE OWNER LADDER: set
 /// `MGC_NO_MC2_BALL_OWNER_LADDER` to restore the pre-dig
 /// approximation, in which two OWNED spheres resolved the survivor's
@@ -276,6 +312,26 @@ pub(crate) fn no_m57_reclaim_bit() -> bool {
 pub(crate) fn no_m57_trap_fallthrough() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_M57_TRAP_FALLTHROUGH").is_some())
+}
+
+/// A/B toggle for **THE MANA BALL's OWNER TAG IS A RAW POOL SEAT**
+/// (round 161, w161a): set `MGC_NO_MC1_BALL_OWNER_SEAT` to restore the
+/// pre-dig derive, which resolved `+144` through [`Gen::owner_team`]
+/// (the `PLAYER_TARGET` sentinel plus the eight registered wizard
+/// seats) and fell back to the unowned family 52 for everything else.
+/// Retail `sub_274D0` indexes the POOL at `+144` and tests only
+/// `pool[+144].+64 == 3`, then reads that record's `+160` extension at
+/// `+48`; a class-3 NON-wizard (the (3,3) mana balloon) shares the
+/// engine's default extension, whose `+48` is 0, so it colours the
+/// ball with the player-0 family 105. Decompile remc1
+/// `sub_main.cpp:29586-29625` = remc1hw `sub_main.cpp:28130-28169`;
+/// shipped bytes `CARPET.EXE` file 0x3FCC8 / `HIDDEN.EXE` file
+/// 0x3FEC8, quoted at the call site in [`Gen::ball_resize`]. Witness
+/// mc1hwl5 t=25348..25486, ball 866 `type86` retail 112 / port 59.
+/// MC1 family only — MC2's sphere derive is a different routine.
+fn no_mc1_ball_owner_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_BALL_OWNER_SEAT").is_some())
 }
 
 /// `MGC_NO_MC1_CH4_AMOUNT_KEEP=1` restores the pre-dig MC1 ch4 intake,
@@ -5378,7 +5434,8 @@ impl Gen {
     /// sub_26E90 (:29353), class-10 state 38 — the UNDEAD ARMY.
     /// The spawner overwrites its own `+44` with 10000 (the mana
     /// purse it hands out), sizes the ring from the FREE POOL
-    /// (`sub_37710` :44061 = `free.len() + 1`, clamped to 8), caps it
+    /// (`sub_37710` :44061 = `free.len()` — see
+    /// [`undead_ring_size_is_the_free_length`], clamped to 8), caps it
     /// at 64 live skeletons per owner, raises them on a 512-unit ring
     /// at `k·2048/N` facing radial+180°, and marks itself dead.
     ///
@@ -5403,7 +5460,11 @@ impl Gen {
         // :29367-72 — the pool probe, negative-clamped then capped at
         // 8. (Retail's `(__int16)` narrowings are unreachable at any
         // real pool size; kept as the shape, not as live arithmetic.)
-        let mut n = self.free.len() as i32 + 1;
+        // `sub_37710_37AD0` is `top_index + 1` = the stack's LENGTH;
+        // the port's own `Vec` already holds that, so there is no
+        // second `+ 1` (see `undead_ring_size_is_the_free_length`).
+        let mut n = self.free.len() as i32
+            + i32::from(!undead_ring_size_is_the_free_length());
         if n & 0x8000 != 0 {
             n = 0;
         }
@@ -7022,7 +7083,91 @@ impl Gen {
         //     "sprite 56 with a live class-3 owner" was the m57 simply
         //     keeping its unowned ctor stamp. PHASE, NOT ARITHMETIC.
         // The team-colour derive below is correct for the (10,39).
-        let base = match self.owner_team(self.ent[i].f144) {
+        // ⭐⭐⭐ MC1's `+144` IS A RAW POOL SEAT, AND THE ONLY TEST IS
+        // `class == 3`. `sub_274D0` does
+        //
+        //     v3 = pool + 164 * event->+144;
+        //     if (v3 > pool && *(BYTE *)(v3 + 64) == 3)
+        //         switch (*(WORD *)(*(DWORD *)(v3 + 160) + 48)) { … }
+        //     else v1 = 52;
+        //
+        // (remc1 sub_main.cpp:29586-29625, remc1hw sub_main.cpp:28130-
+        // 28169 — the two bodies are the same statements). It never
+        // consults a wizard register: it INDEXES THE POOL at the seat,
+        // accepts ANY class-3 occupant, and reads that record's
+        // `+160` "wizext" pointer at `+48` for the palette family.
+        // Only wizards carry a real extension; every other entity
+        // shares the engine's default one, whose `+48` word reads 0 —
+        // so a class-3 NON-wizard colours the ball with family 105,
+        // the player-0 row.
+        //
+        // The port resolved the seat through [`Gen::owner_team`],
+        // i.e. only `PLAYER_TARGET` and the eight registered wizard
+        // seats, and answered "unowned" (52) for anything else. Two
+        // holes, both closed here: a class-3 non-wizard in the seat
+        // (retail 105, port 52) and a REGISTERED seat whose record has
+        // since been recycled to another class (retail 52, port 105+).
+        //
+        // WITNESS mc1hwl5 t=25348..25486, ball 866 (`+140` 240,277 →
+        // size 7, `+144` = 7): slot 7 is recycled from a dead (0,9)
+        // corpse into a (3,3) MANA BALLOON at t=25348 and retail's
+        // very next resize jumps the row 59 → 112 (52+7 → 105+7) and
+        // holds it; the port stayed on 59 for all 61 heads. The
+        // balloon's own owner is castle 411 = player 3 (ball 253 in
+        // the same take reads `+144` 411 → row 132 = 129+3), so the
+        // 105 is NOT the balloon's owner colour — it is the default
+        // extension's zero.
+        //
+        // SHIPPED BYTES — `CARPET.EXE` file 0x3FCC8 (VA 0x274D0, file
+        // = VA + 0x187F8) and `HIDDEN.EXE` file 0x3FEC8 (VA 0x274D0,
+        // file = VA + 0x189F8, pinned by this body's own
+        // `call sub_36FA0_37360`: CARPET `e8 00 fa 00 00` → 0x4F798 =
+        // VA 0x36FA0, HIDDEN `e8 c0 fd 00 00` → 0x4FD58 = VA 0x37360)
+        // are byte-identical apart from the pool-base global
+        // (`8b 15 00 e4 01 00` vs `8b 15 f0 e3 01 00`) and that rel32
+        // — HW does NOT fork the derive:
+        // ```text
+        //   3ff20  39 d0              cmp    %edx,%eax      ; seat != 0
+        //   3ff22  76 58              jbe    0x3ff7c        ; → 52
+        //   3ff24  80 78 40 03        cmpb   $0x3,0x40(%eax); class 3?
+        //   3ff28  75 52              jne    0x3ff7c        ; → 52
+        //   3ff2a  8b 80 a0 00 00 00  mov    0xa0(%eax),%eax; +160
+        //   3ff30  66 8b 40 30        mov    0x30(%eax),%ax ; +48
+        //   3ff34  40                 inc    %eax
+        //   3ff35  66 3d 08 00        cmp    $0x8,%ax
+        //   3ff39  77 46              ja     0x3ff81        ; stale cx
+        //   3ff3b  98                 cwtl
+        //   3ff3c  2e ff 24 85 a8 74 01 00  jmp *%cs:0x174a8(,%eax,4)
+        //   3ff44  b9 69 00 00 00     mov    $0x69,%ecx     ; 105
+        //   …                                               ; +8 each
+        //   3ff7c  b9 34 00 00 00     mov    $0x34,%ecx     ; 52
+        // ```
+        // (`+48 == 0xFFFF` lands on table entry 0 = the 52 arm, which
+        // is the decompile's `case 0xFFFF: goto LABEL_15`.)
+        //
+        // MC2 keeps its own derive — `GetManaSphereColorIndexFromEntityId_369F0`
+        // is a different routine and is not re-scoped here.
+        let own = self.ent[i].f144;
+        let team = if mc2 || no_mc1_ball_owner_seat() {
+            self.owner_team(own)
+        } else if own == PLAYER_TARGET {
+            // The port's human tag. Retail carries the human's own
+            // pool slot in `+144` (the conformance importer's `tr()`
+            // rewrites it), and that record is the class-3 carpet, so
+            // the seat test passes and its wizext reads player 0.
+            Some(0)
+        } else if own != 0
+            && (own as usize) < self.ent.len()
+            && self.ent[own as usize].class64 == 3
+        {
+            // A registered wizard seat answers with its player slot;
+            // any other class-3 occupant reads the shared default
+            // extension, i.e. 0.
+            Some(self.owner_team(own).unwrap_or(0))
+        } else {
+            None
+        };
+        let base = match team {
             Some(team) => {
                 let art = if mc2 {
                     crate::mc2::color_art(team)

@@ -22,6 +22,7 @@
 //! These tests therefore CONSTRUCT the differing case directly, by
 //! casting with an ODD carpet speed.
 
+use mgc_formats::{Thing, ThingKind};
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use mgc_sim::mc1::spells::SpellId;
@@ -63,7 +64,28 @@ fn armed_world() -> (World, PlayerPose) {
         angle: vec![5; 0x10000],
         ceiling: Vec::new(),
     };
-    let mut w = World::new(planes, &[], 1, synthetic_assets());
+    // ⚖ AUTHOR THE HUMAN'S START MARKER. Every shipped MC1/HW level
+    // but two authors a `(3,4)`, and since round 161 a marker-less MC1
+    // world seats its carpet at the ORIGIN rather than not at all — so
+    // a bare `World::new(.., &[], ..)` here would make the fixture's
+    // pool layout depend on `MGC_NO_MC1_MARKERLESS_HUMAN_SEAT`. With
+    // the marker the carpet exists in BOTH arms of that A/B and the
+    // series below are the same either way (round 162, w162a/w162b).
+    let marker = Thing {
+        slot: 0,
+        kind: ThingKind::Entity,
+        class: 3,
+        model: 4,
+        x: 16,
+        y: 16,
+        dis_id: 0,
+        swi_sz: 0,
+        swi_id: 0,
+        parent: 0,
+        child: 0,
+        par3: None,
+    };
+    let mut w = World::new(planes, &[marker], 1, synthetic_assets());
     w.set_dev_spells(true);
     w.grant_all_spells();
     let pose = PlayerPose::from_tiles(16.0, 40.0, 16.0, 0.0, 0.0, 0.0);
@@ -77,9 +99,19 @@ fn an_odd_gap_overshoots_and_oscillates_forever() {
     // ODD pose speed gives the ctor's 384 a +126 of 385: a gap of
     // exactly -1, the only place the two forms disagree.
     let speeds = meteor_speed_series(1);
+    // ⚖ THE SERIES IS SAMPLED FROM THE PRESS TICK, on which the meteor
+    // is already born: the carpet sits at slot 1 and the book above it,
+    // so the token is reached later in the SAME ascending pass and
+    // fires at once (round 162, w162a — the cast phase is slot
+    // arithmetic; retail witness mc1l3 t=7, token 581 over carpet 579).
+    // Before round 161 this fixture had NO carpet at all, the wizard
+    // pass ran post-walk, and the arm landed after the token had
+    // already ticked — so the old pin began one step later. Same
+    // oscillation, one earlier sample; the law under test (step =
+    // 2 * SIGN(gap), never clamped, never settling) is untouched.
     assert_eq!(
         speeds,
-        vec![383, 385, 383, 385, 383, 385, 383, 385, 383],
+        vec![385, 383, 385, 383, 385, 383, 385, 383, 385],
         "retail steps 2 * SIGN(gap): from 385 against minSpeed 384 it \
          OVERSHOOTS to 383, then oscillates about 384 forever. A \
          `.clamp(-2, 2)` would step ONE and pin at 384."
@@ -102,7 +134,7 @@ fn an_even_gap_is_identical_under_both_forms() {
     let speeds = meteor_speed_series(16);
     assert_eq!(
         speeds,
-        vec![398, 396, 394, 392, 390, 388, 386, 384, 384],
+        vec![396, 394, 392, 390, 388, 386, 384, 384, 384],
         "an even gap preserves parity under a step of 2 and settles"
     );
 }

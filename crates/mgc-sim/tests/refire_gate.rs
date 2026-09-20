@@ -20,6 +20,7 @@
 //! (`debug_bless_owned_spells` zeroes the castle ladder) with the
 //! pool refilled to its 1000 ceiling between ticks.
 
+use mgc_formats::{Thing, ThingKind};
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use mgc_sim::mc1::spells::SpellId;
@@ -66,7 +67,25 @@ fn armed_world() -> (World, PlayerPose) {
         angle: vec![5; 0x10000],
         ceiling: Vec::new(),
     };
-    let mut w = World::new(planes, &[], 1, synthetic_assets());
+    // ⚖ AUTHOR THE HUMAN'S START MARKER, so the fixture's pool layout
+    // does not depend on `MGC_NO_MC1_MARKERLESS_HUMAN_SEAT` (round
+    // 162). The carpet lands at slot 1 and `grant_all_spells` mints
+    // the book ABOVE it — which is retail's own level-start order.
+    let marker = Thing {
+        slot: 0,
+        kind: ThingKind::Entity,
+        class: 3,
+        model: 4,
+        x: 16,
+        y: 16,
+        dis_id: 0,
+        swi_sz: 0,
+        swi_id: 0,
+        parent: 0,
+        child: 0,
+        par3: None,
+    };
+    let mut w = World::new(planes, &[marker], 1, synthetic_assets());
     w.set_dev_spells(true);
     w.grant_all_spells();
     let pose = PlayerPose::from_tiles(16.0, 40.0, 16.0, 0.0, 0.0, 0.0);
@@ -172,11 +191,19 @@ fn accelerate_channel_holds() {
     );
 }
 
-/// 23 Repeat Fireballs is a LAUNCHER (mc1l4 t=5376): the press tick
-/// only ARMS the token (sub_46B00's bare LABEL_32 flow), the token
-/// fires one ball per lap from its own tick (sub_58240 = fireball's
+/// 23 Repeat Fireballs is a LAUNCHER (mc1l4 t=5376): the press only
+/// ARMS the token (sub_46B00's bare LABEL_32 flow), the token fires
+/// one ball per lap from its own tick (sub_58240 = fireball's
 /// sub_56090), and the held re-issue re-arms every tick — so N held
-/// ticks yield N−1 emissions, first ball one tick after the press.
+/// ticks yield N emissions here.
+///
+/// ⚖ THE PHASE IS SLOT-RELATIVE, NOT "next lap" (round 162, w162a).
+/// The arm happens at the CARPET's walk slot and the fire at the
+/// TOKEN's, in one ascending pass, so a token ABOVE the carpet fires
+/// on the press tick. This fixture's carpet is slot 1 with the book
+/// above it — retail's own level-start order — so the first ball
+/// lands on the press. Retail witness: mc1l3 t=7, token 581 over
+/// carpet 579, armed and fired in the same tick.
 #[test]
 fn firehose_fires_every_held_tick() {
     let (mut w, pose) = armed_world();
@@ -184,15 +211,15 @@ fn firehose_fires_every_held_tick() {
     tick_full(&mut w, pose, true);
     assert_eq!(
         projectiles(&w),
-        0,
-        "the press tick ARMS only — the token fires next lap (the cast-phase law)"
+        1,
+        "the token sits ABOVE the carpet, so the press tick arms AND fires"
     );
     for _ in 0..5 {
         tick_full(&mut w, pose, true);
     }
     assert!(
-        projectiles(&w) >= 5,
-        "6 held ticks yield 5 emissions (got {})",
+        projectiles(&w) >= 6,
+        "6 held ticks yield 6 emissions (got {})",
         projectiles(&w)
     );
 }
@@ -206,16 +233,16 @@ fn firehose_fires_every_held_tick() {
 fn lightning_streams_while_held() {
     let (mut w, pose) = armed_world();
     equip(&mut w, pose, 15);
-    // ⭐ THE CAST-PHASE LAW COVERS 15 TOO. Its command arm is the same
+    // ⭐ THE SAME ARM FLOW COVERS 15 TOO. Its command arm is the same
     // bare LABEL_20→LABEL_32 flow every launcher takes (the branch is
     // on the token's +65, and 15 is < 0x10, neither 2 nor 16 nor 21),
-    // and its fire machine sub_57470 (:65806) is fireball's skeleton
-    // — so the press ARMS and the token fires one lap later.
+    // and its fire machine sub_57470 (:65806) is fireball's skeleton.
+    // The token is ABOVE the carpet here, so it fires on the press
+    // tick (round 162, w162a: the phase is slot-relative).
     tick_full(&mut w, pose, true);
-    assert_eq!(
-        projectiles(&w),
-        0,
-        "the press tick ARMS only — the token fires next lap"
+    assert!(
+        projectiles(&w) > 0,
+        "the token sits ABOVE the carpet, so the press tick arms AND fires"
     );
     for _ in 0..4 {
         tick_full(&mut w, pose, true);
@@ -237,11 +264,12 @@ fn lightning_stream_dies_dry_and_needs_a_reclick() {
     w.debug_bless_owned_spells();
     w.set_dev_spells(false);
     equip(&mut w, pose, 15);
-    // The launcher phase: press = arm, token = fire one lap later.
+    // The launcher phase: the arm lands at the carpet's walk slot and
+    // this token is ABOVE it, so it fires on the press tick.
     tick_full(&mut w, pose, true);
-    assert_eq!(projectiles(&w), 0, "the press tick ARMS only");
+    assert!(projectiles(&w) > 0, "the press tick arms AND fires");
     tick_full(&mut w, pose, true);
-    assert!(projectiles(&w) > 0, "the token fires at arm+1");
+    assert!(projectiles(&w) > 0, "and the held stream keeps emitting");
 
     // Held ticks: the pool can never recover to the full 1000 by the
     // command point (the token's debit lands first), so the re-arm
@@ -265,15 +293,17 @@ fn lightning_stream_dies_dry_and_needs_a_reclick() {
         stalled >= after_two,
         "the stream got at most its armed burst out"
     );
-    // A fresh click restarts it — press to ARM, token to fire.
+    // A fresh click restarts it. ⚖ The baseline is the STALLED count,
+    // not a post-press sample: this token sits above the carpet, so
+    // the press tick both arms and fires, and sampling after it would
+    // compare the restarted stream against itself. Lightning's zigzag
+    // is a one-tick transient, so a live stream shows segments and a
+    // dead one decays to none.
     tick_full(&mut w, pose, false);
     tick_full(&mut w, pose, true);
-    let armed = projectiles(&w);
-    tick_full(&mut w, pose, true);
-    tick_full(&mut w, pose, true);
     assert!(
-        projectiles(&w) > armed,
-        "the re-click restarts the stream (armed {armed}, now {})",
+        projectiles(&w) > stalled,
+        "the re-click restarts the stream (stalled {stalled}, now {})",
         projectiles(&w)
     );
 }

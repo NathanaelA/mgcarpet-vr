@@ -107,6 +107,92 @@ pub(crate) fn ball_guard_excludes_own_id() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_BALL_GUARD_OWN_ID").is_none())
 }
 
+/// ⭐⭐⭐ **THE WAR TEST'S TEAM INDEX IS READ THROUGH THE TAG
+/// RECORD'S `+160`, AND EVERY NON-WIZARD RECORD CARRIES `NewEvent`'s
+/// DEFAULT WIZEXT — WHOSE `+48` IS A BSS ZERO. A CLASS-3 TAG THAT IS
+/// NOT A WIZARD THEREFORE SCORES AGAINST `hate[0]`, THE HUMAN.**
+///
+/// The war test is one expression shared by the ball claim
+/// `sub_15080` (`reference/remc1/sub_main.cpp:18895`) and the castle
+/// raid `sub_143A0` (:18514):
+///
+/// ```text
+/// 50000 - tagrec->+136 / 10 * me->wizext->+522 / 255
+///        < me->wizext->[460 + 8 * tagrec->+160->+48]
+/// ```
+///
+/// Both operands come off the TAG RECORD, not off a wizard seat.
+/// `CARPET.EXE` VA 0x15080 = file **0x2D878**, the ball claim's copy,
+/// verbatim from the shipped binary:
+///
+/// ```text
+/// 2d8f6  8a 8a a3 74 00 00      mov  0x74a3(%edx),%cl   ; tagrec +64 class
+/// 2d900  80 f9 03               cmp  $0x3,%cl
+/// 2d903  0f 85 11 01 00 00      jne  0x2da1a            ; -> the wild arm
+/// 2d915  8b 82 03 75 00 00      mov  0x7503(%edx),%eax  ; tagrec +160  (29955)
+/// 2d921  0f bf 40 30            movswl 0x30(%eax),%eax  ; ITS +48, SIGNED
+/// 2d925  66 8b 84 c5 cc 01 00 00 mov 0x1cc(%ebp,%eax,8),%ax ; my hate[that]
+/// 2d935  8b 82 eb 74 00 00      mov  0x74eb(%edx),%eax  ; tagrec +136  (29931)
+/// 2d93d  b9 0a 00 00 00 / f7 f9 idiv $10
+/// 2d947  0f bf 95 0a 02 00 00   movswl 0x20a(%ebp),%edx ; my +522 (agg)
+/// 2d95b  f7 fd                  idiv $255
+/// 2d95d  ba 50 c3 00 00         mov  $0xc350,%edx       ; 50000
+/// 2d962  29 c2                  sub  %eax,%edx
+/// 2d966  3b 04 24 / 7d 1f       cmp (%esp),%eax ; jge   ; SIGNED, -> neutral arm
+/// ```
+///
+/// `+160` is written in exactly two places. `NewEvent`'s two arms
+/// (`sub_37220_375E0`, :43878 and :43903) stamp **every** record with
+/// `unk_B7330_B7320` — a static `Type_160[30]` at VA 0xB7330 (MC1) /
+/// 0xB7320 (HW), and `LE` object 3 (base 0x90000, 29 initialised
+/// pages) only reaches VA 0xAD000, so that array is **BSS: zero at
+/// load**. Nothing in the listing writes its `+48` (the writes that go
+/// through a record's `+160` land at `+460+8i`, `+462+8i` and `+528`).
+/// The only real wizexts are attached to the WIZARD CARPETS
+/// (`:52173` at level load, `:54866` on respawn:
+/// `v2x->var_u32_29955_160 = &a1x->str_1103;` with
+/// `->var_48 = a1x - str_13323`, the wizard index; `str_13323`'s
+/// stride is 2049, which is exactly the stride of the `owner_ptr`
+/// words the recorder captures for the four carpets of mc1hwl5).
+///
+/// The port's `owner_slot` resolves a tag only to a seated wizard and
+/// returned `None` otherwise, so the ball claim FELL THROUGH to the
+/// neutral arm (carpet-guard + castle-overlap vetoes, scored from the
+/// WIZARD) where retail takes the at-war arm (no vetoes, scored from
+/// the castle REGISTER).
+///
+/// WITNESS mc1hwl5 t=25348..25486 (123 of the take's 135 heads, all
+/// slot 386 `chase`): rival 2's wizext holds `agg 255` and a flat
+/// `hate[..] = 24607`; **33 of the 76 balls on the tick-top chain are
+/// tagged `+144 = 7`**, and slot 7 is a `(3,3)` keep of wizard 411 —
+/// class 3, so retail takes the wizard arm, but not a wizard, so its
+/// `+160` is the default. Retail's threshold is
+/// `50000 - 1062574/10 * 255/255 = -56257 < hate[0]` → at war for all
+/// 33, scored from his castle register 962 at (16384, 0), where ball
+/// **50** is the global minimum (75,952,724 against 96,927,557 for the
+/// ball 665 the port's from-the-wizard neutral arm elected — 665 sits
+/// 736 units from the wizard and 50 sits 12,915 away).
+///
+/// ⚠ RESIDUAL, NOT FIXED HERE: `hate_over` clamps the threshold with
+/// `50_000u32.saturating_sub(..)` where 0x2d962 is a plain signed
+/// `sub` and 0x2d969 a signed `jge`. The two disagree only when the
+/// product exceeds 50000 AND `hate[team] == 0` (retail: at war; port:
+/// not). No corpus witness — mc1hwl5's hate is 24607 throughout.
+///
+/// `MGC_NO_MC1_DEFAULT_WIZEXT_TEAM=1` restores the `None` fall-through.
+pub(crate) fn default_wizext_team() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_DEFAULT_WIZEXT_TEAM").is_none())
+}
+
+/// The war threshold's SIGNED, WRAPPING 32-bit arithmetic — see
+/// [`World::hate_over`] for the shipped bytes and the witness.
+/// `MGC_NO_MC1_HATE_SIGNED_WRAP=1` restores the u32 saturating form.
+pub(crate) fn hate_signed_wrap() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HATE_SIGNED_WRAP").is_none())
+}
+
 /// ⭐⭐⭐ **THE WAR CLEAR TESTS THE TARGET'S MODEL BYTE AND NOTHING
 /// ELSE — SHOOTING A CREATURE DISCHARGES THE RIVAL'S GRUDGE.**
 ///
@@ -681,6 +767,47 @@ pub(crate) fn no_mc1_markerless_origin_seat() -> bool {
 pub(crate) fn no_mc1_native_human_record() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_NATIVE_HUMAN_RECORD").is_some())
+}
+
+/// A/B toggle for **THE MARKER-LESS HUMAN SEAT** (round 161, w161d):
+/// set `MGC_NO_MC1_MARKERLESS_HUMAN_SEAT` to restore the pre-dig
+/// [`World::mc1_spawn_human_record`], which returned without minting
+/// the carpet record at all when the level authored no `(3,4)` row.
+///
+/// This is the HUMAN half of round 154's
+/// [`no_mc1_markerless_origin_seat`] — ⭐⭐⭐ A LAW ON ONE CALL PATH IS
+/// NOT LANDED: retail has ONE routine, `sub_44D30` (:54802), for
+/// every wizard, and the port splits it into
+/// `mc1_spawn_human_record` / `spawn_rival`; round 154 gave the
+/// origin seat to the rival arm and left the human arm's
+/// `else { return }` standing.
+///
+/// Retail (remc1 `sub_main.cpp`):
+/// ```text
+/// 51488  memset((void*)(&str_AE400_AE3F0->str_9177), 0, 48);   // sub_40550, level init
+/// 54845  v32x = str_AE400_AE3F0->str_9177[v3].v_9177;          // UNCONDITIONAL
+/// 54846-49  tempZ = sub_11F50(&v32x); tempZ.y++; v32x.z = tempZ.word;
+/// 54850  if (event == str_AE400_AE3F0->str_29795)              // wizard 0 = the human
+/// 54852      v2x = sub_373F0_377B0(&v32x, 3, …);               // POP the carpet record
+/// ```
+/// Shipped `HIDDEN.EXE` (file = VA + **0x18D38**; `CARPET.EXE` = VA +
+/// 0x187F8 and is byte-for-byte the same shape at file 0x5D528):
+/// ```text
+///   5daa7  8d b4 41 d9 23 00 00  lea 0x23d9(%ecx,%eax,2),%esi  ; &str_9177[wizard], no test
+///   5dab3  a5 / 66 a5            movsl ; movsw                 ; copy the 6-byte seat
+///   5dab6  e8 8d ce fc ff        call 0x2a948                  ; sub_11F50 (ground z)
+///   5dabe  fe c4                 inc %ah                       ; + 0x100
+///   5dacb  8d 81 63 74 00 00     lea 0x7463(%ecx),%eax         ; str_29795 (pool base)
+///   5dad1  39 c3 / 75 2b         cmp %eax,%ebx ; jne           ; human vs AI arm
+///   5daec  e8 b7 26 ff ff        call 0x501a8                  ; sub_373F0 — the carpet pop
+///   59320  6a 30 … 05 d9 23 00 00 … call 0x75b38               ; sub_40550: memset(str_9177,0,0x30)
+/// ```
+/// Witness `recordings/mc1hwl5.mgcr`: mc1hw level 5 authors `(3,5)`
+/// through `(3,9)` and **no `(3,4)`**, and retail's record 0 holds the
+/// human at slot 341, x 0 / y 0 / z 256 for its first 30+ ticks.
+pub(crate) fn no_mc1_markerless_human_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_MARKERLESS_HUMAN_SEAT").is_some())
 }
 
 /// A/B toggle for **THE POST-SPAWN TRUCE WALKS THE TICK-TOP CLASS-3
@@ -1322,10 +1449,16 @@ impl World {
     /// the slot stays CLASS 0, a pinned record whose `rand` lane is
     /// the live per-entity stream, the pose the runner's input
     /// anchored at the slot by the walk (`mc1_carpet_slot != 0` takes
-    /// the certified in-walk arm, which native play now runs too). A
-    /// world with no marker keeps slot 0. The constructor seats it;
-    /// the book goes through [`World::grant_level_book`] BEFORE
-    /// `set_wizards`. Set `MGC_NO_MC1_NATIVE_HUMAN_RECORD=1` for A/B.
+    /// the certified in-walk arm, which native play now runs too).
+    /// ⚠ SINCE ROUND 161 (w161d) EVERY MC1 WORLD SEATS A CARPET —
+    /// a marker-less level is seated at the origin rather than
+    /// skipped, so `mc1_carpet_slot == 0` no longer means "no marker",
+    /// it means **no MC1 world at all** (MC2, or the A/B switch).
+    /// The bare-world fall-throughs still keyed on that sentinel
+    /// (`engine::world` :10288/:10462/:10562) are therefore MC2-only
+    /// on this path now. The constructor seats it; the book goes
+    /// through [`World::grant_level_book`] BEFORE `set_wizards`.
+    /// Set `MGC_NO_MC1_NATIVE_HUMAN_RECORD=1` for A/B.
     pub fn mc1_spawn_human_record(&mut self) {
         if no_mc1_native_human_record()
             || matches!(self.game(), crate::ids::GameId::Mc2)
@@ -1333,17 +1466,30 @@ impl World {
         {
             return;
         }
-        let Some((mx, my)) = self.start_markers[0] else {
-            return;
+        // ⚖ A MARKER-LESS **HUMAN** SEATS AT THE ORIGIN TOO — the
+        // other half of round 154's `no_mc1_markerless_origin_seat`,
+        // which landed on [`World::spawn_rival`] ONLY. `sub_44D30`
+        // (:54845) reads `str_9177[wizard]` UNCONDITIONALLY and pops
+        // the class-3 carpet on the `event == str_29795` arm (:54848)
+        // with no marker test at all, and `sub_40550` (:51488)
+        // memsets the whole 48-byte array with the pool, so colour 0
+        // with no `(3,4)` THING row is seated at (0, 0, ground+0x100)
+        // exactly like a marker-less rival. See
+        // [`no_mc1_markerless_human_seat`].
+        let (x, y) = match self.start_markers[0] {
+            // `sub_44D30`'s pose: the marker's tile centre, ground +
+            // 0x100 (:54838-42, the same snap `spawn_rival` uses).
+            Some((mx, my)) => ((mx << 8).wrapping_add(128), (my << 8).wrapping_add(128)),
+            None if no_mc1_markerless_human_seat() => return,
+            // The memset seat is ENGINE units (0, 0), NOT tile (0,0)'s
+            // centre — retail's `str_9177[0]` is zeroed bytes, never a
+            // tile index run through the half-tile snap.
+            None => (0u16, 0u16),
         };
         let Some(i) = self.g.new_event() else { return };
         let rand = self.g.ent[i].rand;
         self.g.ent[i] = crate::engine::features::Ent::default();
         self.g.ent[i].rand = rand;
-        // `sub_44D30`'s pose: the marker's tile centre, ground + 0x100
-        // (:54838-42, the same snap `spawn_rival` uses).
-        let x = (mx << 8).wrapping_add(128);
-        let y = (my << 8).wrapping_add(128);
         let z = (self.g.ground_z(x, y) as i16).wrapping_add(0x100);
         self.human_pose = (x, y, z);
         self.human_pose_prev = self.human_pose;
@@ -3987,11 +4133,57 @@ impl World {
             .any(|&s| self.rivals[ri].owned[s] != 0)
     }
 
+    /// The war test's two TAG-RECORD operands (`sub_15080` :18895 /
+    /// `sub_143A0` :18514): the hate index `tagrec->+160->+48` and the
+    /// ceiling `tagrec->+136`. A tag that seats no wizard still has a
+    /// `+160` — `NewEvent`'s default, whose `+48` is a BSS zero — so
+    /// retail scores it against `hate[0]` off the tag record's own
+    /// `+136`. See [`default_wizext_team`].
+    fn hate_team_of_tag(&self, tag: u16) -> Option<(u8, i32)> {
+        if let Some(o) = self.owner_slot(tag) {
+            return Some((o, self.wizard_wealth(o) as i32));
+        }
+        if !default_wizext_team() {
+            return None;
+        }
+        let wealth = self.g.ent.get(tag as usize).map_or(0, |e| e.f136);
+        Some((0, wealth))
+    }
+
     /// The hate gate (:18514 etc.): hate[owner] over the wealth-
     /// scaled threshold.
-    fn hate_over(&self, ri: usize, slot: u8, wealth: u32) -> bool {
+    ///
+    /// ⭐⭐⭐ **THE WAR THRESHOLD IS 32-BIT SIGNED AND IT OVERFLOWS.**
+    /// `CARPET.EXE` VA 0x15080 file 0x2D935-0x2D969 is
+    /// `mov 0x74eb(%edx),%eax` (the ceiling `+136`) / `cdq` /
+    /// `idiv $10` / `movswl 0x20a(%ebp),%edx` (`+522`, the aggression,
+    /// SIGNED 16-bit) / `imul %eax,%edx` — a 32-bit `imul` that keeps
+    /// the LOW half only — / `cdq` / `idiv $255` /
+    /// `mov $0xc350,%edx` / `sub %eax,%edx` / `cmp (%esp),%eax` /
+    /// `jge` — a SIGNED compare against the zero-extended hate word.
+    /// The port's `50_000u32.saturating_sub(wealth / 10 * agg / 255)`
+    /// was wrong twice over: it clamped a threshold retail lets go
+    /// negative (so a rival with `hate == 0` read NOT-at-war where
+    /// retail reads at-war), and it computed the product in u32, so a
+    /// ceiling past 84,215,040 — where `+136/10 * 255` leaves i32 —
+    /// never wrapped.
+    ///
+    /// The wrap is load-bearing, not a curiosity: mc1hwl5's `(3,3)`
+    /// keep at slot 7 carries a `+136` that climbs past 10⁸ over the
+    /// take (1,062,574 at t=25350; 87,064,642 at t=25514), so retail's
+    /// threshold flips from −56,257 (at war, all 33 of its balls
+    /// scored from the castle register) to +8,186,545 (NOT at war,
+    /// scored from the wizard through the neutral arm) somewhere
+    /// between t=25490 and t=25510 — and the port has to flip with it.
+    ///
+    /// `MGC_NO_MC1_HATE_SIGNED_WRAP=1` restores the u32 saturating form.
+    fn hate_over(&self, ri: usize, slot: u8, wealth: i32) -> bool {
         let r = &self.rivals[ri];
-        let threshold = 50_000u32.saturating_sub(wealth / 10 * r.agg as u32 / 255);
+        if hate_signed_wrap() {
+            let threshold = 50_000i32 - (wealth / 10).wrapping_mul(r.agg as i16 as i32) / 255;
+            return r.hate[slot as usize] as i32 > threshold;
+        }
+        let threshold = 50_000u32.saturating_sub(wealth.max(0) as u32 / 10 * r.agg as u32 / 255);
         r.hate[slot as usize] as u32 > threshold
     }
 
@@ -4045,10 +4237,9 @@ impl World {
             if e.model65 != 2 || e.id24 == me {
                 continue;
             }
-            let Some(owner) = self.owner_slot(e.id24) else {
+            let Some((owner, owner_wealth)) = self.hate_team_of_tag(e.id24) else {
                 continue;
             };
-            let owner_wealth = self.wizard_wealth(owner);
             let hated = self.hate_over(ri, owner, owner_wealth);
             // Undefended: the owner is over 7680 away (:18517-22)
             // AND the owner's carpet does NOT box-overlap the castle
@@ -4356,10 +4547,21 @@ impl World {
                 continue;
             }
             let owner_ent = e.id24;
+            // ⚠ THE THIRD SITE OF THE SAME RETAIL EXPRESSION IS
+            // DELIBERATELY LEFT ON `owner_slot` (round 161, w161b).
+            // `sub_147E0` (:18624) resolves the team the same way —
+            // `v3 = ownerrec->+160; hate[*(i16*)(v3+48)]` — but it
+            // then runs its overlap veto against
+            // `pool[*(u16*)(v3 + 50)]`, that wizext's CASTLE
+            // REGISTER, which on the DEFAULT wizext is a BSS 0, i.e.
+            // pool slot 0, the SCRATCH record. The port's `home`
+            // below is `castle_reg[owner & 7]`, so seating a
+            // non-wizard tag at team 0 here would veto against the
+            // HUMAN's castle instead. Needs its own witness.
             let Some(owner) = self.owner_slot(owner_ent) else {
                 continue;
             };
-            if !self.hate_over(ri, owner, self.wizard_wealth(owner)) {
+            if !self.hate_over(ri, owner, self.wizard_wealth(owner) as i32) {
                 continue;
             }
             if (self.g.ent[j].f140.max(0) as u32) <= cargo_gate {
@@ -4456,12 +4658,16 @@ impl World {
             // so retail claims the wild 2000-ball where the
             // flag-reading port chased a human-owned one). At-war
             // balls score from the REGISTER's entity, not from me.
-            // (A class-3 non-wizard tag has no team; retail reads a
-            // team byte through the null wizext — fall through to
-            // the neutral arm until a corpus exemplar rules.)
-            let team = self.owner_slot(tag);
-            if let Some(o) = team
-                && self.hate_over(ri, o, self.wizard_wealth(o))
+            // ⭐⭐⭐ A class-3 tag that seats no wizard — a keep, a
+            // castle, any `(3, m >= 2)` — still reaches this test:
+            // its `+160` is `NewEvent`'s DEFAULT wizext, whose `+48`
+            // is a BSS zero, so the hate index is the HUMAN's and the
+            // ceiling is the TAG RECORD's own `+136` (mc1hwl5
+            // t=25348-486, 33 of the 76 balls on the chain). See
+            // [`default_wizext_team`].
+            let team = self.hate_team_of_tag(tag);
+            if let Some((o, wealth)) = team
+                && self.hate_over(ri, o, wealth)
             {
                 let d = Gen::dist2_sq(rx, ry, bx, by) as u32;
                 if best.is_none_or(|(_, bd)| d < bd) {
@@ -6679,20 +6885,27 @@ mod tests {
             angle: vec![5; 0x10000],
             ceiling: Vec::new(),
         };
-        let things = vec![Thing {
+        // ⚖ BOTH seats are authored. Before round 161 this fixture
+        // named only colour 1, and the HUMAN's marker-less seat then
+        // landed at engine (0, 0) — 14 tiles from the sleeper at tile
+        // (10, 10), i.e. INSIDE the wake radius, so the sleeper woke on
+        // tick 1 and the law under test was unobservable. Every shipped
+        // level authors a `(3,4)`; so does this one now.
+        let marker = |model: u16, x: u16, y: u16| Thing {
             slot: 0,
             kind: ThingKind::Entity,
             class: 3,
-            model: 5,
-            x: 120,
-            y: 120,
+            model,
+            x,
+            y,
             dis_id: 0,
             swi_sz: 0,
             swi_id: 0,
             parent: 0,
             child: 0,
             par3: None,
-        }];
+        };
+        let things = vec![marker(4, 100, 100), marker(5, 120, 120)];
         let mut w = World::new(planes, &things, 1, assets());
         let mut book = [false; SPELL_COUNT];
         book[3] = true;
@@ -6762,6 +6975,77 @@ mod tests {
             "the zeroed str_9177[1] seats the rival at the origin, not at the human's (120,120)"
         );
         assert_eq!(e.z, ground.wrapping_add(256), "ground + 0x100, sub_44D30 :54838-42");
+    }
+
+    /// THE HUMAN TWIN of the test above (round 161, w161d) — ⭐⭐⭐ A
+    /// LAW ON ONE CALL PATH IS NOT LANDED. Retail has ONE wizard
+    /// (re)init routine for all eight colours, `sub_44D30` (:54802);
+    /// the port splits it into [`World::mc1_spawn_human_record`] and
+    /// [`World::spawn_rival`], and round 154 gave the origin seat to
+    /// the rival arm alone, leaving the human arm's `else { return }`
+    /// standing 120 lines away in this same file.
+    ///
+    /// `sub_40550` (:51488) `memset(&str_9177, 0, 48)` zeroes the
+    /// whole 8x6-byte seat array with the pool, and :54845 reads
+    /// `str_9177[wizard]` UNCONDITIONALLY before popping the class-3
+    /// carpet on the `event == str_29795` arm — so a colour no THING
+    /// row names is seated at engine (0, 0, ground + 0x100), human
+    /// included.
+    ///
+    /// Only two levels in the whole baked MC1+HW corpus author no
+    /// `(3,4)`: **mc1hw 005** (a populated campaign level that names
+    /// seats 1..5 and forgets the human's — the witness,
+    /// `recordings/mc1hwl5.mgcr`, where retail holds the human at
+    /// slot 341, x 0 / y 0 / z 256) and **mc1hw 198** (an empty
+    /// terrain-only arena). The mirror-image omission is mc1l24,
+    /// which names 0,1,2,3,5 and forgets colour 4 — the rival test
+    /// above.
+    ///
+    /// ⚠ THE KILL-SWITCH PROOF: this test FAILS under
+    /// `MGC_NO_MC1_MARKERLESS_HUMAN_SEAT=1` (no carpet is pooled at
+    /// all, so `mc1_carpet_slot` reads 0). It is deliberately the ONE
+    /// place in the suite that is not A/B-neutral — every other
+    /// fixture seats its own carpet so the switch measures this law
+    /// and nothing else.
+    #[test]
+    fn a_marker_less_human_is_seated_at_the_origin_like_retail() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // Colour 1 has a seat; the HUMAN (model 4) has none — mc1hw
+        // level 5's exact shape, in miniature.
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 3,
+            model: 5,
+            x: 120,
+            y: 120,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let w = World::new(planes, &things, 1, assets());
+        assert_eq!(w.start_markers[0], None, "the human authors no marker");
+        assert_ne!(
+            w.mc1_carpet_slot, 0,
+            "the carpet is pooled anyway: :54845 reads str_9177[0] with no marker test"
+        );
+        let ground = w.g.ground_z(0, 0) as i16;
+        assert_eq!(
+            w.human_pose,
+            (0, 0, ground.wrapping_add(256)),
+            "the zeroed str_9177[0] seats the human at the ORIGIN (engine units, \
+             not tile (0,0)'s centre), ground + 0x100 — not at colour 1's (120,120) \
+             and not at the map centre"
+        );
     }
 
     fn rebound_world() -> World {
