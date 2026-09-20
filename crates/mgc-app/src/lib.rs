@@ -10,6 +10,7 @@
 //! without a display.
 
 mod bakecheck;
+mod camera;
 mod campaign;
 mod config;
 mod entities;
@@ -1471,6 +1472,120 @@ fn fog_cut(cam: &mgc_render::CameraView, x: f32, alt: f32, z: f32, wall: f32) ->
     dx * dx + dy * dy + dz * dz > wall * wall
 }
 
+/// The carpet pose this frame: `(x, y, z, yaw)` lerped between the
+/// last two ticks, positions taking the SHORT way around the 256-tile
+/// seam. The eye and the `--thirdperson` subject both read it, so the
+/// subject can never stutter against its own camera.
+fn interp_carpet(a: &Flyer, b: &Flyer, alpha: f32) -> (f32, f32, f32, f32) {
+    let lerp_wrap = |p: f32, q: f32| {
+        let mut d = q - p;
+        if d > 128.0 {
+            d -= 256.0;
+        }
+        if d < -128.0 {
+            d += 256.0;
+        }
+        (p + d * alpha).rem_euclid(256.0)
+    };
+    (
+        lerp_wrap(a.x, b.x),
+        a.y + (b.y - a.y) * alpha,
+        lerp_wrap(a.z, b.z),
+        a.yaw + (b.yaw - a.yaw) * alpha,
+    )
+}
+
+/// Append the replay's INSTRUMENT billboards to a draw set: the
+/// `--thirdperson` subject (the player's own carpet, which nothing
+/// else draws) and, under `MGC_REPLAY_GHOST=1`, the recorded retail
+/// pose.
+///
+/// ⚠⚠ **BOTH SUBMISSION PATHS CALL THIS.** The app builds its
+/// billboard set in two places — `apply_smooth_motion` at frame rate,
+/// and `sync_world` at tick rate, which is the one that runs when
+/// smooth motion is off — and an instrument added to only the first
+/// is an instrument that disappears the moment the player turns
+/// smooth motion off. (The old ghost had exactly that gap.)
+fn push_replay_instruments(
+    out: &mut Vec<Billboard>,
+    driver: Option<&replay::ReplayDriver>,
+    third_person: bool,
+    game: mgc_sim::ids::GameId,
+    carpet: (f32, f32, f32, f32),
+    dims: &impl Fn(u16) -> Option<(u16, u16, u16)>,
+) {
+    let Some(d) = driver else { return };
+    let (x, y, z, yaw) = carpet;
+    if third_person
+        && let Some(b) = entities::human_billboard(game, x, y, z, yaw, dims)
+    {
+        out.push(b);
+    }
+    if replay_ghost_wanted()
+        && let Some(g) = replay::ghost_billboard(d, game, dims)
+    {
+        out.push(g);
+    }
+}
+
+/// `MGC_REPLAY_GHOST=1`: put the replay ghost back on screen — the
+/// recorded retail pose as a translucent carpet over the port's solid
+/// one, the A/B picture for a take that HAS diverged. Off by default
+/// since 2026-09-20 (see the push site).
+fn replay_ghost_wanted() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("MGC_REPLAY_GHOST").is_ok_and(|v| v != "0"))
+}
+
+/// `--thirdperson`: the render camera for a replay watched from
+/// behind (`camera::boom_eye` does the framing and the terrain
+/// resolve). `subject_y` is the CARPET plane — the boom frames the
+/// carpet, not the eye half a tile above it.
+///
+/// Both terrain samplers are `&self` reads on the live world, so this
+/// cannot perturb a graded replay; off-world (a level with no sim
+/// world yet) the boom sees flat ground at the sim's own fallback.
+fn third_person_camera(
+    eye: &CameraView,
+    subject_y: f32,
+    sim: &Simulation,
+    aspect: f32,
+) -> CameraView {
+    // The EFFECTIVE fov: `flight_fov_y` widens the vertical angle on a
+    // window taller than 4:3, and the framing law is in screen
+    // fractions, so it has to be the fov actually rendered.
+    let fov_y = mgc_render::flight_fov_y(eye.fov_y, aspect);
+    let ground = |x: f32, z: f32| sim.ground_height(x, z);
+    let ceiling = |x: f32, z: f32| {
+        // `player_cave_ceiling` takes the sim's 8.8 axes (its `y` is
+        // the renderer's `z`), returns `None` off-cave, and has
+        // retail's 1.5-tile clearance already taken off.
+        sim.world.as_ref().and_then(|w| {
+            let xe = (x.rem_euclid(256.0) * 256.0) as u16;
+            let ye = (z.rem_euclid(256.0) * 256.0) as u16;
+            w.player_cave_ceiling(xe, ye).map(|c| c as f32 / 256.0)
+        })
+    };
+    let p = camera::boom_eye(
+        [eye.x, subject_y, eye.z],
+        eye.yaw,
+        eye.pitch,
+        fov_y,
+        &ground,
+        &ceiling,
+    );
+    CameraView {
+        x: p[0],
+        y: p[1],
+        z: p[2],
+        // No bank: a billboard carpet cannot roll, so rolling the
+        // world around it would swing the subject across the frame
+        // for a tumble the sprite never shows.
+        roll: 0.0,
+        ..*eye
+    }
+}
+
 /// Greedy word-wrap for the messaging font: split `s` into lines no
 /// wider than `max_w` SOURCE pixels (`UiAssets::text_width` units;
 /// the caller applies its own scale). A single over-long word gets
@@ -1973,6 +2088,9 @@ struct App {
     /// (consumed by `attach_replay_record`), then the live driver.
     replay_pending: Option<replay::ReplayFile>,
     replay: Option<replay::ReplayDriver>,
+    /// `--thirdperson`: the replay viewpoint (`camera.rs`). Read only
+    /// while a replay is live — live play always flies first person.
+    third_person: bool,
     /// `--record`: the destination path, then the live recorder.
     record_path: Option<PathBuf>,
     recorder: Option<replay::PortRecorder>,
@@ -2101,6 +2219,7 @@ impl App {
         launch: LaunchParams,
         replay_boot: Option<replay::ReplayFile>,
         record_path: Option<PathBuf>,
+        third_person: bool,
     ) -> Self {
         // The running game's identity is known without a level: the
         // campaign id (a campaign boots to its frontend, level-less).
@@ -2228,6 +2347,7 @@ impl App {
             launch,
             replay_pending: replay_boot,
             replay: None,
+            third_person,
             record_path,
             recorder: None,
             rec_toggles: serde_json::Map::new(),
@@ -4191,14 +4311,37 @@ impl App {
             self.cfg.gameplay.patches.mc2_dweller_invisibility.on(),
             self.cfg.gameplay.patches.ball_owner_recolor.on(),
         );
-        // The replay GHOST (④): the recorded pose as a translucent
-        // wizard-carpet, riding beside the free-running sim — where
-        // they overlap, the replay is visually exact.
-        if let Some(d) = &self.replay
-            && let Some(b) = replay::ghost_billboard(d, sess)
-        {
-            billboards.push(b);
-        }
+        // THE REPLAY VIEWPOINT (④). Two instrument billboards, both
+        // minted here from a pose and never from the world.
+        //
+        // ⚖ PLAYER RULING 2026-09-20, splitting the replay in two:
+        //
+        // `--firstperson` (default) draws NEITHER. The old ghost — the
+        // recorded retail pose, translucent, sitting under the
+        // viewport — only obscured the picture, and the divergence it
+        // advertised is in the take's data and the HUD anyway; with
+        // the corpus all but certified, a visibly displaced ghost is a
+        // sight nobody has had in rounds.
+        //
+        // `--thirdperson` draws the HUMAN's own carpet, solid, as the
+        // subject the boom is framing (`camera.rs`) — off the SAME
+        // interpolated flyer the camera anchors to, so the subject can
+        // never stutter against its own camera, and identically for a
+        // retail take and a port one (the ghost exists only for retail
+        // takes; the flyer exists for both).
+        //
+        // `MGC_REPLAY_GHOST=1` puts the ghost back in either view, for
+        // the day a divergence wants watching: retail's pose
+        // translucent over the port's solid one is exactly the A/B
+        // picture.
+        push_replay_instruments(
+            &mut billboards,
+            self.replay.as_ref(),
+            self.third_person,
+            sess.level.game,
+            interp_carpet(&sess.prev_flyer, &sess.sim.flyer, alpha),
+            &dims,
+        );
         r.set_billboards(billboards);
         // Enhanced fire: the procedural crater (walls + smoke) goes
         // FIRST so it wins density-cap slots; then the velocity-aware
@@ -4440,7 +4583,29 @@ impl App {
         let overlay = map_overlay(level, &self.cfg);
         if let Some(r) = &mut self.renderer {
             if entities {
-                r.set_billboards(level.billboards.clone());
+                // THE TICK-RATE ARM of the draw set — what runs with
+                // smooth motion off. The replay instruments ride here
+                // as well as on the frame-rate arm; see
+                // `push_replay_instruments` for why that is not
+                // optional. At tick rate the carpet pose is the tick's
+                // own (alpha = 1, no interpolation to do).
+                let mut set = level.billboards.clone();
+                let index = level.sprites.as_ref().map(|(i, _)| i);
+                let dims = |id: u16| {
+                    index
+                        .and_then(|i| i.sprites.get(id as usize))
+                        .map(|s| (s.width, s.height, s.flags))
+                };
+                let f = &sim.flyer;
+                push_replay_instruments(
+                    &mut set,
+                    self.replay.as_ref(),
+                    self.third_person,
+                    level.game,
+                    (f.x, f.y, f.z, f.yaw),
+                    &dims,
+                );
+                r.set_billboards(set);
                 r.set_health_bars(bars);
                 r.set_lights(&lights);
             }
@@ -6220,17 +6385,8 @@ impl App {
         let sess = sess_ref!(self);
         let (a, b) = (&sess.prev_flyer, &sess.sim.flyer);
         // Positions may wrap across the 256-tile seam; take the
-        // short way around for interpolation.
-        let lerp_wrap = |p: f32, q: f32| {
-            let mut d = q - p;
-            if d > 128.0 {
-                d -= 256.0;
-            }
-            if d < -128.0 {
-                d += 256.0;
-            }
-            (p + d * alpha).rem_euclid(256.0)
-        };
+        // short way around for interpolation (`interp_carpet`).
+        let (carpet_x, carpet_y, carpet_z, carpet_yaw) = interp_carpet(a, b, alpha);
         // The knock camera kick (remc1 :52433-37): the view
         // pitches down ~v_22/8 engine-angle units while a
         // buffet/knock is live (the kraken drag feedback).
@@ -6273,15 +6429,35 @@ impl App {
         // view a half tile low everywhere, which reads as "docked at
         // the castle you sit lower than retail" wherever the ground is
         // close enough to judge (player report 2026-08-05).
-        let carpet_y = a.y + (b.y - a.y) * alpha;
-        let cam = CameraView {
-            x: lerp_wrap(a.x, b.x),
+        // THE EYE: retail's own viewpoint, and what everything that
+        // wants the PLAYER rather than the picture reads (the aim ray,
+        // the coordinate overlay).
+        let eye = CameraView {
+            x: carpet_x,
             y: carpet_y + mgc_sim::EYE_LIFT,
-            z: lerp_wrap(a.z, b.z),
-            yaw: a.yaw + (b.yaw - a.yaw) * alpha,
+            z: carpet_z,
+            yaw: carpet_yaw,
             pitch: view_pitch - kick,
             roll: view_roll,
             fov_y: FOV_Y,
+        };
+        // THE RENDER CAMERA. Live play and `--firstperson` render from
+        // the eye; `--thirdperson` swings it onto a boom behind the
+        // carpet so the flight can be watched (`camera.rs`). The boom
+        // frames the CARPET PLANE, not the eye — half a tile at three
+        // tiles' range is a sixth of the frame.
+        let cam = if self.third_person && self.replay.is_some() {
+            let aspect = self
+                .window
+                .as_ref()
+                .map(|w| {
+                    let s = w.inner_size();
+                    s.width as f32 / s.height.max(1) as f32
+                })
+                .unwrap_or(mgc_render::NATIVE_W / mgc_render::NATIVE_H);
+            third_person_camera(&eye, carpet_y, &sess.sim, aspect)
+        } else {
+            eye
         };
         // The overlay fog wall: terrain fully occludes at
         // 0.95·fog_distance (see terrain.wgsl fog_amount);
@@ -6768,12 +6944,16 @@ impl App {
                 // camera — otherwise the pointer steps at
                 // 24 Hz while the camera glides (choppy,
                 // player report 2026-07-23).
+                // ⚠ THE AIM RAY IS THE PLAYER'S, NOT THE PICTURE'S.
+                // Under `--thirdperson` the render camera has left the
+                // carpet, so every term here reads `eye` — only the
+                // PROJECTION below takes `cam`.
                 let (neutral_yaw, pose_yaw) = match self.cfg.controls.models.thrust {
-                    config::ThrustModel::Classic => (cam.yaw, f.yaw),
+                    config::ThrustModel::Classic => (eye.yaw, f.yaw),
                     config::ThrustModel::Enhanced => {
-                        let lead = (sess.sim.aim_yaw() + self.mouse.yaw - cam.yaw)
+                        let lead = (sess.sim.aim_yaw() + self.mouse.yaw - eye.yaw)
                             .clamp(-mgc_sim::LEAD_MAX, mgc_sim::LEAD_MAX);
-                        let a = cam.yaw + lead;
+                        let a = eye.yaw + lead;
                         (a, a)
                     }
                 };
@@ -6786,9 +6966,9 @@ impl App {
                         &cam,
                         size.0,
                         size.1,
-                        cam.x + sy * cp * AIM_D,
-                        cam.y + sp * AIM_D,
-                        cam.z - cyaw * cp * AIM_D,
+                        eye.x + sy * cp * AIM_D,
+                        eye.y + sp * AIM_D,
+                        eye.z - cyaw * cp * AIM_D,
                     )
                 } else {
                     None
@@ -6964,16 +7144,18 @@ impl App {
             // 1024/3072): x/y = the horizontal position on
             // the sim's wrapping 8.8 axes, z = altitude,
             // (+E) = elevation over the terrain underneath.
-            // Reads the interpolated camera pose, so it glides
-            // with the picture — but reports the CARPET plane,
+            // Reads the interpolated EYE (never the render
+            // camera — `--thirdperson` moves that off the
+            // carpet), so it glides with the picture while
+            // still reporting the CARPET plane,
             // backing out the eye lift the camera rides
             // (`mgc_sim::EYE_LIFT`): the floor/band numbers this
             // readout speaks in are carpet-relative.
             if self.cfg.render.debug.coords && assets.has_font() {
-                let g = sess.sim.ground_height(cam.x, cam.z);
-                let xe = (cam.x.rem_euclid(256.0) * 256.0) as u16;
-                let ye = (cam.z.rem_euclid(256.0) * 256.0) as u16;
-                let ze = ((cam.y - mgc_sim::EYE_LIFT) * 256.0).round() as i32;
+                let g = sess.sim.ground_height(eye.x, eye.z);
+                let xe = (eye.x.rem_euclid(256.0) * 256.0) as u16;
+                let ye = (eye.z.rem_euclid(256.0) * 256.0) as u16;
+                let ze = ((eye.y - mgc_sim::EYE_LIFT) * 256.0).round() as i32;
                 let elev = ze - (g * 256.0).round() as i32;
                 let text = format!("x {xe}, y {ye}, z {ze} ({elev:+})");
                 let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
@@ -8392,6 +8574,12 @@ struct Args {
     /// recovery, port recordings via the exact input channel);
     /// docs/RECORDING.md "Consumers".
     replay: Option<PathBuf>,
+    /// `--thirdperson`: watch a `--replay` from a boom behind the
+    /// carpet instead of through its eye, with the recorded pose
+    /// drawn SOLID (`--firstperson`, the default, hides it entirely).
+    /// Replay-only for now — player ruling 2026-09-20: third person
+    /// breaks aiming, so live play keeps the retail eye.
+    third_person: bool,
     /// `--replay-check <take.mgcr>`: the headless verifying twin —
     /// run the whole take, print the drift summary; exit 0 only on
     /// zero divergence.
@@ -8465,6 +8653,7 @@ fn parse_args() -> Result<Args, String> {
     let mut awake_range = None;
     let mut pool_slots = None;
     let mut replay = None;
+    let mut third_person = false;
     let mut replay_check = None;
     let mut record = None;
     let mut flock_probe = None;
@@ -8544,6 +8733,11 @@ fn parse_args() -> Result<Args, String> {
                     it.next().ok_or("--replay needs a .mgcr path")?,
                 ));
             }
+            // The replay viewpoint. `--firstperson` is the default and
+            // exists so it can be said out loud; `--thirdperson` swings
+            // the eye onto a boom behind the carpet (`camera.rs`).
+            "--firstperson" => third_person = false,
+            "--thirdperson" => third_person = true,
             "--replay-check" => {
                 replay_check = Some(PathBuf::from(
                     it.next().ok_or("--replay-check needs a .mgcr path")?,
@@ -8812,6 +9006,9 @@ fn parse_args() -> Result<Args, String> {
                      [--pool-slots N] [--awake-range TILES (0 = always awake)] \
                      [--replay take.mgcr (play a recording — retail or port — as \
                      the session; level from the header)] \
+                     [--firstperson (default: replay through the carpet's own \
+                     eye, the recorded pose hidden) | --thirdperson (watch it \
+                     from a boom behind the carpet, the recorded pose solid)] \
                      [--replay-check take.mgcr (headless: whole take + drift \
                      summary; exit 0 = zero divergence)] \
                      [--record out.mgcr (write this session as a port recording; \
@@ -8878,6 +9075,7 @@ fn parse_args() -> Result<Args, String> {
         pool_slots,
         awake_range,
         replay,
+        third_person,
         replay_check,
         record,
         flock_probe,
@@ -10235,6 +10433,12 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     // faithful tiers and no instruments, a port take pins its own
     // recorded sim closure.
     let mut replay_boot: Option<replay::ReplayFile> = None;
+    // `--thirdperson` is a REPLAY view (player ruling 2026-09-20:
+    // third person breaks aiming, so live play keeps retail's eye).
+    // Say so rather than ignoring it silently.
+    if args.third_person && args.replay.is_none() {
+        eprintln!("--thirdperson: ignored — it is a --replay view (live play flies first person)");
+    }
     if let Some(path) = args.replay.as_ref().or(args.replay_check.as_ref()) {
         let file = match replay::ReplayFile::open(path) {
             Ok(f) => f,
@@ -10590,6 +10794,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         },
         replay_boot,
         args.record.clone(),
+        args.third_person,
     );
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");

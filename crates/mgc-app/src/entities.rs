@@ -1962,6 +1962,49 @@ pub fn ghost_billboard(
     yaw: f32,
     sprite_dims: &impl Fn(u16) -> Option<(u16, u16, u16)>,
 ) -> Option<Billboard> {
+    instrument_billboard(game, type_index, x, alt, z, yaw, 4, sprite_dims)
+}
+
+/// The sprite-stats row carrying the HUMAN's own carpet art, in both
+/// games: MC1's rivals take rows 273-279 and *"slot 0 keeps 44"*
+/// (`mc1/rivals.rs`, retail :54927-55), MC2's `carpet_sprite_row(0)`
+/// is the same 44.
+pub const HUMAN_CARPET_ROW: u16 = 44;
+
+/// THE PLAYER'S OWN CARPET, drawn solid — the `--thirdperson` subject.
+///
+/// ⭐ **NEITHER GAME HAS EVER DRAWN THIS.** Retail is first person, so
+/// the human's carpet is art the renderer never asked for, and the
+/// port inherits the shape honestly: the human is not a pool entity at
+/// all (`World::tick` takes a `PlayerPose`), so no amount of unhiding
+/// would produce one — measured 2026-09-20, zero class-3 poses at the
+/// player across MC1 levels that carry rivals. It is therefore an
+/// INSTRUMENT like the ghost, minted at draw time from the
+/// interpolated flyer and touching no world state, which is what keeps
+/// `--thirdperson` off the graded lanes entirely.
+pub fn human_billboard(
+    game: GameId,
+    x: f32,
+    alt: f32,
+    z: f32,
+    yaw: f32,
+    sprite_dims: &impl Fn(u16) -> Option<(u16, u16, u16)>,
+) -> Option<Billboard> {
+    instrument_billboard(game, HUMAN_CARPET_ROW, x, alt, z, yaw, 0, sprite_dims)
+}
+
+/// A billboard that belongs to the app, not to the world: no tile
+/// chain, no distance concealment, an explicit blend.
+fn instrument_billboard(
+    game: GameId,
+    type_index: u16,
+    x: f32,
+    alt: f32,
+    z: f32,
+    yaw: f32,
+    blend: u8,
+    sprite_dims: &impl Fn(u16) -> Option<(u16, u16, u16)>,
+) -> Option<Billboard> {
     let s = resolve_pose_sprite(game, type_index, sprite_dims)?;
     Some(Billboard {
         x: x.rem_euclid(MAP_TILES as f32),
@@ -1972,7 +2015,7 @@ pub fn ghost_billboard(
         draw_type: s.draw_type,
         frame: 0,
         world_h: s.world_h,
-        blend: 4,
+        blend,
         // An instrument, not a retail entity — never distance-hidden,
         // and on no tile chain, so it takes the neutral co-tile rank.
         conceal: false,
@@ -2637,6 +2680,34 @@ mod tests {
             map_only: false,
             flame_scale: 1.0,
             sprite_h_units: None,
+        }
+    }
+
+    /// THE REPLAY VIEWPOINT'S TWO INSTRUMENTS (2026-09-20): the
+    /// `--thirdperson` subject is the human's own carpet art, SOLID;
+    /// the ghost is the same construction at the instrument alpha.
+    /// Both are wrapped onto the torus and exempt from concealment.
+    #[test]
+    fn the_replay_instruments_split_solid_subject_from_faint_ghost() {
+        // A stub sprite index: every row is 64x64, flags 0.
+        let dims = |_: u16| Some((64u16, 64u16, 0u16));
+        for game in [GameId::Mc1, GameId::Mc2] {
+            let subject = human_billboard(game, 300.0, 4.0, -2.0, 0.5, &dims)
+                .expect("the human carpet resolves in both games");
+            let ghost = ghost_billboard(game, HUMAN_CARPET_ROW, 300.0, 4.0, -2.0, 0.5, &dims)
+                .expect("the ghost resolves from the same row");
+            assert_eq!(subject.blend, 0, "{game:?}: the subject is opaque");
+            assert_eq!(ghost.blend, 4, "{game:?}: the ghost keeps instrument alpha");
+            // Same art, same place — they differ only in opacity.
+            assert_eq!(subject.sprite_base, ghost.sprite_base);
+            assert!(!subject.conceal && !ghost.conceal);
+            assert!(
+                (subject.x - 44.0).abs() < 1e-3 && (subject.z - 254.0).abs() < 1e-3,
+                "wrapped onto the torus, got ({}, {})",
+                subject.x,
+                subject.z
+            );
+            assert!((subject.y - 4.0).abs() < 1e-3, "altitude is not wrapped");
         }
     }
 

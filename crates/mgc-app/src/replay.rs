@@ -16,7 +16,7 @@
 //! app's own pacing machinery (F3 game speed, P pause) is the
 //! playback transport for free.
 
-use crate::{LoadedLevel, Session};
+use crate::LoadedLevel;
 use mgc_formats::mgcr::{
     self, Family, ObsMc1, PortInput, Recording, RecordingWriter, RetailMc1, RetailMc2,
     TerrainImage, decode_retail_mc1, decode_retail_mc2,
@@ -1438,15 +1438,13 @@ pub fn begin_replay_recording(
 
 /// The ghost's translucent billboard, if the session can resolve the
 /// sprite (see `entities::ghost_billboard`).
-pub fn ghost_billboard(driver: &ReplayDriver, sess: &Session) -> Option<mgc_render::Billboard> {
+pub fn ghost_billboard(
+    driver: &ReplayDriver,
+    game: mgc_sim::ids::GameId,
+    sprite_dims: &impl Fn(u16) -> Option<(u16, u16, u16)>,
+) -> Option<mgc_render::Billboard> {
     let (x, alt, z, yaw, type_index) = driver.ghost?;
-    let index = sess.level.sprites.as_ref().map(|(i, _)| i);
-    let dims = |id: u16| {
-        index
-            .and_then(|i| i.sprites.get(id as usize))
-            .map(|s| (s.width, s.height, s.flags))
-    };
-    crate::entities::ghost_billboard(sess.level.game, type_index, x, alt, z, yaw, &dims)
+    crate::entities::ghost_billboard(game, type_index, x, alt, z, yaw, sprite_dims)
 }
 
 #[cfg(test)]

@@ -590,10 +590,42 @@ remains the path for any unpatched exe.
     embedded `start_mgcs_b64`, feeds the input channel and asserts
     the hash channel live.
   Either way the HUD carries a bit-exact / "diverged since t=N"
-  counter and a translucent GHOST billboard rides at the recorded
-  pose (retail takes) — a mid-demo desync is surfaced on screen,
-  never silently absorbed. Playback speed is a viewer control (F3;
-  presentation only); per-tick semantics are invariant.
+  counter — a mid-demo desync is surfaced on screen, never silently
+  absorbed. Playback speed is a viewer control (F3; presentation
+  only); per-tick semantics are invariant.
+
+  **THE VIEWPOINT (player-ruled 2026-09-20).** A replay is watched one
+  of two ways, and both are presentation: no sim state, no graded
+  lane, nothing hashed.
+  - **`--firstperson`** (the DEFAULT, so the flagless behaviour is
+    unchanged): through the carpet's own eye, exactly as the take was
+    flown. NOTHING is drawn at the player — the translucent GHOST
+    billboard that used to ride at the recorded pose is now OFF. It
+    sat under the viewport obscuring the picture, and the divergence
+    it advertised is in the take's data and the HUD counter anyway.
+  - **`--thirdperson`**: the eye swings onto a BOOM behind and above
+    the carpet (`mgc-app/src/camera.rs`), looking along the flyer's
+    own view direction — parallel, never toed in, so the horizon sits
+    where first person puts it. The player's own carpet is drawn
+    SOLID as the subject; retail draws it nowhere and the port has no
+    human entity to unhide (`World::tick` takes a `PlayerPose`), so it
+    is minted at draw time from the interpolated flyer, exactly like
+    the ghost — an instrument, never a pool entity.
+    ⭐ **THE BOOM FRAMES AT A FIXED ANGLE, NOT A FIXED LENGTH**: it
+    sits on a cone at `atan(tan(fov_y/2)/3)` off the reversed view
+    axis, which puts the subject on the two-thirds mark of the screen
+    at EVERY length — and the length is not constant, because the
+    boom shortens against terrain (floor via `ground_height_tiles`,
+    cave roof via `player_cave_ceiling`, both `&self` reads) so the
+    camera never ends up inside rock or through a cave ceiling. A
+    framing that drifted as the boom shortened would pump the subject
+    up and down the screen at every hill. No bank: a billboard carpet
+    cannot roll.
+  - **`MGC_REPLAY_GHOST=1`** puts the ghost back in either view, for
+    a take that HAS diverged: retail's pose translucent over the
+    port's solid one is the A/B picture.
+  `--thirdperson` is replay-only — it breaks aiming, so live play
+  keeps retail's eye.
   **`--replay-check <file>`** is the headless twin: whole take, drift
   summary on stdout, exit 0 only on zero divergence. Its retail
   results are certified against `mgc-conform replay`'s (identical
