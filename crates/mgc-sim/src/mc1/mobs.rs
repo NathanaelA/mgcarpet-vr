@@ -1654,7 +1654,9 @@ impl Gen {
                 (e.x, e.y, e.z, e.id24, e.f84)
             };
             if let Some(p) = self.spawn_zigzag(x, y, z) {
-                self.arm_projectile(p, owner, tf66, tf67, tgt, tx, ty, tz, 800, 23, f84 as i16);
+                let (owner, tf66, tf67, tgt, lift) =
+                    self.mc1_arm_live(p, i, (owner, tf66, tf67, tgt, f84 as i16), false, 1);
+                self.arm_projectile(p, owner, tf66, tf67, tgt, tx, ty, tz, 800, 23, lift);
                 self.ent[p].row156 = 6;
             }
         }
@@ -1935,7 +1937,9 @@ impl Gen {
             if let Some(p) = self.spawn_fireball(x, y, z) {
                 self.ent[p].row156 = 2; // unk_98F38[2], turn 0x71
                 self.ent[p].f140 = 60000;
-                self.arm_projectile(p, owner, f66, f67, tgt, tx, ty, tz, 3000, 0, 4 * f84 as i16);
+                let (owner, f66, f67, tgt, lift) =
+                    self.mc1_arm_live(p, i, (owner, f66, f67, tgt, 4 * f84 as i16), true, 4);
+                self.arm_projectile(p, owner, f66, f67, tgt, tx, ty, tz, 3000, 0, lift);
             }
         }
         let row = &BEHAVIOR[self.ent[i].row156 as usize];
@@ -3168,7 +3172,7 @@ impl Gen {
     /// folded into their own arms below, where the same gate is
     /// already in scope.
     #[allow(clippy::too_many_arguments)]
-    fn attack_thunk(
+    pub(crate) fn attack_thunk(
         &mut self,
         i: usize,
         model: u8,
@@ -3211,6 +3215,8 @@ impl Gen {
             0 | 3 => {
                 if let Some(p) = self.spawn_fireball(x, y, z) {
                     self.ent[p].row156 = 6; // turn 0: no homing
+                    let (owner, sf66, sf67, tgt, lift) =
+                        self.mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
                     self.arm_projectile(p, owner, sf66, sf67, tgt, tx, ty, tz, 500, 0, lift);
                     self.snd(8, i); // :22182/:22406
                     return true;
@@ -3248,6 +3254,8 @@ impl Gen {
             // sub_1A990 (:21907): the 250-damage straight bolt.
             4 | 10 => {
                 if let Some(p) = self.spawn_bolt(x, y, z) {
+                    let (owner, sf66, sf67, tgt, lift) =
+                        self.mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
                     self.arm_projectile(p, owner, sf66, sf67, tgt, tx, ty, tz, 250, 0, lift);
                     return true;
                 }
@@ -3274,8 +3282,16 @@ impl Gen {
                 match v4 {
                     0 => {
                         for k in 0..n {
+                            // :21990-22006 — the muzzle is re-read off
+                            // the shooter's `+72` for EVERY shot in the
+                            // volley, so a shot that seized the shooter
+                            // re-homes the rest onto its own zeroed axis
+                            // ([`crate::mc1::combat::no_mc1_self_seize`]).
+                            let (x, y, z) = self.mc1_muzzle(i, (x, y, z));
                             if let Some(p) = self.spawn_fireball(x, y, z) {
                                 self.ent[p].row156 = (6 - k).max(0) as u8;
+                                let (owner, sf66, sf67, tgt, lift) = self
+                                    .mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
                                 self.arm_projectile(
                                     p, owner, sf66, sf67, tgt, tx, ty, tz, 400, 0, lift,
                                 );
@@ -3289,8 +3305,11 @@ impl Gen {
                         // ladder as case 0's; the spawn default is
                         // NOT it.
                         for k in 1..n.max(1) {
+                            let (x, y, z) = self.mc1_muzzle(i, (x, y, z));
                             if let Some(p) = self.spawn_zigzag(x, y, z) {
                                 self.ent[p].row156 = (6 - k).max(0) as u8;
+                                let (owner, sf66, sf67, tgt, lift) = self
+                                    .mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
                                 self.arm_projectile(
                                     p, owner, sf66, sf67, tgt, tx, ty, tz, 800, 23, lift,
                                 );
@@ -3301,6 +3320,8 @@ impl Gen {
                     3..=6 => {
                         if let Some(p) = self.spawn_trail_bolt(x, y, z) {
                             self.ent[p].row156 = 3;
+                            let (owner, sf66, sf67, tgt, lift) =
+                                self.mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
                             self.arm_projectile(
                                 p, owner, sf66, sf67, tgt, tx, ty, tz, 8000, 17, lift,
                             );
@@ -3325,6 +3346,8 @@ impl Gen {
             // (3, 0xFF).
             7 => {
                 if let Some(p) = self.spawn_slow_bolt(x, y, z) {
+                    let (owner, sf66, sf67, tgt, lift) =
+                        self.mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
                     self.arm_projectile(p, owner, sf66, sf67, tgt, tx, ty, tz, 780, 0, lift);
                     self.ent[p].row156 = 6;
                     return true;
@@ -3337,6 +3360,8 @@ impl Gen {
             // (+528 = 200, sub_1CE30 :23557-60).
             8 => {
                 if let Some(p) = self.spawn_zigzag(x, y, z) {
+                    let (owner, tf66, tf67, tgt, lift) =
+                        self.mc1_arm_live(p, i, (owner, tf66, tf67, tgt, lift), false, 1);
                     self.arm_projectile(p, owner, tf66, tf67, tgt, tx, ty, tz, 4000, 23, lift);
                     self.ent[p].row156 = 6;
                     self.snd(38, i); // :23555
@@ -3353,6 +3378,8 @@ impl Gen {
             9 => {
                 let dmg = if self.ent[i].f144 != 0 { 600 } else { 400 };
                 if let Some(p) = self.spawn_bolt(x, y, z) {
+                    let (owner, sf66, sf67, tgt, lift) =
+                        self.mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
                     self.arm_projectile(p, owner, sf66, sf67, tgt, tx, ty, tz, dmg, 0, lift);
                     // m9 alone re-skins its bolt (:21957): row 203 =
                     // sprite family base 215 where 195 is base 193 —
@@ -3378,6 +3405,8 @@ impl Gen {
             11 => {
                 if let Some(p) = self.spawn_seeker(x, y, z) {
                     self.ent[p].f26 = 20;
+                    let (owner, _, _, tgt, lift) =
+                        self.mc1_arm_live(p, i, (owner, 0xFF, 0xFF, tgt, lift), false, 1);
                     self.arm_projectile(p, owner, 0xFF, 0xFF, tgt, tx, ty, tz, 3000, 25, lift);
                     self.snd(9, i); // :24700
                     return true;
@@ -3389,6 +3418,8 @@ impl Gen {
             15 => {
                 if let Some(p) = self.spawn_bolt(x, y, z) {
                     let dflt = self.ent[p].f44;
+                    let (owner, sf66, sf67, tgt, lift) =
+                        self.mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
                     self.arm_projectile(p, owner, sf66, sf67, tgt, tx, ty, tz, dflt, 0, lift);
                     return true;
                 }

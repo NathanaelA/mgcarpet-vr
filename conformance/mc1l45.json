@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l45",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 2670,
+   "file": "a-castle-downgrade-reprices-an-unbound-owners-token.mgcr",
+   "source": "mc1l45",
+   "note": "A CASTLE LEVEL EVENT NEEDS NO BIND (round 159, w159a law 1, MGC_NO_MC1_CASTLE_DOWNGRADE_REPRICE): the teardown sub_47A70_47DB0 (remc1 sub_main.cpp :56498, CARPET.EXE file 0x60268) decrements +26 (0x6034F) and calls sub_47C60 unconditionally (0x6035C); sub_47C60 (:56572) tests only the owner's +70 <= 1u (0x60486-90) and wizext+708 != 0 (0x60498-A2), then sub_47BD0 (:56540) re-prices the Create-Castle token: +136 = cap, +140 = cap / +50 (0x6040E-1D). No wizext+50 bind test (that is only the respawn caller's gate, :55034). The port's level-event stamp also demanded castle flags bit 2 (its bind stand-in), which an authored/setup castle that never committed a level-up lacks. mc1l45 pair 2670->2671: wiz 4's level-3 castle 547 (flags 12) drops to level 2; retail's (12,16) token 526 goes 40000/396 -> 20000/198, the port kept 40000/396. Same head on mc1l45-froze t=1266. Ledger ROUND 159 w159a."
+  }
+ ]
+}

@@ -3416,6 +3416,35 @@ pub(crate) fn mc1_castle_ladder_per_tick() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_LADDER_EVENT").is_some())
 }
 
+/// Kill switch for **A CASTLE DOWNGRADE RE-PRICES AN UNBOUND OWNER'S
+/// TOKEN** (round 159, w159a): set
+/// `MGC_NO_MC1_CASTLE_DOWNGRADE_REPRICE=1` to restore the bind gate
+/// (castle flags bit 2, the port's stand-in for `wizext+50`) on the
+/// level-event ladder stamp in [`World::tick_inner`].
+///
+/// Retail's teardown `sub_47A70_47DB0` (:56498, CARPET.EXE file
+/// 0x60268; ONE caller, `sub_470E0` at VA 0x470EF) decrements `+26`
+/// (0x6034F) and calls `sub_47C60_47FA0` (0x6035C `call 0x60458`)
+/// unconditionally inside its `+26 > 0` arm. `sub_47C60` (:56572,
+/// file 0x60458) gates on exactly two things: the OWNER's `+70 <= 1u`
+/// (0x60486-90) and `wizext+708 != 0` (0x60498-A2, `+0x2C4` =
+/// `+676[16]`, the Create-Castle token). No `wizext+50` read — the
+/// bind is the RESPAWN caller's gate (:55034 → `sub_47DD0`), not the
+/// ladder's. So a castle that never committed a level-up in this
+/// run (an authored or level-setup castle, flags bit 2 clear) still
+/// re-prices its owner's token on every downgrade: `sub_47BD0`
+/// writes `token+136 = cap`, `token+140 = cap / movswl token+50`
+/// (0x6040E-1D).
+///
+/// Witness: mc1l45 t=2671 (and mc1l45-froze t=1266). Wiz 4 (ent
+/// 522)'s level-3 castle 547 (flags 12, never committed) drops to
+/// level 2; retail re-prices token 526 (12,16) 40000/396 → 20000/198
+/// the same tick. The port kept 40000/396 — segment 0's head.
+pub(crate) fn mc1_castle_ladder_needs_bind() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_DOWNGRADE_REPRICE").is_some())
+}
+
 /// ⭐ HANDLER ATTRIBUTION (`MGC_WRITE_TRACE=<slot>[:<field>]`) — the
 /// 80% write barrier: [`World::tick_inner`] snapshots the watched
 /// `Ent` around every pre/post pass and every dispatch, diffs after,
@@ -9708,8 +9737,16 @@ impl World {
                         // the price its last event wrote
                     } else if self.g.ent[i].f26 > 0
                         && self.g.ent[i].flags & 0x400 == 0
-                        && self.g.ent[i].flags & 2 != 0
+                        && (self.g.ent[i].flags & 2 != 0
+                            || (self.g.ent[i].f26 != pre26
+                                && !mc1_castle_ladder_needs_bind()))
                     {
+                        // ⭐ A LEVEL EVENT NEEDS NO BIND. The bind
+                        // stand-in (flags bit 2) answers the per-tick
+                        // era's question; `sub_47C60` itself tests
+                        // only the owner's `+70 <= 1u` and
+                        // `wizext+708 != 0` — see
+                        // [`mc1_castle_ladder_needs_bind`].
                         if owner_alive {
                             let lvl = self.g.ent[i].f26;
                             let cap =
@@ -36821,6 +36858,65 @@ mod tests {
         assert_eq!(run(false, false, false), 250, "retail: a real volcano is kicked");
     }
 
+    /// ⭐ THE KICK WRITES A TOKEN'S SPELL LEVEL, NOT ITS BURST (round
+    /// 159, w159a). The eruption start's store is a RAW `+26` write
+    /// (CARPET.EXE file 0x3E7B6); on a live class-12 token retail's
+    /// `+26` is the spell level, while the port homes the token's `+48`
+    /// burst counter in `f26`. mc1l45 t=16951: the kick lands on wiz
+    /// 3's Retreat token 169 `(12,21)` — retail `+26` 0 → 250, `+48`
+    /// stays 0 and the wizard keeps speed 0; the port armed the burst
+    /// and snapped the wizard to `−f128 = −80` a tick later.
+    /// `MGC_NO_MC1_VOLCANO_KICK_TOKEN_LEVEL=1` restores the blind store.
+    #[test]
+    fn the_eruption_kick_does_not_arm_a_token_burst() {
+        let mut w = flat_world();
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: true,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        let tok = w.g.new_event().expect("token slot");
+        {
+            let e = &mut w.g.ent[tok];
+            e.class64 = 12;
+            e.model65 = 21;
+            e.f26 = 0; // retail +48: idle
+        }
+        let (vx, vy) = (0x8000u16 + 0x2000, 0x8000u16);
+        let vz = w.g.ground_z(vx, vy) as i16;
+        let v = w.g.new_event().expect("volcano slot");
+        {
+            let e = &mut w.g.ent[v];
+            e.class64 = 10;
+            e.model65 = 18;
+            e.tick70 = 18;
+            e.max_life = 10000;
+            e.act_life = 10000;
+            e.f26 = 0;
+        }
+        w.g.link(v, vx, vy, vz);
+        w.g.erupting = tok as u16;
+        w.g.effect_tick(v, &ctx);
+        assert_eq!(w.g.erupting, v as u16, "the start registers the new driver");
+        let want = if crate::mc1::combat::volcano_kick_spares_token_burst() {
+            0
+        } else {
+            250
+        };
+        assert_eq!(
+            w.g.ent[tok].f26, want,
+            "the raw +26 store is the token's spell level, not its +48 burst"
+        );
+    }
+
     /// The other two blind register writes under the same patch
     /// (`volcano_register_revalidate`, round 158). (1) The plume
     /// handover soft-kills whatever inherited the old `(10,19)`'s slot
@@ -38540,6 +38636,48 @@ mod tests {
         assert_eq!(
             w.g.ent[m].f136, ctor,
             "dead owner: the ladder freezes at the last commit"
+        );
+    }
+
+    /// ⭐ **A CASTLE DOWNGRADE RE-PRICES AN UNBOUND OWNER'S TOKEN**
+    /// (round 159, w159a). `sub_47A70_47DB0`'s teardown calls
+    /// `sub_47C60_47FA0` unconditionally (CARPET.EXE 0x6035C), and the
+    /// ladder gates only on the owner's `+70 <= 1u` and `wizext+708`
+    /// — never on the `wizext+50` bind the port models as castle flags
+    /// bit 2. mc1l45 t=2671: wiz 4's never-committed level-3 castle
+    /// 547 (flags 12) drops to level 2 and retail re-prices token 526
+    /// 40000/396 → 20000/198; the port kept 40000/396.
+    /// `MGC_NO_MC1_CASTLE_DOWNGRADE_REPRICE=1` restores the bind gate.
+    #[test]
+    fn castle_downgrade_reprices_an_unbound_owners_token() {
+        let mut w = rival_world(true, 3);
+        let c = w.rival_castle(w.rivals[0].ent).expect("castle");
+        let m = w.rivals[0].owned[16] as usize;
+        w.rivals[0].eliminated = true;
+        w.tick(away(), PlayerCommand::default());
+        let lvl = w.g.ent[c].f26;
+        assert!(lvl >= 2, "a level to lose without dying");
+        // An authored / level-setup castle that never committed a
+        // level-up in this run: the bind stand-in is clear.
+        w.g.ent[c].flags &= !2;
+        w.g.ent[m].f136 = 1;
+        w.g.ent[m].f140 = 1;
+        // The lethal notice parks the castle in action 6; the leveler
+        // runs on its next pass.
+        w.g.ent[c].tick70 = 6;
+        w.g.ent[c].act_life = -400;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[c].f26, lvl - 1, "the teardown took one rung");
+        let cap = Gen::CASTLE_CAP[(lvl - 1) as usize];
+        let want = if crate::engine::world::mc1_castle_ladder_needs_bind() {
+            (1, 1)
+        } else {
+            (cap, cap / 101)
+        };
+        assert_eq!(
+            (w.g.ent[m].f136, w.g.ent[m].f140),
+            want,
+            "sub_47C60 re-prices the owner's token at the new rung, bind or no bind"
         );
     }
 

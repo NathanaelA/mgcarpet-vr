@@ -1,0 +1,18 @@
+{
+ "dir": "fixtures/mc1l47",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 16904,
+   "file": "the-meteor-trail-seizes-its-own-bolt.mgcr",
+   "source": "mc1l47",
+   "note": "THE TRAIL CTOR READS ITS OPERANDS THROUGH A POINTER (round 159, w159e, MGC_NO_MC1_TRAIL_SELF_SEIZE): the m3 meteor trail wrapper sub_53070 (remc1 sub_main.cpp :63021-38) passes the (10,1) seeder ctor a POINTER to the bolt's own +72 (CARPET.EXE file 0x6B881 `8d 43 48` lea / `e8 5e 43 fe ff` call sub_373F0) and reads +24 off the bolt only after it returns (0x6B898 `66 8b 5b 18`); sub_3A510 (file 0x52D08) calls NewEvent FIRST (0x52D09) and links through the pointer AFTER (0x52D48 call sub_41CF0). With the free stack dry the recycle path seizes the BOLT ITSELF, so the seeder links at the freshly zeroed (0,0,0) and keeps its own-slot +24 stamp. The port hoisted (x,y,z,id24) before allocating. mc1l47 pair 16904->16905: the human's (9,3) meteor at slot 977 seizes itself (free stack 0, recycle 13); retail's (10,1) is at (0,0,0) with id24 977, the port's was posed at the bolt (x 31455, z 1795) owned by the human (29). Same class as MGC_NO_EFFECT_RING_LIVE_OPERANDS. Ledger ROUND 159 w159e."
+  },
+  {
+   "t": 20444,
+   "file": "the-castle-snaps-to-ground-before-the-leveler.mgcr",
+   "source": "mc1l47",
+   "note": "TRANSFORM CASE 5 SNAPS THE CASTLE TO THE GROUND (round 159, w159b, MGC_NO_MC1_CASTLE_LEVELER_GROUND): sub_46F10_47250 case 5 (remc1 sub_main.cpp :56088-92) — painter done -> the m41 leveler — is not a pure action case: sub_46D20(a1,1), then `*(a1+76) = sub_11F50(a1+72)`, then sub_47080_473C0 (CARPET.EXE VA 0x46FF1 `56 e8 <sub_11F50> ; 66 89 43 4c`, then VA 0x46FFF `53 e8 <sub_47080>`, its only caller). The port re-grounded z only in the pure waits 1/4/6, so the tick the painter handed back sub-state 5 kept the pre-paint z for one pair. mc1l47 pair 20444->20445: castle 430 (3,2) +70=5, +48 5->6, retail z 3136 -> 3296, port held 3136. Same law on mc1l45 t=8522/9501/34903, mc1l47 t=26846 (+48 4->6, the painter finished earlier in the same walk), mc1l43 t=7669. Ledger ROUND 159 w159b."
+  }
+ ]
+}

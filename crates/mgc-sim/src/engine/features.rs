@@ -2831,6 +2831,27 @@ pub(crate) fn no_mc1_castle_upgrade_latch() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_UPGRADE_LATCH").is_some())
 }
 
+/// `MGC_NO_MC1_CASTLE_LEVELER_GROUND=1` restores the port's stale z on
+/// the transform machine's case 5 (painter done → spawn the m41
+/// leveler). `sub_46F10_47250` case 5 (:56088-92) is NOT a pure action
+/// case: it releases/pins the owner token (`sub_46D20(a1, 1)`), then
+/// snaps the castle to the ground — `*(a1+76) = sub_11F50(a1+72)` —
+/// and only THEN calls `sub_47080_473C0`. CARPET.EXE VA 0x46FE6:
+/// `6a 01 53 e8 <sub_46D20>` / `56 e8 <sub_11F50> ; 66 89 43 4c` /
+/// `53 e8 <sub_47080>` (sub_47080's only caller, VA 0x46FFF). The port
+/// refreshed z only in the pure waits 1/4/6, so the tick the painter
+/// handed back 5 kept the pre-paint tower-top z for one pair.
+///
+/// WITNESSES — `(3,2) +70=5`, `+48 → 6`, retail z steps, port holds:
+/// mc1l45 t=8522 slot 599 (5664 → 5888), t=9501 slot 573, t=34903
+/// slot 650; mc1l47 t=20445 slot 430, t=26846 slot 998 (`+48 4 → 6`:
+/// the painter finished earlier in the same walk); mc1l43 t=7669 slot
+/// 946.
+pub(crate) fn no_mc1_castle_leveler_ground() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_LEVELER_GROUND").is_some())
+}
+
 /// `MGC_NO_MC1_DIG_ABORT_LATCH=1` restores the pre-dig ring walk, which
 /// swallowed [`Gen::dig_cell`]'s clamp latch on every caller that did
 /// not pass `protect`. `sub_40D30_41070` (:51711-16, CARPET.EXE
@@ -10129,6 +10150,16 @@ impl Gen {
             // original's real flow (:56132; cases 1/4/6 are pure
             // waits, :56073-78).
             5 => {
+                // ⭐ CASE 5 SNAPS z TOO, unconditionally, BEFORE the
+                // leveler spawn (:56090 `+76 = sub_11F50(+72)`;
+                // CARPET.EXE VA 0x46FF1 `push esi(+72) / call
+                // sub_11F50 / mov [ebx+0x4c],ax`, then `call
+                // sub_47080` at 0x46FFF). See
+                // [`no_mc1_castle_leveler_ground`].
+                if !no_mc1_castle_leveler_ground() {
+                    let (x, y) = (self.ent[i].x, self.ent[i].y);
+                    self.ent[i].z = self.ground_z(x, y) as i16;
+                }
                 let (x, y, z, own, lvl) = {
                     let e = &self.ent[i];
                     (e.x, e.y, e.site_z, e.id24, e.f26)

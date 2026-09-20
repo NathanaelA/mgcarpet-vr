@@ -82,6 +82,48 @@ fn no_effect_ring_live_operands() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_EFFECT_RING_LIVE_OPERANDS").is_some())
 }
 
+/// `MGC_NO_MC1_TRAIL_SELF_SEIZE=1` restores the pre-dig HOISTED
+/// operands of the meteor's fire-trail wrapper. Retail's `sub_53070`
+/// (remc1 `sub_main.cpp` :63021-38) passes the ctor a POINTER to the
+/// bolt's own position, not a copy: `CARPET.EXE` file 0x6B881
+/// `8d 43 48` (`lea eax,[ebx+0x48]`, +72) / `50` / `e8 5e 43 fe ff`
+/// (`call sub_373F0` = the `(10,1)` ctor `sub_3A510`), and `+24` is
+/// read off `%ebx` only AFTER it returns (`66 8b 5b 18` at 0x6B898).
+/// `sub_3A510` (file 0x52D08) calls `NewEvent_372C0` FIRST
+/// (`e8 aa cd ff ff` at 0x52D09) and only then `sub_41CF0(new, a1)`
+/// (`e8 9b 77 00 00` at 0x52D48), which reads x/y/z through `a1`.
+/// So when the free stack is dry and the allocator seizes the BOLT
+/// ITSELF, `a1` aliases the freshly memset child: the seeder links
+/// at (0,0,0) and takes its own-slot `+24` stamp. WITNESS mc1l47
+/// pair 16904→16905: the human's (9,3) meteor at slot 977 seizes
+/// itself for its trail; retail's (10,1) reads x/y/z 0, `id24` 977,
+/// the port's hoisted copies posed it at the bolt (x 31455, z 1795)
+/// owned by the human (29).
+///
+/// ⭐⭐ IT IS A CLASS, NOT A TRAIL LAW (w159e follow-up). `sub_373F0`
+/// (file 0x4FBE8) has 106 call sites in `CARPET.EXE`; every one that
+/// pushes `lea 0x48(%reg)` of the CALLER's own record hands every
+/// ctor behind it the same pointer, and every class-9/10 ctor body
+/// the port models is `NewEvent` → field stores → `sub_41CF0(new,
+/// a1)` (or a raw `+72` copy), so a self-seized caller always yields
+/// a child posed at its own zeroed (0,0,0). Every read of the
+/// caller's `+24`/`+30`/`+44`/`+68/+69`/… after the allocation then
+/// reads the CHILD, which makes the plain copy-stamps identity
+/// stores, and the caller's closing `sub_41E80(a1)` reaps the child.
+/// [`Gen::mc1_self_seized`] is the shared pose half; each call site
+/// re-reads its post-allocation operands live. The site census and
+/// the unreachable (wizard-caster) half are on that helper.
+///
+/// `MGC_NO_MC1_SELF_SEIZE=1` is the class-wide name; the original
+/// `MGC_NO_MC1_TRAIL_SELF_SEIZE=1` is honoured as a synonym.
+pub(crate) fn no_mc1_self_seize() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var_os("MGC_NO_MC1_SELF_SEIZE").is_some()
+            || std::env::var_os("MGC_NO_MC1_TRAIL_SELF_SEIZE").is_some()
+    })
+}
+
 /// `MGC_NO_PARTNER_SOFTKILL_FIX=1` restores the port's invented
 /// `flags & 0x400 == 0` clause in [`Gen::ball_merge_candidates`]'
 /// tile-ring walk. Retail's `sub_11D10` has NO reap test: an
@@ -171,6 +213,29 @@ pub(crate) fn no_m57_merge() -> bool {
 pub(crate) fn plume_handover_is_guarded() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_PLUME_SPAWN_GUARD").is_none())
+}
+
+/// ⭐ **THE VOLCANO'S BLIND KICK WRITES A TOKEN'S SPELL LEVEL, NOT
+/// ITS BURST** (round 159, w159a). `sub_25EC0` (:28778-81; CARPET.EXE
+/// file 0x3E7B2-BC: `cmp %eax,%edx; jbe; movw $0xfa,0x1a(%edx)`)
+/// stores 250 into the RAW `+26` word of whatever record the stale
+/// `+36` register names — a pointer-above-base test and nothing else.
+/// When that record is a live class-12 manifestation, retail's `+26`
+/// is the token's spell level; the port homes the token's `+48`
+/// burst counter in `Ent::f26` (the importer's re-home,
+/// `conformance.rs` `f26: if r.class64 == 12 { r.f48 }`), so the
+/// port's blind `f26 = 250` ARMED the burst instead. mc1l45 t=16952:
+/// the volcano at slot 707 kicks wiz 3 (ent 496)'s Retreat token 169
+/// `(12,21)` — retail `+26` 0 → 250 with `+48` staying 0; the port
+/// armed `+48` 250, the backwards-speed handler ran its v_14 kill and
+/// expiry snap and wrote the wizard's `f126 = −f128 = −80` against
+/// retail's 0 (segment 3's INHERITED head: pair-clean because the
+/// graded diff cannot see a token's raw `+26`/`+48` split). Set
+/// `MGC_NO_MC1_VOLCANO_KICK_TOKEN_LEVEL=1` to restore the blind
+/// `f26` store.
+pub(crate) fn volcano_kick_spares_token_burst() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_VOLCANO_KICK_TOKEN_LEVEL").is_none())
 }
 
 /// A/B toggle for the MC2 BALL-MERGE OWNER LADDER: set
@@ -1648,11 +1713,16 @@ impl Gen {
             _ => None,
         };
         if let Some(c) = child {
-            let e = &mut self.ent[c];
-            e.id24 = own;
-            e.f30 = yaw;
-            e.f32 = pitch;
-            e.f44 = dmg;
+            // :63933-38 — four stamps read off the carrier after the
+            // allocation: identity stores on a self-seizure, and the
+            // reap then lands on the child ([`no_mc1_self_seize`]).
+            if !self.mc1_self_seized(c, i) {
+                let e = &mut self.ent[c];
+                e.id24 = own;
+                e.f30 = yaw;
+                e.f32 = pitch;
+                e.f44 = dmg;
+            }
             self.ent[i].flags |= 0x400;
         }
         false
@@ -1809,6 +1879,55 @@ impl Gen {
     /// a creature bolt born behind the walk cursor surfaces with
     /// target_yaw 0).
     #[allow(clippy::too_many_arguments)]
+    /// The muzzle a repeated spawn reads: retail re-reads the
+    /// emitter's `+72` per shot, so once a shot has seized the
+    /// emitter the rest of the volley is laid around the CHILD's
+    /// zeroed axis. Hoisted copies stay under the kill switch.
+    pub(crate) fn mc1_muzzle(&self, src: usize, hoisted: (u16, u16, i16)) -> (u16, u16, i16) {
+        if no_mc1_self_seize() || matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+            return hoisted;
+        }
+        let e = &self.ent[src];
+        (e.x, e.y, e.z)
+    }
+
+    /// THE CREATURE THUNKS' POST-ALLOCATION OPERANDS. Every retail
+    /// shooter thunk (`sub_1A8E0` :21890-98, `sub_1A990` :21947-55,
+    /// `sub_1AA40`, `sub_1AB70` :22005-06, `sub_1AE30` :22122-25,
+    /// `sub_1AEE0` :22155-60, `sub_1E380` :24683-700, m15 :25857-58)
+    /// mints its bolt with a POINTER to the shooter's `+72` and only
+    /// THEN reads `+24` (owner), `+146` (target), `+84` (the muzzle
+    /// lift) and — for the thunks that copy the shooter's pair —
+    /// `+66/+67`. On a self-seizure those reads land on the bolt
+    /// itself, so it flies owner = its own slot, target 0, lift = its
+    /// own `+84`, with the shooter's filter replaced by the ctor's.
+    /// The BEARING needs no fixing: retail aims from the shooter's
+    /// `+72`, the port from the bolt's, and after
+    /// [`Gen::mc1_self_seized`] zeroed the pose those are the same
+    /// record. `shooter_filter` is false for m8/m6 (which copy the
+    /// TARGET's pair, :22155-60) and for m11 (which writes none);
+    /// `lift_mul` is 4 for the m16 wyvern's quadruple lift.
+    pub(crate) fn mc1_arm_live(
+        &mut self,
+        p: usize,
+        src: usize,
+        ops: (u16, u8, u8, u16, i16),
+        shooter_filter: bool,
+        lift_mul: i16,
+    ) -> (u16, u8, u8, u16, i16) {
+        if !self.mc1_self_seized(p, src) {
+            return ops;
+        }
+        let e = &self.ent[p];
+        (
+            e.id24,
+            if shooter_filter { e.f66 } else { ops.1 },
+            if shooter_filter { e.f67 } else { ops.2 },
+            e.f146,
+            lift_mul * e.f84 as i16,
+        )
+    }
+
     pub(crate) fn arm_projectile(
         &mut self,
         p: usize,
@@ -2817,12 +2936,27 @@ impl Gen {
         let magnet_bolt = self.ent[i].class64 == 9 && self.ent[i].model65 == 17;
         if magnet_bolt {
             if let Some(fl) = self.spawn_effect(12, x, y, z) {
-                let e = &mut self.ent[fl];
-                e.id24 = owner;
-                e.f30 = yaw;
-                e.f32 = pitch;
+                // :63905-11: a flash that seized the bolt makes the
+                // three stamps identity stores ([`Gen::mc1_self_seized`]).
+                if !self.mc1_self_seized(fl, i) {
+                    let e = &mut self.ent[fl];
+                    e.id24 = owner;
+                    e.f30 = yaw;
+                    e.f32 = pitch;
+                }
             }
         }
+        // ⭐ Every operand below is read AFTER the flash's allocation
+        // in retail (`+72` and `+68/+69` are the second ctor call's
+        // arguments, :63913), so a flash that seized the bolt hands
+        // the payload spawn the FLASH's own fields — a (10,0) at
+        // (0,0,0), `+69` being the fresh record's 0.
+        let (x, y, z, owner, yaw, pitch, f44, f69) = if no_mc1_self_seize() {
+            (x, y, z, owner, yaw, pitch, f44, f69)
+        } else {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24, e.f30, e.f32, e.f44, e.f69)
+        };
         // ⭐ RETAIL'S DESPAWN SITS INSIDE THE CHILD-ALLOCATION GUARD.
         // Every class-9 detonation arm has the shape
         // `if ((fx = sub_373F0_377B0(...))) { …score…; sub_41E80(a1); }`
@@ -2846,6 +2980,13 @@ impl Gen {
         // later unmodelled `+69`.
         let starved0 = self.exhausted;
         let child = self.spawn_effect(f69, x, y, z);
+        // A detonation that seized its own bolt: the child sits at
+        // (0,0,0); `sub_526C0` reads the CHILD's `+65`/`+24` (not a
+        // wizard's shot); the `+24/+30/+32/+44` stamps are identity
+        // stores; the `+146` victim stamp (`v20[73]`, off the probe
+        // register) still lands; and the closing `sub_41E80(a1)`
+        // reaps the child. See [`no_mc1_self_seize`].
+        let seized = child.is_some_and(|fx| self.mc1_self_seized(fx, i));
         if let Some(fx) = child {
             // `sub_526C0` (:62585-612), first statement of every
             // allocation-guarded detonation block (generic :62762-64,
@@ -2858,13 +2999,15 @@ impl Gen {
             // bumps `shots` 445 → 446 only at the t=8013 allocation;
             // the port's pre-spawn bump read 446 four ticks early and
             // stayed one high.
-            if owner == PLAYER_TARGET && !stats_pre_spawn {
+            if owner == PLAYER_TARGET && !stats_pre_spawn && !seized {
                 self.mc1_shot_stats(i, struck);
             }
             let e = &mut self.ent[fx];
-            e.id24 = owner;
-            e.f30 = yaw;
-            e.f32 = pitch;
+            if !seized {
+                e.id24 = owner;
+                e.f30 = yaw;
+                e.f32 = pitch;
+            }
             // The child carries the struck victim's SLOT in +146
             // — sub_52770's explode block ONLY (:58859-64 `v20[73] =
             // victim`, the states-3/17 generic family); the m0/m1
@@ -2906,7 +3049,7 @@ impl Gen {
                     None => e.f146 = MC1_MISS_STAMP,
                 }
             }
-            if copy_f44 {
+            if copy_f44 && !seized {
                 e.f44 = f44;
             }
         }
@@ -3473,13 +3616,22 @@ impl Gen {
         // elsewhere and has no corpus witness, so HW keeps
         // NewEvent's 0.
         if let Some(s) = self.spawn_effect(38, x, y, z) {
+            // :63767-83 — `+24/+30/+32/+44/+68/+69` are copied off the
+            // carrier after the allocation: identity stores when the
+            // cloud seized the carrier itself ([`no_mc1_self_seize`]),
+            // which leaves the fresh record's `+68/+69` = 10/0. The
+            // `+146` probe stamp still lands; the reap below hits the
+            // cloud.
+            let seized = self.mc1_self_seized(s, i);
             let e = &mut self.ent[s];
-            e.id24 = own;
-            e.f30 = f30;
-            e.f32 = f32;
-            e.f44 = f44;
-            e.f68 = 9;
-            e.f69 = 9;
+            if !seized {
+                e.id24 = own;
+                e.f30 = f30;
+                e.f32 = f32;
+                e.f44 = f44;
+                e.f68 = 9;
+                e.f69 = 9;
+            }
             e.f146 = match hit {
                 Some(MailTarget::Pool(j)) => j as u16,
                 Some(MailTarget::Player) => PLAYER_TARGET,
@@ -4306,10 +4458,19 @@ impl Gen {
                 (e.x, e.y, e.z, e.id24)
             };
             if let Some(s) = self.spawn_effect(1, x, y, z) {
+                // ⭐ THE TRAIL CAN SEIZE ITS OWN BOLT — see
+                // [`no_mc1_self_seize`]. Retail hands the ctor a
+                // POINTER to the bolt's `+72` and reads `+24` after the
+                // allocator returns, so a self-seized bolt yields a
+                // seeder linked at its own freshly-zeroed (0,0,0) and
+                // owned by its own slot stamp.
+                let alias = self.mc1_self_seized(s, i);
                 // +16|=0x80, +18|=1: the seeder's fires inherit the
                 // no-damage bit — a decorative trail (:63033-38).
                 self.ent[s].flags |= 0x80 | 0x10000;
-                self.ent[s].id24 = owner;
+                if !alias {
+                    self.ent[s].id24 = owner;
+                }
             }
         }
         r
@@ -4632,6 +4793,21 @@ impl Gen {
             // (:63423, after the flight, which never re-acquires), so
             // the live `+146` is the latched value here — no
             // `mc1_aim_latch` read. The model gate still applies.
+            // :63428-47 read `+24/+30/+32/+140/+44` off the beam AFTER
+            // the allocation, so a blast that seized its own beam reads
+            // its OWN fields: `sub_526C0` sees a class-10 owner and
+            // scores nothing, the stamps are identity stores, and the
+            // quartering tests the blast's `+140` and quarters the
+            // blast's own `+44` ([`no_mc1_self_seize`]). The ctor
+            // pointer here is the stack endpoint `&v25`, so the POSE
+            // is the caller's copy either way.
+            let seized = self.mc1_seized_caller(fx, i);
+            let (owner, f140, f44) = if seized {
+                let e = &self.ent[fx];
+                (e.id24, e.f140, e.f44)
+            } else {
+                (owner, f140, f44)
+            };
             if owner == PLAYER_TARGET
                 && !stats_pre_spawn
                 && self.mc1_shot_counts(self.ent[i].model65)
@@ -4664,9 +4840,11 @@ impl Gen {
                 None => false,
             };
             let e = &mut self.ent[fx];
-            e.id24 = owner;
-            e.f30 = yaw0;
-            e.f32 = pitch0;
+            if !seized {
+                e.id24 = owner;
+                e.f30 = yaw0;
+                e.f32 = pitch0;
+            }
             e.f146 = match hit {
                 Some(MailTarget::Pool(j)) => j as u16,
                 Some(MailTarget::Player) => PLAYER_TARGET,
@@ -5397,7 +5575,16 @@ impl Gen {
                     !revalidate || g.ent[pl].class64 == 10 && g.ent[pl].model65 == 19
                 };
                 if prev != 0 && prev < self.ent.len() && kick_ok {
-                    self.ent[prev].f26 = 250;
+                    // The kick is a RAW `+26` store (file 0x3E7B6
+                    // `66 c7 42 1a fa 00`). On a live class-12 token
+                    // the port homes retail's `+48` burst counter in
+                    // `f26` — retail's `+26` there is the SPELL LEVEL,
+                    // a lane the port does not model — so the store
+                    // must not land in `f26`. See
+                    // [`volcano_kick_spares_token_burst`].
+                    if !(self.ent[prev].class64 == 12 && volcano_kick_spares_token_burst()) {
+                        self.ent[prev].f26 = 250;
+                    }
                 }
                 self.erupting = i as u16;
                 let g = self.ground_z(x, y) as i16;
@@ -6232,7 +6419,13 @@ impl Gen {
             (e.x, e.y, e.z, e.id24)
         };
         if let Some(s) = self.spawn_effect(5, x, y, z) {
-            self.ent[s].id24 = owner;
+            // :62695-97 / :62910-12 / :63176-78 / :63704-06: `+24` is
+            // read off the bolt after the allocation — identity on a
+            // self-seizure, and the `sub_41E80(a1)` below then reaps
+            // the splash itself ([`no_mc1_self_seize`]).
+            if !self.mc1_self_seized(s, i) {
+                self.ent[s].id24 = owner;
+            }
         }
         self.ent[i].flags |= 0x400;
     }
@@ -6245,6 +6438,89 @@ impl Gen {
     /// check the caller's retail anchor before picking one.
     pub(crate) fn on_water_pub(&self, x: u16, y: u16) -> bool {
         self.t.tile_type[(((y >> 8) as usize) << 8) | (x >> 8) as usize] == 0
+    }
+
+    /// The register half alone: did the allocator hand `src`'s own
+    /// slot back as `child`? For the sites whose ctor pointer is a
+    /// STACK local (`lea 0x8(%esp)`, e.g. the m9 lightning's endpoint
+    /// `&v25`, :63424) — the pose is the caller's copy, but every
+    /// post-allocation read of `src` still reads the child.
+    pub(crate) fn mc1_seized_caller(&self, child: usize, src: usize) -> bool {
+        child == src
+            && !no_mc1_self_seize()
+            && !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2)
+    }
+
+    /// ⭐ THE SHARED POSE HALF OF [`no_mc1_self_seize`]: `child` came
+    /// back from a ctor that retail handed a POINTER into `src`'s own
+    /// record (`lea 0x48(%reg)` → `call sub_373F0`, or a direct ctor
+    /// call with the same pointer). If the dry free stack made the
+    /// allocator seize `src` itself, the ctor read its position
+    /// through that pointer AFTER `NewEvent_372C0` memset the record,
+    /// so the child sits at (0,0,0) — linked there if the ctor links,
+    /// raw-written if it does not. Returns whether the alias fired;
+    /// the caller must then read every post-allocation operand of
+    /// `src` LIVE (they are the child's own fields), never from a
+    /// pre-allocation copy.
+    ///
+    /// MC1 column only: MC2's ctors and allocator are their own lane.
+    ///
+    /// SITE CENSUS — `sub_373F0` (file 0x4FBE8) has 106 call sites in
+    /// `CARPET.EXE`; 62 push a record pointer (`lea 0x48(%reg)` /
+    /// `lea 0x96(%reg)`), the rest a stack axis (`lea 0x8(%esp)`) or
+    /// the global scratch `word_AE454`, which alias only through the
+    /// post-allocation OPERAND reads, never the pose.
+    ///
+    /// * MODELLED HERE — `sub_53070` trail (:63029), the class-9
+    ///   detonations that share [`Gen::proj_explode`] (`sub_52770`
+    ///   :62759, `sub_52B30` :62923, `sub_52ED0` :63000, `sub_530C0`
+    ///   :63190, `sub_542B0` :63905/:63913), the state-19 relay
+    ///   `sub_54480` :63932 (`death_relay_tick`), the water splashes
+    ///   :62695/:62910/:63176/:63704 (`splash_and_die`), the storm
+    ///   bloom `sub_53DC0` :63767, the m9 lightning's endpoint blast
+    ///   :63424 (stack axis, operands only), the creature shooter
+    ///   thunks :21884/:21916/:21943/:22026/:22051/:22074/:22111/
+    ///   :22144/:23248/:25848/:26159 ([`Gen::mc1_arm_live`]), the
+    ///   corpse's puff :21866 and ball `sub_27690` :29675, and the
+    ///   standing fire's exhaust `sub_252D0` :28230.
+    /// * UNREACHABLE — the sixteen cast token machines
+    ///   (`sub_56090`…`sub_58240`, :65058-66325) and
+    ///   `sub_44D30`/`sub_45FC0`/`sub_155F0`/`sub_3C9D0`: their
+    ///   pointer is a WIZARD's record. MC1's recycle stack is a
+    ///   rebuild over the live records carrying `0x20400`
+    ///   (sacrificable | reap-flagged — `mc1/rivals.rs`), a wizard
+    ///   record carries neither, and it is minted once at level load
+    ///   (`sub_44D30`'s null-record branch) and never freed — the
+    ///   respawn at :55616 hands the SAME record back — so no stack
+    ///   can ever name its slot.
+    /// * STILL EXPOSED, NOT CONVERTED (w159e ran out of round; each
+    ///   needs its own operand audit, none has a corpus witness) —
+    ///   the volcano driver `sub_25EC0` :28784/:28795/:28807 (plume,
+    ///   smoke and lava bomb off the vent's `+72`), the quake crevice
+    ///   `sub_25990` :28562 and canyon head `sub_26920` :29135, the
+    ///   tree's death flame `sub_49890` :57681 (it also reads `+94`,
+    ///   which the port models as the mail source, and takes an LCG
+    ///   draw on the caller AFTER the allocation), its siblings
+    ///   :57707/:57744/:57762, the castle's `sub_47020`/`sub_47080`
+    ///   :56105/:56124 (`+150`, so the child reads the castle's
+    ///   zeroed SITE triple) and `sub_47400` :56343/:56428, the m6
+    ///   spit `sub_1BD20` :22947, and the HW-only trail
+    ///   (`proj_firewall_tick`, hw:59934) whose bytes live in
+    ///   `HIDDEN.EXE`, not `CARPET.EXE`.
+    pub(crate) fn mc1_self_seized(&mut self, child: usize, src: usize) -> bool {
+        if !self.mc1_seized_caller(child, src) {
+            return false;
+        }
+        if self.ent[child].flags & 4 != 0 {
+            self.unlink(child);
+            self.link(child, 0, 0, 0);
+        } else {
+            let e = &mut self.ent[child];
+            e.x = 0;
+            e.y = 0;
+            e.z = 0;
+        }
+        true
     }
 
     // ---- class-10 combat effects -------------------------------------------
@@ -7227,10 +7503,17 @@ impl Gen {
                                 (e.x, e.y, e.z, e.id24)
                             };
                             if let Some(p) = self.spawn_effect(13, fx, fy, fz) {
+                                // :28230-37 — `+24` is read off the fire
+                                // AFTER the allocation (identity on a
+                                // self-seizure; `+86 += 2` already reads
+                                // the child). See [`no_mc1_self_seize`].
+                                let seized = self.mc1_self_seized(p, i);
                                 let e = &mut self.ent[p];
                                 e.f26 = 100;
                                 e.act_life = 15;
-                                e.id24 = own;
+                                if !seized {
+                                    e.id24 = own;
+                                }
                                 e.type86 = e.type86.wrapping_add(2);
                             }
                         }
@@ -9158,6 +9441,21 @@ impl Gen {
             (e.x, e.y, e.z, e.f30, e.f140, e.f144)
         };
         if let Some(b) = self.spawn_mana_ball(x, y, z) {
+            // ⭐ :29675-93 — EVERY operand of the drop is read off the
+            // corpse AFTER the ball's allocation (`+140` :29679,
+            // `+144` :29681, `+30` :29685, and the `+72` pair the lift
+            // needs :29691-92), so a ball that seized its own corpse
+            // reads the BALL's fields and its own zeroed position: no
+            // mana, no claim, heading 0 and the ground under tile
+            // (0,0). See [`no_mc1_self_seize`]. The closing
+            // `a2x->+144 = 0` then lands on the ball.
+            let seized = self.mc1_self_seized(b, i);
+            let (x, y, z, heading, mana, owner) = if seized {
+                let e = &self.ent[b];
+                (e.x, e.y, e.z, e.f30, e.f140, e.f144)
+            } else {
+                (x, y, z, heading, mana, owner)
+            };
             self.ent[b].f140 = mana;
             self.ent[b].f144 = owner;
             let d1 = self.ent_rand(b);
@@ -9194,7 +9492,13 @@ impl Gen {
             (e.x, e.y, e.z, e.id24)
         };
         if let Some(p) = self.spawn_effect(1, x, y, z) {
-            self.ent[p].id24 = id;
+            // :21866-68 — `+24` is read off the corpse after the
+            // allocation (identity on a self-seizure), and the
+            // `sub_41E80(a1x)` in the caller then reaps the puff
+            // ([`no_mc1_self_seize`]).
+            if !self.mc1_self_seized(p, i) {
+                self.ent[p].id24 = id;
+            }
             self.ent[p].f26 = 0;
         }
     }
@@ -9389,6 +9693,132 @@ mod ring_seizure_tests {
             (laid_around - 1000).abs() > 1000,
             "…and NOT around the sprayer's own x=1000 (measured origin {laid_around})"
         );
+    }
+
+    /// Park `s` at the top of an EMPTY free stack's recycle list, so
+    /// the next `new_event` hands `s`'s own slot back — retail's dry
+    /// `NewEvent_372C0` sacrificing a live victim (:43885-908).
+    fn seize_next(g: &mut Gen, s: usize) {
+        g.free.clear();
+        g.mc2_recycle.stack = vec![s as u16];
+        g.mc2_recycle.refill = false;
+    }
+
+    /// ⭐⭐⭐ **A CLASS-9 DETONATION CAN SEIZE ITS OWN BOLT, AND THEN
+    /// THE PAYLOAD IS BORN AT THE MAP ORIGIN** — the trail law's
+    /// (`MGC_NO_MC1_SELF_SEIZE`) second family, `sub_52770`'s
+    /// `LABEL_25_26` block (:62759-72) and the m0/m1/m8/m12/m17/m19
+    /// twins that share its shape.
+    ///
+    /// `CARPET.EXE` (file = VA + 0x187F8): the detonation's ctor call
+    /// is `sub_373F0(a1 + 72, a1->+68, a1->+69)` and every stamp that
+    /// follows — `v20[12] = a1+24`, `v20[15] = a1+30`, `v20[16] =
+    /// a1+32`, `v20[22] = a1+44` — reads the bolt AFTER the allocator
+    /// returned, so on a self-seizure they are identity stores, the
+    /// accuracy call `sub_526C0(a1, …)` reads the CHILD's `+65`/`+24`
+    /// (never a class-3 owner, so nothing scores), and the closing
+    /// `sub_41E80(a1)` reap-flags the payload itself.
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_MC1_SELF_SEIZE=1` restores the
+    /// hoisted copies — the payload would be posed at the bolt's
+    /// (30000, 30000, 1000) and carry owner 504 / yaw 724.
+    #[test]
+    fn a_detonation_that_seizes_its_own_bolt_lands_at_the_origin() {
+        let mut g = flat_gen(rings_at(0, 1), VerbSet::MC1);
+        let b = g.spawn_trail_bolt(30000, 30000, 1000).expect("bolt slot");
+        g.ent[b].id24 = OWNER;
+        g.ent[b].f30 = AIM;
+        g.ent[b].f32 = 40;
+        g.ent[b].f44 = 8000;
+        g.ent[b].f68 = 10;
+        g.ent[b].f69 = 0; // the (10,0) fire payload
+        seize_next(&mut g, b);
+        g.proj_explode(b, &ctx(), None, true, true);
+        assert!(
+            g.mc2_recycle.seized == 1,
+            "the rig must have sacrificed the bolt for its own payload"
+        );
+        assert_eq!(
+            (g.ent[b].class64, g.ent[b].model65),
+            (10, 0),
+            "the bolt's record IS the payload now"
+        );
+        assert_eq!(
+            (g.ent[b].x, g.ent[b].y, g.ent[b].z),
+            (0, 0, 0),
+            "the ctor read its position through the alias, i.e. off its own memset record"
+        );
+        assert_eq!(
+            g.ent[b].id24, b as u16,
+            "`+24` is read after the allocation, so the stamp is the identity"
+        );
+        assert_eq!(g.ent[b].f30, 0, "…and so is the heading");
+        assert_ne!(g.ent[b].f44, 8000, "…and the payload copy");
+        assert_ne!(g.ent[b].flags & 0x400, 0, "`sub_41E80(a1)` reaps the child");
+        assert_eq!(g.shots, 0, "`sub_526C0` reads the child: no wizard shot");
+    }
+
+    /// ⭐⭐ **A CORPSE THAT LOSES ITS SLOT TO ITS OWN MANA BALL DROPS
+    /// NOTHING** — `sub_27690` (:29663-95) reads `+140` (the purse),
+    /// `+144` (the claim) and `+30` off the CORPSE after the ball's
+    /// allocation, and computes the launch lift from the corpse's
+    /// `+72` against the ground under it. On a self-seizure all four
+    /// come off the ball, whose purse is the ctor's, and the trailing
+    /// `a2x->+144 = 0` clears the ball's own claim.
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_MC1_SELF_SEIZE=1` — the ball
+    /// would carry the corpse's 5,000 mana and the claim 77.
+    #[test]
+    fn a_corpse_seized_by_its_own_ball_drops_an_empty_one() {
+        let mut g = flat_gen(rings_at(0, 1), VerbSet::MC1);
+        let c = g.spawn_creature(9, 20000, 20000, 100).expect("corpse slot");
+        g.ent[c].f140 = 5000;
+        g.ent[c].f144 = 77;
+        g.ent[c].f30 = AIM;
+        seize_next(&mut g, c);
+        g.corpse_drop(c);
+        assert_eq!(
+            (g.ent[c].class64, g.ent[c].model65),
+            (10, 39),
+            "the corpse's record IS the ball now"
+        );
+        assert_eq!((g.ent[c].x, g.ent[c].y, g.ent[c].z), (0, 0, 0));
+        assert_ne!(g.ent[c].f140, 5000, "the purse is read off the BALL");
+        assert_eq!(g.ent[c].f144, 0, "and `a2x->+144 = 0` lands on the ball");
+    }
+
+    /// ⭐⭐ **A CREATURE THAT SEIZES ITSELF FOR ITS OWN SHOT FIRES AN
+    /// UNOWNED, UNTARGETED BOLT FROM THE MAP ORIGIN** — the shooter
+    /// thunks read `+24`, `+146` and `+84` off the shooter after the
+    /// ctor returns (`sub_1A8E0` :21890-98 and its eight siblings),
+    /// and aim from the shooter's `+72`, which the seizure has turned
+    /// into the bolt's own zeroed axis.
+    ///
+    /// WHAT WOULD BREAK IT: `MGC_NO_MC1_SELF_SEIZE=1` — the bolt
+    /// would be posed at the creature's (20000, 20000) and carry its
+    /// owner and target.
+    #[test]
+    fn a_creature_seized_by_its_own_shot_fires_from_the_origin() {
+        let mut g = flat_gen(rings_at(0, 1), VerbSet::MC1);
+        let c = g.spawn_creature(0, 20000, 20000, 100).expect("shooter slot");
+        g.ent[c].id24 = OWNER;
+        g.ent[c].f146 = 321;
+        g.ent[c].f84 = 200;
+        seize_next(&mut g, c);
+        let fired = g.attack_thunk(c, 0, 321, 40000, 20000, 100, 3, 0xFF);
+        assert!(fired, "the thunk allocated (by seizing the shooter)");
+        assert_eq!(
+            (g.ent[c].class64, g.ent[c].model65),
+            (9, 0),
+            "the shooter's record IS the fireball now"
+        );
+        assert_eq!(
+            (g.ent[c].x, g.ent[c].y),
+            (0, 0),
+            "the bolt links at its own zeroed axis, not the shooter's"
+        );
+        assert_eq!(g.ent[c].id24, c as u16, "owner is the post-alloc identity");
+        assert_eq!(g.ent[c].f146, 0, "target is the bolt's own (none)");
     }
 
     /// ⭐⭐⭐ **THE FIRE-SPREADER KEEPS ITS EMITTER IN ONE REGISTER, SO

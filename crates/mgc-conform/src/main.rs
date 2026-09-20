@@ -1266,6 +1266,94 @@ impl TerrainReport {
     }
 }
 
+
+/// ⭐⭐⭐ **EVERY RECORDING STARTS MID-SETTLE — AND THE PLAYER'S HANDS
+/// WERE ALREADY ON THE STICK.** The native settle
+/// ([`native_settled_world`]) drives the carpet IDLE at the start
+/// marker for the recorder's phase, which is right only when retail's
+/// carpet was idle for those ticks too. `mc1l43` proves it is not
+/// always: record 0 reads the human at (52624, 60048) = the marker
+/// centre (51584, 59008) + (1040, 1040) and stepping +80/+80 a tick,
+/// i.e. THIRTEEN ticks of flight already banked inside a 16-tick
+/// settle. The (5,11) genie 272's ambush blink copies the target's
+/// position mid-settle (`sub_1E770` :24733), so the port's genie
+/// landed 560 units short, and its (10,1) sparkle ring / (10,0) fires
+/// scorched and dug the WRONG 3x3: `terrain-check mc1l43` DIFFERENT,
+/// type 8 / height 3 / shading 6 / angle 7 cells at (201..203,
+/// 214..216), plus 118 of the 120 `init-check` RAW-SHADOW rows (39
+/// `(10,0)` x + 39 y, the genie's own x/y/next20, …), all of them
+/// exactly (-560, -560).
+///
+/// The drift is READ FROM THE TAKE, never guessed: `v` = record 1's
+/// carpet position minus record 0's (consecutive ticks only), `d` =
+/// record 0's position minus the marker centre. The seat applies only
+/// when `d` is an EXACT whole multiple `n` of `v` on BOTH axes
+/// (`v == 0` ⇒ `d == 0`) with `0 < n <= settle` — i.e. when constant
+/// -velocity flight from the marker explains record 0 on the nose; any
+/// other shape leaves the idle pose alone. mc1l43: n = 13, start =
+/// 16 − 13 = 3, and the take goes terrain-check IDENTICAL with
+/// `init-check` RAW SHADOW 120 rows → 2.
+///
+/// `MGC_NO_MC1_SETTLE_DRIFT=1` restores the all-idle settle window.
+/// Returns `(start tick, vx, vy)` in engine units per tick.
+fn mc1_settle_drift(
+    path: &std::path::Path,
+    first: &mgc_formats::mgcr::TickRecord,
+    marker: (f32, f32),
+    settle: u32,
+) -> Option<(u32, i32, i32)> {
+    if std::env::var_os("MGC_NO_MC1_SETTLE_DRIFT").is_some() || settle == 0 {
+        return None;
+    }
+    let carpet = |rec: &mgc_formats::mgcr::TickRecord| -> Option<(u16, u16)> {
+        let st = mgc_formats::mgcr::decode_retail_mc1(rec.state.as_ref()?).ok()?;
+        let w = st
+            .wizards
+            .get(st.local_player as usize)
+            .or_else(|| st.wizards.first())?;
+        let e = st.ents.get(w.play_index as usize)?;
+        Some((e.x, e.y))
+    };
+    let p0 = carpet(first)?;
+    // Record 1 must be the very next TICK for its delta to be one
+    // tick of flight (a sparse take simply gets no seat).
+    let mut rec = Recording::open(path).ok()?;
+    let r0 = rec.next_tick()?.ok()?;
+    let r1 = rec.next_tick()?.ok()?;
+    if r1.t != r0.t + 1 {
+        return None;
+    }
+    let p1 = carpet(&r1)?;
+    let v = (
+        (p1.0.wrapping_sub(p0.0) as i16) as i32,
+        (p1.1.wrapping_sub(p0.1) as i16) as i32,
+    );
+    let m = (
+        (marker.0 * 256.0).round() as i32 as u16,
+        (marker.1 * 256.0).round() as i32 as u16,
+    );
+    let d = (
+        (p0.0.wrapping_sub(m.0) as i16) as i32,
+        (p0.1.wrapping_sub(m.1) as i16) as i32,
+    );
+    if d == (0, 0) {
+        return None;
+    }
+    // n from whichever axis moves; the other axis must agree exactly.
+    let n = match (v.0, v.1) {
+        (0, 0) => return None,
+        (0, vy) => (d.1 % vy == 0).then_some(d.1 / vy)?,
+        (vx, _) => (d.0 % vx == 0).then_some(d.0 / vx)?,
+    };
+    if n <= 0 || n as u32 > settle {
+        return None;
+    }
+    if d != (v.0 * n, v.1 * n) {
+        return None;
+    }
+    Some((settle - n as u32, v.0, v.1))
+}
+
 /// THE NATIVE WORLD AT RECORD 0 — the port's own level build
 /// (`verify::build_world` / `build_world_mc2_with_book`, the human's
 /// book read off the take), ticked `settle` times with the carpet
@@ -1398,6 +1486,11 @@ pub(crate) fn native_settled_world(
         // one number per take drives both and a bare `init-check`
         // reads the standard recording session (38/40 MC2 takes
         // IDENTICAL). `none`/`off` restores the plain native settle.
+        let drift = if family == mgc_formats::mgcr::Family::Mc1 {
+            mc1_settle_drift(path, first, (px, pz), settle)
+        } else {
+            None
+        };
         let sever_at: Option<u32> = match std::env::var("MGC_INIT_SEVER_AT") {
             Ok(v) => {
                 let v = v.trim();
@@ -1440,8 +1533,28 @@ pub(crate) fn native_settled_world(
             // mc1l16 34, all exactly +256) was this line, not a fire
             // ctor (round 154, w154k). `MGC_INIT_SETTLE_ALT=<tiles>`
             // overrides the lift for an A/B (`2.0` = the old pose).
+            // ⭐ THE SETTLE WINDOW IS NOT ALWAYS IDLE — THE PLAYER
+            // WAS ALREADY FLYING. `drift` (MC1, see
+            // [`mc1_settle_drift`]) is the straight-line pre-record
+            // motion read off records 0 and 1: from settle tick
+            // `start` the carpet steps `v` engine units per tick, so
+            // everything that reads the human's POSITION inside the
+            // load settle sees where retail's carpet actually was.
+            // The ALTITUDE stays the marker's idle seat — retail's
+            // carpet holds `ground(marker) + 256` across the drift
+            // (mc1l43: the genie's ambush blink copies the target z
+            // and lands at 2384 = the marker seat, not the ground
+            // under the drifted point).
+            let (dx, dz) = match drift {
+                Some((start, vx, vy)) if k >= start => {
+                    let n = (k - start) as f32;
+                    (n * vx as f32 / 256.0, n * vy as f32 / 256.0)
+                }
+                _ => (0.0, 0.0),
+            };
             let alt = w.ground_height_tiles(px, pz) + settle_alt;
-            let pose = mgc_sim::engine::world::PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+            let pose =
+                mgc_sim::engine::world::PlayerPose::from_tiles(px + dx, alt, pz + dz, 0.0, 0.0, 0.0);
             w.tick(pose, idle);
         }
         if std::env::var_os("MGC_POOL_CENSUS").is_some() {

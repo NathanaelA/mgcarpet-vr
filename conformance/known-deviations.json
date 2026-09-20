@@ -500,8 +500,126 @@
    "takes": [
     "mc1l26-froze"
    ],
-   "note": "RETAIL'S OWN CORRUPTION — A LEVEL-250 CASTLE (round 152, dig w152k, 2026-09-18). The (10,18) volcano eruption handover writes `+26 = 250` into the PREVIOUS erupting slot with only a `slot != 0` test (combat.rs `+26 = 250`, retail :28779 — ported blind, both columns agree on the write). Twice on this take that slot had been RE-MINTED: (1) t=25646 slot 917 = the human's (10,17) blast ring -> radius 250; at 25647 retail's `sub_11410(250,250)` indexes the 32-entry ring header `dword_AD008[250]` (static VA 0xAD5E4, OUT OF BOUNDS), walks 6,938 cells (13,877 LCG draws on 917 vs the port's 1 — `ring_cells` is empty for lo > 31), the first cell reads (-1,-1) and takes the only free slot 785 as a (10,0) fire where the port's later mint put a (10,13) smoke — 12 rows (785 x11, 917 rand), a permanent floor, not derivable without a memory image. (2) t=30711 onward: wiz 3's castle 964 at (32768,0) carries `+26 = 250` = LEVEL 250; retail's level-250 reads land OOB in the build/quota tables (extents 3328 -> 640, the balloon fleet culled, a (10,39) drop minted at 981) while the port's `build_tab[lvl % len]`/quota arms give 2432/3584 and keep spawning (3,3) balloons re-heading every other tick — the 2-tick head cadence of the 445 LOCAL heads is that one root's residue (free stack 191: NOT a dry-pool seizure). Retail then froze at the take's end (the player's 'one of them froze'; see the round-151 `MGC_OVERRUN` note). The two REAL port laws underneath were landed the same dig and are pinned: `MGC_NO_MC1_RIVAL_CASTLE_TOKEN_REGISTER` (fixture mc1l26/the-rival-castle-tokens-split-reads-the-register, cut from THIS take at 25107) and `MGC_NO_MC1_AABB_SIGNED_EXTENTS` (`sub_118C0` loads +80/+82/+84 with `movswl`; the 48000 = -17536 ring extents reached castle 978 across the y seam only in the port). The twin mc1l26 is CERTIFIED END. Same class as `mc1l48-search-ring-heap-damage`. ⚖ `deviation` on the main session's reading of that precedent — the player may flip it to `open` (mc1l6 precedent) to keep the take uncertified. Ledger docs/CONFORMANCE-FINDINGS.md §ROUND 152.",
+   "note": "RETAIL'S OWN CORRUPTION — A LEVEL-250 CASTLE (round 152, dig w152k, 2026-09-18). The (10,18) volcano eruption handover writes `+26 = 250` into the PREVIOUS erupting slot with only a `slot != 0` test (combat.rs `+26 = 250`, retail :28779 — ported blind, both columns agree on the write). Twice on this take that slot had been RE-MINTED: (1) t=25646 slot 917 = the human's (10,17) blast ring -> radius 250; at 25647 retail's `sub_11410(250,250)` indexes the 32-entry ring header `dword_AD008[250]` (static VA 0xAD5E4, OUT OF BOUNDS), walks 6,938 cells (13,877 LCG draws on 917 vs the port's 1 — `ring_cells` is empty for lo > 31), the first cell reads (-1,-1) and takes the only free slot 785 as a (10,0) fire where the port's later mint put a (10,13) smoke — 12 rows (785 x11, 917 rand), a permanent floor, not derivable without a memory image. (2) t=30711 onward: wiz 3's castle 964 at (32768,0) carries `+26 = 250` = LEVEL 250; retail's level-250 reads land OOB in the build/quota tables (extents 3328 -> 640, the balloon fleet culled, a (10,39) drop minted at 981) while the port's `build_tab[lvl % len]`/quota arms give 2432/3584 and keep spawning (3,3) balloons re-heading every other tick — the 2-tick head cadence of the 445 LOCAL heads is that one root's residue (free stack 191: NOT a dry-pool seizure). Retail then froze at the take's end (the player's 'one of them froze'; see the round-151 `MGC_OVERRUN` note). ⚠ CORRECTED round 159: castle 964 is not the one that froze — it keeps life 40000 at level 250 to the end. A SECOND kick at t=31424 made castle 984 LEVEL 250; that one sat at life < 0, downgraded 250 -> 245 and the row-245 collapse walk hung (last record t=31915: 984 level 245 state 6, +82 16896, life -550). Root + patch: `volcano_register_revalidate` (round 158 w158b, docs/DEVIATIONS.md). The two REAL port laws underneath were landed the same dig and are pinned: `MGC_NO_MC1_RIVAL_CASTLE_TOKEN_REGISTER` (fixture mc1l26/the-rival-castle-tokens-split-reads-the-register, cut from THIS take at 25107) and `MGC_NO_MC1_AABB_SIGNED_EXTENTS` (`sub_118C0` loads +80/+82/+84 with `movswl`; the 48000 = -17536 ring extents reached castle 978 across the y seam only in the port). The twin mc1l26 is CERTIFIED END. Same class as `mc1l48-search-ring-heap-damage`. ⚖ `deviation` on the main session's reading of that precedent — the player may flip it to `open` (mc1l6 precedent) to keep the take uncertified. Ledger docs/CONFORMANCE-FINDINGS.md §ROUND 152.",
    "t_min": 25646
+  },
+  {
+   "id": "mc1l45-froze-level-250-castle-oob",
+   "status": "deviation",
+   "takes": [
+    "mc1l45-froze"
+   ],
+   "note": "RETAIL'S OWN CORRUPTION — THE SECOND LEVEL-250 CASTLE FREEZE (round 158 dig w158b, registered round 159). The same root as `mc1l26-froze-level-250-castle-oob`: `sub_25EC0` (:28778-79; CARPET.EXE file 0x3E7B4 `jbe` / 0x3E7B6 `movw $250,0x1a(%edx)`) kicks the previous erupting volcano through a stale `erupting` register with no class test; at t=27730 volcano 964 erupts at the origin, the register still names slot 966 (the t=27070 driver), which by then is wiz 2's CASTLE at (192,192) — level 3 -> 250. It sits at life < 0 and downgrades every ~74 ticks 250 -> 245; the row-245 collapse walker `sub_28FE0` (exit only on a zero byte) never returns: the take's last record t=28506 is that castle entering state 6 at level 245. The port never hangs (`castle_downgrade`'s `min`/modulo guards) and so diverges from t=27730 on (extra (3,3) balloons from a level-7 quota, a re-lifted life), the 2-tick cadence of the ~292 LOCAL heads. Patched natively by `volcano_register_revalidate` (docs/DEVIATIONS.md); the retail arm stays the replay truth. The pre-27730 part of this take is graded normally (its head #1 at t=1266 is the mc1l45 (12,16) head). `t_min` is PAIR-start space (boundary 27730 = pair 27729).",
+   "t_min": 27729
+  },
+  {
+   "id": "mc1l43-row0-shim-225-sound-table-heap-pointer",
+   "status": "deviation",
+   "takes": [
+    "mc1l43"
+   ],
+   "kind": "field",
+   "fields": [
+    "x",
+    "y",
+    "z"
+   ],
+   "slots": [
+    356,
+    382,
+    474,
+    594,
+    693,
+    754,
+    789,
+    808,
+    827,
+    850,
+    876,
+    877,
+    889,
+    914,
+    919,
+    933,
+    945,
+    951,
+    953,
+    955,
+    958,
+    963,
+    972,
+    980,
+    990,
+    993
+   ],
+   "ticks": [
+    211,
+    1558,
+    1987,
+    4187,
+    7582,
+    10242,
+    10272
+   ],
+   "note": "RETAIL OOB READ — ROW-0 SHIM BYTE {225} IS THE LOW BYTE OF dword_CC1C0, THE LOADED SOUND TABLE'S END POINTER (identified round 155, w155c; measured on THIS take round 159, dig w159d). Same byte, same class as `mc1l34-row0-shim-225-sound-table-heap-pointer`: mc1l43 needs it PLAIN where mc1l7/mc1l21 pinned it BUILDING. WITNESS: t=4188, the human castle 725 (3,2) at tile (224,4) is knocked from level 3 to 2 by rival 356 and un-stamps its footprint through the slot-0 fake collapse (sub_28FE0, row 3, x 214..234, y 250..14) — the walk itself is bit-exact (slot 0's `+4` stream: retail rand 4074197958 -> 2489683467, the port's collapse probe counts the same 315 draws) and the epilogue smoother then diverges on row 0 alone: retail smooths (224,0) 24 -> 17 and (225,0) 18 -> 16, the port skipped both on the shared table's building-classed {225}. The row-1 cascade under them reads one unit high ((223..226,1)), so every (10,6) lava-bomb fire standing on the footprint rides ground 18..29 units high (slots 789/808/827/850/876/889/919 z), the fresh fire 754 is born on the wrong cell, and a lava bomb still airborne in retail lands on the raised (226,1) and seeds an EXTRA (10,6) in slot 753. The same byte owns every other row registered here: a temporary per-level {225}-plain probe took mc1l43 from 11 segments / horizon 211 to 3 segments / horizon 7668, closing t=212, 1559, 1988, 4188, 7583, 10243, 10273 and 12061 in one — all of them the castle site at tiles (221..228, 255..1) across the y seam. Shim index i = IDA CC0DF + i (CARPET.EXE file 0x4E8E9 `mov 0x3c0df(%ebx),%dl`); the pointer is written by sub_634E0_639F0's tail (`*var32_end_buffer = size + *colorPalette_var28`, remc1 sub_main.cpp:74658) when sub_5D070_5D580 loads data/snds<bank>-<q>.tab, and the path record at CARPET.EXE file 0xA06C3 names data-relative 0x3C154/0x3C1C0 as that file's begin/end pointers. The table unpacks to 1472/1504 bytes and the heap block is 16-aligned (malloc_425C0_42900, `(a1+15) & 0xFFF0`), so the byte is 16-aligned and building-classed exactly when the level load happened to put it on 0x10 or 0x20. Ticks are PAIR STARTS. ⚖ PLAYER RULING (2026-09-18): OOB reads are not modelled faithfully — registered deviation. Ledger docs/CONFORMANCE-FINDINGS.md §ROUND 155 155-9 / 155-11, §ROUND 159."
+  },
+  {
+   "id": "mc1l43-row0-shim-225-sound-table-heap-pointer-extra",
+   "status": "deviation",
+   "takes": [
+    "mc1l43"
+   ],
+   "kind": "extra",
+   "class": 10,
+   "model": 6,
+   "slots": [
+    753
+   ],
+   "ticks": [
+    4187
+   ],
+   "note": "See mc1l43-row0-shim-225-sound-table-heap-pointer — the EXTRA-IN-PORT face of the same byte: on the raised (226,1) cell the port's lava bomb reaches the ground one tick early and seeds an extra (10,6) standing fire in slot 753 (life 30, +44 150, owner 356), which retail seeds one tick later. Pair start 4187."
+  },
+  {
+   "id": "mc1l43-row0-shim-225-sound-table-heap-pointer-pose",
+   "status": "deviation",
+   "takes": [
+    "mc1l43"
+   ],
+   "kind": "pose",
+   "class": 3,
+   "model": 0,
+   "fields": [
+    "pose.eff_pitch"
+   ],
+   "slots": [
+    333
+   ],
+   "ticks": [
+    12060
+   ],
+   "note": "See mc1l43-row0-shim-225-sound-table-heap-pointer — the POSE face of the same byte: the human carpet flies over the un-stamped castle footprint and sub_455D0's climb-authority operand (z - ground - 1024) reads the one-unit-high row-1 cells, so pose.eff_pitch is 1984 against retail's 1986. Pair start 12060."
+  },
+  {
+   "id": "mc1l43-row0-shim-101-audio-handle",
+   "status": "deviation",
+   "takes": [
+    "mc1l43"
+   ],
+   "kind": "field",
+   "class": 10,
+   "model": 39,
+   "fields": [
+    "x",
+    "y"
+   ],
+   "slots": [
+    344
+   ],
+   "ticks": [
+    16353
+   ],
+   "note": "RETAIL OOB READ — ROW-0 SHIM BYTE {101} IS dword_CC144, THE HANDLE OF THE LAST DIGITAL SAMPLE STARTED (identified round 155, w155c; measured on THIS take round 159, dig w159d). `dword_CC144 = sub_6535C(dword_CC140, &dword_939F0)` (remc1 sub_main.cpp:57032/:62377/:69895/:69947/:75571) — the value follows live audio timing and changes WITHIN a take. mc1l43 t=16127: a smoother pass over tiles (97..104, 255..1) takes every cell down one unit in both columns, but retail HOLDS (101,0) at 52 where the port averages it to 51; (102,0) smooths 53 -> 52 in both columns, pinning {102,103} plain, so {101} is the byte — and it must be PLAIN earlier in the same take (a temporary {101}-building probe made the port hold (101,0) at t<=16125 where retail smoothed it, and opened two new heads at t=925 and t=4678 while leaving this one open). The one graded row is the (10,39) mana ball 344 flying over (100..101, 255): the held height moves its ungraded dest_y by one at pair 16352->16353 and its y at pair 16353->16354 (retail 65283, port 65284). Ticks are PAIR STARTS. ⚖ PLAYER RULING (2026-09-18): OOB reads are not modelled faithfully — registered deviation. Ledger docs/CONFORMANCE-FINDINGS.md §ROUND 155 155-9 / 155-11, §ROUND 159."
   },
   {
    "id": "mc1l34-row0-shim-101-audio-handle",

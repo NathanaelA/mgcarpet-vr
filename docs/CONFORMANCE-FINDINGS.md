@@ -106,6 +106,158 @@ rejection streaks; the gate now counts only `dv±1` steps as tear
 suspects.) Every open entry below reproduced across all takes,
 including the 75%-torn pre-gate corpus.
 
+## ROUND 159 (2026-09-19, vm113) — **THE MC1 FINAL-LEVEL CERTIFICATION DRILL**: the last 4 takes → ALL END, 4 laws, 1 harness law, 5 deviations
+
+Opened on `3e4c4d4` (rounds 157 + 158 committed by the player), gate 1,211 / 0 / 4, conform md5 `86c9e657`. Round 158
+graded the player's last 7 MC1 takes and certified three (l42-new, l44, l46); this round is the drill it deferred:
+mc1l43, mc1l45, mc1l45-froze, mc1l47. Five Opus digs, one per head family (w159a..w159e).
+
+### 159-0 INTAKE (`replay --segmented --classify` on HEAD)
+| take | ticks | seg | horizon | first signature | terrain |
+|---|---|---|---|---|---|
+| mc1l43 | 39462 | 11 | 211 | (3,1)slot382:z | **DIFFERENT** type 8 · height 3 · shading 6 · angle 7 |
+| mc1l45 | 41793 | 6 | 2670 | (12,16)slot526:mana,mana_max | IDENTICAL |
+| mc1l45-froze | 28506 | 294 | 1265 | (12,16)slot526:mana,mana_max | IDENTICAL |
+| mc1l47 | 45616 | 4 | 16904 | (10,1)slot977:id,x,y,z | IDENTICAL |
+
+The head families, named off `explain` before briefing: a `(12,16)` mana halving shared by l45/l45-froze; a SIX-head
+castle `(3,2)` z family spanning three takes; l43's terrain + early z heads; l43's mid/late heads; l47's birth under
+pool exhaustion. ⭐ **THE FAMILY, NOT THE TAKE, IS THE UNIT OF BRIEFING** — w159b's one law closed heads on three takes
+at once, and two digs (w159c, w159d) reached the SAME byte from opposite ends of l43.
+
+### 159-1 ✅ w159b — TRANSFORM CASE 5 SNAPS THE CASTLE TO THE GROUND (`MGC_NO_MC1_CASTLE_LEVELER_GROUND`)
+Not castle growth and not a computed z step: `sub_46F10_47250` case 5 (:56088-92) — painter finished → mint the `(10,41)`
+leveler — is not a pure action case. It calls `sub_46D20(a1,1)`, then ALWAYS `*(a1+76) = sub_11F50(a1+72)` (the ground
+snap), and only then `sub_47080_473C0` (CARPET.EXE VA 0x46FF1 `56 e8 <sub_11F50> ; 66 89 43 4c`, then VA 0x46FFF
+`53 e8 <sub_47080>` — sub_47080's ONLY caller). The port re-grounded z only in the pure waits 1/4/6, before the `match`,
+so on the tick the painter handed back sub-state 5 the castle kept its pre-paint tower-top z for one pair. The varying
+z deltas (32..224) are just the ground the painter had changed. **Six heads, three takes**: mc1l45 t=8522 / 9501 / 34903,
+mc1l47 t=20445 / 26846, mc1l43 t=7669. The `+48 4 → 6` pairs are the same law (the painter wrote 5 earlier in the same
+walk). One port call path (`World::step` → `castle_tick`), MC2 untouched. Fixture
+`mc1l47/the-castle-snaps-to-ground-before-the-leveler` (new manifest).
+
+### 159-2 ✅ w159a law 1 — A CASTLE LEVEL EVENT NEEDS NO BIND (`MGC_NO_MC1_CASTLE_DOWNGRADE_REPRICE`)
+The `(12,16)` halving is not its own routine: it is wiz 4's Create-Castle token being RE-PRICED when his level-3 castle
+(slot 547) is knocked to level 2 in the same tick. The teardown `sub_47A70_47DB0` (:56498, file 0x60268) decrements `+26`
+at 0x6034F and calls `sub_47C60` UNCONDITIONALLY at 0x6035C; `sub_47C60` (:56572) tests only the owner's `+70 <= 1u`
+(0x60486-90) and `wizext+708 != 0` (0x60498-A2), then `sub_47BD0` (:56540) writes `token+136 = cap`, `token+140 = cap /
++50` (0x6040E-1D). **Nothing reads the `wizext+50` bind** — that is only the respawn caller's gate (:55034). The port's
+level-event ladder stamp also demanded castle `flags & 2`, its bind stand-in, which an AUTHORED/setup castle (flags 12)
+that never committed a level-up does not carry, so the token kept 40000/396 where retail re-priced it to 20000/198.
+Fixture `mc1l45/a-castle-downgrade-reprices-an-unbound-owners-token` (new manifest); the same head sits on mc1l45-froze
+t=1266.
+
+### 159-3 ✅ w159a law 2 — THE VOLCANO'S BLIND KICK WRITES A TOKEN'S SPELL LEVEL, NOT ITS BURST (`MGC_NO_MC1_VOLCANO_KICK_TOKEN_LEVEL`)
+mc1l45 t=16952's rival-wizard head (`speed` retail 0, port −80) is the RETAIL arm of `volcano_register_revalidate` landing
+on the wrong port field. `sub_25EC0`'s kick (:28778-81, file 0x3E7B2-BC `cmp; jbe; 66 c7 42 1a fa 00`) is a RAW `+26`
+store; at t=16951 the stale register named wiz 3's `(12,21)` Retreat token 169 (`MGC_WRITE_TRACE=169:f26` → `by slot 707
+(10,18)`). On a class-12 token retail's `+26` is the SPELL LEVEL — but the importer homes retail's `+48` burst counter in
+`Ent::f26` for class 12 (`world/conformance.rs:6706`), so the store armed a BURST, and the backwards-speed handler then
+wrote the wizard's `f126 = −f128 = −80`. Skipping the store for class 12 is the exact INVERSE of the importer: a token's
+`+26` has no port home at all (a registered gap, cf. MC2's `mc2_write_raw10`). Graded INHERITED — pair 16950→16951 is
+clean in the graded fields — so a unit test is the pin (`the_eruption_kick_does_not_arm_a_token_burst`).
+⭐ **AN IMPORTER RE-HOME IS A HAZARD FOR EVERY RAW-OFFSET WRITE**: MC2 met this as `mc2_write_raw10` in round 158, MC1
+meets it here, and the two are the same shape. ⏭ LEAD: MC2's twin kick (`mc2/morph.rs:552`) vs MC2's class-12 record —
+unchecked.
+
+### 159-4 ✅ w159e — THE TRAIL CTOR READS ITS OPERANDS THROUGH A POINTER (`MGC_NO_MC1_TRAIL_SELF_SEIZE`)
+mc1l47 t=16905: the free stack is EMPTY (recycle stack 13) and the human's `(9,3)` meteor at slot 977 mints its fire
+trail — so the allocator hands the trail THE METEOR'S OWN SLOT. Retail's wrapper `sub_53070` (:63021-38) passes the ctor
+a POINTER to the bolt's own `+72` (file 0x6B881 `8d 43 48` lea, `e8 5e 43 fe ff` call `sub_373F0`) and reads `+24` off
+the bolt only AFTER it returns (0x6B898 `66 8b 5b 18`); `sub_3A510` (file 0x52D08) calls `NewEvent` FIRST (0x52D09) and
+links through the pointer AFTER (0x52D48). So the seeder links at the freshly-zeroed (0,0,0) and keeps its own-slot `+24`
+stamp. The port hoisted `(x, y, z, id24)` into locals before allocating and posed the seeder at the bolt, owned by the
+human. Same class as `MGC_NO_EFFECT_RING_LIVE_OPERANDS` on a new call path. Fixture
+`mc1l47/the-meteor-trail-seizes-its-own-bolt`. ⭐ **THE PORT'S VALUE-TAKING `spawn_*` HELPERS ARE A STANDING HAZARD** —
+every retail site that hands a ctor `lea +72` and reads `+24` after the call is exposed the same way; only a DRY POOL
+reveals it. ⏭ LEAD: the call-path audit (`splash_and_die` → `spawn_effect(5,…)` among them).
+
+### 159-5 ⚖ w159d + w159c — EIGHT OF mc1l43's TEN HEADS ARE ONE OOB SHIM BYTE (registered, no code law)
+Two digs reached the same byte from opposite ends (w159d from the t=4188 castle collapse, w159c from the t=184 leveler
+epilogue) — an independent confirmation, and w159c's attempt to refute it failed. `smooth_cell`'s row-0 neighbour-type
+gate reads one byte BELOW the type plane (shim index i = IDA `CC0DF + i`, file 0x4E8E9 `mov 0x3c0df(%ebx),%dl`).
+**{225} is the low byte of `dword_CC1C0`, the loaded sound table's END pointer** — the file-table entry at file 0xA06A8
+is `{"data/snds0-0.tab", &CC154, &CC1C0}` and `sub_634E0`'s tail writes `*end = start + size` (file 0x7BDDE-F4,
+:74656-57) where `start` is that call's own `malloc` — i.e. a HEAP ADDRESS's low byte, session state BY CONSTRUCTION,
+16-aligned, so it is building-classed exactly when the level load happened to land it on 0x10/0x20. mc1l7/l21 pinned it
+BUILDING (round 152); mc1l34 (round 155) and mc1l43 need it PLAIN, and forcing mc1l7 plain LOSES its END — the
+contradiction is real and irreducible. **WITNESS (mc1l43 t=4188)**: the human castle 725 at tile (224,4) is knocked
+level 3 → 2 and un-stamps its footprint through the slot-0 fake collapse (`sub_28FE0`) — the walk itself is BIT-EXACT
+(315 draws, slot 0's `+4` stream identical) — and the epilogue smoother then splits on row 0 alone: retail smooths
+(224,0) 24 → 17 and (225,0) 18 → 16, the port skips both, the row-1 cascade under them reads one unit high, every
+`(10,6)` lava-bomb fire on the footprint rides 18..29 units high, and a bomb still airborne in retail lands on the
+raised (226,1) and seeds the EXTRA `(10,6)` in slot 753. A per-level {225}-plain probe takes the take from 11 segments /
+horizon 211 to 3 / 7668. The ninth head (t=16354) is **{101} = `dword_CC144`, the handle of the last digital sample
+started** — it changes WITHIN a take (a static pin opens two new heads at t=925 and 4678). ⚖ Per the player's ruling
+(155-11, *"OOB reads are not something to model faithfully"*) both are REGISTERED DEVIATIONS, not laws: four rules
+(`mc1l43-row0-shim-225-sound-table-heap-pointer` + `-extra` + `-pose`, `mc1l43-row0-shim-101-audio-handle`). Both digs'
+optional per-level/per-take seat patches were measured, work, and were NOT landed.
+
+### 159-6 ✅ w159c — **THE SETTLE WINDOW IS NOT ALWAYS IDLE: THE PLAYER WAS ALREADY FLYING** (`MGC_NO_MC1_SETTLE_DRIFT`, harness)
+mc1l43's terrain row was NOT the shim byte: the 8 type / 3 height / 6 shading / 7 angle cells are a compact 3×3 block at
+(201..203, 214..216), nowhere near the seam, appearing at settle tick 13. `native_settled_world` drives the carpet IDLE
+at the start marker for the recorder's phase — right only if retail's carpet was idle too. In mc1l43 record 0 has the
+human at (52624, 60048) = marker centre (51584, 59008) + (1040, 1040), stepping +80/+80 a tick: **thirteen ticks of
+flight already banked inside a 16-tick settle**. The `(5,11)` genie 272's ambush blink copies the target's position
+mid-settle (`sub_1E770` :24733), so the port's genie landed exactly (−560, −560) short and the `(10,1)` sparkle ring /
+`(10,0)` fires it sheds scorched and dug the wrong 3×3 (118 of `init-check`'s 120 RAW-SHADOW rows carry that same
+−560). The drift is READ FROM THE TAKE, never guessed: `v` = record 1's carpet position − record 0's (consecutive ticks
+only), `d` = record 0 − marker centre, applied only when `d == n*v` EXACTLY on both axes with `0 < n <= settle`
+(mc1l43: n = 13 ⇒ start tick 3); altitude stays the marker's idle seat (retail holds `ground(marker) + 256` across the
+drift — the blink lands at 2384). Harness-only (`mgc-conform/src/main.rs`; `native_settled_world` has three callers,
+none of them `replay`). **mc1l43 terrain-check DIFFERENT → IDENTICAL; `init-check` RAW SHADOW 120 rows / 12 lanes → 2 /
+2.** Full 97-take terrain sweep: ONE moved row (mc1l43), **96 IDENTICAL · 0 DIFFERENT · 1 ERROR** (mc1l32-terrainless) —
+the first time the corpus has no DIFFERENT row at all. ⭐⭐⭐ **THE INSTRUMENT IS A LANE TOO** (again): a terrain
+divergence that survived three rounds of terrain work was the harness posing the player, not the sculptor.
+
+### 159-9 ✅ w159e follow-up — THE SELF-SEIZURE ALIAS IS A CLASS, CENSUSED FROM THE BINARY (`MGC_NO_MC1_SELF_SEIZE`)
+⚖ **PLAYER RULING (2026-09-19): land the whole follow-up**, unwitnessed paths included. `sub_373F0` (file 0x4FBE8) has
+**106** `e8 rel32` call sites in `CARPET.EXE`; the argument setup was disassembled at every one. **62 push a POINTER INTO
+A RECORD** (`lea 0x48(%reg)`, the `+72` axis, at 58; `lea 0x96(%reg)`, the `+150` site triple, at 4) and alias the pose;
+the other 44 push a stack axis or the global scratch `word_AE454` and cannot alias the pose, but their POST-ALLOCATION
+operand reads alias identically. Every class-9/10 ctor has the shape `NewEvent_372C0` → field stores → `sub_41CF0(new,
+a1)`, so the pointer is dereferenced only after the record is memset. ⭐ **THE SECOND HALF OF THE CLASS IS WHAT MAKES THE
+FIX SMALL: when the caller IS the child, every `child->f = caller->f` stamp is an IDENTITY STORE** — the correct port
+behaviour is to SKIP those stamps, not emulate them; only the non-identity reads (`+140`, `+84` scaled, `+44 >> 2`,
+`+26`) must be re-read live. **REACHABILITY**: anything minted mid-level is exposed, because MC1's recycle stack is a
+rebuild over live records carrying `0x20400` and is never purged, so it names STALE slots. The **wizard-caster half is
+UNREACHABLE and written off** (~20 of the 62): the sixteen cast token machines (`sub_56090`…`sub_58240`, :65058-66325)
+plus `sub_44D30`/`sub_45FC0`/`sub_155F0`/`sub_3C9D0` all pass a WIZARD's record, which carries neither `0x20000` nor
+`0x400`, is minted once at level load and never freed. Landed: three shared helpers (`mc1_self_seized`,
+`mc1_seized_caller`, `mc1_muzzle`) plus `mc1_arm_live`, converting `proj_explode` (covering `sub_52770`/`sub_52B30`/
+`sub_52ED0`/`sub_530C0`/`sub_542B0`, including the magnet's two-spawn arm), `death_relay_tick`, `splash_and_die`, the
+storm bloom, the m9 lightning endpoint blast, the eleven creature shooter thunks (m5's volley loops re-read the muzzle
+PER SHOT), `corpse_drop_mc1`, `corpse_puff` and the standing fire's exhaust. ⏭ STILL EXPOSED, named with anchors in
+`mc1_self_seized`'s doc comment: the volcano driver :28784/:28795/:28807, the quake crevice :28562 and canyon head
+:29135, the tree death flame :57681/:57707/:57744/:57762 (also reads `+94` and draws the LCG on the caller after the
+allocation), the castle's :56105/:56124 (a `+150` pointer ⇒ the child reads the castle's ZEROED site triple) and
+:56343/:56428, the m6 spit :22947, and the HW-only `proj_firewall_tick` trail (bytes in `HIDDEN.EXE`). MEASURED: the
+whole 97-take brief sweep is **BYTE-IDENTICAL** to the pre-landing sweep (the class only fires under a dry pool), fixture
+suite 625/625, gate 1,216/0/4, and the three new unit tests all go RED under the switch while the three pre-existing W5
+seizure tests stay green. The old `MGC_NO_MC1_TRAIL_SELF_SEIZE` is kept as a synonym.
+⚠ CAVEAT the dig flagged: `mc1_self_seized`'s pose half does `unlink` + `link(0,0,0)`, so an aliased child is briefly
+head-inserted in the caller's tile before moving to tile 0 (retail links it once); `unlink`'s `player_chain`
+bookkeeping can see that transient. A `link`-level "zero on alias" would avoid it.
+
+### 159-7 ⚖ mc1l45-froze's TAIL REGISTERED (`mc1l45-froze-level-250-castle-oob`)
+The take's other 292 segments are round 158's level-250 castle freeze (castle 966 kicked at t=27730 by the stale volcano
+`erupting` register, downgrading to 245 where retail's collapse walker never returns), the same registered class as
+`mc1l26-froze-level-250-castle-oob` and patched natively by `volcano_register_revalidate`. ⚠ **CORRECTION to that older
+rule's note**: mc1l26-froze has TWO level-250 castles — 964 (t=30711, keeps life 40000, never downgrades) and 984
+(t=31424, walks to 245 and freezes at the take's end). Round 158's memory note ("984, not 964") was half right; both the
+deviation note and the §ROUND 152 entry now say both.
+
+### 159-8 RESULT
+**All four takes END.** mc1l43 roster 9 / devs 0 · mc1l45 END clean · mc1l45-froze roster 292 / devs 0 · mc1l47 END clean.
+Gate 1,216 / 0 / 4 (1,213 before 159-9). Three new fixtures across two new manifests (`conformance/mc1l45.json`,
+`conformance/mc1l47.json`); each was verified RED under its own kill switch and GREEN under the others. Fixture suite
+625 / 625. **SESSION-END SWEEPS**: terrain 97 takes with ONE moved row (mc1l43 → IDENTICAL), leaving **96 IDENTICAL · 0
+DIFFERENT · 1 ERROR** — the first time the corpus carries no DIFFERENT row; brief 97 takes with 93 rows byte-identical,
+the 4 target rows to END, and THREE ALREADY-CERTIFIED TAKES IMPROVED — mc1l26-froze 731 → 730, mc1l48 595 → 593 (devs 48
+→ 46), mc1l48-nodeath 225 → 223 (devs 29 → 27) — every one reversion-probed ONE SWITCH AT A TIME to
+`MGC_NO_MC1_CASTLE_LEVELER_GROUND`. No regressions anywhere. ⚖ Per the player, no extra fixtures were cut from those
+three rows: the law is the same story the mc1l47 fixture already pins.
+
 ## ROUND 157 (2026-09-19, vm113) — **THE THIRD MC1 INTAKE**: four new takes (mc1l37-new, l38, l40, l41), ALL END, 3 laws
 
 Opened on `72be2ce` (round 156 committed by the player), gate 1,367 / 0 / 4. The player had already moved the batch into
@@ -1403,7 +1555,8 @@ l15's Meteor cast site → w152l.
     (13,877 LCG draws, the first cell at (−1,−1) takes free slot 785) — 12 rows, a permanent floor; t=30711
     wiz 3's castle 964 at (32768,0) → LEVEL 250 → every build/quota read OOB (extents 3328 → 640, the fleet
     culled) while the port's `lvl % len` arms keep spawning balloons every other tick = the 445-head storm,
-    one root; then retail froze. Same class as `mc1l48-search-ring-heap-damage`; status `deviation` on that
+    one root; then retail froze. (⚠ round 159 correction: the castle that FROZE is 984, kicked to level 250
+    at t=31424 and walked down to 245; 964 stays at level 250 with full life to the end.) Same class as `mc1l48-search-ring-heap-damage`; status `deviation` on that
     precedent — ⚖ the player may flip it to `open` (the mc1l6 precedent) to keep the take uncertified. The
     twin mc1l26 is bit-exact END.
 
