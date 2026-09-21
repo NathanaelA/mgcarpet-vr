@@ -1,6 +1,27 @@
 #!/usr/bin/env python3
 """Detour-patch CARPET.EXE / HIDDEN.EXE to pace the sim tick loop and expose a
-recorder mailbox.
+recorder mailbox -- and, optionally, to guard retail's stale volcano registers.
+
+Two independent patches live here, and the difference between them matters:
+
+  * THE PACING STUB (default) is BEHAVIOUR-NEUTRAL. It changes when the tick
+    loop runs, never what it computes: "the recorded tick sequence is identical
+    to retail's". Every take in the corpus is recorded through it.
+
+  * THE VOLCANO WRITE GUARD (``--volcano-guard``, MC1/HW only) CHANGES
+    SIMULATION. It is the binary half of the port's
+    ``volcano_register_revalidate`` patch, suppressing two blind writes that
+    retail makes through stale slot registers -- the `+26 = 250` kick that
+    turns a re-minted CASTLE into a level-250 castle and HANGS the game on its
+    next downgrade, and the plume soft-kill that kills whatever inherited the
+    old column's slot. It exists because those two writes make some levels
+    (notably the Hidden Worlds showcase maps) unwinnable or crash-prone through
+    no fault of the player.
+
+    A binary carrying the guard IS NOT THE SHIPPED BINARY. Recordings made with
+    it witness the PATCHED arm and must never be graded as retail; the default
+    output is named ``*_RECVG.EXE`` rather than ``*_REC.EXE`` so the two cannot
+    be confused on disk.
 
 Why
 ---
@@ -635,13 +656,24 @@ def build_stub(b: Build, period: int, floor: int = FLOOR_DEFAULT) -> bytes:
 # Patch / verify
 # --------------------------------------------------------------------------
 def patch(le: LE, b: Build, period: int, wire: bool = True, passthrough: bool = False,
-          extend: bool = True, floor: int = FLOOR_DEFAULT) -> bytes:
+          extend: bool = True, floor: int = FLOOR_DEFAULT,
+          volcano: bool = False) -> bytes:
     o1 = le.objs[0]
     stub = build_passthrough(b) if passthrough else build_stub(b, period, floor)
     cave_off = va_to_file(le, b.cave_va)
     if cave_off + len(stub) > obj_file_off(le, o1) + o1.npages * 0x1000:
         raise ValueError("stub overflows the cave")
     le.data[cave_off : cave_off + len(stub)] = stub
+
+    # The volcano write guard shares the cave, placed straight after the pacing
+    # stub (16-aligned) so the two never overlap however either one grows.
+    vol_end = b.cave_va + len(stub)
+    if volcano:
+        vol_va = (b.cave_va + len(stub) + 15) & ~15
+        vol_blob = patch_volcano(le, vol_va)
+        vol_end = vol_va + len(vol_blob)
+        if va_to_file(le, vol_end) > obj_file_off(le, o1) + o1.npages * 0x1000:
+            raise ValueError("volcano stubs overflow the cave")
 
     # Both the code cave (obj1 tail) and the mailbox (obj3 tail) sit PAST their
     # object's declared vsize, so at runtime those tails fall outside the
@@ -654,7 +686,7 @@ def patch(le: LE, b: Build, period: int, wire: bool = True, passthrough: bool = 
     if extend:
         objtab = struct.unpack_from("<I", le.data, le.lx + 0x40)[0]
         new1 = (o1.vsize + 0xFFF) & ~0xFFF
-        if b.cave_va + len(stub) > o1.vbase + new1:
+        if vol_end > o1.vbase + new1:
             raise ValueError("stub crosses the page boundary; extend by another page")
         struct.pack_into("<I", le.data, le.lx + objtab + 0 * 24, new1)
         o1.vsize = new1
@@ -678,6 +710,317 @@ def patch(le: LE, b: Build, period: int, wire: bool = True, passthrough: bool = 
         rel = b.cave_va - (cs + 5)
         le.data[off + 1 : off + 5] = struct.pack("<i", rel)
     return stub
+
+
+# --------------------------------------------------------------------------
+# THE VOLCANO WRITE GUARD (round 162) -- optional, MC1/HW only.
+#
+# Retail's eruption start (`sub_25EC0`, VA 0x25FBC / 0x26030 in BOTH builds)
+# makes TWO BLIND WRITES through global slot registers whose only gate is
+# `slot != 0` (the `> pool base` pointer test) -- no class, model or life
+# check -- so each stamps whatever record now occupies that slot:
+#
+#   KICK  VA 0x25FBE  `66 c7 42 1a fa 00`  movw $0xfa,0x1a(%edx)
+#         edx = pool_base + erupting_reg*164. `+26 = 250` is meant for the
+#         PREVIOUS volcano (10,18). Landing on a re-minted CASTLE sets its
+#         LEVEL to 250; every later downgrade reads the build table out of
+#         bounds and the collapse walker `sub_28FE0` run for row 245 reads
+#         127 rows from a garbage pointer and never returns -- the
+#         player-reported FREEZE (mc1l45-froze castle 966, mc1l26-froze
+#         castle 984). A register naming the driver's own slot self-kicks it.
+#
+#   PLUME VA 0x26035  `e8 rel32`            call <soft-kill>(old plume)
+#         eax = pool_base + plume_reg*164, pushed as the arg. Meant for the
+#         previous (10,19) column; lands on whatever inherited the slot.
+#
+# The guard is EXACTLY the port's `volcano_register_revalidate` patch
+# (crates/mgc-sim/src/patches.rs, crates/mgc-sim/src/mc1/combat.rs): the kick
+# lands only on a (10,18) that is not the driver itself, the plume kill only
+# on a (10,19). Nothing else changes -- this is a write guard, not a rewrite.
+#
+# ⚠ A binary carrying this guard is NO LONGER THE SHIPPED BINARY: unlike the
+# pacing stub (whose recorded tick sequence is identical to retail's) this
+# CHANGES SIMULATION. Takes made with it witness the PATCHED arm, never the
+# faithful one, and must never be graded as retail.
+#
+# Class/model live at +64/+65 of a 164-byte record; a volcano is (10,18) and
+# its plume (10,19).
+VOL_KICK_SIG = bytes.fromhex("760666c7421afa00")   # jbe +6 ; movw $0xfa,0x1a(%edx)
+VOL_PLUME_SIG = bytes.fromhex("39d0760950e8")      # cmp %edx,%eax ; jbe +9 ; push %eax ; call
+VOL_CLASS_OFF, VOL_MODEL_OFF = 0x40, 0x41
+VOL_CLASS, VOL_MODEL_VOLCANO, VOL_MODEL_PLUME = 10, 18, 19
+
+
+def find_volcano_sites(le: LE) -> tuple[int, int]:
+    """(kick_store_va, plume_call_va), located by unique byte signature."""
+    o1 = le.objs[0]
+    code_off = obj_file_off(le, o1)
+    blob = bytes(le.data[code_off : code_off + o1.npages * 0x1000])
+
+    def one(sig: bytes, what: str) -> int:
+        hits = []
+        i = blob.find(sig)
+        while i >= 0:
+            hits.append(i)
+            i = blob.find(sig, i + 1)
+        if len(hits) != 1:
+            raise ValueError(f"volcano {what}: expected 1 signature hit, got {len(hits)}")
+        return o1.vbase + hits[0]
+
+    # The kick SIGNATURE starts at the `jbe`; the store is 2 bytes in. The
+    # plume signature starts at the `cmp`; its `call` is 5 bytes in.
+    return one(VOL_KICK_SIG, "kick") + 2, one(VOL_PLUME_SIG, "plume") + 5
+
+
+def build_volcano_stubs(vol_va: int, killer_va: int) -> tuple[bytes, int, int]:
+    """(blob, kick_stub_va, plume_stub_va) for the cave at `vol_va`."""
+    # --- stub 1: the kick guard. Entered by `call`; edx = the register's
+    # record, ebx = the erupting driver's own record. Flags are dead across
+    # the original store (the next instruction reloads a global), but they are
+    # preserved anyway so the stub is safe to re-point at any similar site.
+    k = bytearray()
+    k += b"\x9c"                                    # pushfd
+    k += b"\x39\xda"                                # cmp %ebx,%edx      (prev == self?)
+    k += b"\x74\x12"                                # je  skip
+    k += bytes([0x80, 0x7A, VOL_CLASS_OFF, VOL_CLASS])       # cmpb $10,0x40(%edx)
+    k += b"\x75\x0c"                                # jne skip
+    k += bytes([0x80, 0x7A, VOL_MODEL_OFF, VOL_MODEL_VOLCANO])  # cmpb $18,0x41(%edx)
+    k += b"\x75\x06"                                # jne skip
+    k += b"\x66\xc7\x42\x1a\xfa\x00"                # movw $0xfa,0x1a(%edx)
+    k += b"\x9d"                                    # skip: popfd
+    k += b"\xc3"                                    # ret
+    assert len(k) == 25, len(k)
+
+    # --- stub 2: the plume guard. Entered by `call` with the record already
+    # pushed, so the arg is at [esp+4]. On a pass it TAIL-JUMPS to the original
+    # killer, whose own `ret` returns straight to the caller -- the stack frame
+    # is exactly what it expects. eax is dead across the original cdecl call.
+    plume_va = vol_va + len(k)
+    p = bytearray()
+    p += b"\x8b\x44\x24\x04"                        # mov 0x4(%esp),%eax
+    p += bytes([0x80, 0x78, VOL_CLASS_OFF, VOL_CLASS])       # cmpb $10,0x40(%eax)
+    p += b"\x75\x0b"                                # jne skip
+    p += bytes([0x80, 0x78, VOL_MODEL_OFF, VOL_MODEL_PLUME]) # cmpb $19,0x41(%eax)
+    p += b"\x75\x05"                                # jne skip
+    jmp_va = plume_va + len(p)
+    p += b"\xe9" + struct.pack("<i", killer_va - (jmp_va + 5))   # jmp <killer>
+    p += b"\xc3"                                    # skip: ret
+    assert len(p) == 22, len(p)
+    return bytes(k + p), vol_va, plume_va
+
+
+def patch_volcano(le: LE, vol_va: int) -> bytes:
+    """Install the write guard, stubs at `vol_va`. Returns the stub blob."""
+    kick_va, plume_call_va = find_volcano_sites(le)
+
+    # Resolve the original soft-kill target from the existing rel32.
+    pc_off = va_to_file(le, plume_call_va)
+    if le.data[pc_off] != 0xE8:
+        raise ValueError(f"plume site {plume_call_va:#x} is not an E8 call")
+    killer_va = plume_call_va + 5 + struct.unpack_from("<i", le.data, pc_off + 1)[0]
+
+    blob, kick_stub_va, plume_stub_va = build_volcano_stubs(vol_va, killer_va)
+    off = va_to_file(le, vol_va)
+    le.data[off : off + len(blob)] = blob
+
+    # Site 1: the 6-byte store becomes `call <kick stub>` + one nop. The `jbe`
+    # two bytes above still jumps +6, landing on the same next instruction.
+    ks_off = va_to_file(le, kick_va)
+    if bytes(le.data[ks_off : ks_off + 6]) != bytes.fromhex("66c7421afa00"):
+        raise ValueError(f"kick site {kick_va:#x} is not the expected store")
+    le.data[ks_off : ks_off + 5] = b"\xe8" + struct.pack("<i", kick_stub_va - (kick_va + 5))
+    le.data[ks_off + 5] = 0x90
+
+    # Site 2: re-point the existing call at the plume stub (same length).
+    le.data[pc_off + 1 : pc_off + 5] = struct.pack("<i", plume_stub_va - (plume_call_va + 5))
+    return blob
+
+
+# --- MC2 / NETHERW twin -----------------------------------------------------
+# `sub_32A70`, the ground-vortex controller, has the SAME two blind writes
+# through `word_0x31` / `word_0x33`. Three things differ from MC1 and all three
+# matter: the record is 168 B with class at +0x3F and model at +0x40 (MC1:
+# 164 B, +0x40 / +0x41); the slot registers index a POINTER TABLE
+# (`mov 0x1a3e4(,%eax,4),%eax`) rather than base + slot*stride; and the kick is
+# a 32-bit `movl $0xfa,0x10(%eax)` (MC1's is a 16-bit `+26` store). The plume
+# kill is `call <flags |= 0x400>`, and unlike MC1's the port's guard also
+# rejects the NEW column itself -- which is live in `esi` at the call.
+VOL2_KICK_SIG = bytes.fromhex("39d07607c74010fa000000")  # cmp %edx,%eax ; jbe +7 ; movl $0xfa,0x10(%eax)
+VOL2_PLUME_SIG = bytes.fromhex("39c8760950e8")           # cmp %ecx,%eax ; jbe +9 ; push %eax ; call
+VOL2_CLASS_OFF, VOL2_MODEL_OFF = 0x3F, 0x40
+
+
+def find_volcano_sites_mc2(le: LE) -> tuple[int, int]:
+    """(kick_store_va, plume_call_va) in NETHERW.EXE, by unique signature."""
+    o1 = le.objs[0]
+    code_off = obj_file_off(le, o1)
+    blob = bytes(le.data[code_off : code_off + o1.npages * 0x1000])
+
+    def one(sig: bytes, what: str) -> int:
+        hits = []
+        i = blob.find(sig)
+        while i >= 0:
+            hits.append(i)
+            i = blob.find(sig, i + 1)
+        if len(hits) != 1:
+            raise ValueError(f"volcano(mc2) {what}: expected 1 signature hit, got {len(hits)}")
+        return o1.vbase + hits[0]
+
+    # Kick signature starts at the `cmp`; its store is 4 bytes in. Plume
+    # signature starts at the `cmp`; its `call` is 5 bytes in.
+    return one(VOL2_KICK_SIG, "kick") + 4, one(VOL2_PLUME_SIG, "plume") + 5
+
+
+def build_volcano_stubs_mc2(vol_va: int, killer_va: int) -> tuple[bytes, int, int]:
+    """(blob, kick_stub_va, plume_stub_va) for NETHERW's cave at `vol_va`."""
+    # stub 1 -- eax = the register's record, ebx = the driver's own record.
+    k = bytearray()
+    k += b"\x9c"                                            # pushfd
+    k += b"\x39\xd8"                                        # cmp %ebx,%eax
+    k += b"\x74\x13"                                        # je  skip
+    k += bytes([0x80, 0x78, VOL2_CLASS_OFF, VOL_CLASS])     # cmpb $10,0x3f(%eax)
+    k += b"\x75\x0d"                                        # jne skip
+    k += bytes([0x80, 0x78, VOL2_MODEL_OFF, VOL_MODEL_VOLCANO])  # cmpb $18,0x40(%eax)
+    k += b"\x75\x07"                                        # jne skip
+    k += b"\xc7\x40\x10\xfa\x00\x00\x00"                    # movl $0xfa,0x10(%eax)
+    k += b"\x9d\xc3"                                        # skip: popfd ; ret
+    assert len(k) == 26, len(k)
+
+    # stub 2 -- arg at [esp+4] (already pushed); esi = the NEW column, which
+    # `call 0x7c710` (cdecl) preserves, so the self-test is free here.
+    plume_va = vol_va + len(k)
+    p = bytearray()
+    p += b"\x8b\x44\x24\x04"                                # mov 0x4(%esp),%eax
+    p += b"\x39\xf0"                                        # cmp %esi,%eax  (old == col?)
+    p += b"\x74\x11"                                        # je  skip
+    p += bytes([0x80, 0x78, VOL2_CLASS_OFF, VOL_CLASS])     # cmpb $10,0x3f(%eax)
+    p += b"\x75\x0b"                                        # jne skip
+    p += bytes([0x80, 0x78, VOL2_MODEL_OFF, VOL_MODEL_PLUME])    # cmpb $19,0x40(%eax)
+    p += b"\x75\x05"                                        # jne skip
+    jmp_va = plume_va + len(p)
+    p += b"\xe9" + struct.pack("<i", killer_va - (jmp_va + 5))   # jmp <killer>
+    p += b"\xc3"                                            # skip: ret
+    assert len(p) == 26, len(p)
+    return bytes(k + p), vol_va, plume_va
+
+
+def patch_volcano_mc2(le: LE, vol_va: int) -> bytes:
+    kick_va, plume_call_va = find_volcano_sites_mc2(le)
+    pc_off = va_to_file(le, plume_call_va)
+    if le.data[pc_off] != 0xE8:
+        raise ValueError(f"volcano(mc2) plume site {plume_call_va:#x} is not an E8 call")
+    killer_va = plume_call_va + 5 + struct.unpack_from("<i", le.data, pc_off + 1)[0]
+
+    blob, kick_stub_va, plume_stub_va = build_volcano_stubs_mc2(vol_va, killer_va)
+    off = va_to_file(le, vol_va)
+    le.data[off : off + len(blob)] = blob
+
+    # The 7-byte store becomes `call <stub>` + two nops; the `jbe` above still
+    # jumps +7 onto the same next instruction.
+    ks_off = va_to_file(le, kick_va)
+    if bytes(le.data[ks_off : ks_off + 7]) != bytes.fromhex("c74010fa000000"):
+        raise ValueError(f"volcano(mc2) kick site {kick_va:#x} is not the expected store")
+    le.data[ks_off : ks_off + 5] = b"\xe8" + struct.pack("<i", kick_stub_va - (kick_va + 5))
+    le.data[ks_off + 5 : ks_off + 7] = b"\x90\x90"
+
+    le.data[pc_off + 1 : pc_off + 5] = struct.pack("<i", plume_stub_va - (plume_call_va + 5))
+    return blob
+
+
+def has_volcano_guard_mc2(le: LE) -> bool:
+    try:
+        kick_va, _ = find_volcano_sites_mc2(le)
+    except ValueError:
+        # Signature gone == already patched (the store is a call now).
+        try:
+            off = va_to_file(le, 0x32B79)
+        except Exception:
+            return False
+        return le.data[off] == 0xE8 and le.data[off + 5 : off + 7] == b"\x90\x90"
+    return False
+
+
+def verify_volcano_mc2(le: LE) -> str:
+    o1 = le.objs[0]
+    kick_va, plume_va = 0x32B79, 0x32BDE
+    ko = va_to_file(le, kick_va)
+    if le.data[ko] != 0xE8 or le.data[ko + 5 : ko + 7] != b"\x90\x90":
+        raise ValueError("volcano(mc2): kick site is not `call rel32` + 2 nops")
+    kick_stub = kick_va + 5 + struct.unpack_from("<i", le.data, ko + 1)[0]
+    po = va_to_file(le, plume_va)
+    if le.data[po] != 0xE8:
+        raise ValueError("volcano(mc2): plume site is not an E8 call")
+    plume_stub = plume_va + 5 + struct.unpack_from("<i", le.data, po + 1)[0]
+    lo, hi = o1.vbase, o1.vbase + o1.npages * 0x1000
+    for name, va in (("kick", kick_stub), ("plume", plume_stub)):
+        if not (lo <= va < hi):
+            raise ValueError(f"volcano(mc2): {name} stub {va:#x} outside obj1")
+    js = va_to_file(le, plume_stub) + 20
+    if le.data[js] != 0xE9:
+        raise ValueError("volcano(mc2): plume stub does not end in a tail jmp")
+    killer = plume_stub + 20 + 5 + struct.unpack_from("<i", le.data, js + 1)[0]
+    want, _, want_plume = build_volcano_stubs_mc2(kick_stub, killer)
+    if want_plume != plume_stub:
+        raise ValueError("volcano(mc2): stub layout disagrees")
+    got = bytes(le.data[va_to_file(le, kick_stub) : va_to_file(le, kick_stub) + len(want)])
+    if got != want:
+        raise ValueError("volcano(mc2): stub bytes differ from the canonical build")
+    return (f"volcano guard (mc2): kick {kick_va:#x} -> {kick_stub:#x}, "
+            f"plume {plume_va:#x} -> {plume_stub:#x} -> killer {killer:#x}; "
+            f"{len(want)} B, canonical")
+
+
+def verify_volcano(le: LE) -> str:
+    """Re-derive the guard from the patched image and check it end to end.
+
+    Returns a one-line report. Raises if anything does not add up. The kick
+    SIGNATURE is gone by construction once patched (the store became a call),
+    which is also what stops the patch being applied twice.
+    """
+    o1 = le.objs[0]
+    kick_va, plume_va = 0x25FBE, 0x26035  # same VAs in both MC1 builds
+    lo, hi = o1.vbase, o1.vbase + o1.npages * 0x1000
+
+    ko = va_to_file(le, kick_va)
+    if le.data[ko] != 0xE8 or le.data[ko + 5] != 0x90:
+        raise ValueError("volcano: kick site is not `call rel32` + nop")
+    kick_stub = kick_va + 5 + struct.unpack_from("<i", le.data, ko + 1)[0]
+
+    po = va_to_file(le, plume_va)
+    if le.data[po] != 0xE8:
+        raise ValueError("volcano: plume site is not an E8 call")
+    plume_stub = plume_va + 5 + struct.unpack_from("<i", le.data, po + 1)[0]
+
+    for name, va in (("kick", kick_stub), ("plume", plume_stub)):
+        if not (lo <= va < hi):
+            raise ValueError(f"volcano: {name} stub {va:#x} is outside obj1")
+        if va < o1.vbase + o1.vsize - 0x1000:
+            raise ValueError(f"volcano: {name} stub {va:#x} is not in the cave tail")
+
+    # The plume stub must tail-jump to a real routine, and the blob must be
+    # byte-identical to what this build would emit for that target.
+    js = va_to_file(le, plume_stub) + 16
+    if le.data[js] != 0xE9:
+        raise ValueError("volcano: plume stub does not end in a tail jmp")
+    killer = plume_stub + 16 + 5 + struct.unpack_from("<i", le.data, js + 1)[0]
+    want, _, want_plume = build_volcano_stubs(kick_stub, killer)
+    if want_plume != plume_stub:
+        raise ValueError("volcano: stub layout disagrees (kick/plume not adjacent)")
+    got = bytes(le.data[va_to_file(le, kick_stub) : va_to_file(le, kick_stub) + len(want)])
+    if got != want:
+        raise ValueError("volcano: stub bytes differ from the canonical build")
+    return (f"volcano guard: kick {kick_va:#x} -> {kick_stub:#x}, "
+            f"plume {plume_va:#x} -> {plume_stub:#x} -> killer {killer:#x}; "
+            f"{len(want)} B, canonical")
+
+
+def has_volcano_guard(le: LE) -> bool:
+    """True if the kick store has been replaced by a call (i.e. patched)."""
+    try:
+        off = va_to_file(le, 0x25FBE)
+    except Exception:
+        return False
+    return le.data[off] == 0xE8 and le.data[off + 5] == 0x90
 
 
 def verify(path: str, period: int, inert: bool = False, passthrough: bool = False) -> None:
@@ -745,6 +1088,10 @@ def verify(path: str, period: int, inert: bool = False, passthrough: bool = Fals
     print(f"  {redirected} call site(s) -> stub @ {cave_va:#x}; stub -> original "
           f"tick fn @ {hook_va:#x}; {stub_len} bytes; obj1.vsize {aligned}; "
           f"entry untouched; {fl}")
+    if has_volcano_guard(le):
+        print(f"  {verify_volcano(le)}")
+        print("  \u26a0 SIMULATION IS PATCHED -- recordings from this binary "
+              "witness the PATCHED arm, never retail.")
     if shutil.which("ndisasm"):
         import subprocess
         import tempfile
@@ -921,7 +1268,8 @@ def build_stub_mc2(b: BuildMC2, floor: int = FLOOR_DEFAULT) -> bytes:
 
 
 def patch_mc2(le: LE, b: BuildMC2, wire: bool = True, extend: bool = True,
-              pace: Optional[int] = None, floor: int = FLOOR_DEFAULT) -> bytes:
+              pace: Optional[int] = None, floor: int = FLOOR_DEFAULT,
+              volcano: bool = False) -> bytes:
     o1 = le.objs[0]
 
     # Optional: widen the native frame period so a heavy frame's compute can't
@@ -945,13 +1293,22 @@ def patch_mc2(le: LE, b: BuildMC2, wire: bool = True, extend: bool = True,
         raise ValueError("stub overflows the cave")
     le.data[cave_off : cave_off + len(stub)] = stub
 
+    # The volcano write guard shares the cave, 16-aligned after the signal stub.
+    vol_end = b.cave_va + len(stub)
+    if volcano:
+        vol_va = (b.cave_va + len(stub) + 15) & ~15
+        vol_blob = patch_volcano_mc2(le, vol_va)
+        vol_end = vol_va + len(vol_blob)
+        if va_to_file(le, vol_end) > obj_file_off(le, o1) + o1.npages * 0x1000:
+            raise ValueError("volcano stubs overflow the cave")
+
     # Page-align obj1.vsize (so the code cave is inside the CS limit and will
     # execute) and obj3.vsize (so the mailbox is inside the DS limit and its
     # writes persist) -- the same two lifts the MC1 arm needs.
     if extend:
         objtab = struct.unpack_from("<I", le.data, le.lx + 0x40)[0]
         new1 = (o1.vsize + 0xFFF) & ~0xFFF
-        if b.cave_va + len(stub) > o1.vbase + new1:
+        if vol_end > o1.vbase + new1:
             raise ValueError("stub crosses the page boundary; extend by another page")
         struct.pack_into("<I", le.data, le.lx + objtab + 0 * 24, new1)
         o1.vsize = new1
@@ -1047,6 +1404,10 @@ def verify_mc2(path: str, inert: bool = False) -> None:
     print(f"  1 call site -> stub @ {cave_va:#x}; stub -> frame driver @ {frame_fn:#x}; "
           f"{stub_len} bytes; mailbox guest {MB2_GUEST:#x} (MGCTTIK2); obj1.vsize "
           f"{aligned}; entry untouched; {fl}{per}")
+    if has_volcano_guard_mc2(le):
+        print(f"  {verify_volcano_mc2(le)}")
+        print("  \u26a0 SIMULATION IS PATCHED -- recordings from this binary "
+              "witness the PATCHED arm, never retail.")
     if shutil.which("ndisasm"):
         import subprocess
         import tempfile
@@ -1111,6 +1472,22 @@ def main(argv=None):
              f"(8.3 / 10 ms). Costs time ONLY on frames that already blew their "
              f"budget, unlike --period / --pace. Max {FLOOR_MAX}.",
     )
+    ap.add_argument(
+        "--volcano-guard",
+        action="store_true",
+        help="ALL THREE BUILDS: also install the VOLCANO WRITE GUARD -- the binary "
+             "half of the port's `volcano_register_revalidate` patch. Retail's "
+             "eruption start makes two blind writes through stale slot "
+             "registers (gated only on `slot != 0`): the `+26 = 250` kick, "
+             "which turns a re-minted CASTLE into a level-250 castle and HANGS "
+             "the game on its next downgrade, and the plume soft-kill, which "
+             "kills whatever inherited the old column's slot. The guard lets "
+             "the kick land only on a (10,18) other than the driver itself and "
+             "the kill only on a (10,19). "
+             "WARNING: this CHANGES SIMULATION, unlike the pacing stub -- a "
+             "binary carrying it is no longer the shipped one, and recordings "
+             "made with it witness the PATCHED arm, never retail.",
+    )
     ap.add_argument("--verify-only", metavar="PATCHED", help="just re-verify an already-patched exe")
     ap.add_argument(
         "--inert",
@@ -1163,7 +1540,11 @@ def main(argv=None):
 
         base = os.path.basename(args.exe)
         stem, ext = os.path.splitext(base)
-        return os.path.join(os.path.dirname(args.exe) or ".", f"{stem}_REC{ext or '.EXE'}")
+        # A volcano-guarded binary gets its OWN name: it is not the shipped
+        # simulation, so it must never be mistaken for the recording EXE on
+        # disk. Takes made with it witness the PATCHED arm.
+        tag = "_RECVG" if getattr(args, "volcano_guard", False) else "_REC"
+        return os.path.join(os.path.dirname(args.exe) or ".", f"{stem}{tag}{ext or '.EXE'}")
 
     # --- MC2 / NETHERW: signal-only (no pacer), optional frame-period widen. ---
     if is_mc2(le):
@@ -1178,14 +1559,15 @@ def main(argv=None):
               f"cave={b2.cave_va:#x}  mailbox={MB2_GUEST:#x}  "
               f"timer=obj3+{b2.obj3ref_off:#x}{mode}{pace_note}")
         stub = patch_mc2(le, b2, wire=not args.inert, extend=not args.no_extend,
-                         pace=args.pace, floor=args.floor)
+                         pace=args.pace, floor=args.floor, volcano=args.volcano_guard)
         out = _out_path()
         with open(out, "wb") as f:
             f.write(le.data)
         tag = ", INERT" if args.inert else ""
         pace_tag = f", pace={args.pace}" if args.pace is not None else ", signal-only"
         floor_tag = f", floor={args.floor}" if args.floor else ", floor=OFF"
-        print(f"wrote {out}  (stub {len(stub)} B{pace_tag}{floor_tag}{tag})")
+        vg = ", VOLCANO-GUARD (simulation patched, NOT retail)" if args.volcano_guard else ""
+        print(f"wrote {out}  (stub {len(stub)} B{pace_tag}{floor_tag}{tag}{vg})")
         verify_mc2(out, inert=args.inert)
         return 0
 
@@ -1197,14 +1579,15 @@ def main(argv=None):
     print(f"build={b_.name}  hook={b_.hook_va:#x}  cave={b_.cave_va:#x}  "
           f"wallclock={b_.wallclock:#x}{mode}")
     stub = patch(le, b_, args.period, wire=not args.inert, passthrough=args.passthrough,
-                 extend=not args.no_extend, floor=args.floor)
+                 extend=not args.no_extend, floor=args.floor, volcano=args.volcano_guard)
 
     out = _out_path()
     with open(out, "wb") as f:
         f.write(le.data)
     tag = ", INERT" if args.inert else ", PASSTHROUGH" if args.passthrough else ""
     floor_tag = f", floor={args.floor}" if args.floor else ", floor=OFF"
-    print(f"wrote {out}  (stub {len(stub)} B, period={args.period}{floor_tag}{tag})")
+    vol_tag = ", VOLCANO-GUARD (simulation patched, NOT retail)" if args.volcano_guard else ""
+    print(f"wrote {out}  (stub {len(stub)} B, period={args.period}{floor_tag}{tag}{vol_tag})")
     verify(out, args.period, inert=args.inert, passthrough=args.passthrough)
     return 0
 
