@@ -71,9 +71,7 @@ fn main() {
             if orphan && first_orphan.is_none() {
                 first_orphan = Some(t);
             }
-            println!(
-                "t={t} player {pi} (carpet {own}): register={reg} castles={castles:?}{tag}"
-            );
+            println!("t={t} player {pi} (carpet {own}): register={reg} castles={castles:?}{tag}");
         }
         prev = now;
     }

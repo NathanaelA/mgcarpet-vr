@@ -20,7 +20,10 @@ fn main() {
     let mut cur: Option<u64> = None;
     for line in text.lines() {
         if let Some(rest) = line.trim().strip_prefix("pair ") {
-            cur = rest.split('\u{2192}').nth(1).and_then(|t| t.trim_end_matches(':').trim().parse().ok());
+            cur = rest
+                .split('\u{2192}')
+                .nth(1)
+                .and_then(|t| t.trim_end_matches(':').trim().parse().ok());
             continue;
         }
         let Some(t) = cur else { continue };
@@ -28,10 +31,21 @@ fn main() {
         let slot = if let Some(r) = l.strip_prefix("slot ") {
             r.split_whitespace().next().and_then(|s| s.parse().ok())
         } else if let Some(i) = l.find("slot ") {
-            l[i + 5..].split_whitespace().next().and_then(|s| s.parse().ok())
-        } else { None };
-        let field = l.split_once(": retail").and_then(|(lhs, _)| lhs.rsplit_once(' ')).map(|(_, f)| f.to_string()).unwrap_or_else(|| "<set>".into());
-        if let Some(s) = slot { want.entry(t).or_default().insert((s, field)); }
+            l[i + 5..]
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok())
+        } else {
+            None
+        };
+        let field = l
+            .split_once(": retail")
+            .and_then(|(lhs, _)| lhs.rsplit_once(' '))
+            .map(|(_, f)| f.to_string())
+            .unwrap_or_else(|| "<set>".into());
+        if let Some(s) = slot {
+            want.entry(t).or_default().insert((s, field));
+        }
     }
     let mut rec = Recording::open(std::path::Path::new(&path)).unwrap();
     // (class,model,slot) -> (heads, fields, owner set, action set, ticks)
@@ -41,25 +55,52 @@ fn main() {
     let mut acts: BTreeMap<(u8, u8, u16), BTreeSet<u8>> = BTreeMap::new();
     while let Some(r) = rec.next_tick() {
         let tick = r.unwrap();
-        let Some(slots) = want.get(&tick.t) else { continue };
-        let Some(raw) = tick.state.as_ref() else { continue };
-        let Ok(st) = decode_retail_mc2(raw) else { continue };
+        let Some(slots) = want.get(&tick.t) else {
+            continue;
+        };
+        let Some(raw) = tick.state.as_ref() else {
+            continue;
+        };
+        let Ok(st) = decode_retail_mc2(raw) else {
+            continue;
+        };
         for (s, field) in slots {
-            let Some(e) = st.ents.get(*s as usize) else { continue };
+            let Some(e) = st.ents.get(*s as usize) else {
+                continue;
+            };
             let k = (e.class3f as u8, e.model40 as u8, *s);
             heads.entry(k).or_default().insert(tick.t);
-            *fields.entry(k).or_default().entry(field.clone()).or_default() += 1;
+            *fields
+                .entry(k)
+                .or_default()
+                .entry(field.clone())
+                .or_default() += 1;
             owners.entry(k).or_default().insert(e.owner28);
             acts.entry(k).or_default().insert(e.action45);
         }
     }
-    let mut out: Vec<_> = heads.iter().map(|(k, h)| (h.len(), *k, h.iter().copied().min().unwrap(), h.iter().copied().max().unwrap())).collect();
+    let mut out: Vec<_> = heads
+        .iter()
+        .map(|(k, h)| {
+            (
+                h.len(),
+                *k,
+                h.iter().copied().min().unwrap(),
+                h.iter().copied().max().unwrap(),
+            )
+        })
+        .collect();
     out.sort_by(|a, b| b.0.cmp(&a.0));
     for (n, (c, m, s), t0, t1) in out {
         let k = (c, m, s);
         let mut fs: Vec<_> = fields[&k].iter().collect();
         fs.sort_by(|a, b| b.1.cmp(a.1));
         let top: Vec<String> = fs.iter().take(6).map(|(f, n)| format!("{f}×{n}")).collect();
-        println!("{n:>4} heads  ({c},{m}) slot {s:<4} t={t0}..{t1}  owner={:?} act={:?}  {}", owners[&k], acts[&k], top.join(" "));
+        println!(
+            "{n:>4} heads  ({c},{m}) slot {s:<4} t={t0}..{t1}  owner={:?} act={:?}  {}",
+            owners[&k],
+            acts[&k],
+            top.join(" ")
+        );
     }
 }

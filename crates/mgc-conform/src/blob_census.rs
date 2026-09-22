@@ -48,9 +48,9 @@ fn ent_decoded_mc2(off: usize) -> bool {
 fn wiz_decoded_mc2(off: usize) -> bool {
     const T: usize = 998;
     const FLIGHT: [usize; 44] = [
-        4, 6, 12, 14, 16, 30, 32, 36, 60, 62, 64, 92, 322, 326, 330, 332, 333, 334, 335, 340,
-        341, 343, 345, 355, 397, 418, 420, 446, 449, 516, 518, 578, 580, 582, 584, 586, 609, 610,
-        1111, 1112, 1116, 1117, 1118, 1119,
+        4, 6, 12, 14, 16, 30, 32, 36, 60, 62, 64, 92, 322, 326, 330, 332, 333, 334, 335, 340, 341,
+        343, 345, 355, 397, 418, 420, 446, 449, 516, 518, 578, 580, 582, 584, 586, 609, 610, 1111,
+        1112, 1116, 1117, 1118, 1119,
     ];
     if (0x9..0x14).contains(&off) || (0x1C..0x4F).contains(&off) || (0x39F..0x3E1).contains(&off) {
         return true;
@@ -127,31 +127,31 @@ fn wiz_decoded(off: usize) -> bool {
     }
     let r = off - T160;
     const RANGES: [(usize, usize); 30] = [
-        (0, 8),      // move_bits, roll/pitch delta
-        (12, 18),    // cmd_speed, v14, strafe
-        (22, 30),    // knock, eff_pitch
-        (46, 58),    // danger, castle, balloon_reg
-        (84, 152),   // guard_reg
-        (308, 312),  // banked_houses
-        (314, 322),  // duel triple
-        (326, 331),  // charge, roll/pitch acc
-        (331, 333),  // grace
-        (341, 343),  // life_rate
-        (343, 351),  // shots, hits
-        (359, 363),  // kills
-        (383, 387),  // regen_stall
-        (391, 394),  // alerts
-        (404, 408),  // burst, poverty
-        (415, 416),  // ai_state
-        (460, 524),  // hate/war 8 × (2+2) interleaved
-        (526, 530),  // tempo, aggro
-        (532, 628),  // spell_list
-        (628, 676),  // learn
-        (676, 724),  // owned_slots
-        (724, 772),  // cooldown
-        (916, 940),  // blue
-        (940, 942),  // hand_left
-        (944, 946),  // hand_right
+        (0, 8),     // move_bits, roll/pitch delta
+        (12, 18),   // cmd_speed, v14, strafe
+        (22, 30),   // knock, eff_pitch
+        (46, 58),   // danger, castle, balloon_reg
+        (84, 152),  // guard_reg
+        (308, 312), // banked_houses
+        (314, 322), // duel triple
+        (326, 331), // charge, roll/pitch acc
+        (331, 333), // grace
+        (341, 343), // life_rate
+        (343, 351), // shots, hits
+        (359, 363), // kills
+        (383, 387), // regen_stall
+        (391, 394), // alerts
+        (404, 408), // burst, poverty
+        (415, 416), // ai_state
+        (460, 524), // hate/war 8 × (2+2) interleaved
+        (526, 530), // tempo, aggro
+        (532, 628), // spell_list
+        (628, 676), // learn
+        (676, 724), // owned_slots
+        (724, 772), // cooldown
+        (916, 940), // blue
+        (940, 942), // hand_left
+        (944, 946), // hand_right
         (0, 0),
         (0, 0),
         (0, 0),
@@ -204,7 +204,10 @@ pub(crate) fn blob_census(path: &std::path::Path, limit: Option<usize>) -> i32 {
             return 2;
         }
     };
-    let (wiz_end, pool_end) = (lay.wiz_base + lay.wiz_stride * WIZ_COUNT, lay.pool + lay.ent_stride * ENT_COUNT);
+    let (wiz_end, pool_end) = (
+        lay.wiz_base + lay.wiz_stride * WIZ_COUNT,
+        lay.pool + lay.ent_stride * ENT_COUNT,
+    );
     let mut ent = vec![0u64; lay.ent_stride];
     let mut wiz = vec![0u64; lay.wiz_stride];
     let mut glob = vec![0u64; lay.size];
@@ -220,7 +223,11 @@ pub(crate) fn blob_census(path: &std::path::Path, limit: Option<usize>) -> i32 {
         };
         let Some(cur) = r.state else { continue };
         if cur.len() != lay.size {
-            println!("BLOB {name}: ERROR — struct image {} bytes, want {}", cur.len(), lay.size);
+            println!(
+                "BLOB {name}: ERROR — struct image {} bytes, want {}",
+                cur.len(),
+                lay.size
+            );
             return 2;
         }
         if let Some(p) = &prev {
@@ -266,10 +273,17 @@ pub(crate) fn blob_census(path: &std::path::Path, limit: Option<usize>) -> i32 {
     }
     println!("== blob-census {name}: {records} record(s) with state");
     let show = |title: &str, v: &[u64], decoded: &dyn Fn(usize) -> bool| {
-        let mut rows: Vec<(usize, u64)> =
-            v.iter().enumerate().filter(|(_, c)| **c > 0).map(|(k, c)| (k, *c)).collect();
+        let mut rows: Vec<(usize, u64)> = v
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c > 0)
+            .map(|(k, c)| (k, *c))
+            .collect();
         let undec = rows.iter().filter(|(k, _)| !decoded(*k)).count();
-        println!("  -- {title}: {} moving offset(s), {undec} UNDECODED", rows.len());
+        println!(
+            "  -- {title}: {} moving offset(s), {undec} UNDECODED",
+            rows.len()
+        );
         rows.sort_by_key(|&(k, c)| (std::cmp::Reverse(c), k));
         for (k, c) in rows {
             println!(
@@ -279,15 +293,25 @@ pub(crate) fn blob_census(path: &std::path::Path, limit: Option<usize>) -> i32 {
         }
     };
     show(
-        &format!("POOL RECORD (offset within the {}-byte record, live slots)", lay.ent_stride),
+        &format!(
+            "POOL RECORD (offset within the {}-byte record, live slots)",
+            lay.ent_stride
+        ),
         &ent,
         &lay.ent_decoded,
     );
     show(
-        &format!("WIZARD RECORD (offset within the {}-byte record, seated)", lay.wiz_stride),
+        &format!(
+            "WIZARD RECORD (offset within the {}-byte record, seated)",
+            lay.wiz_stride
+        ),
         &wiz,
         &lay.wiz_decoded,
     );
-    show("GLOBALS (absolute struct offset, outside both arrays)", &glob, &lay.global_decoded);
+    show(
+        "GLOBALS (absolute struct offset, outside both arrays)",
+        &glob,
+        &lay.global_decoded,
+    );
     0
 }

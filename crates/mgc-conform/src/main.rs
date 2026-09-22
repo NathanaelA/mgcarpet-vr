@@ -13,9 +13,9 @@
 //!   N+1 (adjacent pairs only; gaps break pairing, never the run).
 
 mod alloc_trace;
+mod blob_census;
 mod explain;
 mod fixtures;
-mod blob_census;
 mod init_check;
 mod jsondiff;
 mod pose_lane;
@@ -1147,7 +1147,10 @@ pub(crate) fn record0_settle(
 ) -> Result<(u32, bool), String> {
     let phase = retail_record0_phase(first, family)
         .ok_or("record 0 carries no decodable state to read the phase from — pass --settle <n>")?;
-    let state = first.state.as_ref().ok_or("record 0 carries no state channel")?;
+    let state = first
+        .state
+        .as_ref()
+        .ok_or("record 0 carries no state channel")?;
     let want = match family {
         mgc_formats::mgcr::Family::Mc1 => mgc_formats::mgcr::decode_retail_mc1(state)?.rand,
         mgc_formats::mgcr::Family::Mc2 => mgc_formats::mgcr::decode_retail_mc2(state)?.rand,
@@ -1266,7 +1269,6 @@ impl TerrainReport {
     }
 }
 
-
 /// ⭐⭐⭐ **EVERY RECORDING STARTS MID-SETTLE — AND THE PLAYER'S HANDS
 /// WERE ALREADY ON THE STICK.** The native settle
 /// ([`native_settled_world`]) drives the carpet IDLE at the start
@@ -1369,7 +1371,13 @@ pub(crate) fn native_settled_world(
     level: u32,
     args: &Args,
     settle: u32,
-) -> Result<(mgc_sim::engine::world::World, mgc_sim::engine::features::Planes), String> {
+) -> Result<
+    (
+        mgc_sim::engine::world::World,
+        mgc_sim::engine::features::Planes,
+    ),
+    String,
+> {
     let (mut w, pristine) = match family {
         mgc_formats::mgcr::Family::Mc1 => {
             // The human's carried book off record 0, in acquisition
@@ -1590,8 +1598,14 @@ pub(crate) fn native_settled_world(
                 _ => (0.0, 0.0),
             };
             let alt = w.ground_height_tiles(px, pz) + settle_alt;
-            let pose =
-                mgc_sim::engine::world::PlayerPose::from_tiles(px + dx, alt, pz + dz, 0.0, 0.0, 0.0);
+            let pose = mgc_sim::engine::world::PlayerPose::from_tiles(
+                px + dx,
+                alt,
+                pz + dz,
+                0.0,
+                0.0,
+                0.0,
+            );
             w.tick(pose, idle);
         }
         if std::env::var_os("MGC_POOL_CENSUS").is_some() {

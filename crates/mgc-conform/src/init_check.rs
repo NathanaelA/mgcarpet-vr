@@ -117,92 +117,92 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
     let mut shadow = crate::shadow::Shadow::census_all();
     let t = first.t;
     // (retail rand, human slot, retail occupancy, per-wizard retail seat)
-    let (r_rand, human_slot, retail, seats): (u32, u16, Occupancy, Vec<(usize, u16)>) =
-        match family {
-            Family::Mc1 => {
-                let st = decode_retail_mc1(state)?;
-                let human = st
-                    .wizards
-                    .get(st.local_player as usize)
-                    .map_or(0, |w| w.play_index);
-                shadow.compare_core_mc1(&world, &st, human, t);
-                shadow.compare_ents_mc1(&world, &st, human, t);
-                shadow.compare_wiz_mc1(&world, &st, t);
-                shadow.compare_globals_mc1(&world, &st, t);
-                shadow.compare_chains_mc1(&world, &st, human, t);
-                shadow.compare_free_mc1(&world, &st, human, t);
-                let occ = st
-                    .ents
-                    .iter()
-                    .enumerate()
-                    .skip(1)
-                    .filter(|(_, e)| e.class64 != 0)
-                    .map(|(s, e)| (s as u16, (e.class64, e.model65)))
-                    .collect();
-                let seats = st
-                    .wizards
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, w)| w.play_index != 0)
-                    .map(|(i, w)| (i, w.play_index))
-                    .collect();
-                (st.rand, human, occ, seats)
+    let (r_rand, human_slot, retail, seats): (u32, u16, Occupancy, Vec<(usize, u16)>) = match family
+    {
+        Family::Mc1 => {
+            let st = decode_retail_mc1(state)?;
+            let human = st
+                .wizards
+                .get(st.local_player as usize)
+                .map_or(0, |w| w.play_index);
+            shadow.compare_core_mc1(&world, &st, human, t);
+            shadow.compare_ents_mc1(&world, &st, human, t);
+            shadow.compare_wiz_mc1(&world, &st, t);
+            shadow.compare_globals_mc1(&world, &st, t);
+            shadow.compare_chains_mc1(&world, &st, human, t);
+            shadow.compare_free_mc1(&world, &st, human, t);
+            let occ = st
+                .ents
+                .iter()
+                .enumerate()
+                .skip(1)
+                .filter(|(_, e)| e.class64 != 0)
+                .map(|(s, e)| (s as u16, (e.class64, e.model65)))
+                .collect();
+            let seats = st
+                .wizards
+                .iter()
+                .enumerate()
+                .filter(|(_, w)| w.play_index != 0)
+                .map(|(i, w)| (i, w.play_index))
+                .collect();
+            (st.rand, human, occ, seats)
+        }
+        Family::Mc2 => {
+            let st = decode_retail_mc2(state)?;
+            let human = st
+                .players
+                .get(st.local_player as usize)
+                .map_or(0, |p| p.play_index);
+            let torn = BTreeSet::new();
+            shadow.compare_ents_mc2(&world, &st, human, &torn, t);
+            shadow.compare_map_heads_mc2(&world, &st, human, &torn, t);
+            shadow.compare_wiz_mc2(&world, &st, t);
+            shadow.compare_board_mc2(&world, &st, t);
+            shadow.compare_free_mc2(&world, &st, human, t);
+            // ⭐ `MGC_INIT_STACKS=<n>` — the allocator microscope for
+            // the CONSTRUCTOR (`MGC_ALLOC_TRACE`'s twin: that one
+            // only reaches graded boundaries, and a native build has
+            // none). Prints the top n of both free stacks, next-pop
+            // first, so a slot-order divergence with clean occupancy
+            // names the transient that was born and freed in one
+            // side only.
+            if let Some(n) = std::env::var("MGC_INIT_STACKS")
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+            {
+                let (pf, _) = world.free_stacks_mc2();
+                let pool = st.ents.len();
+                let cut = |v: &[u16]| {
+                    v.iter()
+                        .filter(|s| (**s as usize) < pool && **s != human)
+                        .rev()
+                        .take(n)
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                println!("  FREE retail top{n}: {}", cut(&st.free_stack));
+                println!("  FREE port   top{n}: {}", cut(&pf));
             }
-            Family::Mc2 => {
-                let st = decode_retail_mc2(state)?;
-                let human = st
-                    .players
-                    .get(st.local_player as usize)
-                    .map_or(0, |p| p.play_index);
-                let torn = BTreeSet::new();
-                shadow.compare_ents_mc2(&world, &st, human, &torn, t);
-                shadow.compare_map_heads_mc2(&world, &st, human, &torn, t);
-                shadow.compare_wiz_mc2(&world, &st, t);
-                shadow.compare_board_mc2(&world, &st, t);
-                shadow.compare_free_mc2(&world, &st, human, t);
-                // ⭐ `MGC_INIT_STACKS=<n>` — the allocator microscope for
-                // the CONSTRUCTOR (`MGC_ALLOC_TRACE`'s twin: that one
-                // only reaches graded boundaries, and a native build has
-                // none). Prints the top n of both free stacks, next-pop
-                // first, so a slot-order divergence with clean occupancy
-                // names the transient that was born and freed in one
-                // side only.
-                if let Some(n) = std::env::var("MGC_INIT_STACKS")
-                    .ok()
-                    .and_then(|v| v.trim().parse::<usize>().ok())
-                {
-                    let (pf, _) = world.free_stacks_mc2();
-                    let pool = st.ents.len();
-                    let cut = |v: &[u16]| {
-                        v.iter()
-                            .filter(|s| (**s as usize) < pool && **s != human)
-                            .rev()
-                            .take(n)
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    };
-                    println!("  FREE retail top{n}: {}", cut(&st.free_stack));
-                    println!("  FREE port   top{n}: {}", cut(&pf));
-                }
-                let occ = st
-                    .ents
-                    .iter()
-                    .enumerate()
-                    .skip(1)
-                    .filter(|(_, e)| e.class3f != 0)
-                    .map(|(s, e)| (s as u16, (e.class3f, e.model40)))
-                    .collect();
-                let seats = st
-                    .players
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, p)| p.play_index != 0)
-                    .map(|(i, p)| (i, p.play_index))
-                    .collect();
-                (st.rand, human, occ, seats)
-            }
-        };
+            let occ = st
+                .ents
+                .iter()
+                .enumerate()
+                .skip(1)
+                .filter(|(_, e)| e.class3f != 0)
+                .map(|(s, e)| (s as u16, (e.class3f, e.model40)))
+                .collect();
+            let seats = st
+                .players
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.play_index != 0)
+                .map(|(i, p)| (i, p.play_index))
+                .collect();
+            (st.rand, human, occ, seats)
+        }
+    };
     let p_rand = world.rand_state();
     // The human's carpet is a pool record in retail and lives OUTSIDE
     // the pool in the port (`PLAYER_TARGET`) — a hole by design on
@@ -221,8 +221,16 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
     // that comparison (`play_index != ent`), so say so here or its
     // whole block reads clean where nobody looked.
     let port_seats: BTreeMap<u8, u16> = match family {
-        Family::Mc1 => world.wiz_shadow_mc1().iter().map(|w| (w.wiz, w.ent)).collect(),
-        Family::Mc2 => world.wiz_shadow_mc2().iter().map(|w| (w.wiz, w.ent)).collect(),
+        Family::Mc1 => world
+            .wiz_shadow_mc1()
+            .iter()
+            .map(|w| (w.wiz, w.ent))
+            .collect(),
+        Family::Mc2 => world
+            .wiz_shadow_mc2()
+            .iter()
+            .map(|w| (w.wiz, w.ent))
+            .collect(),
     };
 
     println!(
@@ -239,7 +247,11 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
     );
     println!(
         "  rand: retail {r_rand:#010x} port {p_rand:#010x} — {}",
-        if r_rand == p_rand { "MATCH" } else { "DIFFERENT" }
+        if r_rand == p_rand {
+            "MATCH"
+        } else {
+            "DIFFERENT"
+        }
     );
     println!(
         "  pool: retail {} live, port {} live (human slot {human_slot}) — {same} slot(s) agree on \
@@ -286,13 +298,20 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
         println!(
             "  seat wiz {wiz}: retail slot {slot} port {}{}",
             ps.map_or("— (no live wizard)".to_string(), |s| s.to_string()),
-            if ok { "" } else { "  ⚠ brain block NOT compared" }
+            if ok {
+                ""
+            } else {
+                "  ⚠ brain block NOT compared"
+            }
         );
     }
     for wiz in port_seats.keys() {
         if !seats.iter().any(|(w, _)| *w as u8 == *wiz) {
             seat_diff += 1;
-            println!("  seat wiz {wiz}: retail — port {}  ⚠ port-only wizard", port_seats[wiz]);
+            println!(
+                "  seat wiz {wiz}: retail — port {}  ⚠ port-only wizard",
+                port_seats[wiz]
+            );
         }
     }
     print!("{}", shadow.render(false));
@@ -310,13 +329,18 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
             }
             println!(
                 "  -- stagevar[{i}] kind {} flags {:#04x} chain {} cadence {} payload {}                  (watch_ent decoded {})",
-                row[0] & 0xF, row[1], row[2], row[3],
+                row[0] & 0xF,
+                row[1],
+                row[2],
+                row[3],
                 u32::from_le_bytes([row[4], row[5], row[6], row[7]]),
                 st.stagevar_watch[i],
             );
         }
         for s in list.split(',').filter_map(|s| s.trim().parse::<u16>().ok()) {
-            let Some(re) = st.ents.get(s as usize) else { continue };
+            let Some(re) = st.ents.get(s as usize) else {
+                continue;
+            };
             let port: BTreeMap<&'static str, Option<i64>> = world
                 .port_ent_lanes_mc2(s, human_slot, false)
                 .unwrap_or_default()
@@ -326,8 +350,10 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
             for (name, rv) in retail_ent_lanes_mc2(re) {
                 let pv = port.get(name).copied().flatten();
                 let mark = if pv == Some(rv) { " " } else { "≠" };
-                println!("     {mark} {name:>10}: retail {rv:>8}  port {}",
-                    pv.map_or("—".to_string(), |v| v.to_string()));
+                println!(
+                    "     {mark} {name:>10}: retail {rv:>8}  port {}",
+                    pv.map_or("—".to_string(), |v| v.to_string())
+                );
             }
         }
     }
@@ -350,7 +376,11 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
         pop.len(),
         shadow.lanes.len(),
         if shadow.free.0 == 0 { "MATCH" } else { "DIFF" },
-        if shadow.recycle.0 == 0 { "MATCH" } else { "DIFF" },
+        if shadow.recycle.0 == 0 {
+            "MATCH"
+        } else {
+            "DIFF"
+        },
     );
     Ok(identical)
 }

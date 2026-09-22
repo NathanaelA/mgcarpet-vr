@@ -330,8 +330,8 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         let witness = respawn_witness.observe(tick.input.as_ref());
         let space = respawn_key_mc2(tick.input.as_ref());
         let mouse = mgc_formats::recover::mouse_pos(tick.input.as_ref());
-        let legacy = space
-            && (prev_space || (mouse.is_some() && mouse != prev_mouse && mouse == press));
+        let legacy =
+            space && (prev_space || (mouse.is_some() && mouse != prev_mouse && mouse == press));
         prev_space = space;
         prev_mouse = mouse.or(prev_mouse);
         aligned.respawn = if pair_respawn_legacy { legacy } else { witness };
@@ -1407,12 +1407,7 @@ fn slot_is_torn_at(slot: usize, a: &RetailEntMc2, b: &RetailEntMc2) -> bool {
     slot_is_torn_scoped(slot, a, b, TearScope::Shadow)
 }
 
-fn slot_is_torn_scoped(
-    slot: usize,
-    a: &RetailEntMc2,
-    b: &RetailEntMc2,
-    scope: TearScope,
-) -> bool {
+fn slot_is_torn_scoped(slot: usize, a: &RetailEntMc2, b: &RetailEntMc2, scope: TearScope) -> bool {
     // ⭐ ROUND 150 (w150a): THE RE-SEED CLAUSES ARE GRADED NOW. They
     // were `TearScope::Shadow`-only because widening them un-hid
     // mc2l16 t=7903 — four death-fall newborns the pinned-pair arm
@@ -2080,7 +2075,13 @@ mod tests {
     #[test]
     fn mc2_a_null_dispatch_row_holds_its_phase_byte_and_is_not_torn() {
         let hold = |class: u8, action: u8| {
-            let mut a = RetailEntMc2 { class3f: class, model40: 27, action45: action, phase3e: 77, ..Default::default() };
+            let mut a = RetailEntMc2 {
+                class3f: class,
+                model40: 27,
+                action45: action,
+                phase3e: 77,
+                ..Default::default()
+            };
             a.model40 = if class == 5 { 27 } else { 77 };
             let b = a;
             slot_is_torn(&a, &b)

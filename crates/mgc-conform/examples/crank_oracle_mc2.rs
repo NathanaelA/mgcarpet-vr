@@ -7,18 +7,24 @@
 //! the capture's own `rollDelta_0x4_4`.  Solve for k.  Also lists every
 //! live class-10 model-22 whirlwind HEAD and its cell distance to the
 //! human carpet.
-use mgc_formats::mgcr::{Recording, decode_retail_mc2, RetailMc2};
+use mgc_formats::mgcr::{Recording, RetailMc2, decode_retail_mc2};
 
 fn ladder(acc: i16, k: u8) -> i16 {
     let mut v = acc as i32;
     for _ in 0..k {
-        if v < 256 { v += 28; }
+        if v < 256 {
+            v += 28;
+        }
     }
     v as i16
 }
 
 fn scaled(d: i16, ms: u8) -> i16 {
-    if ms > 0 { ((d as i32) * (4 - ms as i32) / 4) as i16 } else { d }
+    if ms > 0 {
+        ((d as i32) * (4 - ms as i32) / 4) as i16
+    } else {
+        d
+    }
 }
 
 fn main() {
@@ -30,8 +36,12 @@ fn main() {
     let mut prev: Option<(u64, RetailMc2)> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r.unwrap();
-        let Some(raw) = tick.state.as_ref() else { continue };
-        let Ok(st) = decode_retail_mc2(raw) else { continue };
+        let Some(raw) = tick.state.as_ref() else {
+            continue;
+        };
+        let Ok(st) = decode_retail_mc2(raw) else {
+            continue;
+        };
         if tick.t >= t0 && tick.t <= t1 {
             if let Some((pt, pst)) = prev.as_ref() {
                 let pp = &pst.players[pst.local_player as usize];
@@ -46,8 +56,12 @@ fn main() {
                 // k solving: with veto the mover skips roll += dr.
                 let mut ks: Vec<(u8, &str)> = vec![];
                 for k in 0..=8u8 {
-                    if ladder(a0, k).wrapping_add(dr) == a1 { ks.push((k, "dr")); }
-                    if ladder(a0, k) == a1 && dr != 0 { ks.push((k, "veto")); }
+                    if ladder(a0, k).wrapping_add(dr) == a1 {
+                        ks.push((k, "dr"));
+                    }
+                    if ladder(a0, k) == a1 && dr != 0 {
+                        ks.push((k, "veto"));
+                    }
                 }
                 // whirlwind heads
                 let mut ww = vec![];
@@ -62,15 +76,27 @@ fn main() {
                     }
                 }
                 let (cf30, pf30, cflags, pflags) = (
-                    ce.map_or(0, |e| e.f30), pe.map_or(0, |e| e.f30),
-                    ce.map_or(0, |e| e.flags), pe.map_or(0, |e| e.flags));
+                    ce.map_or(0, |e| e.f30),
+                    pe.map_or(0, |e| e.f30),
+                    ce.map_or(0, |e| e.flags),
+                    pe.map_or(0, |e| e.flags),
+                );
                 println!(
                     "t={} ({}→{}) roll_acc {a0} -> {a1} (Δ{}) rollDelta={} ms={ms} k={:?} f30 {pf30}->{cf30} flags {pflags:#x}->{cflags:#x} | ww[{}]: {}",
-                    tick.t, pt, tick.t, a1.wrapping_sub(a0), cp.roll_delta, ks, ww.len(), ww.join(" ")
+                    tick.t,
+                    pt,
+                    tick.t,
+                    a1.wrapping_sub(a0),
+                    cp.roll_delta,
+                    ks,
+                    ww.len(),
+                    ww.join(" ")
                 );
             }
         }
         prev = Some((tick.t, st));
-        if tick.t > t1 { break }
+        if tick.t > t1 {
+            break;
+        }
     }
 }

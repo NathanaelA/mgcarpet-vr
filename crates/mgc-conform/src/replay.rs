@@ -268,7 +268,10 @@ fn building_patches_probe(world: &mut World) {
     // through (set BOTH env vars).
     if *ON.get_or_init(|| std::env::var_os("MGC_REPLAY_BUILDING_PATCHES").is_some()) {
         let mut p = world.patches();
-        if !p.mc1_crushed_site_collapse || !p.mc1_building_pad_saturate || !p.mc2_building_pad_saturate {
+        if !p.mc1_crushed_site_collapse
+            || !p.mc1_building_pad_saturate
+            || !p.mc2_building_pad_saturate
+        {
             p.mc1_crushed_site_collapse = true;
             p.mc1_building_pad_saturate = true;
             p.mc2_building_pad_saturate = true;
@@ -730,7 +733,9 @@ impl PlaneCensus {
         let mut bits = 0u8;
         let mut first: Vec<(usize, usize, u8, u8)> = Vec::new();
         for (k, name) in ["height", "type", "ceiling", "angle"].iter().enumerate() {
-            let Some(truth) = img.plane(name) else { continue };
+            let Some(truth) = img.plane(name) else {
+                continue;
+            };
             let pk = port[k];
             if pk.is_empty() {
                 continue;
@@ -1962,7 +1967,9 @@ fn run_mc1(
     // input, one heartbeat line per tick — the instrument for a take
     // whose retail side FROZE at its end (mc1l26-froze, mc1l49): does
     // the port, holding retail's exact final state, hang the same way?
-    let overrun: Option<u64> = std::env::var("MGC_OVERRUN").ok().and_then(|v| v.parse().ok());
+    let overrun: Option<u64> = std::env::var("MGC_OVERRUN")
+        .ok()
+        .and_then(|v| v.parse().ok());
     let mut overrun_input: Option<(Mc1Input, PlayerCommand)> = None;
     let mut printed_import = false;
     // MGC_CASTLE_TRACE=<t0>:<t1> — the replay-mode castle-story probe:
@@ -2219,10 +2226,7 @@ fn run_mc1(
             // byte, the way the pair importer does. The frame clock
             // itself free-runs (one frame per tick at the default
             // game speed).
-            world.set_mc1_hud_drawn(matches!(
-                pst.wizards[pst.local_player as usize].view,
-                0 | 3
-            ));
+            world.set_mc1_hud_drawn(matches!(pst.wizards[pst.local_player as usize].view, 0 | 3));
             // THE SCRATCH LANE's port half (round 160). Sampled
             // BEFORE the step so the interval matches retail's
             // `pst` -> `st` exactly one tick, which is what makes the
@@ -3431,8 +3435,11 @@ fn run_mc2(
                 // graded diff below keeps the narrow one — see
                 // `verify_mc2::TearScope`.
                 let torn = torn_slots(&pst, &st);
-                let torn_graded =
-                    crate::verify_mc2::torn_slots_scoped(&pst, &st, crate::verify_mc2::TearScope::Graded);
+                let torn_graded = crate::verify_mc2::torn_slots_scoped(
+                    &pst,
+                    &st,
+                    crate::verify_mc2::TearScope::Graded,
+                );
                 // THE RAW SHADOW, free-run half. Unlike pair mode the
                 // port has been carrying its OWN state since the
                 // anchor, so the first tick a raw lane parts is the
@@ -3459,7 +3466,13 @@ fn run_mc2(
                 let mut pd = compare_mc2_gated(&obs, &port, slot, &torn_graded);
                 // The MC2 sprite lane, free-run half (see the MC1
                 // boundary above).
-                crate::verify_mc2::append_sprite_diffs_mc2(&mut pd, &st, &world, slot, &torn_graded);
+                crate::verify_mc2::append_sprite_diffs_mc2(
+                    &mut pd,
+                    &st,
+                    &world,
+                    slot,
+                    &torn_graded,
+                );
                 let pd = pd;
                 let dump = args.dump == Some(pt)
                     || (args.dump_first

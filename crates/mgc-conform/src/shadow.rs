@@ -257,7 +257,13 @@ impl Shadow {
     /// the rest to the obs diff, which a native world has no pinned
     /// projection for. These are the lanes of the two dump-state
     /// tables that carry straight across with no re-home.
-    pub(crate) fn compare_core_mc1(&mut self, world: &World, st: &RetailMc1, human_slot: u16, t: u64) {
+    pub(crate) fn compare_core_mc1(
+        &mut self,
+        world: &World,
+        st: &RetailMc1,
+        human_slot: u16,
+        t: u64,
+    ) {
         const CORE: [&str; 9] = [
             "rand", "max_life", "act_life", "flags", "x", "y", "z", "type86", "f63",
         ];
@@ -592,16 +598,14 @@ impl Shadow {
             // carries `3·spell + phase` (round 154, w154k: the
             // `(12,x) f70` "retail 34 port 1" rows on mc1l10/l13/l16/
             // l20/l21/hwl2 — one per authored jar, all exactly this).
-            let gf70 = if self.native
-                && g.class == 12
-                && g.f70 >= mgc_sim::engine::world::MANIFEST_BASE
-            {
-                3 * (g.f70 - mgc_sim::engine::world::MANIFEST_BASE) as i64
-            } else if self.native && g.class == 12 && g.f70 <= 2 {
-                3 * g.model as i64 + g.f70 as i64
-            } else {
-                g.f70 as i64
-            };
+            let gf70 =
+                if self.native && g.class == 12 && g.f70 >= mgc_sim::engine::world::MANIFEST_BASE {
+                    3 * (g.f70 - mgc_sim::engine::world::MANIFEST_BASE) as i64
+                } else if self.native && g.class == 12 && g.f70 <= 2 {
+                    3 * g.model as i64 + g.f70 as i64
+                } else {
+                    g.f70 as i64
+                };
             let mut hits: Vec<(&'static str, i64, i64)> = vec![
                 ("f70", w.f70 as i64, gf70),
                 ("f71", w.f71 as i64, g.f71 as i64),
@@ -710,7 +714,14 @@ impl Shadow {
             // castle link, compared above since w154j).
             let worker = w.class64 == 10 && matches!(w.model65, 41 | 42);
             let unmodelled: [(&'static str, i64); 3] = [
-                ("f42~", if w.class64 == 12 || worker { 0 } else { w.f42 as i64 }),
+                (
+                    "f42~",
+                    if w.class64 == 12 || worker {
+                        0
+                    } else {
+                        w.f42 as i64
+                    },
+                ),
                 ("f61~", w.f61 as i64),
                 ("f62~", w.f62 as i64),
             ];
@@ -786,11 +797,22 @@ impl Shadow {
         }
         for (cell, &w) in expect.iter().enumerate() {
             let g = world.map_head_cell(cell);
-            if w == g || w == human_slot || g == human_slot || torn.contains(&w) || torn.contains(&g) {
+            if w == g
+                || w == human_slot
+                || g == human_slot
+                || torn.contains(&w)
+                || torn.contains(&g)
+            {
                 continue;
             }
             let re = &st.ents[if w != 0 { w } else { g } as usize];
-            self.hit((re.class3f, re.model40, "map_head"), t, if w != 0 { w } else { g }, w as i64, g as i64);
+            self.hit(
+                (re.class3f, re.model40, "map_head"),
+                t,
+                if w != 0 { w } else { g },
+                w as i64,
+                g as i64,
+            );
         }
     }
 
@@ -1034,7 +1056,10 @@ impl Shadow {
                 // The pinned pair's mover-owned human lanes (see the field).
                 if self.pair_pinned
                     && ws.wiz == 0
-                    && matches!(name, "knock_mag" | "duel_count" | "duel_hold" | "duel_victim")
+                    && matches!(
+                        name,
+                        "knock_mag" | "duel_count" | "duel_hold" | "duel_victim"
+                    )
                 {
                     continue;
                 }
@@ -1120,10 +1145,19 @@ impl Shadow {
             // hate ledger (0x601F = neutral), war flags, learn and
             // cooldown countdowns; everyone's exit-status word.
             let neutral_hate = 0x601F_i64;
-            let mut unmodelled: Vec<(&'static str, u16, i64)> = vec![("status~", 0, w.status as i64)];
+            let mut unmodelled: Vec<(&'static str, u16, i64)> =
+                vec![("status~", 0, w.status as i64)];
             if ws.wiz == 0 {
                 for (i, &h) in w.hate.iter().enumerate() {
-                    unmodelled.push(("hate~", i as u16, if h as i64 == neutral_hate { 0 } else { h as i64 }));
+                    unmodelled.push((
+                        "hate~",
+                        i as u16,
+                        if h as i64 == neutral_hate {
+                            0
+                        } else {
+                            h as i64
+                        },
+                    ));
                 }
                 for (i, &v) in w.war.iter().enumerate() {
                     unmodelled.push(("war~", i as u16, v as i64));
@@ -1143,15 +1177,33 @@ impl Shadow {
                     ("castle_alert~", 0, w.castle_alert as i64),
                     ("player_alert~", 0, w.player_alert as i64),
                     ("balloon_alert~", 0, w.balloon_alert as i64),
-                    ("hand_left~", 0, if w.hand_left == 255 || w.hand_left == 0xFFFF { 0 } else { w.hand_left as i64 + 1 }),
-                    ("hand_right~", 0, if w.hand_right == 255 || w.hand_right == 0xFFFF { 0 } else { w.hand_right as i64 + 1 }),
+                    (
+                        "hand_left~",
+                        0,
+                        if w.hand_left == 255 || w.hand_left == 0xFFFF {
+                            0
+                        } else {
+                            w.hand_left as i64 + 1
+                        },
+                    ),
+                    (
+                        "hand_right~",
+                        0,
+                        if w.hand_right == 255 || w.hand_right == 0xFFFF {
+                            0
+                        } else {
+                            w.hand_right as i64 + 1
+                        },
+                    ),
                 ]);
                 for (i, &v) in w.blue.iter().enumerate() {
                     unmodelled.push(("blue~", i as u16, v as i64));
                 }
             }
             for (name, idx, a) in unmodelled {
-                let last = self.unmodelled_last.insert((0x100 | ws.wiz as u16, name, idx), a);
+                let last = self
+                    .unmodelled_last
+                    .insert((0x100 | ws.wiz as u16, name, idx), a);
                 if a != 0 && last != Some(a) {
                     self.wiz_hit((ws.wiz, name), t, idx, a, -1);
                 }
@@ -1181,7 +1233,10 @@ impl Shadow {
                 // The pinned pair's mover-owned human lanes (see the field).
                 if self.pair_pinned
                     && ws.wiz == 0
-                    && matches!(name, "knock_mag" | "duel_count" | "duel_hold" | "duel_victim")
+                    && matches!(
+                        name,
+                        "knock_mag" | "duel_count" | "duel_hold" | "duel_victim"
+                    )
                 {
                     continue;
                 }
@@ -1328,7 +1383,9 @@ impl Shadow {
                 if s == human_slot || s == PLAYER_TARGET_U16 {
                     continue;
                 }
-                let Some(r) = st.ents.get(s as usize) else { continue };
+                let Some(r) = st.ents.get(s as usize) else {
+                    continue;
+                };
                 if r.class64 == 0 {
                     self.chain_n.1 += 1;
                     continue;
@@ -1561,8 +1618,7 @@ impl Shadow {
             let _ = writeln!(
                 s,
                 "    bucket chains: {} link(s) compared, {} skipped (severed / freed) — rows under `chain0`",
-                self.chain_n.0,
-                self.chain_n.1
+                self.chain_n.0, self.chain_n.1
             );
         }
         let _ = writeln!(

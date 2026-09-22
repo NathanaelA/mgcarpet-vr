@@ -35,7 +35,10 @@ fn main() {
         let slot = if let Some(r) = l.strip_prefix("slot ") {
             r.split_whitespace().next().and_then(|s| s.parse().ok())
         } else if let Some(i) = l.find("slot ") {
-            l[i + 5..].split_whitespace().next().and_then(|s| s.parse().ok())
+            l[i + 5..]
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok())
         } else {
             None
         };
@@ -82,10 +85,7 @@ fn main() {
     }
     eprintln!("{seen} of those ticks carried a decodable state\n");
 
-    let mut out: Vec<_> = heads
-        .iter()
-        .map(|(k, h)| (h.len(), rows[k], *k))
-        .collect();
+    let mut out: Vec<_> = heads.iter().map(|(k, h)| (h.len(), rows[k], *k)).collect();
     out.sort_by(|a, b| b.cmp(a));
     println!("{:>6}  {:>6}  species", "heads", "rows");
     for (h, r, (c, m)) in out {

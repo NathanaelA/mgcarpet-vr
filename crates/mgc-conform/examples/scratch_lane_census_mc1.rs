@@ -43,7 +43,8 @@ fn main() {
             .unwrap()
             .to_string_lossy()
             .to_string();
-        let (mut prev, mut states, mut moves, mut draws, mut unreach) = (None, 0u64, 0u64, 0u64, 0u64);
+        let (mut prev, mut states, mut moves, mut draws, mut unreach) =
+            (None, 0u64, 0u64, 0u64, 0u64);
         let mut first = None;
         while let Some(r) = rec.next_tick() {
             let tick = r.expect("tick");
