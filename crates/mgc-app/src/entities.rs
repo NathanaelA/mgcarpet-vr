@@ -2843,6 +2843,11 @@ mod tests {
         assert_eq!(dots(pose(10, 39, false, 52), false, false)[0].color, 232);
         // Portals draw the 2x2 grown dot (:57270).
         assert_eq!(dots(pose(10, 34, false, 223), false, false)[0].size, 2);
+        // The (10,55) Global Death field: the owner's team colour at
+        // the cast site, no ring (player retail-verified 2026-09-23).
+        let bomb = dots(pose(10, 55, true, 0), false, false);
+        assert_eq!(bomb[0].color, TEAM0_EVEN);
+        assert!(bomb[0].halo.is_none(), "effects wear no ring");
         // Charred trees leave the map (:57219).
         assert!(dots(pose(2, 0, false, 226), false, false).is_empty());
         assert_eq!(dots(pose(2, 0, false, 83), false, false).len(), 1);

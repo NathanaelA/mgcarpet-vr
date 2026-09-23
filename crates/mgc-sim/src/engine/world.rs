@@ -4014,6 +4014,15 @@ fn drawable(game: GameId, class: u16, model: u16) -> bool {
                 // exported as a map-only pose (live_poses_mc1). MC2's
                 // aura stays out pending its own retail check.
                 || (!mc2 && model == 54)
+                // MC1's (10,55) GLOBAL DEATH field (the ticking bomb,
+                // state 60): no sprite — "authentically invisible" in
+                // the world — but retail's map walk plots it at the
+                // cast site in the OWNER's team colour (sub_48710
+                // LABEL_32: class 10, model past 0x22 and not 0x27 →
+                // owner is a wizard → `byte_99B58[2·team]`; the white
+                // player's white dot, player retail-verified
+                // 2026-09-23). Map-only pose, like the magnet.
+                || (!mc2 && model == 55)
                 // MC1's (10,52) CRAB EGG: sprite-stats row 205 (art
                 // 228, the grey cracked shell), assigned by its ctor
                 // sub_3B860 :47627 — the whole class of bug the magic
@@ -4877,6 +4886,10 @@ impl World {
         // boosting wizard (sub_48710 :57258-77 plots model 2 in the
         // owner's team color).
         let contrail = e.class64 == 10 && e.model65 == 2;
+        // The (10,55) Global Death field: spriteless, map-only — the
+        // owner-coloured dot at the cast site while it primes (see
+        // `drawable`).
+        let death_field = e.class64 == 10 && e.model65 == 55;
         // Body segments hide from map dots + health bars (the heads
         // carry both) — MC1's state 120.
         let segment = e.class64 == 5 && e.tick70 == 120;
@@ -4918,7 +4931,7 @@ impl World {
             segment,
             life_frac,
             blend,
-            map_only: unclaimed_house || magnet || contrail,
+            map_only: unclaimed_house || magnet || contrail || death_field,
         }
     }
 
@@ -52717,6 +52730,33 @@ mod tests {
         assert!(!w.won(), "the win flag alone never ends the level");
         w.tick(pose, space);
         assert!(w.won(), "alive + won + Space = the win-exit");
+    }
+
+    /// The (10,55) Global Death field is spriteless but plots on the
+    /// map at the cast site in the OWNER's colour (retail sub_48710
+    /// LABEL_32; player retail-verified 2026-09-23: the white player's
+    /// white dot) — exported as a MAP-ONLY pose while it primes.
+    #[test]
+    fn the_global_death_field_exports_a_map_only_pose() {
+        let mut w = flat_world();
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 3400, 0);
+        w.cast_bomb(pose, true);
+        let mut found = None;
+        for _ in 0..8 {
+            w.tick(pose, PlayerCommand::default());
+            if let Some(p) = w
+                .live_poses()
+                .into_iter()
+                .find(|p| p.class == 10 && p.model == 55)
+            {
+                found = Some(p);
+                break;
+            }
+        }
+        let p = found.expect("the death field minted and exported a pose");
+        assert!(p.map_only, "no sprite in the world: map only");
+        assert_eq!(p.team, Some(0), "the human's field wears the human's team");
+        assert_eq!(count(&w, 10, 55), 1);
     }
 
     /// THE RESPAWN PRESS MUST NOT ALSO WIN. Retail issues cmd 15 THEN
