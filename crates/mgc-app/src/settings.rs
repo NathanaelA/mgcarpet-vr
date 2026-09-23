@@ -474,6 +474,33 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · preference",
+            label: "horizon_cull",
+            class: Preference,
+            key: None,
+            cli: Some("--no-horizon-cull"),
+            cfg_path: "render.preference.horizon_cull",
+            // Faithful = ON: retail drew a camera-relative grid cut
+            // at 20 tiles; the whole-map draw is the port's excess.
+            read: |c| Val::Toggle {
+                on: c.render.preference.horizon_cull,
+                faithful: true,
+            },
+            desc: "Stop drawing terrain past the horizon melt (which follows \
+                   the fog distance): each visible tile once, in its nearest \
+                   wrap copy, instead of the whole map nine times. A large \
+                   frame-rate win at every fog distance — retail's 20 tiles \
+                   becomes the cheapest view. Off = the old full draw.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.horizon_cull = v,
+                descs: [
+                    "The whole map, nine times, every frame.",
+                    "Only the terrain inside the melt band (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · preference",
             label: "light_sources",
             class: Preference,
             key: None,
@@ -520,9 +547,10 @@ pub fn registry() -> Vec<Spec> {
                    reasons; note the monsters' sight radii (15-20 tiles) were \
                    tuned so pop-in hides in that fog — long distances reveal \
                    creatures acting before you could faithfully see them. \
-                   Capped at 90: the horizon silhouettes beyond the fog always \
-                   melt into the sky across 95..125 tiles (hiding the world's \
-                   wrap-around), and the fog may never reach into that band.",
+                   The horizon silhouettes beyond the fog melt into the sky \
+                   across a band that follows this distance (1.5x .. +1/3), \
+                   and the horizon cull stops drawing behind it, so shorter \
+                   is also faster. Capped at 90.",
             ctl: Ctl::Stops {
                 get: |c| c.render.preference.fog_distance,
                 set: |c, v| c.render.preference.fog_distance = v,

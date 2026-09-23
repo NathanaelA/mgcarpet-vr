@@ -975,7 +975,10 @@ struct Globals {
     /// The pre-bank basis (`camera_flat_basis`) for billboard
     /// expansion: sprites keep the pitch tilt but stay upright over
     /// the terrain when the carpet banks, matching retail's -roll
-    /// sprite counter-rotation (SetBillboards_3B560). w slots unused.
+    /// sprite counter-rotation (SetBillboards_3B560). The w slots
+    /// carry the silhouette MELT band, `bb_right.w` = start and
+    /// `bb_up.w` = end in tiles ([`melt_band`]) — both terrain.wgsl
+    /// and billboard.wgsl read them.
     bb_right: [f32; 4],
     bb_up: [f32; 4],
     /// x/y = framebuffer size in pixels, z = sea-sheen flag for this
@@ -1279,13 +1282,125 @@ fn sky_texel(srgb: [f32; 3]) -> [u8; 4] {
 /// 0.75·D..0.95·D). Most monster sight radii are 15-20 tiles, so the
 /// retail distance is exactly what hides acquisition pop-in.
 const DEFAULT_FOG_TILES: f32 = 20.0;
-/// Fog view-distance cap, tiles: keeps the whole fog band (full
-/// occlusion at 0.95·D = 85.5) short of the silhouette melt band
-/// (terrain.wgsl EXT_START..EXT_END = 95..125), which runs
-/// unconditionally and hides the ~128-tile torus-copy pop — the fog
-/// and the melt never overlap (player-ruled 2026-08-08, round 2).
-/// 0 stays "fog off". config::FOG_STOPS' top stop matches this.
+/// Fog view-distance cap, tiles. At the cap the melt band
+/// ([`melt_band`]) is exactly the fog-off 95..125, ending short of
+/// the ~128-tile torus-copy pop; the melt starts at 1.5·D so the fog
+/// band (full at 0.95·D) and the melt never overlap (player-ruled
+/// 2026-08-08, round 2 — kept by construction in round 3). 0 stays
+/// "fog off". config::FOG_STOPS' top stop matches this.
 pub const MAX_FOG_TILES: f32 = 90.0;
+
+/// The silhouette melt band when fog is OFF: the historical fixed
+/// 95..125 tiles, ending short of the ~128-tile half-map distance
+/// where a peak's nearest torus copy switches sides.
+const MELT_OFF: (f32, f32) = (95.0, 125.0);
+/// The melt band FOLLOWS THE FOG (player-ruled 2026-09-23): it starts
+/// at `MELT_GAP` × the fog distance — past the fog wall (0.95·D), so
+/// the two bands never overlap (the standing round-2 ruling) — and
+/// runs for `max(D / 3, MELT_WIDTH_MIN)` tiles, both capped at the
+/// fog-off band. Retail's 20 tiles therefore melts over 30..37 and
+/// the horizon cull below cuts right behind it; at the 90-tile cap
+/// the band is exactly the old 95..125.
+const MELT_GAP: f32 = 1.5;
+const MELT_WIDTH_MIN: f32 = 6.0;
+/// Horizon cull margin past the melt's end, in tiles: the last tile
+/// whose fragments could still be anything but the discarded sky.
+const CULL_MARGIN: f32 = 1.0;
+
+/// The silhouette melt band `(start, end)` for a fog distance, in
+/// tiles — the law both shaders read from `Globals::bb_right.w` /
+/// `bb_up.w`. Monotone in `fog`, never below the fog wall.
+pub fn melt_band(fog: f32) -> (f32, f32) {
+    if fog <= 0.0 {
+        return MELT_OFF;
+    }
+    let start = (fog * MELT_GAP).min(MELT_OFF.0);
+    let end = (start + (fog / 3.0).max(MELT_WIDTH_MIN)).min(MELT_OFF.1);
+    (start, end)
+}
+
+/// THE HORIZON CULL: which terrain tiles a frame draws, and in which
+/// torus copy. Retail drew a 21×40 camera-relative grid cut at 20
+/// tiles (GRO:668/1042); the port rasterized the whole 256×256 map
+/// NINE times (the 3×3 wrap) and let the fragment shader discard the
+/// melted far field. This builds, for a camera at tile `(tx, tz)`,
+/// the index list of every tile whose box lies within `radius` tiles
+/// of the camera tile's centre — each tile ONCE, in its NEAREST copy
+/// (the copy the shader's `instance` offsets by ±256) — grouped into
+/// nine contiguous `(start, count)` ranges, one per instance. Pure,
+/// so the tests can grade it without a GPU. `n` = the map side.
+///
+/// The window is a square of half-side `r = ceil(radius) + 1` tiles,
+/// spanning at most the map side (a half-side of 128 stops one short
+/// of the far edge, so the ±128 tie goes to the −side) — it can never
+/// visit one tile twice, and a visited tile's copy is simply which
+/// side of the map edge its unwrapped coordinate fell on.
+pub fn horizon_cull_indices(
+    n: usize,
+    cam_tile: (i32, i32),
+    radius: f32,
+    out: &mut Vec<u32>,
+) -> [(u32, u32); 9] {
+    out.clear();
+    let side = n as i32;
+    let r = (radius.ceil() as i32 + 1).min(side / 2);
+    let span = (2 * r + 1).min(side);
+    let (tx, tz) = cam_tile;
+    let (cx, cz) = (tx as f32 + 0.5, tz as f32 + 0.5);
+    let r2 = radius * radius;
+    let verts = (n + 1) as u32;
+    let at = |x: i32, z: i32| z as u32 * verts + x as u32;
+    // Pass 1: which copy each window tile lands in (255 = culled).
+    let w = span as usize;
+    let mut copy = vec![255u8; w * w];
+    let mut counts = [0u32; 9];
+    for (iz, dz) in (-r..-r + span).enumerate() {
+        for (ix, dx) in (-r..-r + span).enumerate() {
+            let (ux, uz) = (tx + dx, tz + dz);
+            // Nearest point of the tile box to the camera tile centre.
+            let px = cx.clamp(ux as f32, ux as f32 + 1.0);
+            let pz = cz.clamp(uz as f32, uz as f32 + 1.0);
+            let (ddx, ddz) = (px - cx, pz - cz);
+            if ddx * ddx + ddz * ddz > r2 {
+                continue;
+            }
+            let (kx, kz) = (ux.div_euclid(side) + 1, uz.div_euclid(side) + 1);
+            let c = (kx + 3 * kz) as usize;
+            copy[iz * w + ix] = c as u8;
+            counts[c] += 6;
+        }
+    }
+    // Pass 2: prefix the ranges, then emit each tile's two triangles
+    // into its copy's range — the same checkerboard split as the full
+    // mesh (`(x + z) & 1`).
+    let mut ranges = [(0u32, 0u32); 9];
+    let mut acc = 0u32;
+    for (i, &c) in counts.iter().enumerate() {
+        ranges[i] = (acc, c);
+        acc += c;
+    }
+    out.resize(acc as usize, 0);
+    let mut cursor: [usize; 9] = std::array::from_fn(|i| ranges[i].0 as usize);
+    for (iz, dz) in (-r..-r + span).enumerate() {
+        for (ix, dx) in (-r..-r + span).enumerate() {
+            let c = copy[iz * w + ix];
+            if c == 255 {
+                continue;
+            }
+            let (x, z) = ((tx + dx).rem_euclid(side), (tz + dz).rem_euclid(side));
+            let (a, b, cc, d) = (at(x, z), at(x + 1, z), at(x + 1, z + 1), at(x, z + 1));
+            let tri: [u32; 6] = if (x + z) & 1 == 0 {
+                [a, cc, b, a, d, cc]
+            } else {
+                [a, d, b, b, d, cc]
+            };
+            let k = &mut cursor[c as usize];
+            out[*k..*k + 6].copy_from_slice(&tri);
+            *k += 6;
+        }
+    }
+    ranges
+}
 
 /// Shore-field bake geometry — must match terrain.wgsl's SHORE_RES /
 /// SHORE_MAX: texels per tile edge, and the distance saturation.
@@ -1707,6 +1822,19 @@ pub struct Renderer {
     /// Fog view distance in tiles (full occlusion; 0 = fog off).
     /// [`DEFAULT_FOG_TILES`] = the retail band.
     fog_distance: f32,
+    /// The horizon cull toggle (`render.preference.horizon_cull`,
+    /// default on): draw only the tiles inside the melt band, each in
+    /// its nearest torus copy, instead of the whole map nine times.
+    horizon_cull: bool,
+    /// The culled index buffer (worst-case size, allocated with the
+    /// mesh), its CPU staging list, the per-copy draw ranges, and the
+    /// key the ranges were built for — `(cam tile x, z, radius bits)`
+    /// — so a frame that neither crossed a tile nor changed the fog
+    /// re-uploads nothing.
+    cull_index_buf: Option<wgpu::Buffer>,
+    cull_indices: Vec<u32>,
+    cull_ranges: [(u32, u32); 9],
+    cull_key: Option<(i32, i32, u32)>,
     /// Sky/fog color (sRGB): [`SKY_SRGB`] default, overridden per MC2
     /// environment from the bundle (shade LUT row 0 — night = black).
     sky_srgb: [f32; 3],
@@ -3167,6 +3295,11 @@ impl Renderer {
             map_tex: None,
             smooth_shading: false,
             fog_distance: DEFAULT_FOG_TILES,
+            horizon_cull: true,
+            cull_index_buf: None,
+            cull_indices: Vec::new(),
+            cull_ranges: [(0, 0); 9],
+            cull_key: None,
             sky_srgb: SKY_SRGB,
             map_view: false,
             map_layout: MapScreenLayout::default(),
@@ -3362,6 +3495,56 @@ impl Renderer {
         } else {
             tiles.min(MAX_FOG_TILES)
         };
+    }
+
+    /// Enable/disable the horizon cull ([`horizon_cull_indices`]).
+    /// Takes effect on the next frame.
+    pub fn set_horizon_cull(&mut self, on: bool) {
+        self.horizon_cull = on;
+    }
+
+    /// Rebuild the culled index ranges for this frame's camera if its
+    /// tile or the cull radius changed; every terrain draw of the
+    /// frame (mirror, world, ceiling, the book's viewport) then reads
+    /// the one buffer — they all share the camera's plan position.
+    fn refresh_horizon_cull(&mut self, cam: &CameraView) {
+        if !self.horizon_cull || self.cull_index_buf.is_none() {
+            return;
+        }
+        let n = MAP_TILES as usize;
+        let full = MAP_TILES as f32;
+        let tile = |v: f32| v.rem_euclid(full).floor() as i32;
+        let radius = melt_band(self.fog_distance).1 + CULL_MARGIN;
+        let key = (tile(cam.x), tile(cam.z), radius.to_bits());
+        if self.cull_key == Some(key) {
+            return;
+        }
+        self.cull_ranges = horizon_cull_indices(n, (key.0, key.1), radius, &mut self.cull_indices);
+        if let Some(buf) = &self.cull_index_buf {
+            self.queue
+                .write_buffer(buf, 0, bytemuck::cast_slice(&self.cull_indices));
+        }
+        self.cull_key = Some(key);
+    }
+
+    /// One terrain grid draw — the culled per-copy ranges when the
+    /// cull is live, else the whole map in all nine wrap copies (the
+    /// vertex shader offsets by instance either way).
+    fn draw_terrain_grid(&self, pass: &mut wgpu::RenderPass<'_>, full_ib: &wgpu::Buffer) {
+        match (&self.cull_index_buf, self.horizon_cull && self.cull_key.is_some()) {
+            (Some(cib), true) => {
+                pass.set_index_buffer(cib.slice(..), wgpu::IndexFormat::Uint32);
+                for (i, &(start, count)) in self.cull_ranges.iter().enumerate() {
+                    if count > 0 {
+                        pass.draw_indexed(start..start + count, 0, i as u32..i as u32 + 1);
+                    }
+                }
+            }
+            _ => {
+                pass.set_index_buffer(full_ib.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.index_count, 0, 0..9);
+            }
+        }
     }
 
     /// Enable/disable water reflections (the per-frame mirrored-
@@ -3730,6 +3913,15 @@ impl Renderer {
                 }),
         );
         self.index_count = indices.len() as u32;
+        // The horizon cull's index buffer: worst case = every tile
+        // once (the full list's size), written per camera-tile step.
+        self.cull_index_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("terrain cull indices"),
+            size: (indices.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        self.cull_key = None;
 
         // A small helper: 2D R8Uint texture from a byte grid.
         let byte_tex = |label: &str, bytes: &[u8], width: u32, height: u32| {
@@ -5156,6 +5348,10 @@ impl Renderer {
         // inland stretches of water levels.
         let mirror_active =
             sheen_active && self.deep_water_in_reach(cam, right, up, fwd, tan_h, tan_v);
+        // The silhouette melt band follows the fog; the horizon cull
+        // cuts right behind it (see `melt_band` / `refresh_horizon_cull`).
+        let melt = melt_band(self.fog_distance);
+        self.refresh_horizon_cull(cam);
         let globals = Globals {
             view_proj,
             camera: [cam.x, cam.y, cam.z, self.fog_distance],
@@ -5169,8 +5365,8 @@ impl Renderer {
             ],
             cam_right: [right[0], right[1], right[2], tan_h],
             cam_up: [up[0], up[1], up[2], tan_v],
-            bb_right: [bb_right[0], bb_right[1], bb_right[2], 0.0],
-            bb_up: [bb_up[0], bb_up[1], bb_up[2], 0.0],
+            bb_right: [bb_right[0], bb_right[1], bb_right[2], melt.0],
+            bb_up: [bb_up[0], bb_up[1], bb_up[2], melt.1],
             viewport: [
                 w as f32,
                 hpx as f32,
@@ -5696,8 +5892,7 @@ impl Renderer {
             pass.set_bind_group(0, bg, &[]);
             pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]);
             pass.set_vertex_buffer(0, vb.slice(..));
-            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.index_count, 0, 0..9);
+            self.draw_terrain_grid(&mut pass, ib);
             // Mirrored sprites (opaque range only — reflected smoke
             // isn't worth a sorted blend pass). NOT retail (GRO reflects
             // terrain only); a monster over water should show in the
@@ -5828,9 +6023,9 @@ impl Renderer {
                         _ => pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]),
                     }
                     pass.set_vertex_buffer(0, vb.slice(..));
-                    pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                    // 3x3 wrap copies; the vertex shader offsets by instance.
-                    pass.draw_indexed(0..self.index_count, 0, 0..9);
+                    // 3x3 wrap copies (the vertex shader offsets by
+                    // instance) — culled to the melt band by default.
+                    self.draw_terrain_grid(pass, ib);
                     // The MC2 cave ceiling: the same grid again with
                     // the ceiling heightmap + ceiling globals (the
                     // pipeline never culls, so the downward faces
@@ -5838,7 +6033,7 @@ impl Renderer {
                     // like retail's ceiling raster pass).
                     if let Some(cbg) = &self.ceiling_bind_group {
                         pass.set_bind_group(0, cbg, &[]);
-                        pass.draw_indexed(0..self.index_count, 0, 0..9);
+                        self.draw_terrain_grid(pass, ib);
                     }
                 }
                 if let (1.., Some(bg), Some(buf)) = (
@@ -6830,4 +7025,105 @@ mod tests {
         bake_shore_region(&new, n, &mut full, 0, 0, n, n);
         assert_eq!(incremental, full);
     }
+    /// The melt band follows the fog: fog off keeps the fixed 95..125,
+    /// otherwise it starts past the fog wall (never overlapping the
+    /// fog band — the round-2 ruling), grows with the distance, and
+    /// meets the fixed band exactly at the 90-tile cap.
+    #[test]
+    fn the_melt_band_follows_the_fog() {
+        assert_eq!(melt_band(0.0), (95.0, 125.0));
+        assert_eq!(melt_band(90.0), (95.0, 125.0));
+        let (s20, e20) = melt_band(20.0);
+        assert!((s20 - 30.0).abs() < 1e-4 && (e20 - 36.6667).abs() < 1e-3, "{s20}..{e20}");
+        let (s50, e50) = melt_band(50.0);
+        assert!((s50 - 75.0).abs() < 1e-4 && e50 > 91.0 && e50 < 92.0, "{s50}..{e50}");
+        let mut prev = (0.0f32, 0.0f32);
+        for d in 1..=90 {
+            let (s, e) = melt_band(d as f32);
+            assert!(s > 0.95 * d as f32, "fog {d}: melt {s} inside the fog band");
+            assert!(e > s && e <= 125.0, "fog {d}: {s}..{e}");
+            assert!(s >= prev.0 && e >= prev.1, "fog {d}: not monotone");
+            prev = (s, e);
+        }
+    }
+
+    /// Decode the tile a triangle pair belongs to from its first index
+    /// (the `a` corner = the tile's own (x, z) vertex).
+    fn tile_of(first: u32) -> (i32, i32) {
+        let verts = MAP_TILES as u32 + 1;
+        ((first % verts) as i32, (first / verts) as i32)
+    }
+
+    /// A radius past the half-map keeps every tile — exactly once, in
+    /// one copy — so the cull with an infinite reach is the nearest-
+    /// copy dedup and nothing else.
+    #[test]
+    fn a_wide_horizon_cull_emits_every_tile_once() {
+        let n = MAP_TILES as usize;
+        let mut out = Vec::new();
+        let ranges = horizon_cull_indices(n, (100, 40), 1000.0, &mut out);
+        assert_eq!(out.len(), n * n * 6, "every tile, two triangles");
+        let mut seen = vec![false; n * n];
+        for tri in out.chunks(6) {
+            let (x, z) = tile_of(tri[0]);
+            assert!(!seen[(z as usize) * n + x as usize], "tile ({x},{z}) emitted twice");
+            seen[(z as usize) * n + x as usize] = true;
+        }
+        assert!(seen.iter().all(|&s| s));
+        let total: u32 = ranges.iter().map(|r| r.1).sum();
+        assert_eq!(total as usize, out.len());
+        // Contiguous, in order.
+        let mut acc = 0;
+        for &(start, count) in &ranges {
+            assert_eq!(start, acc);
+            acc += count;
+        }
+    }
+
+    /// A short radius keeps only the disc around the camera tile, all
+    /// of it in the centre copy when the camera is mid-map.
+    #[test]
+    fn a_short_horizon_cull_keeps_the_disc_in_the_centre_copy() {
+        let n = MAP_TILES as usize;
+        let mut out = Vec::new();
+        let ranges = horizon_cull_indices(n, (128, 128), 20.0, &mut out);
+        let tiles = out.len() / 6;
+        let disc = std::f32::consts::PI * 20.5 * 20.5;
+        assert!((tiles as f32) > disc * 0.9 && (tiles as f32) < disc * 1.15, "{tiles} tiles");
+        for (i, &(_, count)) in ranges.iter().enumerate() {
+            assert_eq!(count > 0, i == 4, "copy {i} count {count}");
+        }
+        for tri in out.chunks(6) {
+            let (x, z) = tile_of(tri[0]);
+            let px = 128.5f32.clamp(x as f32, x as f32 + 1.0) - 128.5;
+            let pz = 128.5f32.clamp(z as f32, z as f32 + 1.0) - 128.5;
+            assert!(px * px + pz * pz <= 20.0 * 20.0 + 1e-3, "tile ({x},{z}) outside the disc");
+        }
+    }
+
+    /// Near the seam the tiles across it are emitted in the WRAPPED
+    /// copy — the instance whose shader offset puts them beside the
+    /// camera, not 250 tiles away.
+    #[test]
+    fn the_horizon_cull_wraps_the_seam_into_the_neighbouring_copy() {
+        let n = MAP_TILES as usize;
+        let mut out = Vec::new();
+        let ranges = horizon_cull_indices(n, (2, 128), 20.0, &mut out);
+        // kx = 0 (the −256 copy), kz = 1 → instance 3.
+        assert!(ranges[3].1 > 0, "nothing in the −x copy");
+        assert!(ranges[5].1 == 0, "the +x copy is out of reach");
+        let (start, count) = ranges[3];
+        let wrapped: Vec<(i32, i32)> = out[start as usize..(start + count) as usize]
+            .chunks(6)
+            .map(|t| tile_of(t[0]))
+            .collect();
+        assert!(wrapped.iter().all(|&(x, _)| x >= 236), "{wrapped:?}");
+        assert!(wrapped.contains(&(250, 128)));
+        // And the same tile is not ALSO in the centre copy.
+        let (s4, c4) = ranges[4];
+        assert!(out[s4 as usize..(s4 + c4) as usize]
+            .chunks(6)
+            .all(|t| tile_of(t[0]).0 < 236));
+    }
+
 }

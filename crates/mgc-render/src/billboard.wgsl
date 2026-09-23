@@ -188,10 +188,11 @@ fn fs_main(in: VsOut) -> FsOut {
     // Sprites follow the terrain's silhouette law exactly: past the
     // fog wall they linger as fog-colored cutouts like the landscape
     // they stand on, then dissolve into the sky pixel across the same
-    // fixed extinction band. (Round 2: round 1 discarded at full fog,
-    // which popped sprites in/out of existence at the wall where
-    // terrain kept fading — player report 2026-08-08.)
-    let ext = smoothstep(EXT_START, EXT_END, dist);
+    // extinction band (the renderer's melt_band, in bb_right.w /
+    // bb_up.w). (Round 2: round 1 discarded at full fog, which popped
+    // sprites in/out of existence at the wall where terrain kept
+    // fading — player report 2026-08-08.)
+    let ext = smoothstep(globals.bb_right.w, globals.bb_up.w, dist);
     if ext >= 1.0 || (globals.atlas.w == 2u && fog >= 1.0) {
         discard;
     }
@@ -216,9 +217,6 @@ fn fs_main(in: VsOut) -> FsOut {
 }
 
 const TAU: f32 = 6.283185307179586;
-// The extinction band — MUST match terrain.wgsl's EXT_START/EXT_END.
-const EXT_START: f32 = 95.0;
-const EXT_END: f32 = 125.0;
 
 // The sky-texture pixel behind a fragment — terrain.wgsl's
 // sky_backdrop, duplicated verbatim (same ray law as sky.wgsl,

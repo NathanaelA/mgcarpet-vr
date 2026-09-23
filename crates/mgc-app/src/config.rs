@@ -239,6 +239,14 @@ pub struct RenderPreference {
     /// altitude where retail cut off when flying high). Off = the
     /// plain animated water.
     pub reflections: bool,
+    /// The horizon cull (default on): draw only the terrain inside
+    /// the silhouette melt band, each tile once in its nearest torus
+    /// copy, instead of the whole 256×256 map nine times (the 3×3
+    /// wrap) with the far field discarded per fragment. Retail cut
+    /// its 21×40 camera grid at 20 tiles (remc2 GRO:668/1042), so
+    /// culling is the FAITHFUL arm; off is the old full draw, kept
+    /// as the A/B for any horizon artefact. Pure renderer state.
+    pub horizon_cull: bool,
     /// Dynamic light sources (retail MC2's Dynamic Lighting option,
     /// on by default): fireballs, explosions and standing fire cast
     /// a sphere of light that brightens the terrain around them —
@@ -253,13 +261,16 @@ pub struct RenderPreference {
     /// deliberately overlaps the monster sight/acquisition radii
     /// (15-20 tiles) so pop-in hides in the fog; raising it reveals
     /// creatures acting before you can see them. Beyond the wall the
-    /// terrain lingers as flat horizon silhouettes that always melt
-    /// into the sky across the fixed 95..125-tile band (terrain.wgsl
-    /// EXT_START..EXT_END), hiding the torus wrap unconditionally —
-    /// and the fog may never reach into that band: values clamp to
-    /// [`MAX_FOG_TILES`] = 90 at load, CLI and in the renderer (the
-    /// old 255 whole-torus stop is retired; player-ruled 2026-08-08).
-    /// 0 = fog off (the melt still runs). DEFAULT 50 (deliberate:
+    /// terrain lingers as flat horizon silhouettes that melt into the
+    /// sky across a band that FOLLOWS the fog (mgc-render
+    /// `melt_band`: 1.5·D .. +max(D/3, 6), capped at the fog-off
+    /// 95..125 — player-ruled 2026-09-23), never overlapping the fog
+    /// band (the 2026-08-08 ruling stands), and the horizon cull
+    /// stops drawing right behind the melt — so retail's 20 tiles is
+    /// also the cheapest frame. Values clamp to [`MAX_FOG_TILES`] =
+    /// 90 at load, CLI and in the renderer (the old 255 whole-torus
+    /// stop is retired). 0 = fog off (the fixed melt still runs).
+    /// DEFAULT 50 (deliberate:
     /// retail's 20 was performance-only); the menu offers the stops
     /// 20 (faithful) / 50 (default) / 70 (high) / 90 (max).
     pub fog_distance: u32,
@@ -377,6 +388,7 @@ impl Default for RenderPreference {
             crosshair: true,
             sky: true,
             reflections: true,
+            horizon_cull: true,
             light_sources: true,
             fog_distance: 50,
             vsync: true,

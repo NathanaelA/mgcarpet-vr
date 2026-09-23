@@ -3043,6 +3043,11 @@ impl App {
                     r.set_reflections(self.cfg.render.preference.reflections);
                 }
             }
+            "render.preference.horizon_cull" => {
+                if let Some(r) = &mut self.renderer {
+                    r.set_horizon_cull(self.cfg.render.preference.horizon_cull);
+                }
+            }
             "render.preference.vsync" => {
                 if let Some(r) = &mut self.renderer {
                     r.set_vsync(self.cfg.render.preference.vsync);
@@ -7542,6 +7547,7 @@ impl ApplicationHandler for App {
                 renderer.set_fog_distance(self.cfg.render.preference.fog_distance as f32);
                 renderer.set_hud_transparent(self.hud_transparent());
                 renderer.set_reflections(self.cfg.render.preference.reflections);
+                renderer.set_horizon_cull(self.cfg.render.preference.horizon_cull);
                 renderer.set_vsync(self.cfg.render.preference.vsync);
                 renderer.set_render_scale(self.cfg.render.preference.anti_aliasing.render_scale());
                 // Map-screen topology follows the book surface: no
@@ -8732,6 +8738,8 @@ struct Args {
     sky: Option<bool>,
     /// Water-reflection override (config `render.preference.reflections`).
     reflections: Option<bool>,
+    /// Horizon-cull override (config `render.preference.horizon_cull`).
+    horizon_cull: Option<bool>,
     /// Dynamic-lights override (config `render.preference.light_sources`).
     light_sources: Option<bool>,
     /// Vertical-sync override (config `render.preference.vsync`).
@@ -8829,6 +8837,7 @@ fn parse_args() -> Result<Args, String> {
     let mut fog_distance = None;
     let mut sky = None;
     let mut reflections = None;
+    let mut horizon_cull = None;
     let mut light_sources = None;
     let mut vsync = None;
     let mut fullscreen = None;
@@ -9034,6 +9043,8 @@ fn parse_args() -> Result<Args, String> {
             "--no-sky" => sky = Some(false),
             "--reflections" => reflections = Some(true),
             "--no-reflections" => reflections = Some(false),
+            "--horizon-cull" => horizon_cull = Some(true),
+            "--no-horizon-cull" => horizon_cull = Some(false),
             "--light-sources" => light_sources = Some(true),
             "--no-light-sources" => light_sources = Some(false),
             "--anti-aliasing" => {
@@ -9189,6 +9200,7 @@ fn parse_args() -> Result<Args, String> {
                      [--rival-tags auto|on|off] \
                      [--subtitles on|off] [--fog-distance TILES (0 = no fog)] \
                      [--sky|--no-sky] [--reflections|--no-reflections] \
+                     [--horizon-cull|--no-horizon-cull] \
                      [--light-sources|--no-light-sources] \
                      [--vsync|--no-vsync] [--fullscreen|--windowed] \
                      [--movies|--no-movies] [--anti-aliasing off|msaa|1.5x|2x] \
@@ -9260,6 +9272,7 @@ fn parse_args() -> Result<Args, String> {
         fog_distance,
         sky,
         reflections,
+        horizon_cull,
         light_sources,
         vsync,
         fullscreen,
@@ -10083,6 +10096,7 @@ fn run_screenshot(
     fog_distance: u32,
     sky_texture: bool,
     reflections: bool,
+    horizon_cull: bool,
     light_sources: bool,
     map_view: bool,
     anim_turn: f32,
@@ -10152,6 +10166,7 @@ fn run_screenshot(
         renderer.load_sky(bitmap, &level.palette_rgba);
     }
     renderer.set_reflections(reflections);
+    renderer.set_horizon_cull(horizon_cull);
     if light_sources
         && level.mc2_env != entities::Mc2MapEnv::Day
         && let Some(w) = &level.world
@@ -10515,6 +10530,9 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     }
     if let Some(v) = args.reflections {
         cfg.render.preference.reflections = v;
+    }
+    if let Some(v) = args.horizon_cull {
+        cfg.render.preference.horizon_cull = v;
     }
     if let Some(v) = args.light_sources {
         cfg.render.preference.light_sources = v;
@@ -10895,6 +10913,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             cfg.render.preference.fog_distance,
             cfg.render.preference.sky,
             cfg.render.preference.reflections,
+            cfg.render.preference.horizon_cull,
             cfg.render.preference.light_sources,
             args.map_view,
             args.anim_turn,

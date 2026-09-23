@@ -95,6 +95,7 @@
       "crosshair": true,
       "fog_distance": 50,
       "fullscreen": true,
+      "horizon_cull": true,
       "light_sources": true,
       "movie_subtitles": false,
       "movies": true,

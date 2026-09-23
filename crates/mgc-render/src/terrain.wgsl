@@ -557,26 +557,21 @@ fn fog_amount(dist: f32) -> f32 {
 
 // Silhouette extinction. Terrain past the fog wall stays visible as a
 // flat fog-constant silhouette wherever that constant differs from
-// the sky texture behind it (the whole 3x3 torus field rasterizes,
-// with no reach cull) — the "distant ranges" scenery, kept. This
-// second, far ramp melts those silhouettes into the actual sky pixel
-// across the FIXED band EXT_START..EXT_END, fully gone before ~128
-// tiles: the half-map distance where a peak's nearest torus copy
-// switches sides as the camera flies — the sharp appear/vanish pop
-// this ramp exists to hide. The band is independent of the fog
-// distance and runs UNCONDITIONALLY (round 2: round 1 anchored the
-// melt to the fog wall, entangling the two systems — player-ruled
-// they must never overlap); the renderer instead caps the fog
-// setting (lib.rs MAX_FOG_TILES = 90) so the whole fog band always
-// ends short of EXT_START. Applies in every arm — in the MIRROR the
-// fog discard usually preempts it, but a fog-off view melts its
-// reflection at the same band as the world above.
-// Billboard.wgsl copies these constants — keep them in lockstep.
-const EXT_START: f32 = 95.0;
-const EXT_END: f32 = 125.0;
-
+// the sky texture behind it — the "distant ranges" scenery, kept.
+// This second, far ramp melts those silhouettes into the actual sky
+// pixel across the band `bb_right.w .. bb_up.w` (tiles), which the
+// renderer derives from the fog distance (lib.rs `melt_band`,
+// player-ruled 2026-09-23: the melt FOLLOWS the fog — 1.5·D wide of
+// the fog wall, so the two bands never overlap, the standing round-2
+// ruling — and the horizon cull stops rasterizing right behind it;
+// fog off keeps the historical fixed 95..125, short of the ~128-tile
+// half-map distance where a peak's nearest torus copy switches sides
+// and would pop). Applies in every arm — in the MIRROR the fog
+// discard usually preempts it, but a fog-off view melts its
+// reflection at the same band as the world above. Billboard.wgsl
+// reads the same two slots.
 fn ext_amount(dist: f32) -> f32 {
-    return smoothstep(EXT_START, EXT_END, dist);
+    return smoothstep(globals.bb_right.w, globals.bb_up.w, dist);
 }
 
 // The sky-texture pixel behind a fragment: the same ray law as
