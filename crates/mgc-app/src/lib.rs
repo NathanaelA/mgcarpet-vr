@@ -868,11 +868,114 @@ fn dot_swap_set(level: &LoadedLevel, cfg: &config::Config) -> std::collections::
 /// the load-time fires/painters/craters draw off pool slot numbers,
 /// and the human's tokens sit between the level's records and the
 /// rivals' (round 154). Empty outside a campaign.
+/// The level-start spellbook seed a single-level launch asks for.
+/// Campaign launches always use [`SpellbookSeed::Level`] — the real
+/// carry replaces every instrument.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum SpellbookSeed {
+    /// Only what the level itself grants (plus the campaign carry).
+    #[default]
+    Level,
+    /// `--plausible-spellbook`: the campaign-derived union.
+    Plausible,
+    /// `--set-spellbook`: an explicit `(spell, xp)` list — the CLI
+    /// parse checked the syntax, `load_level` checks the ids against
+    /// the loaded game's table. Trumps `Plausible`. Strictly CLI: no
+    /// config key, no settings row, not recorded anywhere but the
+    /// take's own book pin.
+    Set(Vec<(u8, i32)>),
+}
+
+/// Spell ids by game — the table `--set-spellbook` is checked against
+/// and the one the error text prints (the ids are internal).
+fn set_spellbook_table() -> String {
+    use std::fmt::Write as _;
+    let mut s = String::from(
+        "--set-spellbook takes a comma-separated list of in-level spell ids, e.g. \
+         `--set-spellbook 0,4,7`. MC2 entries may carry banked experience as `id:xp` \
+         (default 0; a campaign scroll banks 4 XP into every owned spell, and the \
+         level's SPELLS `xpos1` ladder turns the bank into the tier). Ids by game:\n\
+         \x20 MC1 / HW (0..23):\n",
+    );
+    for i in 0..mgc_sim::mc1::spells::SPELL_COUNT {
+        let _ = writeln!(s, "    {i:2}  {}", mgc_sim::mc1::spells::SpellId(i as u8).name());
+    }
+    s.push_str("  MC2 (0..25):\n");
+    for (i, n) in ui::MC2_SPELL_NAMES.iter().enumerate() {
+        let _ = writeln!(s, "    {i:2}  {n}");
+    }
+    s
+}
+
+/// Parse the `--set-spellbook` value. Any syntax slip — including a
+/// deliberate `--set-spellbook list` — fails WITH the id table, which
+/// is how a knowledgeable person looks the ids up.
+fn parse_set_spellbook(spec: &str) -> Result<Vec<(u8, i32)>, String> {
+    let bad = |what: &str| format!("--set-spellbook: {what}\n{}", set_spellbook_table());
+    let mut out: Vec<(u8, i32)> = Vec::new();
+    for item in spec.split(',').map(str::trim) {
+        if item.is_empty() {
+            return Err(bad("empty entry"));
+        }
+        let (id, xp) = match item.split_once(':') {
+            Some((id, xp)) => (
+                id.trim(),
+                xp.trim()
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|&x| x >= 0)
+                    .ok_or_else(|| bad(&format!("`{item}`: xp must be a non-negative integer")))?,
+            ),
+            None => (item, 0),
+        };
+        let id: u8 = id
+            .parse()
+            .map_err(|_| bad(&format!("`{item}` is not a spell id")))?;
+        // 26 = the wider (MC2) table; the game-specific bound is
+        // checked at level load, where the game is known.
+        if id as usize >= ui::MC2_SPELL_NAMES.len() {
+            return Err(bad(&format!("spell id {id} is out of range")));
+        }
+        if let Some(e) = out.iter_mut().find(|e| e.0 == id) {
+            e.1 = xp; // a repeated id keeps the last xp
+        } else {
+            out.push((id, xp));
+        }
+    }
+    if out.is_empty() {
+        return Err(bad("no spells given"));
+    }
+    Ok(out)
+}
+
+/// The per-game half of the `--set-spellbook` check: MC1/HW has 24
+/// spells, MC2 26; `:xp` is MC2-only (MC1's book carries no XP).
+fn check_set_spellbook(game: Game, ids: &[(u8, i32)]) -> Result<(), String> {
+    let (limit, label) = match game {
+        Game::MagicCarpet2 => (ui::MC2_SPELL_NAMES.len(), "MC2"),
+        _ => (mgc_sim::mc1::spells::SPELL_COUNT, "MC1 / HW"),
+    };
+    if let Some(&(id, _)) = ids.iter().find(|&&(id, _)| id as usize >= limit) {
+        return Err(format!(
+            "--set-spellbook: spell id {id} does not exist in {label} (0..{})\n{}",
+            limit - 1,
+            set_spellbook_table()
+        ));
+    }
+    if game != Game::MagicCarpet2 && ids.iter().any(|&(_, xp)| xp != 0) {
+        return Err(format!(
+            "--set-spellbook: `id:xp` is MC2-only — {label} spells carry no experience\n{}",
+            set_spellbook_table()
+        ));
+    }
+    Ok(())
+}
+
 fn load_level(
     level_path: &Path,
     tileset: Option<u8>,
     terrain_features: bool,
-    plausible_spellbook: bool,
+    book: &SpellbookSeed,
     campaign_carry: &[u8],
     pool_slots: Option<usize>,
     awake_range: Option<u32>,
@@ -958,9 +1061,18 @@ fn load_level(
     // (same jar class, same per-level availability mask); only the
     // campaign SHAPE differs (25 levels, no skip table), which
     // `campaign::plausible_spellbook` resolves per game.
-    let plausible_spells = if plausible_spellbook
-        && matches!(package.meta.game, Game::MagicCarpet1 | Game::HiddenWorlds)
-    {
+    let mc1_family = matches!(package.meta.game, Game::MagicCarpet1 | Game::HiddenWorlds);
+    // `--set-spellbook`: the explicit override, checked against THIS
+    // game's table now that the game is known (the CLI parse only
+    // checked the syntax).
+    let set_book: Option<&[(u8, i32)]> = match book {
+        SpellbookSeed::Set(ids) => {
+            check_set_spellbook(package.meta.game, ids)?;
+            Some(ids)
+        }
+        _ => None,
+    };
+    let plausible_spells = if *book == SpellbookSeed::Plausible && mc1_family {
         let dir = level_path.parent().unwrap_or(Path::new("."));
         let p = campaign::plausible_spellbook(dir, &package);
         let names: Vec<&str> = p
@@ -1010,22 +1122,56 @@ fn load_level(
         .as_ref()
         .and_then(|w| w.wizards.first())
         .and_then(|h| h.allowed_spells.clone());
-    let human_book: Vec<u8> = {
-        let mut book: Vec<u8> = campaign_carry
-            .iter()
-            .copied()
-            .filter(|&s| {
-                allowed_spells
-                    .as_ref()
-                    .is_none_or(|m| m.get(s as usize).is_none_or(|&v| v == 1))
-            })
-            .collect();
-        for &s in &plausible_spells {
-            if !book.contains(&s) {
-                book.push(s);
-            }
+    let human_book: Vec<u8> = match set_book.filter(|_| mc1_family) {
+        // `--set-spellbook`: EXACTLY the given set — it replaces the
+        // carry and the plausible union, and it is NOT masked by the
+        // level's availability list (a debug override for levels
+        // whose authored grant is not what the tester needs: hidden,
+        // experimental, arena). The mask is reported, not applied.
+        Some(ids) => {
+            let book: Vec<u8> = ids.iter().map(|&(s, _)| s).collect();
+            let name = |&s: &u8| mgc_sim::mc1::spells::SpellId(s).name();
+            let masked: Vec<&str> = book
+                .iter()
+                .filter(|&&s| {
+                    allowed_spells
+                        .as_ref()
+                        .is_some_and(|m| m.get(s as usize).is_some_and(|&v| v != 1))
+                })
+                .map(name)
+                .collect();
+            println!(
+                "set-spellbook: {} spell(s) [{}]{}",
+                book.len(),
+                book.iter().map(name).collect::<Vec<_>>().join(", "),
+                if masked.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " (the level's mask would strip {} — granted anyway)",
+                        masked.join(", ")
+                    )
+                },
+            );
+            book
         }
-        book
+        None => {
+            let mut book: Vec<u8> = campaign_carry
+                .iter()
+                .copied()
+                .filter(|&s| {
+                    allowed_spells
+                        .as_ref()
+                        .is_none_or(|m| m.get(s as usize).is_none_or(|&v| v == 1))
+                })
+                .collect();
+            for &s in &plausible_spells {
+                if !book.contains(&s) {
+                    book.push(s);
+                }
+            }
+            book
+        }
     };
 
     // The living world: the load-time feature pass (MC1/HW — MC2
@@ -1343,7 +1489,21 @@ fn load_level(
     // banked XP (see campaign::plausible_spellbook_mc2). Campaign-order
     // prefix (mains + secrets after their parents); a non-campaign
     // level assumes the whole campaign done.
-    let plausible_book_mc2 = if plausible_spellbook && package.meta.game == Game::MagicCarpet2 {
+    let is_mc2_pkg = package.meta.game == Game::MagicCarpet2;
+    let plausible_book_mc2 = if let Some(ids) = set_book.filter(|_| is_mc2_pkg) {
+        // `--set-spellbook` on MC2: the same `(spell, banked_xp)`
+        // install the plausible instrument uses — learn each spell,
+        // bank its xp, derive the tier from the level's ladder.
+        println!(
+            "set-spellbook (MC2): {} spell(s) [{}]",
+            ids.len(),
+            ids.iter()
+                .map(|&(s, xp)| format!("{}:{xp}", ui::MC2_SPELL_NAMES[s as usize]))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        ids.to_vec()
+    } else if *book == SpellbookSeed::Plausible && is_mc2_pkg {
         let dir = level_path.parent().unwrap_or(Path::new("."));
         let p = campaign::plausible_spellbook_mc2(dir, &package);
         println!(
@@ -3791,7 +3951,7 @@ impl App {
             &level_path,
             self.launch.tileset,
             self.launch.terrain_features,
-            false,
+            &SpellbookSeed::Level,
             &mc1_campaign_carry(Some(&fresh)),
             self.launch.pool_slots,
             self.launch.awake_range,
@@ -3908,7 +4068,7 @@ impl App {
             &path,
             self.launch.tileset,
             self.launch.terrain_features,
-            false, // the plausible instrument is off in campaign mode
+            &SpellbookSeed::Level, // every instrument is off in campaign mode
             &carry,
             self.launch.pool_slots,
             self.launch.awake_range,
@@ -8501,6 +8661,10 @@ struct Args {
     dev_spells: Option<bool>,
     /// CLI override of `dev.plausible_spellbook`.
     plausible_spellbook: Option<bool>,
+    /// `--set-spellbook id[:xp],…` — the explicit level-start book
+    /// (strictly CLI; see `SpellbookSeed::Set`). Trumps the plausible
+    /// instrument; ignored by campaign launches like it.
+    set_spellbook: Option<Vec<(u8, i32)>>,
     /// CLI override of `gameplay.enhancement.wheel_spells`.
     wheel_spells: Option<bool>,
     /// CLI override of `gameplay.cheat.invincible`.
@@ -8623,6 +8787,7 @@ fn parse_args() -> Result<Args, String> {
     let mut crosshair = None;
     let mut dev_spells = None;
     let mut plausible_spellbook = None;
+    let mut set_spellbook = None;
     let mut wheel_spells = None;
     let mut invincible = None;
     let mut ghost = None;
@@ -8825,6 +8990,12 @@ fn parse_args() -> Result<Args, String> {
             "--no-dev-spells" => dev_spells = Some(false),
             "--plausible-spellbook" => plausible_spellbook = Some(true),
             "--no-plausible-spellbook" => plausible_spellbook = Some(false),
+            "--set-spellbook" => {
+                let spec = it
+                    .next()
+                    .ok_or_else(|| format!("--set-spellbook needs a value\n{}", set_spellbook_table()))?;
+                set_spellbook = Some(parse_set_spellbook(&spec)?);
+            }
             "--wheel-spells" => wheel_spells = Some(true),
             "--no-wheel-spells" => wheel_spells = Some(false),
             "--invincible" => invincible = Some(true),
@@ -8984,6 +9155,8 @@ fn parse_args() -> Result<Args, String> {
                      [--health-bars|--no-health-bars] \
                      [--dev-spells|--no-dev-spells] \
                      [--plausible-spellbook|--no-plausible-spellbook] \
+                     [--set-spellbook id[:xp],id,… (the exact level-start book by \
+                     in-level spell id; `--set-spellbook list` prints the ids)] \
                      [--wheel-spells|--no-wheel-spells] \
                      [--invincible|--no-invincible] \
                      [--ghost|--no-ghost] [--inert|--no-inert] \
@@ -9045,6 +9218,7 @@ fn parse_args() -> Result<Args, String> {
         crosshair,
         dev_spells,
         plausible_spellbook,
+        set_spellbook,
         wheel_spells,
         invincible,
         ghost,
@@ -10429,6 +10603,9 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             println!("campaign: plausible_spellbook off — the real campaign carry replaces it");
             cfg.dev.plausible_spellbook = false;
         }
+        if args.set_spellbook.is_some() {
+            println!("campaign: set-spellbook ignored — the real campaign carry replaces it");
+        }
     }
 
     // In-app replay (docs/RECORDING.md "Consumers"): the take's
@@ -10584,6 +10761,18 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         || args.map.is_some()
         || args.flock_probe.is_some()
         || args.replay_check.is_some();
+    // The level-start book seed: `--set-spellbook` trumps the
+    // plausible instrument (an explicit set beats an inferred one).
+    let book_seed = match &args.set_spellbook {
+        Some(ids) => {
+            if cfg.dev.plausible_spellbook {
+                println!("set-spellbook: overrides --plausible-spellbook");
+            }
+            SpellbookSeed::Set(ids.clone())
+        }
+        None if cfg.dev.plausible_spellbook => SpellbookSeed::Plausible,
+        None => SpellbookSeed::Level,
+    };
     let mut boot_level = if campaign_run.is_some() && !headless {
         None
     } else {
@@ -10591,7 +10780,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             &level_path,
             args.tileset,
             args.terrain_features,
-            cfg.dev.plausible_spellbook,
+            &book_seed,
             &mc1_campaign_carry(campaign_run.as_ref()),
             pool_slots,
             awake_range,
