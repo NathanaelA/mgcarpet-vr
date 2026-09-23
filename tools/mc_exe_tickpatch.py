@@ -270,6 +270,59 @@ def obj_file_off(le: LE, obj: Obj) -> int:
     return le.datapages + (obj.pageidx - 1) * 0x1000
 
 
+def le_fixup_sources(le: LE, obj_index: int = 0) -> set:
+    """Every LE internal-fixup SOURCE offset within an object, as object-relative
+    offsets.
+
+    Needed because a fixup is applied by the loader BEFORE any code runs: if we
+    overwrite an instruction whose operand carries one, the loader stamps a
+    relocated absolute over our bytes and the patch becomes a wild branch. (That
+    is exactly how the first MC2 headless hook crashed DOSBox at launch.)
+    """
+    d = le.data
+    lx = le.lx
+    npages = struct.unpack_from("<I", d, lx + 0x14)[0]
+    fpt = lx + struct.unpack_from("<I", d, lx + 0x68)[0]  # fixup page table
+    frt = lx + struct.unpack_from("<I", d, lx + 0x6C)[0]  # fixup record table
+    obj = le.objs[obj_index]
+    first_page = 0
+    for o in le.objs[:obj_index]:
+        first_page += o.npages
+    out = set()
+    for pg in range(obj.npages):
+        gp = first_page + pg
+        if gp + 1 > npages:
+            break
+        s = struct.unpack_from("<I", d, fpt + gp * 4)[0]
+        e = struct.unpack_from("<I", d, fpt + (gp + 1) * 4)[0]
+        p, end = frt + s, frt + e
+        while p < end:
+            src, flags = d[p], d[p + 1]
+            srcoff = struct.unpack_from("<h", d, p + 2)[0]
+            p += 4
+            if (src & 0xF) != 7:  # only internal refs are decoded here
+                break
+            p += 2 if (flags & 0x40) else 1  # object number
+            p += 4 if (flags & 0x10) else 2  # target offset
+            if 0 <= srcoff < 0x1000:  # negative = spills from the previous page
+                out.add(pg * 0x1000 + srcoff)
+    return out
+
+
+def assert_no_fixup(le: LE, va: int, length: int, what: str) -> None:
+    """Refuse to overwrite `length` bytes at `va` if the loader would relocate
+    any of them. See `le_fixup_sources`."""
+    obj = le.objs[0]
+    off = va - obj.vbase
+    hits = sorted(f for f in le_fixup_sources(le, 0) if off <= f < off + length)
+    if hits:
+        raise ValueError(
+            f"{what}: {va:#x}+{length} carries LE fixup(s) at object offset "
+            f"{[hex(h) for h in hits]} -- the loader would overwrite the patch "
+            f"before it runs. Pick a fixup-free site (a relative call/jmp)."
+        )
+
+
 def va_to_file(le: LE, va: int) -> int:
     o = le.objs[0]
     if not (o.vbase <= va < o.vbase + o.npages * 0x1000):
@@ -657,7 +710,7 @@ def build_stub(b: Build, period: int, floor: int = FLOOR_DEFAULT) -> bytes:
 # --------------------------------------------------------------------------
 def patch(le: LE, b: Build, period: int, wire: bool = True, passthrough: bool = False,
           extend: bool = True, floor: int = FLOOR_DEFAULT,
-          volcano: bool = False) -> bytes:
+          volcano: bool = False, timer_init: bool = True) -> bytes:
     o1 = le.objs[0]
     stub = build_passthrough(b) if passthrough else build_stub(b, period, floor)
     cave_off = va_to_file(le, b.cave_va)
@@ -674,6 +727,17 @@ def patch(le: LE, b: Build, period: int, wire: bool = True, passthrough: bool = 
         vol_end = vol_va + len(vol_blob)
         if va_to_file(le, vol_end) > obj_file_off(le, o1) + o1.npages * 0x1000:
             raise ValueError("volcano stubs overflow the cave")
+
+    # The `-custom` timer install shares the cave too, 16-aligned after
+    # whatever precedes it. Like the volcano guard it is applied even under
+    # --inert: --inert is about not wiring the PACER, and this stub's site is
+    # unreachable unless the game is launched with the custom/network bit.
+    if timer_init:
+        tmr_va = (vol_end + 15) & ~15
+        tmr_blob = patch_timer_init(le, tmr_va)
+        vol_end = tmr_va + len(tmr_blob)
+        if va_to_file(le, vol_end) > obj_file_off(le, o1) + o1.npages * 0x1000:
+            raise ValueError("timer-init stub overflows the cave")
 
     # Both the code cave (obj1 tail) and the mailbox (obj3 tail) sit PAST their
     # object's declared vsize, so at runtime those tails fall outside the
@@ -834,6 +898,153 @@ def patch_volcano(le: LE, vol_va: int) -> bytes:
     # Site 2: re-point the existing call at the plume stub (same length).
     le.data[pc_off + 1 : pc_off + 5] = struct.pack("<i", plume_stub_va - (plume_call_va + 5))
     return blob
+
+
+# --------------------------------------------------------------------------
+# The `-custom` timer install (MC1 only)
+# --------------------------------------------------------------------------
+# `-custom` (and `-network` / `-demo N` / `-roll N`, which set the SAME bit --
+# 0x01 of [struct+1], remc1 sub_main.cpp:42280-42315) makes `TopProcedure`
+# skip the menu loop. That is the whole point of the flag: it is the only way
+# to make `-level N` stick. But the menu loop is also the ONLY place the game
+# installs a timer:
+#
+#     sub_357C0_35B80()        :58139   <- installs the ISR
+#       <- sub_4AC70_4AFB0()   :57885   (the decompile's own note: "sound joystick")
+#         <- sub_4AB20_4AE60() :41541   INSIDE `if ((var_u8_1 & 1) == 0)`
+#           <- TopProcedure
+#
+# and it is that function -- not the sound driver -- that owns BOTH arms:
+#
+#     if (byte_939E4 || byte_939CC) { sub_5D97B(0x78, sub_357A0, ..); }  // sound IRQ
+#     else                          { sub_5A459_5A969(); }               // "START_TIMER":
+#                                                                        // PIT ch0 divisor
+#                                                                        // 9903 = 120.5 Hz,
+#                                                                        // vector 8 -> sub_5A3E3
+#
+# Both arms increment `wallclock` (the two `inc [wc]` sites in the image are
+# sub_357A0 and sub_5A3E3), so sound being off is NOT the problem -- the
+# no-sound arm is a complete timer installer. The problem is that under
+# `-custom` the function containing both arms is never CALLED, so the counter
+# the pacer spins on never advances, the stub's frozen-timer guard fires on
+# every frame, and the game runs at under 1 fps. Measured 2026-09-22; the
+# UNPATCHED binary under `-custom` is fine, because retail's main loop does
+# not depend on that counter.
+#
+# The fix is one call. `sub_357C0_35B80` is idempotent (`byte_90AD4` once-guard),
+# and we splice it into the custom branch itself, so the patched bytes are
+# UNREACHABLE on the menu path -- every existing menu-path capture is byte-for-
+# byte unaffected at runtime. It self-selects the correct arm, so we make no
+# decision about sound. (Note it will usually take the sound arm, since the
+# sound init inside it SETS byte_939E4/byte_939CC; `-custom -time` sets
+# var_u8_0 |= 0x40, which takes the silent START_TIMER arm instead.)
+#
+# Anchors, both verified unique in CARPET.EXE and HIDDEN.EXE:
+#   installer:  `call <rel32> ; or byte [disp32],0x80`  (remc1 :58139-58140)
+#               -> 0x357C0 (CARPET) / 0x35B80 (HIDDEN)
+#   custom arm: `xor %bl,%bl ; push imm32 ; (mov %bl,[disp32]) x4 ; call <rel32>`
+#               -> call site 0x3413B (CARPET) / 0x344FB (HIDDEN), whose target
+#                  is sub_40440_40780 (the text.dat load).
+TIMER_INSTALLER_SIG = _re.compile(rb"\xe8(....)\x80\x0d....\x80", _re.S)
+TIMER_CUSTOM_SIG = _re.compile(rb"\x30\xdb\x68....(?:\x88\x1d....){4}\xe8(....)", _re.S)
+TIMER_CUSTOM_CALL_OFF = 2 + 5 + 4 * 6  # branch start -> the `call` opcode
+
+
+def find_timer_sites(le: LE) -> tuple:
+    """(installer_va, custom_call_va, orig_target_va) for the MC1 builds."""
+    o1 = le.objs[0]
+    code_off = obj_file_off(le, o1)
+    code = bytes(le.data[code_off : code_off + o1.npages * 0x1000])
+
+    hits = list(TIMER_INSTALLER_SIG.finditer(code))
+    if len(hits) != 1:
+        raise SystemExit(
+            f"timer-installer signature: expected 1 hit, found {len(hits)} "
+            f"(`call sub_357C0 ; or byte [..],0x80`, remc1 :58139-58140)"
+        )
+    m = hits[0]
+    site = o1.vbase + m.start()
+    installer_va = site + 5 + struct.unpack("<i", m.group(1))[0]
+
+    hits = list(TIMER_CUSTOM_SIG.finditer(code))
+    if len(hits) != 1:
+        raise SystemExit(
+            f"custom-branch signature: expected 1 hit, found {len(hits)} "
+            f"(`xor %bl,%bl ; push imm32 ; 4x mov %bl,[..] ; call`, remc1 :41506-41512)"
+        )
+    m = hits[0]
+    custom_call_va = o1.vbase + m.start() + TIMER_CUSTOM_CALL_OFF
+    orig_target_va = custom_call_va + 5 + struct.unpack("<i", m.group(1))[0]
+    return installer_va, custom_call_va, orig_target_va
+
+
+def build_timer_stub(tmr_va: int, installer_va: int, orig_target_va: int) -> bytes:
+    """Entered by `call` with sub_40440's single cdecl arg already at [esp+4].
+
+    Installs the timer, then TAIL-JUMPS to the original target so its own `ret`
+    returns straight to the custom branch with the stack exactly as it expects
+    -- the same shape as the volcano plume guard above. Both branches are
+    rel32 WITHIN obj1 (the cave is obj1's tail), so neither needs an LE fixup
+    nor the obj3-base derivation the pacer stub has to do for its data refs.
+    """
+    t = bytearray()
+    t += b"\x60"  # pushad   (the installer is void/no-arg; belt and braces)
+    call_va = tmr_va + len(t)
+    t += b"\xe8" + struct.pack("<i", installer_va - (call_va + 5))  # call <installer>
+    t += b"\x61"  # popad
+    jmp_va = tmr_va + len(t)
+    t += b"\xe9" + struct.pack("<i", orig_target_va - (jmp_va + 5))  # jmp <orig>
+    assert len(t) == 12, len(t)
+    return bytes(t)
+
+
+def patch_timer_init(le: LE, tmr_va: int) -> bytes:
+    """Install the `-custom` timer fix, stub at `tmr_va`. Returns the blob."""
+    installer_va, custom_call_va, orig_target_va = find_timer_sites(le)
+    blob = build_timer_stub(tmr_va, installer_va, orig_target_va)
+    off = va_to_file(le, tmr_va)
+    le.data[off : off + len(blob)] = blob
+
+    # Re-point the existing call at the stub (same length, rel32 only).
+    cs_off = va_to_file(le, custom_call_va)
+    if le.data[cs_off] != 0xE8:
+        raise ValueError(f"custom-branch site {custom_call_va:#x} is not an E8 call")
+    # A relative call is never relocated, so this is belt-and-braces -- but the
+    # MC2 arm learned the hard way what overwriting a fixed-up operand costs.
+    assert_no_fixup(le, custom_call_va, 5, "MC1 -custom timer hook")
+    le.data[cs_off + 1 : cs_off + 5] = struct.pack("<i", tmr_va - (custom_call_va + 5))
+    return blob
+
+
+def read_timer_init(le: LE):
+    """(stub_va, installer_va, orig_target_va) read back THROUGH the installed
+    stub, or None if this binary carries no timer install.
+
+    It must not compare the custom-branch call against `find_timer_sites`'s
+    `orig_target_va`: that is derived from the very rel32 the patch overwrites,
+    so post-patch the two are equal by construction and the test always says
+    "absent". Identify the stub by its SHAPE instead (`60 E8 .. 61 E9 ..`) and
+    resolve both of its displacements -- which round-trips the patch rather
+    than trusting either signature.
+    """
+    try:
+        _, custom_call_va, _ = find_timer_sites(le)
+        off = va_to_file(le, custom_call_va)
+        stub_va = custom_call_va + 5 + struct.unpack_from("<i", le.data, off + 1)[0]
+        s = va_to_file(le, stub_va)
+        if not (le.data[s] == 0x60 and le.data[s + 1] == 0xE8
+                and le.data[s + 6] == 0x61 and le.data[s + 7] == 0xE9):
+            return None
+        installer_va = (stub_va + 1) + 5 + struct.unpack_from("<i", le.data, s + 2)[0]
+        orig_va = (stub_va + 7) + 5 + struct.unpack_from("<i", le.data, s + 8)[0]
+    except (SystemExit, Exception):  # SystemExit is a BaseException -- name it
+        return None
+    return stub_va, installer_va, orig_va
+
+
+def has_timer_init(le: LE) -> bool:
+    """True if the custom-branch call has been re-pointed at our stub."""
+    return read_timer_init(le) is not None
 
 
 # --- MC2 / NETHERW twin -----------------------------------------------------
@@ -1092,6 +1303,22 @@ def verify(path: str, period: int, inert: bool = False, passthrough: bool = Fals
         print(f"  {verify_volcano(le)}")
         print("  \u26a0 SIMULATION IS PATCHED -- recordings from this binary "
               "witness the PATCHED arm, never retail.")
+
+    # The `-custom` timer install. Report it either way: its ABSENCE is the
+    # thing that cost a session to diagnose (a `-custom` launch pacing against
+    # a clock nothing starts runs at under 1 fps), so say so out loud.
+    tmr = read_timer_init(le)
+    if tmr:
+        stub_va, installer_va, orig_va = tmr
+        _, custom_call_va, _ = find_timer_sites(le)
+        print(f"  -custom timer install: call @ {custom_call_va:#x} -> stub @ "
+              f"{stub_va:#x} -> installer @ {installer_va:#x}, tail-jmp @ "
+              f"{orig_va:#x}; unreachable unless launched "
+              f"-custom/-network/-demo/-roll, so menu-path captures are unaffected")
+    else:
+        print("  \u26a0 NO -custom timer install: a -custom/-network/-demo/-roll "
+              "launch will run at <1 fps (nothing starts the clock the pacer "
+              "spins on). Re-patch without --no-timer-init.")
     if shutil.which("ndisasm"):
         import subprocess
         import tempfile
@@ -1269,7 +1496,7 @@ def build_stub_mc2(b: BuildMC2, floor: int = FLOOR_DEFAULT) -> bytes:
 
 def patch_mc2(le: LE, b: BuildMC2, wire: bool = True, extend: bool = True,
               pace: Optional[int] = None, floor: int = FLOOR_DEFAULT,
-              volcano: bool = False) -> bytes:
+              volcano: bool = False, headless: bool = True) -> bytes:
     o1 = le.objs[0]
 
     # Optional: widen the native frame period so a heavy frame's compute can't
@@ -1302,6 +1529,16 @@ def patch_mc2(le: LE, b: BuildMC2, wire: bool = True, extend: bool = True,
         if va_to_file(le, vol_end) > obj_file_off(le, o1) + o1.npages * 0x1000:
             raise ValueError("volcano stubs overflow the cave")
 
+    # The headless `-level` fix shares the cave too, 16-aligned after whatever
+    # precedes it. Applied even under --inert: --inert is about not wiring the
+    # SIGNAL stub, and this one's site never executes unless `-level` is given.
+    if headless:
+        hl_va = (vol_end + 15) & ~15
+        hl_blob = patch_mc2_headless(le, b, hl_va)
+        vol_end = hl_va + len(hl_blob)
+        if va_to_file(le, vol_end) > obj_file_off(le, o1) + o1.npages * 0x1000:
+            raise ValueError("headless -level stub overflows the cave")
+
     # Page-align obj1.vsize (so the code cave is inside the CS limit and will
     # execute) and obj3.vsize (so the mailbox is inside the DS limit and its
     # writes persist) -- the same two lifts the MC1 arm needs.
@@ -1329,6 +1566,208 @@ def patch_mc2(le: LE, b: BuildMC2, wire: bool = True, extend: bool = True,
     rel = b.cave_va - (b.call_site + 5)
     le.data[off + 1 : off + 5] = struct.pack("<i", rel)
     return stub
+
+
+# --------------------------------------------------------------------------
+# The MC2 headless `-level` launch
+# --------------------------------------------------------------------------
+# `-level N` does NOT boot straight in on a pristine NETHERW: the game always
+# lands in the main menu, and the switch is only honoured on the SECOND pass
+# through it (player-observed 2026-09-23; re-derived from the shipped bytes
+# after an earlier dig got this wrong). The gate, at VA 0x77063:
+#
+#     mov   dl,[E29E1]        ; MenusAndIntros.cpp:463  `char x_BYTE_E29E1 = 1;`
+#     test  dl,dl
+#     jne   <draw the main menu>          ; <-- FIRST PASS ALWAYS TAKES THIS
+#     mov   eax,[..] ; testb $0x10,0x16(%eax)   ; MULTIPLAYER_MODE
+#     jne   <draw the main menu>
+#     push  0 ; call NewGameDialog_77350  ; <-- the only reader of -level
+#     mov   di,[m_ExitMenuLoop] ; test di,di ; je <draw the main menu>
+#
+# In C that is `if (E29E1 || MULTIPLAYER_MODE || (NewGameDialog(0), !ExitMenuLoop))`
+# -- and `||` SHORT-CIRCUITS, so while E29E1 is 1 the dialog is never called at
+# all. E29E1 is cleared only at the END of the menu loop (:649-650), which is
+# exactly why entering the campaign once makes `-level` work thereafter. It is
+# not in config.dat, so it is back to 1 on every launch: there is no
+# configuration route to a headless boot.
+#
+# The fix is one byte, written only when `-level` was actually given: clear
+# E29E1 in the parser's `-level` handler, so the first menu pass falls through
+# to NewGameDialog. A launch WITHOUT `-level` never executes the patched
+# instruction, so the menu behaves exactly as shipped.
+#
+# NOT fixed (player-ruled 2026-09-23, "the whole dosbox can be killed"): once
+# in the level there is no way back out -- `LoadLevelNumber_D419C` has four
+# references in the whole image (init to -1, the parser write, two reads in
+# NewGameDialog) and is NEVER cleared after use, so every return to the dialog
+# relaunches the same level forever.
+#
+# Anchors, both verified unique in NETHERW.EXE:
+#   handler: `mov $1,%cl ; add $4,%esp ; mov %al,0x42(%ebp) ; mov %al,[D419C]
+#             ; mov %cl,0x72(%ebp)` -- the store is the 5-byte hook @ VA 0x5630C.
+#   gate:    the whole NewGameDialog guard above; its `call` target is checked
+#            against NewGameDialog, so the match verifies itself.
+# ⚠⚠ WHICH INSTRUCTION WE OVERWRITE IS LOAD-BEARING. The first cut hooked the
+# 5-byte `mov %al,[D419C]` store -- and DOSBox died at launch with
+# "Illegal read from 1000000 / DYNX86:Can't run code in this page". That store's
+# operand is an LE INTERNAL FIXUP (page 70, page-off 0x30D -> obj 3 + 0x419C),
+# so the loader writes `obj3_base + 0x419C` straight over the `call`'s rel32
+# before a single instruction runs. The tree already knew the outbound half of
+# this rule -- "injected code gets no LE fixups", hence the obj3-base
+# derivation -- and this is its mirror image: **code we overwrite may still HAVE
+# one.** `assert_no_fixup` below now enforces it at every overwrite site.
+#
+# So we hook the handler's FINAL instruction instead, the `jmp` back to the
+# parse loop (VA 0x56314): relative, never fixed up, and a jmp->jmp tail chain
+# needs no stack handling at all. The `mov %al,[D419C]` store is left pristine,
+# fixup and all -- retail still writes LoadLevelNumber itself.
+MC2_LEVEL_SIG = _re.compile(
+    rb"\xb1\x01\x83\xc4\x04\x88\x45\x42\xa2(....)\x88\x4d\x72\xe9....", _re.S
+)
+MC2_LEVEL_LL_OFF = 9  # match start -> the moffs32 naming LoadLevelNumber
+# ⚠⚠⚠ A SIGNATURE MUST NOT PIN THE BYTES ITS OWN PATCH REWRITES. Three separate
+# detectors in this file got that wrong before it stuck: the MC1 timer one
+# compared against a target the patch had already moved, the first MC2 one
+# pinned the `\xa2` opcode it turned into `\xe8`, and this one pinned the whole
+# `add esp,12 ; test dl,dl ; jne` window it replaces -- each time reporting a
+# perfectly good patch as absent. The window below is therefore a WILDCARD
+# group that callers decode: `\x83...` pristine, `\xe9...` once hooked.
+MC2_MENUGATE_SIG = _re.compile(
+    rb"\x8a\x15(....)"                 # +0  mov dl,[E29E1]   (obj3-rel disp32)
+    rb"(.......)"                      # +6  THE HOOK WINDOW -- never pinned
+    rb"\xa1....\xf6\x40\x16\x10\x75."  # +13 mov eax,[..] ; testb $0x10,.. ; jne
+    rb"\x6a\x00\xe8(....)",            # +24 push 0 ; call NewGameDialog
+    _re.S,
+)
+MC2_GATE_HOOK_OFF = 6   # match start -> `add esp,12`, the 7-byte hook window
+MC2_GATE_WINDOW = 7     # add esp,12 (3) + test dl,dl (2) + jne rel8 (2)
+MC2_GATE_PRISTINE = b"\x83\xc4\x0c\x84\xd2\x75"  # the window minus its rel8
+
+
+def find_mc2_headless_sites(le: LE) -> tuple:
+    """(hook_va, first_byte, loadlevel_off, menu_va, fallthrough_va)."""
+    o1 = le.objs[0]
+    code_off = obj_file_off(le, o1)
+    code = bytes(le.data[code_off : code_off + o1.npages * 0x1000])
+
+    hits = list(MC2_LEVEL_SIG.finditer(code))
+    if len(hits) != 1:
+        raise SystemExit(
+            f"MC2 -level handler signature: expected 1 hit, found {len(hits)}"
+        )
+    loadlevel_off = struct.unpack("<I", hits[0].group(1))[0]
+
+    hits = list(MC2_MENUGATE_SIG.finditer(code))
+    if len(hits) != 1:
+        raise SystemExit(
+            f"MC2 menu-gate signature: expected 1 hit, found {len(hits)}"
+        )
+    m = hits[0]
+    gate_off = struct.unpack("<I", m.group(1))[0]
+    window = m.group(2)
+    hook_va = o1.vbase + m.start() + MC2_GATE_HOOK_OFF
+    fallthrough_va = hook_va + MC2_GATE_WINDOW
+    # Only a PRISTINE window still carries the jne rel8; on a patched image the
+    # menu target is recovered from the stub instead (see read_mc2_headless).
+    menu_va = (fallthrough_va + struct.unpack("<b", window[6:7])[0]
+               if window.startswith(MC2_GATE_PRISTINE) else None)
+    # Self-check: the guarded call must really be NewGameDialog.
+    call_va = o1.vbase + m.end() - 5
+    tgt = call_va + 5 + struct.unpack("<i", m.group(3))[0]
+    if not (0 <= gate_off < le.objs[2].vsize):
+        raise ValueError(f"menu gate obj3-off {gate_off:#x} outside obj3")
+    for name, v in (("guarded call", tgt), ("menu", menu_va)):
+        if v is not None and not (o1.vbase <= v < o1.vbase + o1.npages * 0x1000):
+            raise ValueError(f"menu gate: {name} target {v:#x} outside obj1")
+    return hook_va, window, loadlevel_off, menu_va, fallthrough_va
+
+
+def build_mc2_headless_stub(b: BuildMC2, va: int, loadlevel_off: int,
+                            menu_va: int, fallthrough_va: int) -> bytes:
+    """Replaces the gate's `add esp,12 ; test dl,dl ; jne <menu>`.
+
+    DL arrives holding `x_BYTE_E29E1`, freshly loaded by the instruction just
+    above (which we must NOT touch -- its operand carries an LE fixup). We keep
+    that value, and only when `-level` was actually given (LoadLevelNumber, a
+    SIGNED byte, is >= 0) do we substitute 0 so control falls through to
+    NewGameDialog.
+
+    ⚠ The first cut cleared E29E1 itself, back in the command-line parser. That
+    hung the game on `-skipscreens`: E29E1 has a SECOND reader,
+    `PlayInGameFmv_82670` (MenusAndIntros.cpp:4073), whose `if (!E29E1)` branch
+    then ran on a first boot it was never meant to -- black screen. Deciding at
+    the gate leaves that reader, and the variable, completely untouched.
+    """
+    a = Asm(va)
+    a.raw(b"\x83\xc4\x0c")  # add esp,12        (the displaced instruction)
+    a.raw(b"\x50")  # push eax
+    a.raw(b"\x52")  # push edx                  (parks DL = the gate value)
+    a.call_next()  # push EIP of the pop
+    a.pop_edx()
+    a.sub_edx_imm(va + 10)  # edx = obj1 load delta (link of pop = va+3+1+1+5)
+    a.mov_eax_m(b.obj3ref_va)  # eax = obj3_base + obj3ref_off
+    a.sub_eax_imm(b.obj3ref_off)  # eax = obj3_base
+    a.mov_edx_eax()  # edx = obj3_base
+    a.raw(b"\x80\xba" + struct.pack("<I", loadlevel_off) + b"\x00")  # cmpb $0,[edx+D419C]
+    a.raw(b"\x5a")  # pop edx   -- POP does not disturb the flags
+    a.raw(b"\x58")  # pop eax
+    a.raw(b"\x7c\x02")  # jl +2   (LoadLevelNumber < 0 -> no -level, honour DL)
+    a.raw(b"\x30\xd2")  # xor dl,dl  (-level given -> force the fall-through)
+    a.raw(b"\x84\xd2")  # test dl,dl
+    body = a.assemble()
+    jne_va = va + len(body)
+    body += b"\x0f\x85" + struct.pack("<i", menu_va - (jne_va + 6))  # jne <menu>
+    jmp_va = va + len(body)
+    body += b"\xe9" + struct.pack("<i", fallthrough_va - (jmp_va + 5))
+    return body
+
+
+def patch_mc2_headless(le: LE, b: BuildMC2, va: int) -> bytes:
+    """Install the headless `-level` fix, stub at `va`. Returns the blob."""
+    hook_va, window, loadlevel_off, menu_va, fallthrough_va = find_mc2_headless_sites(le)
+    if not window.startswith(MC2_GATE_PRISTINE):
+        raise ValueError(
+            f"gate hook {hook_va:#x} window is {window.hex()}, not the pristine "
+            f"`add esp,12 ; test dl,dl ; jne` -- already patched?")
+    # The crash that taught us this: never overwrite a relocated operand.
+    assert_no_fixup(le, hook_va, MC2_GATE_WINDOW, "MC2 headless -level hook")
+
+    blob = build_mc2_headless_stub(b, va, loadlevel_off, menu_va, fallthrough_va)
+    off = va_to_file(le, va)
+    le.data[off : off + len(blob)] = blob
+
+    hoff = va_to_file(le, hook_va)
+    le.data[hoff] = 0xE9
+    le.data[hoff + 1 : hoff + 5] = struct.pack("<i", va - (hook_va + 5))
+    le.data[hoff + 5 : hoff + MC2_GATE_WINDOW] = b"\x90" * (MC2_GATE_WINDOW - 5)
+    return blob
+
+
+def read_mc2_headless(le: LE):
+    """(stub_va, loadlevel_off, gate_off) read back through the installed stub,
+    or None. Identified by SHAPE (`60 e8 00000000 5a`), never by comparing the
+    store's target against a signature that the patch itself rewrote."""
+    try:
+        hook_va, window, _, _, _ = find_mc2_headless_sites(le)
+        if window[0] != 0xE9:  # still the pristine `add esp,12`
+            return None
+        hoff = va_to_file(le, hook_va)
+        stub_va = hook_va + 5 + struct.unpack_from("<i", le.data, hoff + 1)[0]
+        s = va_to_file(le, stub_va)
+        if bytes(le.data[s : s + 5]) != b"\x83\xc4\x0c\x50\x52":
+            return None
+        ll = struct.unpack_from("<I", le.data, s + 32)[0]  # cmpb $0,[edx+D419C]
+        jne_va = stub_va + 45
+        menu = jne_va + 6 + struct.unpack_from("<i", le.data, s + 47)[0]
+        jmp_va = stub_va + 51
+        fall = jmp_va + 5 + struct.unpack_from("<i", le.data, s + 52)[0]
+    except (SystemExit, Exception):
+        return None
+    return stub_va, ll, menu, fall
+
+
+def has_mc2_headless(le: LE) -> bool:
+    return read_mc2_headless(le) is not None
 
 
 def verify_mc2(path: str, inert: bool = False) -> None:
@@ -1395,6 +1834,11 @@ def verify_mc2(path: str, inert: bool = False) -> None:
         print(f"VERIFY {path}: OK (INERT)")
         print(f"  MC2 stub @ {cave_va:#x} ({stub_len} bytes) but NO call site targets "
               f"it; obj1.vsize {aligned}; {fl}")
+        # --inert suppresses the SIGNAL stub's wiring, not the headless fix --
+        # say so, rather than leaving a patch present but unreported.
+        hl = read_mc2_headless(le)
+        print(f"  headless -level: {'present, stub @ %#x' % hl[0] if hl else 'ABSENT'} "
+              f"(--inert does not disable it)")
         return
     # The native frame period is the `add esi,N` imm8 right after the call.
     period = code[call_site + 7] if code[call_site + 5 : call_site + 7] == b"\x83\xc6" else None
@@ -1408,6 +1852,20 @@ def verify_mc2(path: str, inert: bool = False) -> None:
         print(f"  {verify_volcano_mc2(le)}")
         print("  \u26a0 SIMULATION IS PATCHED -- recordings from this binary "
               "witness the PATCHED arm, never retail.")
+
+    # The headless `-level` fix. Report it either way -- its ABSENCE means
+    # `-level N` lands in the main menu and is only honoured on the second pass.
+    hl = read_mc2_headless(le)
+    if hl:
+        stub_va, ll_off, menu, fall = hl
+        print(f"  headless -level: menu gate -> stub @ {stub_va:#x}; falls "
+              f"through to NewGameDialog @ {fall:#x} only when LoadLevelNumber "
+              f"obj3+{ll_off:#x} >= 0, else jne @ {menu:#x} as shipped; "
+              f"x_BYTE_E29E1 itself is never written")
+    else:
+        print("  \u26a0 NO headless -level fix: `-level N` will land in the main "
+              "menu and only take effect after you enter the campaign once. "
+              "Re-patch without --no-headless-level.")
     if shutil.which("ndisasm"):
         import subprocess
         import tempfile
@@ -1488,6 +1946,41 @@ def main(argv=None):
              "binary carrying it is no longer the shipped one, and recordings "
              "made with it witness the PATCHED arm, never retail.",
     )
+    ap.add_argument(
+        "--no-timer-init",
+        action="store_true",
+        help="MC1 ONLY: do NOT splice the timer install into the `-custom` "
+             "branch. `-custom` (and -network / -demo / -roll, same flag bit) "
+             "skips TopProcedure's menu loop, which is the ONLY caller of "
+             "sub_357C0_35B80 -- the function that installs the timer ISR, on "
+             "BOTH its arms (sound IRQ 0x78, or the no-sound START_TIMER that "
+             "programs PIT ch0 to 120.5 Hz). Nothing then increments the "
+             "counter the pacer spins on, its frozen-timer guard fires every "
+             "frame, and the game runs at <1 fps. The default splices one "
+             "idempotent call into that branch; the patched bytes are "
+             "UNREACHABLE on the menu path, so menu-path captures are "
+             "unaffected. Sim-neutral in the sense that matters here -- it "
+             "starts a clock, it does not change what any sub-step computes -- "
+             "but it does mean a `-custom` launch now initialises sound as "
+             "every normal launch does (add `-time` to take the silent arm).",
+    )
+    ap.add_argument(
+        "--no-headless-level",
+        action="store_true",
+        help="MC2 ONLY: do NOT make `-level N` skip the main menu. On a "
+             "pristine NETHERW, `-level N` does NOT boot straight in -- "
+             "`x_BYTE_E29E1` starts at 1 and the menu condition SHORT-CIRCUITS "
+             "on it, so NewGameDialog (the only reader of -level) is never "
+             "called on the first pass; it is cleared only at the end of the "
+             "menu loop, which is why entering the campaign once makes -level "
+             "work thereafter. It is not in config.dat, so there is no "
+             "configuration route to a headless boot. The default clears that "
+             "byte from inside the `-level` handler, so a launch WITHOUT "
+             "-level never executes the patched instruction and the menu "
+             "behaves exactly as shipped. (Not fixed either way: once in the "
+             "level there is no way back out -- LoadLevelNumber is never "
+             "cleared, so quitting relaunches it forever. Kill DOSBox.)",
+    )
     ap.add_argument("--verify-only", metavar="PATCHED", help="just re-verify an already-patched exe")
     ap.add_argument(
         "--inert",
@@ -1550,6 +2043,12 @@ def main(argv=None):
     if is_mc2(le):
         if args.passthrough:
             raise SystemExit("--passthrough is an MC1-only diagnostic")
+        if args.no_timer_init:
+            raise SystemExit(
+                "--no-timer-init is MC1-only: MC2 has no `-custom` (its `-level N` "
+                "boots straight in on its own) and its arm adds no pacing, so "
+                "there is no deadline to starve."
+            )
         b2 = find_build_mc2(le)
         mode = "  [INERT: stub written, NOT wired]" if args.inert else ""
         mode += "  [--no-extend: vsize NOT page-aligned]" if args.no_extend else ""
@@ -1559,7 +2058,8 @@ def main(argv=None):
               f"cave={b2.cave_va:#x}  mailbox={MB2_GUEST:#x}  "
               f"timer=obj3+{b2.obj3ref_off:#x}{mode}{pace_note}")
         stub = patch_mc2(le, b2, wire=not args.inert, extend=not args.no_extend,
-                         pace=args.pace, floor=args.floor, volcano=args.volcano_guard)
+                         pace=args.pace, floor=args.floor, volcano=args.volcano_guard,
+                         headless=not args.no_headless_level)
         out = _out_path()
         with open(out, "wb") as f:
             f.write(le.data)
@@ -1567,11 +2067,18 @@ def main(argv=None):
         pace_tag = f", pace={args.pace}" if args.pace is not None else ", signal-only"
         floor_tag = f", floor={args.floor}" if args.floor else ", floor=OFF"
         vg = ", VOLCANO-GUARD (simulation patched, NOT retail)" if args.volcano_guard else ""
-        print(f"wrote {out}  (stub {len(stub)} B{pace_tag}{floor_tag}{tag}{vg})")
+        hl = ", NO headless -level" if args.no_headless_level else ", headless -level"
+        print(f"wrote {out}  (stub {len(stub)} B{pace_tag}{floor_tag}{hl}{tag}{vg})")
         verify_mc2(out, inert=args.inert)
         return 0
 
     # --- MC1 / CARPET / HIDDEN: pacer + mailbox. ---
+    if args.no_headless_level:
+        raise SystemExit(
+            "--no-headless-level is MC2-only: MC1's `-level N` is honoured "
+            "immediately, it is just overwritten by the campaign map screen "
+            "unless you also pass -custom (see --no-timer-init)."
+        )
     b_ = find_build(le)
     mode = ("  [INERT: stub written, NOT wired]" if args.inert
             else "  [PASSTHROUGH: bare call/ret trampoline]" if args.passthrough else "")
@@ -1579,7 +2086,8 @@ def main(argv=None):
     print(f"build={b_.name}  hook={b_.hook_va:#x}  cave={b_.cave_va:#x}  "
           f"wallclock={b_.wallclock:#x}{mode}")
     stub = patch(le, b_, args.period, wire=not args.inert, passthrough=args.passthrough,
-                 extend=not args.no_extend, floor=args.floor, volcano=args.volcano_guard)
+                 extend=not args.no_extend, floor=args.floor, volcano=args.volcano_guard,
+                 timer_init=not args.no_timer_init)
 
     out = _out_path()
     with open(out, "wb") as f:
@@ -1587,7 +2095,9 @@ def main(argv=None):
     tag = ", INERT" if args.inert else ", PASSTHROUGH" if args.passthrough else ""
     floor_tag = f", floor={args.floor}" if args.floor else ", floor=OFF"
     vol_tag = ", VOLCANO-GUARD (simulation patched, NOT retail)" if args.volcano_guard else ""
-    print(f"wrote {out}  (stub {len(stub)} B, period={args.period}{floor_tag}{tag}{vol_tag})")
+    tmr_tag = ", NO -custom timer init" if args.no_timer_init else ", -custom timer init"
+    print(f"wrote {out}  (stub {len(stub)} B, period={args.period}"
+          f"{floor_tag}{tmr_tag}{tag}{vol_tag})")
     verify(out, args.period, inert=args.inert, passthrough=args.passthrough)
     return 0
 

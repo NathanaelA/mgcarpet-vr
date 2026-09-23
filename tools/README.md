@@ -157,12 +157,77 @@ cleanly. Two arms, auto-selected from the binary:
   #   --floor N      minimum capture window in 100 Hz counts (default 2;
   #                  0 = off). See "Missed frames" below — this is the fix
   #                  for heavy levels, ahead of --pace.
+  #   --no-headless-level   DIAGNOSTIC: skip the headless `-level` fix
+  #                  (see below). Without the fix, `-level N` lands in the
+  #                  main menu and is only honoured on the SECOND pass.
   #   --verify-only NETHERW_REC.EXE   re-disassemble the stub and check
   #   --inert / --no-extend           the same isolation diagnostics
   # then record — the recorder detects MGCTTIK2 and window-gates MC2:
   ./tools/mc_dosbox_recorder.py --game mc2 --level 0 --out mc2run.mgcr \
       --max-ticks 0 -- dosbox -conf … NETHERW_REC.EXE
   ```
+
+  **Headless `-level` (default on; `--no-headless-level` disables).** On a
+  pristine NETHERW, `-level N` does **not** boot straight in — the game always
+  lands in the main menu, and the switch is only honoured once you have entered
+  the campaign. The gate is at VA `0x77063`:
+
+  ```
+  mov   dl,[E29E1]        ; MenusAndIntros.cpp:463  `char x_BYTE_E29E1 = 1;`
+  test  dl,dl
+  jne   <draw the main menu>            ; <-- the first pass ALWAYS takes this
+  mov   eax,[..] ; testb $0x10,0x16(%eax)   ; MULTIPLAYER_MODE
+  jne   <draw the main menu>
+  push  0 ; call NewGameDialog_77350    ; <-- the ONLY reader of -level
+  ```
+
+  In C that is `if (E29E1 || MULTIPLAYER_MODE || (NewGameDialog(0), !ExitMenuLoop))`,
+  and `||` **short-circuits** — so while `E29E1` is 1 the dialog is never called
+  at all. It is cleared only at the *end* of the menu loop (`:649-650`), which
+  is exactly why entering the campaign once makes `-level` work thereafter, and
+  it is **not** in `config.dat`, so it is back to 1 on every launch: there is no
+  configuration route to a headless boot.
+
+  The fix **decides at the gate and never writes the variable**. The 7 bytes at
+  VA `0x77069` (`add esp,12 ; test dl,dl ; jne <menu>`, verified fixup-free)
+  become a `jmp` into a cave stub which keeps the freshly-loaded `DL`, and
+  substitutes 0 for it only when `LoadLevelNumber` — a *signed* byte, `-1`
+  until `-level` parses — is `>= 0`. So a launch without `-level` reaches the
+  identical `jne` and the menu behaves exactly as shipped. `LoadLevelNumber` is
+  an obj3 data ref and injected code gets no LE fixups, so the stub derives
+  obj3's real base from the game's own relocated `GameTimerTurn` disp, the same
+  way the signal stub does.
+
+  ⚠ **Why not just clear `x_BYTE_E29E1` in the parser?** That was the first
+  cut, and it hung on `-skipscreens` — black screen, no progress. The byte has
+  a **second reader**: `PlayInGameFmv_82670` (`MenusAndIntros.cpp:4073`), which
+  `-skipscreens` calls, and whose `if (!E29E1)` branch then ran on a first boot
+  it was never written for. Deciding at the gate leaves that reader — and the
+  variable — completely untouched.
+
+  ⚠⚠ **NEVER OVERWRITE A RELOCATED OPERAND — the mirror of the rule above.**
+  The first cut of this patch hooked the 5-byte `mov %al,[D419C]` store instead,
+  and DOSBox died at launch with `Illegal read from 1000000` /
+  `DYNX86:Can't run code in this page!`. That store's operand carries an LE
+  internal fixup (page 70, page-offset `0x30D` → obj 3 + `0x419C`), so the
+  loader stamps `obj3_base + 0x419C` over the `call`'s rel32 **before a single
+  instruction runs**. The tree already knew the outbound half — *"injected code
+  gets no LE fixups"*, hence the obj3-base derivation — and this is its mirror:
+  **code we overwrite may still HAVE one.** `assert_no_fixup()` now parses the
+  LE fixup page/record tables and refuses any such site; it is validated both
+  ways (it fires on that exact store, and passes all ten sites the working MC1
+  and MC2 patches overwrite). Relative `call`/`jmp` displacements are never
+  relocated, which is why every hook in this tool targets one.
+
+  ⚠ **Not fixed, deliberately** (player-ruled 2026-09-23, *"the whole dosbox can
+  be killed"*): once in the level there is no way back out.
+  `LoadLevelNumber_D419C` has four references in the whole image — init to `-1`,
+  the parser write, and two reads in `NewGameDialog` — and is **never cleared
+  after use**, so every return to the dialog relaunches the same level forever.
+
+  Two switches that are *not* the answer, for the record: `-nocd` only skips
+  `InitialiseCdAudio_86A00()` and blocks `SPEECH_ENABLED`; `-skipscreens` only
+  skips the language screen and the intro FMVs. Neither touches the menu gate.
 
   Because MC2 has no pacer, `--period` is ignored for it and the header
   stamps `spin_period_counts: null`. The recorder gates each capture on a
@@ -242,7 +307,27 @@ sub-steps that already blew their budget, unlike raising `--period`, which
 taxes every frame. The PIT counter is integral (~120 Hz), so `N=1` guarantees
 nothing (enter a hair before it ticks and the spin releases immediately) and
 `N=2` is the smallest value that guarantees a full count (≥8.3 ms, ≤16.7 ms);
-the tool rejects `1` outright. And
+the tool rejects `1` outright.
+(1c) **Starts the clock on the `-custom` path** (default on; `--no-timer-init`
+disables, MC1 only). `-custom` — and `-network` / `-demo N` / `-roll N`, which
+set the *same* flag bit — makes `TopProcedure` skip its menu loop. That is the
+only way to make `-level N` stick, but the menu loop is also the **only caller
+of `sub_357C0_35B80`**, the function that installs a timer on *both* its arms:
+the sound IRQ (vector 0x78 → `sub_357A0`) when a card is present, and
+otherwise `sub_5A459_5A969` — "START_TIMER" — which programs PIT ch0 to
+divisor 9903 = **120.5 Hz** and hooks vector 8 → `sub_5A3E3`. Those two are
+the only `inc [wallclock]` sites in the image, so **sound being off is not the
+problem**; the problem is that under `-custom` the function owning both arms is
+never *called*, nothing advances the counter the pacer spins on, the stub's
+frozen-timer guard fires every frame, and the game runs at **under 1 fps**
+(measured 2026-09-22; the *unpatched* binary under `-custom` is fine, because
+retail's main loop does not depend on that counter). The fix splices one
+idempotent `call` into the custom branch itself, so the patched bytes are
+**unreachable on the menu path** and every menu-path capture is unaffected at
+runtime. It self-selects the arm, so the tool makes no decision about sound —
+though note it will usually take the *sound* arm, since the init inside it sets
+`byte_939E4`/`byte_939CC`; add `-time` to the launch (`var_u8_0 |= 0x40`) to
+take the silent START_TIMER arm instead. And
 (2) keeps a mailbox (magic + monotonic sub-step counter + `in_window` flag,
 raised only around a paced spin + the raw F3 `gameSpeed` 0/1/2) in obj3's
 committed tail, addressed via a runtime-derived obj3 base
@@ -268,7 +353,8 @@ is wall-clock independent, so pacing changes only *when* ticks run.
 alongside the input and never touches the original. The stub lives in
 obj1's zero code cave; the mailbox in obj3's zero BSS tail; nothing else
 in the binary changes (verified by byte-diff: only the two `vsize` fields
-(obj1 + obj3, page-aligned), the three call-site rel32s, and the cave —
+(obj1 + obj3, page-aligned), the three call-site rel32s, the custom-branch
+call-site rel32 from (1c), and the cave —
 the tick fn entry stays byte-identical). Diagnostics: `--inert` writes the
 stub but wires no call site (proved the cave is safe); `--passthrough`
 wires a bare `call tickfn;ret` (proved execution was the issue);
@@ -283,7 +369,16 @@ python3 tools/mc_exe_tickpatch.py HIDDEN.EXE          # -> HIDDEN_REC.EXE
 #                  0 = off). Guarantees a window on sub-steps that overrun
 #                  their period — deaths, meteor swarms — where the pacer
 #                  alone leaves none. Raise to 3–4 if gaps persist.
+#   --no-timer-init  DIAGNOSTIC: skip (1c). Do not use for a -custom
+#                  capture — the game will pace against a clock nothing
+#                  starts and run at <1 fps.
 #   --verify-only PATCHED.EXE   re-disassemble the hook + stub and check
+#                  (also reports whether (1c) is present — its ABSENCE is
+#                  what makes a -custom launch crawl)
+
+# a MULTIPLAYER-MAP capture needs -custom to make -level stick (MC1 50-69);
+# without (1c) this combination is the <1 fps case:
+#   CARPET.EXE -custom -level 60        # -custom -time for the silent arm
 
 # record against the patched exe — recorder detects the mailbox itself
 ./tools/mc_dosbox_recorder.py --game mc1 --level 3 --out run.mgcr \
