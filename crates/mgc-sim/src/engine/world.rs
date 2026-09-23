@@ -8442,6 +8442,12 @@ impl World {
         // carpet state whose dispatch never runs the mover `sub_455D0`
         // — the danger clock's seat (`no_mc1_danger_walk_seat`).
         let entry_dead = self.player.state == LifeState::Dead;
+        // The state retail's KEY SCAN found — it runs between walks
+        // (`DrawAndEventsInGame`), so a Space pressed this frame is
+        // judged on the carpet as the LAST walk left it, never on what
+        // this tick's respawn or landing makes of it. See the MC1
+        // win-exit below.
+        let entry_state = self.player.state;
 
         // The MC2 spell column (Phase 4.2): pane selection, the
         // class-15 cast gate (held-button semantics — the gate
@@ -10384,12 +10390,44 @@ impl World {
         // The pooled-carpet dispatch above stripped the command; it
         // lands here. (The native anchor just above is already
         // post-walk and keeps its in-pass arm.)
+        // Judged on `entry_state`, like the win-exit below: cmd 15 is
+        // accepted by the KEY SCAN only when the corpse has already
+        // LANDED (`+70 == 3`, :20836-41), so a Space that arrives on
+        // the touchdown tick itself is refused — the walk above lands
+        // the corpse, but the scan saw it falling.
         if !matches!(self.game, GameId::Mc2)
             && self.mc1_carpet_slot != 0
+            && matches!(entry_state, LifeState::Dead)
             && matches!(self.player.state, LifeState::Dead)
             && cmd.respawn
         {
             self.player_respawn();
+        }
+        // The MC1/HW win-exit (Space = command 27, :48804). Retail's
+        // key scan issues cmd 15 THEN cmd 27 off the ONE Space
+        // (:20081-82) into a one-slot mailbox: cmd 15 is accepted only
+        // for a LANDED corpse (`actLife < 0 && +70 == 3`, :20836-41)
+        // and cmd 27 only into an EMPTY mailbox with the win bit
+        // (`13325 & 2`, :20911-13). So a dead wizard's Space revives
+        // and a SECOND Space wins. Retail also lets a still-FALLING
+        // wizard's Space end the level (cmd 15 refused, 27 lands);
+        // ⚖ DELIBERATE DEVIATION (player-ruled 2026-09-23): Space is
+        // INERT while falling — a reflex respawn press mid-fall must
+        // not end the level. Judged on the state the key found
+        // (`entry_state`), NOT on `player.state`: the
+        // pooled-carpet respawn just above had already flipped a
+        // corpse to Alive, and the old in-match arm then let the same
+        // press win — dying after the win latch ended the level on
+        // the respawn press (player bug, 2026-09-23). The un-pooled
+        // path consumes the key in the post-walk Dead arm below and
+        // was never affected. (MC2 ends via the demon-mouth sequence
+        // instead — its `completed` only gates the trigger.)
+        if !matches!(self.game, GameId::Mc2)
+            && cmd.respawn
+            && self.completed
+            && matches!(entry_state, LifeState::Alive)
+        {
+            self.won = true;
         }
         // The MC1 Shift+K write itself (:20488-93) — the key pass is
         // post-walk like the command processor, so the bare
@@ -10604,18 +10642,10 @@ impl World {
             // Same entry-state dispatch rule as the walk anchor.
             LifeState::Falling | LifeState::Dead if !alive => self.mc1_mortality_pass(player, cmd),
             LifeState::Falling | LifeState::Dead => {}
-            // The MC1/HW win-exit (Space, command 27 :20910/:48804):
-            // only while ALIVE and the win flag holds — retail's
-            // handler issues cmd 15 BEFORE cmd 27, and a latched
-            // revive blocks the win command (:20911), so dead+won+
-            // Space revives first and a SECOND Space wins. That
-            // ordering falls out here: the Dead arm above consumes
-            // the same key. (MC2 ends via the demon-mouth sequence
-            // instead — its `completed` only gates the trigger.)
+            // (The MC1/HW win-exit used to live here, gated on the
+            // CURRENT state — see the `entry_state` arm after the
+            // pooled respawn above for why that double-fired.)
             LifeState::Alive => {
-                if cmd.respawn && self.completed && !matches!(self.game, GameId::Mc2) {
-                    self.won = true;
-                }
                 // A respawn that landed on a starved pool left bank
                 // entries behind; keep retrying until every
                 // remembered spell has its manifestation back
@@ -11805,8 +11835,21 @@ impl World {
                 // (11904, 19584, 2080) = tile (46,76) at ground+256,
                 // life 10000, mana 1000/1000, hand tokens re-minted;
                 // the reload is t=1712's).
-                self.player.lost = true;
-                self.pending_restart = true;
+                // ⭐ WON BEATS LOST. Past the win latch the flags land
+                // as `13325 = 0xE` (the latch's 2 under the 0xC), and
+                // the level-over consumer (:41595-1610) tests
+                // `(13325 & 6) != 4` FIRST: any set win bit takes the
+                // completion arm (`= 2`, `sub_448E0`, the completed
+                // count `var_u16_17++`) and the lost bit is never
+                // read. A castle-less death AFTER completing the
+                // level therefore ends it as WON — no restart, no
+                // loss of the completion.
+                if self.completed {
+                    self.won = true;
+                } else {
+                    self.player.lost = true;
+                    self.pending_restart = true;
+                }
                 let (sx, sy) = self
                     .start_markers
                     .iter()
@@ -52674,6 +52717,104 @@ mod tests {
         assert!(!w.won(), "the win flag alone never ends the level");
         w.tick(pose, space);
         assert!(w.won(), "alive + won + Space = the win-exit");
+    }
+
+    /// THE RESPAWN PRESS MUST NOT ALSO WIN. Retail issues cmd 15 THEN
+    /// cmd 27 off the one Space into a one-slot mailbox (:20081-82):
+    /// the revive fills it and the win-exit is refused (:20911), so a
+    /// completed level survives a death — Space revives, a SECOND
+    /// Space ends it. With the carpet in the POOL the port revived
+    /// pre-match and then let the same press win off the flipped
+    /// state (player bug, 2026-09-23). The castle is bound so the
+    /// castle-less won-beats-lost arm stays out of it.
+    #[test]
+    fn mc1_pooled_dead_space_revives_and_only_the_second_space_wins() {
+        let mut w = flat_world();
+        seat_carpet_if_absent(&mut w);
+        let c = w.g.new_event().expect("castle");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = PLAYER_TARGET;
+            e.x = 80 << 8;
+            e.y = 90 << 8;
+            e.z = 3456;
+        }
+        w.g.castle_reg[0] = c as u16;
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 1000, 0);
+        let space = PlayerCommand {
+            respawn: true,
+            ..PlayerCommand::default()
+        };
+        w.completed = true;
+        w.player.state = LifeState::Dead;
+        w.player.life = -1;
+        w.tick(pose, space);
+        assert_eq!(w.vitals().state, LifeState::Alive, "Space revived the corpse");
+        assert!(!w.won(), "the respawn press must not also end the level");
+        assert!(!w.take_restart(), "a castle stands: no restart");
+        w.tick(pose, PlayerCommand::default());
+        assert!(!w.won(), "the latch alone never ends the level");
+        w.tick(pose, space);
+        assert!(w.won(), "the SECOND Space is the win-exit");
+    }
+
+    /// WON BEATS LOST (:41595-1610): a castle-less death after the
+    /// win latch lands `13325 = 0xE`, and the level-over consumer
+    /// takes the completion arm on any set win bit — the level ends
+    /// as WON on the respawn press, not restarted.
+    #[test]
+    fn mc1_castleless_death_after_the_win_latch_ends_the_level_won() {
+        let mut w = flat_world();
+        seat_carpet_if_absent(&mut w);
+        assert!(w.player_castle_bound().is_none());
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 1000, 0);
+        let space = PlayerCommand {
+            respawn: true,
+            ..PlayerCommand::default()
+        };
+        w.completed = true;
+        w.player.state = LifeState::Dead;
+        w.player.life = -1;
+        w.tick(pose, space);
+        assert!(w.won(), "the win latch outranks the castle-less loss");
+        assert!(!w.take_restart(), "no restart: the completion is kept");
+        assert!(!w.vitals().lost, "the lost bit is never read past the latch");
+    }
+
+    /// ⚖ DEVIATION (player-ruled 2026-09-23): a FALLING wizard's Space
+    /// is INERT. Retail would take the win-exit here (cmd 15 is
+    /// accepted only for a LANDED corpse, :20836-41, so cmd 27 finds
+    /// the mailbox empty) — but a reflex respawn press mid-fall must
+    /// not end the level.
+    #[test]
+    fn mc1_falling_space_is_inert() {
+        let mut w = flat_world();
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 1000, 0);
+        let space = PlayerCommand {
+            respawn: true,
+            ..PlayerCommand::default()
+        };
+        w.completed = true;
+        w.player.state = LifeState::Falling;
+        w.player.life = -1;
+        // Mid-air (flat_world's ground is 100 * 32 = 3200): nothing.
+        let high = PlayerPose::level(100 << 8, 100 << 8, 4000, 0);
+        w.tick(high, space);
+        assert!(!w.won(), "falling + win latch + Space: inert (deviation)");
+        assert!(w.player_falling(), "and it is still the fall, not a revive");
+        // The TOUCHDOWN tick: the walk lands the corpse, but the key
+        // scan saw it falling — cmd 15 is refused (:20836-41), so the
+        // press neither revives nor (castle-less + latched) wins.
+        w.tick(pose, space);
+        assert_eq!(w.vitals().state, LifeState::Dead, "landed this tick");
+        assert!(!w.won(), "the landing-tick Space is refused, not a respawn");
+        assert!(!w.take_restart());
+        // The NEXT Space is the first one the scan sees on a landed
+        // corpse: castle-less past the latch = the level ends WON.
+        w.tick(pose, space);
+        assert!(w.won(), "the landed corpse's Space is cmd 15: won beats lost");
     }
 
     /// The demon-mouth ending (sub_5E8C0_endGameSeq): the (14,4)

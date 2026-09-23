@@ -8368,8 +8368,12 @@ impl ApplicationHandler for App {
                     // equips).
                     PhysicalKey::Code(KeyCode::KeyE) => k.up = down,
                     PhysicalKey::Code(KeyCode::KeyQ) => k.down = down,
+                    // Edge-triggered: the OS auto-repeat must not
+                    // count as a second press, or a held Space
+                    // revives on one tick and wins the level on the
+                    // next (the MC1 win-exit takes a SECOND Space).
                     PhysicalKey::Code(KeyCode::Space) => {
-                        if down {
+                        if down && !event.repeat {
                             self.pending_respawn = true;
                         }
                     }
