@@ -1030,6 +1030,13 @@ pub struct Billboard {
     /// retail's z-bufferless painter did. `0.5` = neutral, for
     /// instruments and the comparison paths that have no chain.
     pub chain_depth: f32,
+    /// Bank, radians, positive = the sprite's right edge DOWN
+    /// (a right bank seen from behind). Rotates the quad about its
+    /// centre in the screen plane. 0 for every retail entity — retail
+    /// counter-rotates its sprites to stay upright (SetBillboards) —
+    /// so only an app INSTRUMENT sets it (the `--thirdperson` subject
+    /// banking through its turns).
+    pub roll: f32,
     /// Retail translucency raster mode (MC2 DrawSprite_41BD3 modes;
     /// docs/traces/mc2-transparency-drawlist.md): 0 = opaque, 2 =
     /// 33%-opaque (smoke), 3 = 67%-opaque (glows/fades). The blend
@@ -1187,6 +1194,8 @@ struct BillboardInstance {
     alpha: f32,
     /// Co-tile chain rank, `(0, 1)` — see [`Billboard::chain_depth`].
     chain: f32,
+    /// Screen-plane bank, radians — see [`Billboard::roll`].
+    roll: f32,
 }
 
 /// The instance layout of [`BillboardInstance`], shared by BOTH
@@ -1196,10 +1205,10 @@ struct BillboardInstance {
 /// `vertex_attr_array!`s, adding `chain` to one and not the other
 /// built cleanly and blew up at pipeline creation, on the launch path,
 /// where nothing but a real window can reach it.
-const BILLBOARD_ATTRS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+const BILLBOARD_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
     0 => Float32x3, 1 => Float32x2, 2 => Float32x2,
     3 => Float32x2, 4 => Uint32x2, 5 => Float32,
-    6 => Float32,
+    6 => Float32, 7 => Float32,
 ];
 
 /// Default sky/fog color, the classic hazy horizon (MC1's hand-picked
@@ -4744,6 +4753,7 @@ impl Renderer {
                 flags: [mirror as u32, 32],
                 alpha,
                 chain: b.chain_depth,
+                roll: b.roll,
             };
             if alpha < 1.0 {
                 translucent.push(inst);

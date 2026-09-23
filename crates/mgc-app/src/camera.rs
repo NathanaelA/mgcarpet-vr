@@ -33,10 +33,12 @@ use mgc_sim::MAP_TILES;
 /// the screen.
 const SUBJECT_DROP: f32 = 1.0 / 3.0;
 
-/// The boom's length in tiles with nothing in the way. Three tiles
-/// puts a carpet at roughly a sixth of the screen height — big enough
-/// to read its heading, small enough to leave the flight visible.
-pub const BOOM_REACH: f32 = 3.0;
+/// The boom's length in tiles with nothing in the way. Four tiles
+/// (player-set 2026-09-23, up from three: "somewhat further back")
+/// puts a carpet at roughly an eighth of the screen height — the
+/// heading still reads, and the chase view's elastic trail adds its
+/// own length at speed on top.
+pub const BOOM_REACH: f32 = 4.0;
 
 /// The shortest the boom may be pulled. Below this the sprite fills
 /// the frame and the view is worse than first person; a camera this
@@ -93,19 +95,13 @@ pub fn boom_eye(
         len = t;
     }
 
-    let mut eye = at(len);
     // The final clamp. The march can only refuse to EXTEND the boom;
     // at `BOOM_MIN` it has no shorter answer to give, and the subject
     // itself may be hugging the ground (a carpet landed on a slope),
     // so pin the eye into the gap here too. Floor last = the floor
     // wins a low-headroom pinch, the sim's own branch order
     // (mgc-sim/src/lib.rs, the MC1 mover's ceiling tail).
-    let (gx, gz) = (wrap(eye[0]), wrap(eye[2]));
-    if let Some(c) = ceiling(gx, gz) {
-        eye[1] = eye[1].min(c - BOOM_CLEARANCE);
-    }
-    eye[1] = eye[1].max(ground(gx, gz) + BOOM_CLEARANCE);
-    [gx, eye[1], gz]
+    clamp_vertical(at(len), ground, ceiling)
 }
 
 /// The unit vector from the subject to the eye: back along the view
@@ -118,9 +114,194 @@ fn boom_dir(yaw: f32, pitch: f32, fov_y: f32) -> [f32; 3] {
     // `camera_flat_basis`'s convention, unrolled (mgc-render).
     let fwd = [sy * cp, sp, -cy * cp];
     let up = [-sy * sp, cp, cy * sp];
-    let theta = ((fov_y * 0.5).tan() * SUBJECT_DROP).atan();
-    let (st, ct) = theta.sin_cos();
+    let (st, ct) = cone_theta(fov_y).sin_cos();
     std::array::from_fn(|i| -fwd[i] * ct + up[i] * st)
+}
+
+/// The cone half-angle that puts the subject on the two-thirds mark:
+/// the subject sits this far BELOW the camera axis.
+fn cone_theta(fov_y: f32) -> f32 {
+    ((fov_y * 0.5).tan() * SUBJECT_DROP).atan()
+}
+
+// ---------------------------------------------------------------------
+// The CHASE camera — the third-person view's feel layer (player-set
+// 2026-09-23, the Gothic chase model): the camera does not ride the
+// carpet rigidly but TRAILS it. Its heading follows the carpet's with
+// a lag, so a turn shows the carpet rotated against the frame for a
+// beat before the camera catches up; its position is elastic on the
+// boom, so accelerations read as the carpet pulling away and settling
+// back; it sits further back and looks down on the carpet from a
+// little above. The framing law is still exact: whatever the lag, the
+// camera LOOKS AT the subject with the cone offset, so the carpet
+// stays on the two-thirds mark at every frame (the test measures it
+// mid-lag). `--firstperson` is the correctness view; this one is the
+// demo reel, and every number below is a feel knob.
+// ---------------------------------------------------------------------
+
+/// Heading lag: the camera yaw closes on the carpet's with this time
+/// constant (s). Longer = more of the carpet's flank on show in turns.
+const YAW_TAU: f32 = 0.30;
+/// Pitch lag (s) — the camera's look-down follows the aim slowly.
+const PITCH_TAU: f32 = 0.35;
+/// Position elasticity (s): the eye trails its boom target. At cruise
+/// (~7.5 tiles/s) the steady-state trail is speed × this.
+const POS_TAU: f32 = 0.12;
+/// Bank smoothing (s): the subject's roll follows the per-tick bank
+/// law through this, so the quantised recorded yaw steps do not flick
+/// the sprite.
+const BANK_TAU: f32 = 0.12;
+/// How much of the carpet's own aim pitch the camera takes on (0 =
+/// always level, 1 = the first-person pitch).
+const PITCH_FOLLOW: f32 = 0.5;
+/// The look-down: the camera axis is tilted this far below the
+/// carpet's (radians) — "slightly from above". The boom cone rides the
+/// camera axis, so this also lifts the eye.
+const ELEVATION: f32 = 12.0 * std::f32::consts::PI / 180.0;
+/// A boom target further than this from the smoothed eye (tiles) is a
+/// respawn/teleport, not motion: the camera re-seats instead of
+/// gliding across the map.
+const SNAP_DIST: f32 = 6.0;
+
+/// The chase view's persistent state — one per replay session, stepped
+/// once per rendered frame.
+#[derive(Debug, Default, Clone)]
+pub struct ChaseCam {
+    /// The lagged camera heading/pitch (the boom's own axis).
+    yaw: f32,
+    pitch: f32,
+    /// The smoothed eye; `None` until the first frame seats it.
+    eye: Option<[f32; 3]>,
+    /// The smoothed subject bank.
+    bank: f32,
+}
+
+/// One frame's resolved chase view (roll is always 0: the world stays
+/// level, the SUBJECT banks).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChaseView {
+    pub eye: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+impl ChaseCam {
+    /// Step the chase view toward the carpet at `subject` (tile
+    /// units) heading `yaw` / aiming `pitch`, over `dt` seconds.
+    pub fn update(
+        &mut self,
+        subject: [f32; 3],
+        yaw: f32,
+        pitch: f32,
+        fov_y: f32,
+        dt: f32,
+        ground: &dyn Fn(f32, f32) -> f32,
+        ceiling: &dyn Fn(f32, f32) -> Option<f32>,
+    ) -> ChaseView {
+        let gain = |tau: f32| 1.0 - (-dt.max(0.0) / tau).exp();
+        let target_pitch = pitch * PITCH_FOLLOW - ELEVATION;
+        if self.eye.is_none() {
+            self.yaw = yaw;
+            self.pitch = target_pitch;
+        }
+        // Heading: shortest arc, so the seam at ±π never spins the
+        // camera the long way round.
+        self.yaw = wrap_angle(self.yaw + wrap_angle(yaw - self.yaw) * gain(YAW_TAU));
+        self.pitch += (target_pitch - self.pitch) * gain(PITCH_TAU);
+
+        // The boom target for the lagged axis, terrain-resolved.
+        let target = boom_eye(subject, self.yaw, self.pitch, fov_y, ground, ceiling);
+        let eye = match self.eye {
+            None => target,
+            Some(e) => {
+                let d = [
+                    wrap_delta(target[0] - e[0]),
+                    target[1] - e[1],
+                    wrap_delta(target[2] - e[2]),
+                ];
+                if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > SNAP_DIST * SNAP_DIST {
+                    target
+                } else {
+                    let g = gain(POS_TAU);
+                    [e[0] + d[0] * g, e[1] + d[1] * g, e[2] + d[2] * g]
+                }
+            }
+        };
+        // The glide can cut a corner into a slope the boom itself
+        // stepped around: the floor/ceiling get the last word again.
+        let eye = clamp_vertical(eye, ground, ceiling);
+        self.eye = Some(eye);
+
+        // Aim: look AT the subject, then lift the axis by the cone
+        // angle so the subject lands on the two-thirds mark — the
+        // framing law holds however far the eye is trailing.
+        let v = [
+            wrap_delta(subject[0] - eye[0]),
+            subject[1] - eye[1],
+            wrap_delta(subject[2] - eye[2]),
+        ];
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-4);
+        ChaseView {
+            eye,
+            yaw: v[0].atan2(-v[2]),
+            pitch: (v[1] / len).clamp(-1.0, 1.0).asin() + cone_theta(fov_y),
+        }
+    }
+
+    /// Step the subject's bank toward `target` (radians) and return
+    /// the smoothed value.
+    pub fn bank(&mut self, target: f32, dt: f32) -> f32 {
+        self.bank += (target - self.bank) * (1.0 - (-dt.max(0.0) / BANK_TAU).exp());
+        self.bank
+    }
+
+    /// The smoothed bank as of the last step (for the draw path that
+    /// runs between camera steps).
+    pub fn bank_now(&self) -> f32 {
+        self.bank
+    }
+}
+
+/// The enhanced mover's bank, re-derived from two consecutive tick
+/// poses `(x, z, yaw)`: the yaw step gives the turn rate, the plan
+/// step projected on the heading gives the signed forward speed, and
+/// the sim's own law (`mgc_sim::enhanced_bank`) turns them into a
+/// roll. A recorded take carries no velocity, so this is the only
+/// honest source.
+pub fn motion_bank(prev: (f32, f32, f32), cur: (f32, f32, f32), tick_dt: f32) -> f32 {
+    let (px, pz, pyaw) = prev;
+    let (cx, cz, cyaw) = cur;
+    let turn_rate = wrap_angle(cyaw - pyaw) / tick_dt;
+    let (sy, cy) = cyaw.sin_cos();
+    // Heading in the plan: (sin yaw, -cos yaw), the renderer's frame.
+    let fwd_speed = (wrap_delta(cx - px) * sy - wrap_delta(cz - pz) * cy) / tick_dt;
+    mgc_sim::enhanced_bank(turn_rate, fwd_speed)
+}
+
+/// The floor/ceiling clearance clamp the boom resolve ends on.
+fn clamp_vertical(
+    mut p: [f32; 3],
+    ground: &dyn Fn(f32, f32) -> f32,
+    ceiling: &dyn Fn(f32, f32) -> Option<f32>,
+) -> [f32; 3] {
+    let (gx, gz) = (wrap(p[0]), wrap(p[2]));
+    if let Some(c) = ceiling(gx, gz) {
+        p[1] = p[1].min(c - BOOM_CLEARANCE);
+    }
+    p[1] = p[1].max(ground(gx, gz) + BOOM_CLEARANCE);
+    [gx, p[1], gz]
+}
+
+/// The shortest signed way round the torus for one axis (tiles).
+fn wrap_delta(d: f32) -> f32 {
+    let full = MAP_TILES as f32;
+    (d + full / 2.0).rem_euclid(full) - full / 2.0
+}
+
+/// The shortest signed arc (radians).
+fn wrap_angle(a: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    (a + PI).rem_euclid(TAU) - PI
 }
 
 fn blocked(
@@ -272,6 +453,98 @@ mod tests {
             "eye x {} off the torus",
             eye[0]
         );
-        assert!(eye[0] < 2.5, "eye x {} did not wrap past the seam", eye[0]);
+        assert!(eye[0] < BOOM_REACH, "eye x {} did not wrap past the seam", eye[0]);
     }
+    fn screen_of(view: &ChaseView, subject: [f32; 3]) -> (f32, f32) {
+        let cam = mgc_render::CameraView {
+            x: view.eye[0],
+            y: view.eye[1],
+            z: view.eye[2],
+            yaw: view.yaw,
+            pitch: view.pitch,
+            roll: 0.0,
+            fov_y: FOV,
+        };
+        mgc_render::world_to_screen(&cam, 1280.0, 960.0, subject[0], subject[1], subject[2])
+            .expect("the subject is in front of the chase camera")
+    }
+
+    /// The framing law survives the lag: a 90° step turn leaves the
+    /// camera trailing for many frames, and on EVERY one of them the
+    /// subject still sits centred on the two-thirds mark.
+    #[test]
+    fn the_chase_view_keeps_the_framing_while_it_lags() {
+        let subject = [128.0, 20.0, 128.0];
+        let mut cam = ChaseCam::default();
+        cam.update(subject, 0.0, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
+        let turned = std::f32::consts::FRAC_PI_2;
+        for frame in 0..40 {
+            let view = cam.update(subject, turned, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
+            let (sx, sy) = screen_of(&view, subject);
+            assert!((sx - 640.0).abs() < 0.5, "frame {frame}: off-centre at {sx}");
+            assert!((sy - 640.0).abs() < 0.5, "frame {frame}: subject at {sy}, want 640");
+        }
+    }
+
+    /// The heading LAGS: right after a step turn the camera axis is
+    /// still mostly the old heading, then it closes on the new one.
+    #[test]
+    fn the_chase_heading_trails_the_carpet_and_converges() {
+        let subject = [128.0, 20.0, 128.0];
+        let mut cam = ChaseCam::default();
+        cam.update(subject, 0.0, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
+        let turned = 1.0;
+        cam.update(subject, turned, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
+        let early = cam.yaw;
+        assert!(early > 0.0 && early < 0.2, "one frame in, the axis moved {early} of 1.0");
+        for _ in 0..180 {
+            cam.update(subject, turned, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
+        }
+        assert!((cam.yaw - turned).abs() < 0.02, "three seconds later it sits at {}", cam.yaw);
+    }
+
+    /// The eye is further back and higher than the rigid boom put it:
+    /// the look-down lifts the cone, and level flight is watched from
+    /// above.
+    #[test]
+    fn the_chase_eye_sits_behind_and_above() {
+        let subject = [128.0, 20.0, 128.0];
+        let mut cam = ChaseCam::default();
+        let view = cam.update(subject, 0.0, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
+        assert!(view.eye[2] > subject[2] + 3.5, "eye z {} — not far enough back", view.eye[2]);
+        let rigid = boom_eye(subject, 0.0, 0.0, FOV, &flat(0.0), &open);
+        assert!(view.eye[1] > rigid[1] + 0.3, "eye y {} vs rigid {}", view.eye[1], rigid[1]);
+        assert!(view.pitch < 0.0, "the camera looks down ({})", view.pitch);
+    }
+
+    /// A teleport re-seats the camera instead of gliding it across
+    /// the map.
+    #[test]
+    fn a_teleport_snaps_the_chase_eye() {
+        let mut cam = ChaseCam::default();
+        cam.update([128.0, 20.0, 128.0], 0.0, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
+        let far = [40.0, 20.0, 200.0];
+        let view = cam.update(far, 0.0, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
+        let d = ((view.eye[0] - far[0]).powi(2) + (view.eye[2] - far[2]).powi(2)).sqrt();
+        assert!(d < BOOM_REACH + 0.5, "eye {d} tiles from the new subject");
+    }
+
+    /// The bank law off recorded motion: a right turn at forward
+    /// speed banks right (positive), a left turn left, and a turn in
+    /// place banks nothing.
+    #[test]
+    fn motion_bank_follows_the_enhanced_law() {
+        let dt = 1.0 / 24.0;
+        // Heading 0 = toward -z; forward motion is -z.
+        let right = motion_bank((128.0, 128.0, 0.0), (128.0, 127.7, 0.08), dt);
+        let left = motion_bank((128.0, 128.0, 0.0), (128.0, 127.7, -0.08), dt);
+        let still = motion_bank((128.0, 128.0, 0.0), (128.0, 128.0, 0.08), dt);
+        assert!(right > 0.05, "right turn banked {right}");
+        assert!((left + right).abs() < 1e-6, "left {left} vs right {right}");
+        assert_eq!(still, 0.0, "a turn in place banks nothing");
+        // The seam: a step across x = 0 is one tile, not 255.
+        let seam = motion_bank((0.2, 128.0, 0.0), (255.9, 128.0, 0.0), dt);
+        assert_eq!(seam, 0.0);
+    }
+
 }

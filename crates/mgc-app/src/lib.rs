@@ -1672,12 +1672,13 @@ fn push_replay_instruments(
     third_person: bool,
     game: mgc_sim::ids::GameId,
     carpet: (f32, f32, f32, f32),
+    bank: f32,
     dims: &impl Fn(u16) -> Option<(u16, u16, u16)>,
 ) {
     let Some(d) = driver else { return };
     let (x, y, z, yaw) = carpet;
     if third_person
-        && let Some(b) = entities::human_billboard(game, x, y, z, yaw, dims)
+        && let Some(b) = entities::human_billboard(game, x, y, z, yaw, bank, dims)
     {
         out.push(b);
     }
@@ -1698,18 +1699,21 @@ fn replay_ghost_wanted() -> bool {
 }
 
 /// `--thirdperson`: the render camera for a replay watched from
-/// behind (`camera::boom_eye` does the framing and the terrain
-/// resolve). `subject_y` is the CARPET plane — the boom frames the
-/// carpet, not the eye half a tile above it.
+/// behind — the CHASE view (`camera::ChaseCam` does the lag, the
+/// framing and the terrain resolve, stepped by this frame's `dt`).
+/// `subject_y` is the CARPET plane — the boom frames the carpet, not
+/// the eye half a tile above it.
 ///
 /// Both terrain samplers are `&self` reads on the live world, so this
 /// cannot perturb a graded replay; off-world (a level with no sim
 /// world yet) the boom sees flat ground at the sim's own fallback.
 fn third_person_camera(
+    chase: &mut camera::ChaseCam,
     eye: &CameraView,
     subject_y: f32,
     sim: &Simulation,
     aspect: f32,
+    dt: f32,
 ) -> CameraView {
     // The EFFECTIVE fov: `flight_fov_y` widens the vertical angle on a
     // window taller than 4:3, and the framing law is in screen
@@ -1726,21 +1730,24 @@ fn third_person_camera(
             w.player_cave_ceiling(xe, ye).map(|c| c as f32 / 256.0)
         })
     };
-    let p = camera::boom_eye(
+    let v = chase.update(
         [eye.x, subject_y, eye.z],
         eye.yaw,
         eye.pitch,
         fov_y,
+        dt,
         &ground,
         &ceiling,
     );
     CameraView {
-        x: p[0],
-        y: p[1],
-        z: p[2],
-        // No bank: a billboard carpet cannot roll, so rolling the
-        // world around it would swing the subject across the frame
-        // for a tumble the sprite never shows.
+        x: v.eye[0],
+        y: v.eye[1],
+        z: v.eye[2],
+        yaw: v.yaw,
+        pitch: v.pitch,
+        // No camera bank: the world stays level and the SUBJECT
+        // sprite banks instead (`Billboard::roll`), so the carpet
+        // never swings across the frame.
         roll: 0.0,
         ..*eye
     }
@@ -2251,6 +2258,10 @@ struct App {
     /// `--thirdperson`: the replay viewpoint (`camera.rs`). Read only
     /// while a replay is live — live play always flies first person.
     third_person: bool,
+    /// The third-person CHASE state (`camera::ChaseCam`): the lagged
+    /// heading, the elastic eye and the subject's smoothed bank,
+    /// stepped once per rendered frame.
+    chase: camera::ChaseCam,
     /// `--record`: the destination path, then the live recorder.
     record_path: Option<PathBuf>,
     recorder: Option<replay::PortRecorder>,
@@ -2508,6 +2519,7 @@ impl App {
             replay_pending: replay_boot,
             replay: None,
             third_person,
+            chase: camera::ChaseCam::default(),
             record_path,
             recorder: None,
             rec_toggles: serde_json::Map::new(),
@@ -4500,6 +4512,7 @@ impl App {
             self.third_person,
             sess.level.game,
             interp_carpet(&sess.prev_flyer, &sess.sim.flyer, alpha),
+            self.chase.bank_now(),
             &dims,
         );
         r.set_billboards(billboards);
@@ -4763,6 +4776,7 @@ impl App {
                     self.third_person,
                     level.game,
                     (f.x, f.y, f.z, f.yaw),
+                    self.chase.bank_now(),
                     &dims,
                 );
                 r.set_billboards(set);
@@ -6615,7 +6629,12 @@ impl App {
                     s.width as f32 / s.height.max(1) as f32
                 })
                 .unwrap_or(mgc_render::NATIVE_W / mgc_render::NATIVE_H);
-            third_person_camera(&eye, carpet_y, &sess.sim, aspect)
+            // The subject's bank off the recorded motion — the
+            // enhanced mover's own law, smoothed — steps with the
+            // camera so the sprite leans as the view swings.
+            let bank = camera::motion_bank((a.x, a.z, a.yaw), (b.x, b.z, b.yaw), TICK_DT);
+            self.chase.bank(bank, dt);
+            third_person_camera(&mut self.chase, &eye, carpet_y, &sess.sim, aspect, dt)
         } else {
             eye
         };

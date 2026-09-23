@@ -365,6 +365,14 @@ pub const LEAD_MAX: f32 = 0.6;
 const BANK_SCALE: f32 = 0.015;
 const BANK_MAX: f32 = 0.6;
 
+/// The enhanced mover's bank law in one place: `turn_rate` in rad/s,
+/// `fwd_speed` the SIGNED forward speed in tiles/s. Public so the
+/// app's `--thirdperson` chase view can bank the subject sprite off
+/// the recorded motion with exactly the formula the camera uses.
+pub fn enhanced_bank(turn_rate: f32, fwd_speed: f32) -> f32 {
+    (BANK_SCALE * turn_rate * fwd_speed).clamp(-BANK_MAX, BANK_MAX)
+}
+
 // --- Enhanced-altitude: the desired-altitude law (deliberate
 // deviation — docs/DEVIATIONS.md "enhanced flight"). q/e pin a
 // GROUND-RELATIVE desired altitude; the carpet drifts toward it at
@@ -2067,7 +2075,7 @@ impl Simulation {
         // a mild bank only insofar as the strafe momentum has genuinely
         // rotated forward — real forward motion, not the sideways drift.
         let fwd_sp = f.vx * fwd[0] + f.vz * fwd[2];
-        f.roll = (BANK_SCALE * self.turn_rate * fwd_sp).clamp(-BANK_MAX, BANK_MAX);
+        f.roll = enhanced_bank(self.turn_rate, fwd_sp);
     }
 
     /// The enhanced-altitude band + cap for one arm: `(hi, cap_abs)` —

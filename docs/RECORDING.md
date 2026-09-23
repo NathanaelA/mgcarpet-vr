@@ -635,8 +635,23 @@ remains the path for any unpatched exe.
     cave roof via `player_cave_ceiling`, both `&self` reads) so the
     camera never ends up inside rock or through a cave ceiling. A
     framing that drifted as the boom shortened would pump the subject
-    up and down the screen at every hill. No bank: a billboard carpet
-    cannot roll.
+    up and down the screen at every hill.
+    ⭐ **IT IS A CHASE CAMERA, NOT A RIGID BOOM** (player-set
+    2026-09-23, the Gothic model — `camera::ChaseCam`): the camera
+    heading follows the carpet's with a ~0.3 s lag, so a turn shows
+    the carpet's flank against the frame for a beat; the eye trails
+    its boom target elastically (~0.12 s), so accelerations read as
+    the carpet pulling away; the boom is four tiles and the axis is
+    tilted 12° below the carpet's, watching it from a little above.
+    The framing law holds THROUGH the lag because the camera looks AT
+    the subject and lifts its axis by the cone angle — the subject is
+    on the two-thirds mark on every frame, measured mid-lag by the
+    test. The subject sprite BANKS through its turns
+    (`Billboard::roll`, the one sprite that ever rolls): the enhanced
+    mover's bank law re-derived from the recorded motion
+    (`camera::motion_bank` → `mgc_sim::enhanced_bank`), smoothed. The
+    world itself never rolls. `--firstperson` remains the correctness
+    view; every chase number is a feel knob in `camera.rs`.
   - **`MGC_REPLAY_GHOST=1`** puts the ghost back in either view, for
     a take that HAS diverged: retail's pose translucent over the
     port's solid one is the A/B picture.

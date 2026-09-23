@@ -53,6 +53,9 @@ struct Instance {
     // tile's entity chain, head->tail. Higher = later in retail's walk
     // = ON TOP. See `Billboard::chain_depth`.
     @location(6) chain: f32,
+    // Screen-plane bank, radians (positive = right edge down), about
+    // the quad's centre. 0 for every retail sprite.
+    @location(7) roll: f32,
 };
 
 struct VsOut {
@@ -108,9 +111,18 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
         anchor.y = -anchor.y;
         up = -up;
     }
+    // The quad corner in the billboard plane, banked about the quad's
+    // centre (a flat carpet rolls about its own middle, not its feet).
+    let half_h = 0.5 * inst.size.y;
+    let ox = c.x * inst.size.x;
+    let oy = c.y * inst.size.y - half_h;
+    let cr = cos(inst.roll);
+    let sr = sin(inst.roll);
+    let rx = ox * cr + oy * sr;
+    let ry = -ox * sr + oy * cr + half_h;
     let world = anchor
-        + globals.bb_right.xyz * (c.x * inst.size.x)
-        + up * (c.y * inst.size.y);
+        + globals.bb_right.xyz * rx
+        + up * ry;
     var out: VsOut;
     out.clip = globals.view_proj * vec4<f32>(world, 1.0);
     out.frac = vec2<f32>(c.x + 0.5, 1.0 - c.y);

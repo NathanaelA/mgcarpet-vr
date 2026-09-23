@@ -335,6 +335,7 @@ pub fn billboards_from_poses(
             // Retail's co-tile paint order, read off the sim's live
             // tile chains (`LivePose::chain_depth`).
             chain_depth: p.chain_depth,
+            roll: 0.0,
             // Retail proximity concealment (a 19..15-tile slant-
             // distance sphere, retail's own fog band — see
             // mgc_render::Billboard): the MC2 wraith (5,26)
@@ -1988,9 +1989,15 @@ pub fn human_billboard(
     alt: f32,
     z: f32,
     yaw: f32,
+    bank: f32,
     sprite_dims: &impl Fn(u16) -> Option<(u16, u16, u16)>,
 ) -> Option<Billboard> {
-    instrument_billboard(game, HUMAN_CARPET_ROW, x, alt, z, yaw, 0, sprite_dims)
+    let mut b = instrument_billboard(game, HUMAN_CARPET_ROW, x, alt, z, yaw, 0, sprite_dims)?;
+    // The chase view's bank — the enhanced mover's law re-derived
+    // from the recorded motion (`camera::ChaseCam`), so the sprite
+    // leans into its turns the way the enhanced camera does.
+    b.roll = bank;
+    Some(b)
 }
 
 /// A billboard that belongs to the app, not to the world: no tile
@@ -2020,6 +2027,7 @@ fn instrument_billboard(
         // and on no tile chain, so it takes the neutral co-tile rank.
         conceal: false,
         chain_depth: 0.5,
+        roll: 0.0,
     })
 }
 
@@ -2065,6 +2073,7 @@ fn push_billboard(
         // read — every sprite takes the neutral co-tile rank and the
         // co-tile tie falls back to submission order, as before.
         chain_depth: 0.5,
+        roll: 0.0,
     });
 }
 
@@ -2692,11 +2701,13 @@ mod tests {
         // A stub sprite index: every row is 64x64, flags 0.
         let dims = |_: u16| Some((64u16, 64u16, 0u16));
         for game in [GameId::Mc1, GameId::Mc2] {
-            let subject = human_billboard(game, 300.0, 4.0, -2.0, 0.5, &dims)
+            let subject = human_billboard(game, 300.0, 4.0, -2.0, 0.5, 0.2, &dims)
                 .expect("the human carpet resolves in both games");
             let ghost = ghost_billboard(game, HUMAN_CARPET_ROW, 300.0, 4.0, -2.0, 0.5, &dims)
                 .expect("the ghost resolves from the same row");
             assert_eq!(subject.blend, 0, "{game:?}: the subject is opaque");
+            assert_eq!(subject.roll, 0.2, "{game:?}: the subject carries its bank");
+            assert_eq!(ghost.roll, 0.0, "{game:?}: the ghost never rolls");
             assert_eq!(ghost.blend, 4, "{game:?}: the ghost keeps instrument alpha");
             // Same art, same place — they differ only in opacity.
             assert_eq!(subject.sprite_base, ghost.sprite_base);
