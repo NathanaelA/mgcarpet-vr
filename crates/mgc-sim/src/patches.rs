@@ -296,6 +296,27 @@ pub struct WorldPatches {
     /// transformation. Measured: `Gen::castle_watchdog_fired` counts
     /// the predicate in BOTH arms, and the MC1 corpus sweep shows it
     /// only on mc1l26 from t=27344.
+    ///
+    /// ⚠ THAT SWEEP IS STALE AS OF ROUND 163 (2026-09-23) — the
+    /// predicate now fires on THREE takes, and the two new ones are
+    /// Hidden Worlds: `mc1hwl9-lightningbug` (21,972 orphaned-wait
+    /// ticks from t=16575, 5,419 recycle victims seized) and
+    /// `mc1hwl14` (35,731 ticks from t=10724, 3,089 seized).
+    ///
+    /// ⭐ AND THE NEW WITNESSES NAME A SECOND HAZARD. mc1l26's worker
+    /// was destroyed by a volcano; `mc1hwl9-lightningbug` was
+    /// captured by the player specifically to witness a rival castle
+    /// that *"got destroyed and rebuilt in a rapid sequence, probably
+    /// destroying it mid building because of the damage that lightning
+    /// storm does, and it made it stay at level 1 forever,
+    /// indestructible"* — i.e. the LIGHTNING STORM is the outside
+    /// agent that killed the (10,42) painter / (10,41) leveler. The
+    /// doc's own "or any future hazard of that shape" is now
+    /// witnessed, on a different hazard, in a different game build.
+    /// That is the strongest available evidence that this arm is
+    /// scoped to the MECHANISM (a worker destroyed from outside) and
+    /// not to the volcano, which is what the player's 2026-09-18
+    /// ruling assumed and nothing had yet tested.
     pub mc1_castle_transform_watchdog: bool,
     /// **THE CRUSHED CONSTRUCTION SITE (MC1)** — player-reported
     /// 2026-09-19 (`bug.mgcr`, mc1:34). A castle's founding and every

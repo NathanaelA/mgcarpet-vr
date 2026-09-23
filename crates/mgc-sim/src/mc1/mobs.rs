@@ -83,6 +83,63 @@ fn no_m4_scratch_target() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_M4_SCRATCH_TARGET").is_some())
 }
 
+/// ⭐⭐⭐ THE GRIFFON'S WANDER SCAN IS CLOAK-BLIND. The m8 griffon's
+/// WANDER (`sub_1CA50`, creature state 0x31) carries its OWN copy of
+/// the class-3 body scan, and that copy **omits the
+/// `(+16 & 0x20) == 0` per-node test** that the shared wander
+/// `sub_19D70` and the militia's `sub_1B5D0` both carry. The two loops
+/// are otherwise the same code; the griffon's is three instructions
+/// shorter. Verbatim from `HIDDEN.EXE` (identical in `CARPET.EXE` at
+/// the same VAs — file = VA + 0x189F8 / + 0x187F8):
+///
+/// ```text
+/// sub_19D70  (VA 0x19D70, file 0x32768) — the SHARED wander:
+///   32975  3b 7c 24 04   cmp   0x4(%esp),%edi    ; d2 > v_28² ?
+///   32979  77 51         ja    0x329cc           ;   -> skip node
+///   3297b  f6 46 10 20   testb $0x20,0x10(%esi)  ; <- THE CLOAK BIT
+///   3297f  75 4b         jne   0x329cc           ;   -> skip node
+///   32981  …cone test…
+///
+/// sub_1CA50  (VA 0x1CA50, file 0x35448) — the m8 GRIFFON wander:
+///   35652  3b 7c 24 0c   cmp   0xc(%esp),%edi    ; d2 > v_28² ?
+///   35656  77 49         ja    0x356a1           ;   -> skip node
+///   35658  …cone test…                           ; <- NO 0x20 TEST
+/// ```
+///
+/// An `f6 4? 10 20` scan over the WHOLE of `sub_1CA50`
+/// (0x1CA50..0x1CF60, both binaries) finds **zero** matches;
+/// `sub_1B5D0` and `sub_19D70` have exactly one each. The winner gate
+/// that follows is unchanged (`+65 <= 1 && wizext[+528]`, HIDDEN
+/// 0x356b5-0x356c6 / decompile `reference/remc1/sub_main.cpp:23500`,
+/// `reference/remc1hw/sub_main.cpp:22057`).
+///
+/// So a CLOAKED wizard body still takes part in the griffon's
+/// election — and because the gate judges the ELECTION WINNER and
+/// never falls past it, the bit swings the outcome BOTH ways:
+///
+/// - mc1hwl9 t=890, griffon 273: retail's nearest in-cone body is the
+///   cloaked carpet 246 (`flags 0x2c`, d²=17.5M) whose wizext `+528`
+///   is 0 — the gate refuses it and the whole scan comes home empty,
+///   so retail PACKS (`+70` 49 → 51, `+52` = 458, `+146` stays 0).
+///   The port skipped 246 for its cloak bit, elected carpet 233
+///   (d²=29.8M, `+528` = 200) and CHASED (`+146` 0 → 233).
+/// - mc1hwl9 t=2973 (griffon 331) and mc1hwl5 t=2218 (griffon 457)
+///   are the mirror: retail's winner IS the cloaked carpet (168 and
+///   386, both `flags 0x2c`) and both ARE village-wanted, so retail
+///   chases them; the port skipped them and its own winner failed the
+///   gate — `+146` stayed 0.
+///
+/// The human is the chain's out-of-pool member and his cloak is the
+/// same `+16 & 0x20` bit (mirrored in `player_invisible`), so it drops
+/// out of the griffon's scan too.
+///
+/// `MGC_NO_MC1_GRIFFON_SCAN_CLOAK_BLIND=1` restores the pre-dig
+/// per-node cloak gate on the griffon's scan.
+pub(crate) fn griffon_scan_cloak_blind() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_GRIFFON_SCAN_CLOAK_BLIND").is_none())
+}
+
 /// `MGC_NO_M15_CHASE_HIT_FALLTHROUGH=1` restores the pre-dig freeze on
 /// the castle guard's CHASE hit tick (the shared prologue's blanket
 /// `return`) — see the `Inbox::Hit` guard in [`Gen::creature_tick`].
@@ -1224,6 +1281,13 @@ impl Gen {
         let r2 = ((row.v_28 as i32) * (row.v_28 as i32)) as u32;
         let cone = row.v_30 as u16;
         let (ex, ey, ef30, owner) = (e.x, e.y, e.f30, e.id24);
+        // ⭐⭐⭐ The m8 GRIFFON's wander (`sub_1CA50`, state 0x31) is
+        // the one copy of this scan with NO per-node `+16 & 0x20`
+        // test — see [`griffon_scan_cloak_blind`] for the shipped
+        // bytes beside `sub_19D70`'s and `sub_1B5D0`'s. It is reached
+        // only from [`Gen::mob_wander`], and only there with
+        // `wanted_only`, so the model tells the caller apart.
+        let cloak_gate = !(wanted_only && e.model65 == 8 && griffon_scan_cloak_blind());
 
         let mut best: Option<u16> = None;
         let mut best_d2 = u32::MAX;
@@ -1263,7 +1327,7 @@ impl Gen {
         // ([`Gen::mc1_human_on_wiz_chain`] — the seizure blank / sever
         // law, the same test the fireball acquire makes).
         if !ctx.pdead_top
-            && !self.player_invisible
+            && !(self.player_invisible && cloak_gate)
             && owner != PLAYER_TARGET
             && self.mc1_human_on_wiz_chain()
         {
@@ -1299,7 +1363,7 @@ impl Gen {
             if c.model65 == 0 || (bodies_only && !wanted_only && c.model65 != 1) {
                 continue;
             }
-            if c.flags & 0x20 != 0 || owner == c.id24 {
+            if (cloak_gate && c.flags & 0x20 != 0) || owner == c.id24 {
                 continue;
             }
             let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;

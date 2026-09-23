@@ -78,6 +78,28 @@ pub(crate) fn force_building_patches() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_FORCE_BUILDING_PATCHES").is_some())
 }
 
+/// PROBE, not a law (round 163): `MGC_FORCE_VOLCANO_GUARD=1` lets
+/// `volcano_register_revalidate` fire in a `strict_retail` world when
+/// its patch set enables it — the sibling of
+/// [`force_building_patches`], and for the same reason.
+///
+/// ⭐ THIS ONE GRADES A *RECORDING*, NOT JUST THE PORT. The round-162
+/// `mc_exe_tickpatch.py --volcano-guard` binary patch installs the
+/// DOS-side half of this very law, so a take recorded on
+/// `*_RECVG.EXE` witnesses the PATCHED arm. Replaying such a take
+/// against the faithful (unguarded) port arm reports the port's own
+/// blind writes as divergences — `flags` rows with a constant
+/// `port - retail = 0x400`, the plume soft-kill. With this probe the
+/// two halves of the same patch face each other and the take grades.
+///
+/// ⚠ A take replayed under this probe is NOT certified against
+/// retail. It is certified against the guarded binary, which is a
+/// different simulation. Say so wherever the number is quoted.
+pub(crate) fn force_volcano_guard() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_FORCE_VOLCANO_GUARD").is_some())
+}
+
 /// A/B toggle for THE AUTHORED STANDING FIRE'S REAL CTOR (round 157,
 /// w157a): set `MGC_NO_MC1_CREATOR_STANDING_FIRE` to restore the pre-dig
 /// [`Gen::spawn_creator`], whose model-6 row fell to the generic
@@ -1527,6 +1549,25 @@ pub(crate) struct Gen {
     /// trail nodes + blasts, is the hashed retail state) and never
     /// saved (cleared on load).
     pub(crate) bolt_fx: BoltFx,
+    /// ⭐ THE VOLCANO'S BLIND PLUME SOFT-KILLS, THIS TICK — the slots
+    /// `eruption_tick`'s handover stamped `flags |= 0x400` on through
+    /// a STALE register, with no class/model/life test (`sub_25EC0`
+    /// :28782-93). Recorded so the conformance roster can excuse
+    /// EXACTLY those rows and nothing else.
+    ///
+    /// ⚠⚠ WHY THIS EXISTS AT ALL (round 163): `0x400` is not the
+    /// volcano's bit, it is the GENERIC death/reap bit
+    /// (`sub_41E80` = `+17 |= 4`). A roster rule that matched the bit
+    /// alone was measurably masking a real port defect — mc1hwl21's
+    /// lightning-beam self-seizure (w163b) was silently excused by it
+    /// until the same bug was caught on three other takes where it
+    /// happened to arrive with company. ⭐⭐⭐ **A BIT IS NOT A
+    /// MECHANISM.** Registering the mechanism means asking the sim
+    /// what it actually did, which is this field.
+    ///
+    /// Hash-silent and never saved, like [`Gen::bolt_fx`]: it records
+    /// writes already made and feeds nothing back.
+    pub(crate) volcano_blind: VolcanoBlind,
     /// THE SHOT-STATS AIM LATCH: the class-9 record's `+146` as it
     /// stood at the handler's DISPATCH ENTRY, stamped by `proj_tick`
     /// and read by `proj_explode`'s `hits` test — every retail flight
@@ -1751,6 +1792,16 @@ pub struct BoltStrike {
 pub(crate) struct BoltFx(pub Vec<BoltStrike>);
 
 impl std::hash::Hash for BoltFx {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
+/// See [`Gen::volcano_blind`] — hash-SILENT ALWAYS, exactly like
+/// [`BoltFx`]: it is a per-tick OBSERVATION of writes the sim already
+/// made, never an input to one, so dropping it changes nothing.
+#[derive(Default, Clone)]
+pub(crate) struct VolcanoBlind(pub Vec<u16>);
+
+impl std::hash::Hash for VolcanoBlind {
     fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
 }
 
@@ -5688,6 +5739,7 @@ impl Gen {
             mc2_ladder_sync: Mc2LadderMail::default(),
             mc2_castle_lock_mail: Mc2LockMail::default(),
             bolt_fx: BoltFx::default(),
+            volcano_blind: VolcanoBlind::default(),
             mc1_aim_latch: HashSilent(0),
             mc2_beam_defer: BeamDefer::default(),
             mc2_pred_axis: Mc2PredAxis::default(),
@@ -12387,6 +12439,7 @@ impl Gen {
             mc2_castle_lock_mail: _,
             // Presentation feed, never saved — a load starts clean.
             bolt_fx: _,
+            volcano_blind: _,
             // Transient within one class-9 dispatch — never live at a
             // boundary.
             mc1_aim_latch: _,
@@ -12543,6 +12596,7 @@ impl Gen {
         // Presentation feed — never saved, never inherited across a
         // load.
         self.bolt_fx.0.clear();
+        self.volcano_blind.0.clear();
         self.mc2_beam_defer = BeamDefer::default();
         // Retail's load empties the victim list (see `snap_write`).
         self.mc2_recycle.stack.clear();

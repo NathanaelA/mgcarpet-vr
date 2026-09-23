@@ -106,6 +106,317 @@ rejection streaks; the gate now counts only `dv±1` steps as tear
 suspects.) Every open entry below reproduced across all takes,
 including the 75%-torn pre-gate corpus.
 
+## ROUND 163 (2026-09-23, vm113) — **THE FINAL MC1HW INTAKE**: eighteen takes, the volcano ruled out of the corpus, HW campaign coverage COMPLETE
+
+Opened on `92b1a77` with the tree clean of Rust changes (HEAD touched only `tools/`). The player staged the
+**remaining eighteen Hidden Worlds takes** — `mc1hwl8`, `mc1hwl9-lightningbug`, `mc1hwl10`..`mc1hwl24` and a
+second `mc1hwl14` — closing the last campaign-coverage gap in the project (HW maps 8..24). Two takes came with
+a brief; the rest were *"mostly mechanical"*.
+
+### 163-1 INTAKE — THREE CERTIFIED ON ARRIVAL, AND THE WHOLE BOARD IS SMALL
+
+`replay --segmented --classify --brief` on the round-162 binary, before any change:
+
+```
+mc1hwl16   end 18949   segments 1    devs 0    horizon END      <- certified on arrival
+mc1hwl18   end 50978   segments 1    devs 0    horizon END      <- certified on arrival
+mc1hwl22   end 34856   segments 1    devs 0    horizon END      <- certified on arrival
+mc1hwl15    2 devs   mc1hwl21    2   mc1hwl19    3   mc1hwl14-badcastletoken  3
+mc1hwl24    4        mc1hwl11    4   mc1hwl17    5   mc1hwl20    6
+mc1hwl13    7        mc1hwl23   12   mc1hwl10   14   mc1hwl9-lightningbug    15
+mc1hwl12   19        mc1hwl14   58 (50 INHERITED)    mc1hwl8   697 (2 classes)
+```
+
+**782,700 ticks graded.** `terrain-check` **17 of 18 IDENTICAL**; only `mc1hwl12` DIFFERENT, and by **2 height
+cells of 65,536**. Single-digit dev counts over 30-60k-tick takes: the HW column continues to be the MC1 column.
+
+⭐ `mc1hwl8`'s 698 segments are **2 classified heads**, not a storm — 697 of its 704 rows are ONE slot and ONE
+field. The head census did the triage in seconds, again (⭐ COUNT DECISIONS, NOT ROWS).
+
+### 163-2 ⭐⭐⭐ THE DOMINANT SIGNATURE WAS NOT A PORT DEFECT — IT WAS WHICH BINARY CAPTURED THE TAKE
+
+Every `flags` divergence in the intake had the SAME arithmetic: **`port - retail = 1024 = 0x400`**, across
+unrelated classes, slots and ticks, on twelve of the fourteen diverging takes.
+
+`0x400` is the volcano PLUME soft-kill bit. `sub_25EC0`'s eruption handover makes two blind writes gated only on
+`slot != 0` (`> pool base`, :28779 and :28791 — no class, no model, no life): the KICK stamps `+26 = 250` and the
+PLUME soft-kill stamps `flags |= 0x400`, each into whatever record now holds a **stale register slot**. Round
+162 built `tools/mc_exe_tickpatch.py --volcano-guard`, which installs the DOS-side half of the port's
+`volcano_register_revalidate` patch and emits `*_RECVG.EXE`; the player validated it in-game 2026-09-21 and
+**recorded every take from `mc1hwl9` up on it** (it was mandatory for l9 — three castles wrecked within a
+minute otherwise). `mc1hwl8` predates the guard.
+
+⇒ **The port was faithfully performing a blind write that the recorder's binary refused.** Same port code,
+correct against one recording and 1024 high against another, purely by capture provenance.
+
+⭐ **THE PROVENANCE IS MEASURABLE FROM THE ROWS ALONE, and it was.** Censusing the sign of the delta:
+`mc1hwl8` is the ONLY take of the eighteen with retail-side `0x400` rows (5) and no port-side rows; every
+`mc1hwl9`-and-up take shows the port-side signature. That census was run BEFORE the player confirmed the split
+and agrees with it exactly. ⚠ It also corrected a wrong reading of my own: I had booked those 5 rows as "the
+port's guard over-rejects where the binary guard does not", i.e. a discrepancy between the two halves of the
+patch. There is no such discrepancy — all 5 are one unguarded take measured under a probe that did not belong
+on it. ⭐ **A DELTA'S SIGN IS PROVENANCE, NOT A DEFECT DIRECTION.**
+
+### 163-3 ⚖ PLAYER RULING — REGISTER THE VOLCANO, DO NOT TRACK THE BINARY
+
+> *"We should have a registered deviation for the volcano stuff, so that it does not matter which recording is
+> on the fixed binary and which not-fixed … the registered deviations are a must. Because we don't need to
+> spend more time with the volcano overall."*
+
+Every existing volcano rule in the roster (`mc1l26-froze-level-250-castle-oob`,
+`mc1l45-froze-level-250-castle-oob`) is take-and-window scoped. That shape is wrong here: it would have to be
+re-derived for every new take, and would silently mis-grade any take whose binary was mis-remembered — which is
+exactly the confusion this round opened with.
+
+**So the matcher gained a bit-exact value gate** (`roster.rs`): `"xor_mask": N` matches a row only when
+`retail ^ port == N` — those bits differ and no others, **in either direction**. `RowCtx` now carries
+`vals: Option<(i64,i64)>`, populated for field rows whose two sides both parse as integers (missing/extra and
+pose rows carry `None` on purpose; a bit mask over a float is meaningless).
+
+New rule **`mc1-volcano-plume-blind-softkill-capture-binary-arm`** — `kind: field`, `fields: ["flags"]`,
+`xor_mask: 1024`, **no `takes` list and no `ticks` list**. A guarded take (port sets the bit) and an unguarded
+one (retail sets it) both grade clean; **no take ever declares its binary**. Zero maintenance.
+
+**Scope discipline: the PLUME half only.** The KICK (`+26 = 250`) stays registered per take where witnessed —
+a 250 stamp is not a single bit, and its downstream is an out-of-bounds downgrade ladder that HANGS retail
+(mc1l26/mc1l45), which is far more than one excusable row. **Zero kick rows were measured in this corpus.**
+
+⚠ **HONEST RESIDUAL, and it is a real limit of bit-scoping**: a blind write has a WAKE, and a rule on the bit
+excuses only the bit. `mc1hwl14-badcastletoken` pair 1403 carries the volcano `flags` row PLUS
+`slot 548 life: retail 0 port 1` and `z: 1324/1325` — the consequences of the port having soft-killed an entity
+retail did not. The rule excuses the flag and the boundary correctly stands.
+
+**MEASURED COST OF THE GAP, rule arm vs probe arm, over the seventeen guarded takes: 101 residual devs vs 91 —
+TEN boundaries, and ONE take's certification** (`mc1hwl14-badcastletoken`, END under the probe, one boundary
+under the rule alone). ⚠ The probe is NOT uniformly tighter either: `mc1hwl21` goes 1 → 2 under it. ⇒ the rule
+is the standing binary-agnostic answer and the probe is an instrument, not a better arm.
+
+⚠ **AN EARLIER STATEMENT OF THIS IN-SESSION SAID "one boundary on one take" AND WAS WRONG** — it counted the
+change in the END-certified COUNT and reported it as the change in the BOUNDARY count. ⭐ A CERTIFICATION
+DELTA IS NOT A ROW DELTA; quote both or neither.
+
+`mc1hwl9` is the sharpest single measurement of the three arms, because round 162 had already measured it
+against the faithful arm: **22 devs (faithful) → 9 (rule, roster=13) → 1 (probe)**, the last being
+`(3,0)slot153:mana` at t=14778 — one genuine law under all that noise.
+⚠ A genuine port defect flipping exactly `flags & 0x400` and nothing else would also be masked. The runner's
+per-rule hit count is the watch on that.
+
+**Measured, retail arm, rule registered** (`roster=N` = boundaries excused): **53 boundaries excused across the
+eighteen**, `mc1hwl19` joins the certified set at END, and the residue drops to the real laws.
+
+### 163-4 THE PATCH-WITNESS HARNESS GOT ITS MISSING HALF
+
+`MGC_REPLAY_VOLCANO_GUARD` (`mgc-conform/src/replay.rs`) + `MGC_FORCE_VOLCANO_GUARD`
+(`mgc-sim/src/engine/features.rs`), the exact sibling of round 157's `MGC_REPLAY_BUILDING_PATCHES` /
+`MGC_FORCE_BUILDING_PATCHES`, wired into **both** sim arms (`mc1/combat.rs`, `mc2/morph.rs` — ⭐ §5, a law on
+one call path is not landed).
+
+⭐ **THIS IS THE FIRST TIME A SHIPPED PATCH HAS BEEN GRADED AGAINST A RETAIL-ENGINE WITNESS.** We ship 23
+patches whose FIXED behaviour had never been measured against anything — the faithful arm is certified to the
+tick, the patched arm was reasoning plus unit tests. A guarded recording IS the patched arm running on the real
+engine. With the probe on, the two halves of `volcano_register_revalidate` face each other and agree: five
+takes reach `devs=0 horizon=END`, including `mc1hwl14-badcastletoken`.
+⚠⚠ **A `horizon=END` under this probe certifies the port against the GUARDED BINARY, not against retail.** The
+probe must never be folded into the sweep baseline.
+⚠ Running it on an UNGUARDED take is actively wrong: `mc1hwl8` goes 697 → 704 devs and grows retail-side
+`0x400` rows. The probe is per-take, and the take's provenance is a fact about the recording.
+
+### 163-5 ⭐ THE CASTLE-TRANSFORM WATCHDOG HAS A SECOND HAZARD — AND THE PLAYER FOUND IT
+
+Player brief on `mc1hwl9-lightningbug`: *"has bugged out one of the rival castles, but not with a volcano. It's
+with a lightning storm … the castle got destroyed and rebuilt in a rapid sequence, probably destroying it mid
+building because of the damage that lightning storm does, and it made it stay at level 1 forever,
+indestructible."*
+
+The port's own instrument names it without being asked. `mc1hwl9-lightningbug` and `mc1hwl14` are the only two
+takes in the corpus that trip `Gen::castle_watchdog_fired`:
+
+```
+mc1hwl9-lightningbug   orphaned-wait ticks 21,972   first t=16575   (5,419 recycle victims seized)
+mc1hwl14               orphaned-wait ticks 35,731   first t=10724   (3,089 seized)
+```
+
+`mc1_castle_transform_watchdog` (player-ruled 2026-09-18) covers exactly this: a castle in a pure wait
+sub-state (`+48` 1/4 waiting on its (10,42) painter, 6 on its (10,41) leveler) whose worker no longer exists at
+its site. Its doc says the arm fires only when *"a worker was destroyed from outside (the stale-victim seizure,
+**or any future hazard of that shape**)"*. **The lightning storm is that future hazard, and this is its first
+witness** — a different agent, in a different game build, from the volcano that produced mc1l26.
+
+⇒ the patch is scoped to the MECHANISM, not to the volcano. That was assumed when it was ruled and nothing had
+tested it. `patches.rs`'s claim that *"the MC1 corpus sweep shows it only on mc1l26 from t=27344"* was stale and
+is corrected in place.
+
+### 163-6 `mc1hwl14-badcastletoken` — THE PATHOLOGY REPRODUCES
+
+Player brief: the level starts with no castle spell and the player is meant to run a gauntlet for it, but the
+spell can also be collected from a dead rival's corpse — and *"the castle spell collected this way cannot be
+used, and in fact permanently breaks the run"*, the player's reading being that its cost is scaled by the
+rival's castle level at death (typically L7), so founding an L1 castle demands the theoretical L8 price. Retail
+behaviour, recorded to demonstrate the pathology.
+
+**The port reproduces it, and the take is `devs=0 horizon=END` under the guard probe** (one boundary under the
+bit rule alone, 163-3). It is now a certified witness of the retail bug rather than an anecdote. The cost
+mechanism itself is NOT yet dug — the take grading clean says the port agrees with retail tick for tick, not
+that we have explained why retail does it. ⏭ a dig target, not a defect.
+
+### 163-7 w163b — THE LIGHTNING BEAM'S SELF-SEIZURE, AND MY BRIEF WAS WRONG ABOUT THE MECHANISM
+
+Briefed on a `(9,9) flags,id` family with four witnesses (mc1hwl11/13/15/21) as a **recycle** failure with a
+volcano flavour — the `flags` row is `port - retail = +0x400`, which *looks* exactly like the plume soft-kill.
+**Both halves of that brief were wrong**, and the dig said so in its first paragraph.
+
+- The port recycles the slot **exactly** as retail does: `rand`, `x/y/z`, `f63`, `act_life`, `class/model` all
+  bit-identical at the head.
+- The `+0x400` is **not** the volcano. `0x400` is the GENERIC death/reap bit (`sub_41E80` = `+17 |= 4`).
+
+**THE LAW.** `sub_535E0_53920` is the lightning BEAM (class 9 model 9), the storm cloud `(10,38)`'s bolt. It
+resolves in one tick: flight → a chain of `8·steps+1` state-14 segments → an endpoint blast. The chain's
+`NewEvent_37680` drains the recycle stack and on these takes **hands the beam back its own slot** — a genuine
+self-seizure the port already reproduces. Three consequences, one law:
+
+1. **The death bit is set by the FLIGHT, not the handler.** `sub_535E0_53920` contains **no** `+16 |= 0x400`
+   anywhere; the kill is the last statement of the flight step `sub_534C0_53800`, which runs BEFORE the chain.
+   So when the chain seizes the beam's record, `NewEvent`'s memset + `movl $8,+0x10` **clears that death bit**
+   and the beam ends the tick **alive, as one of its own segments** (retail `flags` 12; the port re-killed it
+   → 1036). ⭐ This makes the beam the one member of the registered self-seizure class (`no_mc1_self_seize`)
+   whose reborn child is NOT reaped by the caller's closing `sub_41E80`.
+2. **`+24` is a MEMORY re-read**, once per segment and again at the blast — not a hoisted local. `NewEvent`
+   stamps `+24 = own slot`, so from the seizing iteration on every remaining segment and the endpoint blast
+   inherit the BEAM's slot number as owner (retail 872/920/876/992 — always the head's own slot; the port
+   stamped `PLAYER_TARGET`).
+3. **`+30` is a live read too** (the zigzag's perpendicular; `+30/+32` again for the blast heading/pitch).
+   Post-seizure they are the ctor's 0.
+
+**VERIFIED IN THE SHIPPED BINARY BY THE MAIN SESSION**, including the load-bearing NEGATIVE: an
+`orb $4,0x11(%reg)` scan over the whole of `sub_535E0_53920` (HIDDEN.EXE file 0x6C318..0x6C700) returns
+**zero hits**, so the kill genuinely is not in the handler; the flight's `call` at 0x6C2FA resolves to exactly
+0x5ABB8 (`8b 44 24 04 / 80 48 11 04`); `NewEvent`'s recycle arm reads `c7 43 10 08 00 00 00` (`movl $8,+0x10`)
+then `66 89 43 18` (`+24` = own slot).
+
+**Kill switch** `MGC_NO_MC1_BEAM_SELF_SEIZE`. **Measured**: mc1hwl15, mc1hwl13, mc1hwl11 all **1 segment,
+BIT-EXACT over the whole take** with the law on; the switch reverts to the briefed heads field for field.
+
+### 163-8 w163a — THE `chase` FAMILY WAS **TWO** LAWS, AND "RETAIL PARKS" WAS A HARNESS ARTIFACT
+
+Briefed as ONE family — "retail parks on a target, the port re-elects every tick, a missing screen" — over
+mc1hwl8 (697 rows on slot 60), mc1hwl9-lightningbug and mc1hwl5. **Refuted on both counts.**
+
+⭐⭐⭐ **"RETAIL PARKS / THE PORT THRASHES" WAS A `--segmented` ARTIFACT.** After the first divergence the
+harness re-seeds from retail EVERY tick, so each of the 697 rows is an **independent one-tick test**, not a
+trajectory. The port was never thrashing and there is no missing cooldown, interval, LOS or still-valid
+screen. Retail and the port both re-decide every tick (this rival's `tempo` 253 ⇒ think period 1); they take
+**different arms of the same cascade**. ⚠ **ROUND 161 READ THE SAME SHAPE THE SAME WRONG WAY** — its
+"retail pinned to one value across 123 heads is a missing SCREEN, not variance" rests on this artifact, and
+its 123 heads no longer reproduce at HEAD at all. **A REPEATED ROW UNDER `--segmented` IS A REPEATED
+ONE-TICK EXPERIMENT, NOT PERSISTENCE.**
+
+The clean discriminator the brief did not have: the two LOCAL clusters coincide **exactly** with retail's
+wizext `+415` being 13 (HuntMana); every other tick it is 9 (RaidBalloon) and the port matches bit for bit.
+
+**LAW 1 — the ball-claim arm's spell term is the POSSESS TOKEN REGISTER, not `known[3]`.** Cascade arm 7
+(`sub_14230`) opens on `sub_14E60(a1, 3u)` = `(i16)owned[3] > 0` — "is my Possess TOKEN register set" — the
+same shape round 161's `castle_arm_registers` found on arms 1 and 3, on the one arm nobody re-read. A rival
+who *knows* Possess but whose token was scattered has a 0 register: retail refuses arm 7 and falls through to
+arm 8, the mana hunt. The port read `known[3]` and re-pointed the rival at a mana ball. Verified: HIDDEN.EXE
+0x2CC2E `6a 03` push $3 → `call` resolving to 0x2D858, whose `movswl 0x2a4(%edx,%eax,2)` is the SIGNED read.
+Every retail value in the census (192/172/126) is a class-5 creature; every port value (611/818/954/971/8) is
+a class-10 model-39 mana ball or a freed slot. Kill switch `MGC_NO_MC1_POSSESS_ARM_REGISTER`.
+
+**LAW 2 — the m8 GRIFFON's wander scan is CLOAK-BLIND.** `sub_1CA50` carries its own copy of the class-3 body
+scan and **omits the `(+16 & 0x20) == 0` per-node test** that both the shared wander `sub_19D70` and the
+militia's `sub_1B5D0` carry. Verified by scan: `f6 4? 10 20` appears **exactly once** in `sub_19D70`
+(0x3297B), **once** in `sub_1B5D0` (0x34235) and **zero times** anywhere in `sub_1CA50`. Because the
+`+65 <= 1 && wizext[+528]` gate judges the election WINNER and never falls past it, the missing bit swings the
+outcome BOTH ways — mc1hwl9 t=890 retail's winner is the cloaked carpet and it PACKS; mc1hwl9 t=2973 and
+mc1hwl5 t=2218 are the mirror, retail chases a cloaked carpet the port skipped. Kill switch
+`MGC_NO_MC1_GRIFFON_SCAN_CLOAK_BLIND`.
+
+**Measured (main tree, both laws + both digs):** mc1hwl8 **697 → 0, horizon END**; mc1hwl11 **END**;
+mc1hwl9-lightningbug 15 → 1; mc1hwl13 2 → 1; **mc1hwl5 5 → 1, horizon 2,217 → 6,181** — round 163's standing
+lead ⓶.1 is all but closed, its residue now `(10,0)slot912:id,x,y,z`, a different family.
+
+### 163-9 ⚠⚠⚠ THE VOLCANO RULE WAS MASKING A REAL DEFECT — CAUGHT, AND NARROWED TO THE MECHANISM
+
+**w163b's law exposed a flaw in 163-3's rule, by measurement.** Before the beam law, `mc1hwl21` read
+`roster=1 devs=1`; after it, **1 segment, devs=0, and NO roster hit at all**. With the rule DISABLED
+(`status: open`) mc1hwl21 and mc1hwl15 are bit-exact with zero divergences. ⇒ **the boundary the volcano rule
+had been excusing on mc1hwl21 was the beam self-seizure, not a volcano write.**
+
+The cause is exactly what w163b proved: **`0x400` is the generic death/reap bit, not the volcano's**, so
+`xor_mask: 1024` excused ANY death-flag-only divergence.
+
+⭐⭐⭐ **A BIT IS NOT A MECHANISM.** And note WHY the bug was still found: on three OTHER takes the same defect
+arrived as a two-row `flags,id` boundary, which the all-or-nothing roster could not claim. **A bit-scoped rule
+is safe only by the luck of the same bug showing up with company somewhere else in the corpus.**
+
+⚖ **PLAYER-RULED 2026-09-23**, asked directly and choosing the exact fix over the cheap one. The gate is now
+the MECHANISM: `Gen::volcano_blind` (hash-SILENT, the `BoltFx` pattern — it records writes already made and
+feeds nothing back) collects the slots `eruption_tick`'s handover blind-stamps at BOTH plume sites;
+`World::take_volcano_blind_kills` drains it every tick in the replay loop; the rule's new
+`volcano_blind_write: true` matches a row only when the port's own sim says it wrote that slot. `xor_mask`
+is kept beside it as belt and braces.
+
+**MEASURED, and the precision is the point: roster hits 53 → 52.** The mechanism gate removed EXACTLY the one
+masking hit and kept all 52 genuine volcano rows. Pinned by
+`the_volcano_rule_claims_only_slots_the_volcano_actually_wrote`, which asserts the mc1hwl21 shape — same
+field, same bit, same direction, no volcano write — is NOT excused.
+
+⚠ The MC2 arm threads an empty set deliberately: MC2 has the twin (`mc2_summit18_tick`) but no MC2 take is
+recorded on a guarded binary, and empty means no such rule can match.
+
+### 163-10 w163c — THE `z` FAMILY WAS **THREE** STORIES, AND THE HEADLINE PAIR IS BOOKKEEPING
+
+Briefed as one family over five takes, with the `(3,1)` pair (mc1hwl14/mc1hwl20, both exactly **−18**) as the
+strongest lead. **The dig returned an EMPTY PATCH, which is the correct outcome**, and split the five:
+
+**LAWS A+B — the ROW-0 OOB SHIM, already ruled.** The `−18` pair is byte **{117}** (the sound table's BEGIN
+heap pointer) reading BUILDING this session, and **{225}** (its END pointer) reading PLAIN accounts for
+mc1hwl24 and a second mc1hwl14 head. Per-session malloc addresses ⇒ **registered deviations, no code**.
+
+⚠ **AND MY OWN RULE-OUT IN THE BRIEF WAS THE WRONG RULE-OUT.** I told the dig "it is not the terrain plane,
+`terrain-check` is IDENTICAL on four of five". True — and irrelevant: `terrain-check` grades the GENERATED
+plane, while this is the **LIVE** plane, diverging at a castle leveler's `smooth_perimeter` epilogue hundreds
+or thousands of ticks before the head. ⭐⭐⭐ **A CLEAN `terrain-check` DOES NOT RULE OUT TERRAIN** — it rules
+out the *bake*. The live plane's instrument is `MGC_PLANE_DIFF`, and nothing else sees it.
+
+The reach is arithmetic, not hand-waved. mc1hwl14 t=5216: leveler slot 909 `(10,41)` runs its epilogue;
+retail smooths (115,0) 68→64 exactly as the port does (which PINS {115}/{116} plain) and then **HOLDS**
+(116,0)=70 and (117,0)=71 where the port averaged them to 65/54 — {117}, the byte those two skips share, is
+FORCED building. At the graded head t=5718 the only differing corner under rival wizard slot 222 is h(115,2)
+67/66; `interp_plane`'s Δcomp = 85·(+1) + 233·(−1) = −148, `>>3` = **−18**, and the hard clamp parks `z` at
+**2253 vs 2235** — the measured row, derived end to end.
+
+⭐⭐⭐ **AND IT INDEPENDENTLY CONFIRMS ROUND 162's ARITHMETIC LINKAGE.** Round 162 proved low(end) =
+low(begin) + 0xC0/0xE0, hence {117} and {225} can **never both be building in one session**. mc1hwl14 needs
+exactly **{117} building AND {225} plain** — the predicted pairing — and the two flags are cleanly orthogonal
+on that one take (`225=plain` alone closes t=12624 and leaves t=5718; `117=build` alone does the reverse).
+A prediction from a different round, on a different take, meeting its witness.
+
+**Landed as four roster rows** (`mc1hwl14`×2, `mc1hwl20`, `mc1hwl24`; `kind: field`, `fields: ["z"]`, ticks
+are PAIR STARTS). ⭐ The cleanest arm in the set: mc1hwl24 under `225=plain` is **1 segment, horizon END, zero
+divergence over all 44,585 ticks**, hdiff 0 on every tick. Measured after landing: **mc1hwl24 horizon
+5,595 → 28,166** and **mc1hwl20 11,283 → 23,709**, both down to 1 dev.
+
+**#2 and #3 — TWO GENUINELY SEPARATE ONE-TICK LAWS, RANKED AND NOT DUG** (`MGC_PLANE_DIFF` hdiff = 0 on every
+tick up to both heads, so neither is terrain):
+
+- **mc1hwl12 t=16994 — a RIVAL CAST-ATTRIBUTION law.** Retail FIRED (slot 259 `f132` −200→0, `f140`
+  1000→800, wiz 3 `cooldown[15]` 0→1) and a fired cast returns without hovering; the port's
+  `rival_attack_pick(ri, true)` returned **None**, never reached `rival_cast` at all, and hovered instead
+  (`z` 5468→5464, one `v_14 = −4` step). The port's `f140` still lands on 800, so it spends the mana on a
+  different path — an attribution/picker law, not a mana law. **This one head accounts for 9 of mc1hwl12's 16
+  clusters.** ⚖ Rival-brain territory, and the standing ruling is that the rival-brain audit is its own
+  session.
+- **mc1hwl17 t=22540 — a victim-IDENTITY law, and the aim-z bracket is NOT it.** The shipped HW bytes BACK
+  THE PORT: `sub_524C0_52800` (HIDDEN.EXE file 0x6B1F8) `cmpb $0x2,0x41(%eax)` / `je` skips the `z += f78`
+  lift for model 2, so if retail's victim were 713 retail would read 2880 too. ⭐ The sharpest clue for the
+  next dig: a scan of retail's whole 999-slot pool at t=22539 finds **28 records at exactly (42496,56320)**
+  and **not one has aim_z 2980**, so retail's placement is not `victim.z + victim.f78` for anything at that
+  spot. Cheap repro: `slice --from 22500 --to 22545`.
+
+⭐ **COUNTING ALL FIVE AS ONE FAMILY WOULD HAVE BEEN THE ERROR** — the brief's own warning ("a green sweep is
+not an attribution") aimed at the dig, and the dig applied it to the brief.
+
 ## ROUND 162 (2026-09-20, vm113) — **THE CAST-PHASE LAW WAS FALSE**: w161d landed, its 22 tests re-derived, the HW ground plane ruled
 
 Opened on `00862cc` (round 161) with a clean tree. Three banked items, all three closed.

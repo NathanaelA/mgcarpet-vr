@@ -59,6 +59,25 @@ and lists what remains; history lives in the archive and git.
   `cargo test`; `docs/DEVIATIONS.md` registers the rest. Ledger:
   `docs/CONFORMANCE-FINDINGS.md` (§ROUND 150 is the close). MC1's
   campaign is next (19 staged takes in `recordings-new/`).
+- **MC1 conformance (rounds 151-160): WRAPPED.** 45 of 45 campaign maps
+  recorded (0..49 minus the skip table `{8,17,28,33,39}`) and graded.
+- **HIDDEN WORLDS conformance (rounds 161-163): COVERAGE COMPLETE
+  2026-09-23.** All **25 of 25** HW campaign maps now have a take
+  (`mc1hwl0`..`mc1hwl24`), closing the last coverage gap in the
+  project — every campaign level of all three games is now recorded
+  and replayed. Round 163 took the final eighteen in one intake:
+  782,700 ticks graded, `terrain-check` **17 of 18 IDENTICAL** (only
+  `mc1hwl12`, by 2 height cells of 65,536), and the residue is small
+  enough to name — `chase` target election, a `(9,9)` recycled-slot
+  family, and a `z` family.
+  ⚠⚠ **READ `docs/CONFORMANCE-FINDINGS.md` §ROUND 163 BEFORE GRADING
+  ANY HW TAKE FROM `mc1hwl9` UP.** Those were captured on the
+  volcano-guarded `*_RECVG.EXE`, so they do not carry retail's blind
+  volcano register writes. That is handled corpus-wide by the roster
+  rule `mc1-volcano-plume-blind-softkill-capture-binary-arm`
+  (`xor_mask: 1024`, no take list) — **no take declares its binary** —
+  with `MGC_REPLAY_VOLCANO_GUARD` + `MGC_FORCE_VOLCANO_GUARD` as the
+  instrument for the rare boundary where the blind write has a wake.
 
 ## Remaining work
 

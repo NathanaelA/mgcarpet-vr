@@ -108,6 +108,52 @@ pub struct Rule {
     /// Explicit slot list.
     #[serde(default)]
     pub slots: Option<Vec<u16>>,
+    /// ⭐ BIT-EXACT VALUE GATE (round 163): the row matches only when
+    /// `retail ^ port == xor_mask` — i.e. the two sides differ in
+    /// EXACTLY these bits and in no others, in either direction.
+    ///
+    /// This is the shape a rule needs when the deviation is a single
+    /// known BIT rather than a tick or a slot. The volcano plume's
+    /// blind soft-kill stamps `flags |= 0x400` on whatever record now
+    /// holds a stale register slot, so whether a given recording
+    /// carries that bit depends on which BINARY captured it
+    /// (`*_REC.EXE` vs the volcano-guarded `*_RECVG.EXE`) — not on
+    /// the tick, the slot, or the class. A tick list would have to be
+    /// re-derived for every new take; `xor_mask` registers the class
+    /// once and grades both binaries identically.
+    ///
+    /// ⚠ Both sides must parse as integers; a row whose `want`/`got`
+    /// are not integral never matches (floats are compared nowhere
+    /// here on purpose — a bit mask over a float is meaningless).
+    /// ⚠ HONEST RESIDUAL: a genuine port defect that flips exactly
+    /// this bit and nothing else on the same field would be masked.
+    /// That is the price of registering a bit instead of a tick, and
+    /// it is why the mask must name the NARROWEST bit that carries
+    /// the deviation.
+    #[serde(default)]
+    pub xor_mask: Option<u64>,
+    /// ⭐⭐⭐ THE MECHANISM GATE (round 163): match a row only when
+    /// the PORT'S OWN SIM reports that it blind-stamped this row's
+    /// slot this tick through the volcano plume handover's stale
+    /// register (`World::take_volcano_blind_kills`).
+    ///
+    /// ⚠⚠ THIS EXISTS BECAUSE `xor_mask: 1024` WAS NOT ENOUGH, AND
+    /// THE GAP WAS MEASURED, NOT IMAGINED. `0x400` is the generic
+    /// death/reap bit (`sub_41E80` = `+17 |= 4`), not the volcano's,
+    /// so a bit-only rule excuses ANY death-flag-only divergence —
+    /// and it was caught excusing one: mc1hwl21's lightning-beam
+    /// self-seizure (round 163 dig w163b) sat masked behind it until
+    /// the same defect surfaced on three other takes as a two-row
+    /// `flags,id` boundary the all-or-nothing roster could not claim.
+    /// ⭐⭐⭐ **A BIT IS NOT A MECHANISM**, and a bit-scoped rule is
+    /// safe only by the luck of the same bug arriving with company
+    /// somewhere else in the corpus.
+    ///
+    /// Pairing this with `xor_mask` is belt and braces: the slot must
+    /// be one the volcano actually wrote AND the two sides must
+    /// differ in exactly that bit.
+    #[serde(default)]
+    pub volcano_blind_write: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -125,6 +171,14 @@ pub struct RowCtx<'a> {
     pub field: Option<&'a str>,
     /// Tile-space position, when entity context exists.
     pub pos: Option<(f64, f64)>,
+    /// The row's two sides, when BOTH parse as integers — the input
+    /// to [`Rule::xor_mask`]. `None` for missing/extra rows, for
+    /// non-integral fields, and for pose rows.
+    pub vals: Option<(i64, i64)>,
+    /// True when the port's volcano plume handover blind-stamped this
+    /// row's slot on this tick — the input to
+    /// [`Rule::volcano_blind_write`].
+    pub volcano_blind: bool,
 }
 
 impl Roster {
@@ -198,6 +252,20 @@ impl Roster {
                     Some(s) if slots.contains(&s) => {}
                     _ => return false,
                 }
+            }
+            if let Some(mask) = r.xor_mask {
+                match row.vals {
+                    // `retail ^ port == mask` — exactly these bits
+                    // differ, in either direction. A row whose sides
+                    // are not both integral can never match.
+                    Some((want, got)) if ((want ^ got) as u64) == mask => {}
+                    _ => return false,
+                }
+            }
+            if let Some(want) = r.volcano_blind_write
+                && want != row.volcano_blind
+            {
+                return false;
             }
             if let Some([x0, y0, x1, y1]) = r.rect {
                 match row.pos {

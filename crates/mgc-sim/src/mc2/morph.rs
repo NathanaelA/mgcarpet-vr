@@ -552,7 +552,8 @@ impl Gen {
                 // PATCH `volcano_register_revalidate` (retail bug, see
                 // the patch doc): each register write lands only on the
                 // record the register was meant to name.
-                let revalidate = ctx.patches.volcano_register_revalidate && !ctx.strict;
+                let revalidate = ctx.patches.volcano_register_revalidate
+                    && (!ctx.strict || crate::engine::features::force_volcano_guard());
                 let prev = self.erupting as usize;
                 if prev != 0
                     && prev < self.ent.len()

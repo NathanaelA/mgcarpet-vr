@@ -23807,6 +23807,24 @@ impl World {
         std::mem::take(&mut self.g.bolt_fx.0)
     }
 
+    /// Drain the slots the volcano's plume handover blind-stamped
+    /// `flags |= 0x400` on since the last drain (see
+    /// [`crate::engine::features::Gen::volcano_blind`]).
+    ///
+    /// ⭐ THE CONFORMANCE ROSTER'S EXACT VOLCANO GATE. `0x400` is the
+    /// generic death/reap bit, so a rule that matched the BIT alone
+    /// excused any death-flag-only divergence — and was measured
+    /// doing exactly that to a real defect (round 163, mc1hwl21).
+    /// Asking the sim which slots it actually blind-wrote turns the
+    /// registered deviation from a bit into the MECHANISM, with no
+    /// per-take tick list to maintain and no masking.
+    ///
+    /// Drain every tick: like the bolt feed it accumulates until
+    /// taken.
+    pub fn take_volcano_blind_kills(&mut self) -> Vec<u16> {
+        std::mem::take(&mut self.g.volcano_blind.0)
+    }
+
     /// Live-entity census by `(class, model)`, most-populous first —
     /// the pool-spike forensic: when the pool exhausts (or the
     /// entities overlay spikes), the top occupants name the culprit.

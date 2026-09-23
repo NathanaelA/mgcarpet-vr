@@ -143,6 +143,7 @@ fn no_pose_roster_excuse() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_POSE_ROSTER_EXCUSE").is_some())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn roster_excuse(
     stats: &mut RStats,
     roster: Option<&crate::roster::Roster>,
@@ -152,6 +153,9 @@ fn roster_excuse(
     pd: &PairDiff,
     human_slot: u16,
     ctx: &dyn Fn(u16) -> Option<(u8, u8, f64, f64)>,
+    // Slots the port's volcano plume handover blind-stamped on THIS
+    // tick — the input to a rule's `volcano_blind_write` gate.
+    blind_kills: &[u16],
 ) -> bool {
     use crate::roster::{RowCtx, RowKind, RuleStatus, Tag};
     let Some(r) = roster else { return false };
@@ -178,6 +182,10 @@ fn roster_excuse(
                 model,
                 field: Some(name),
                 pos: Some((x, y)),
+                // Pose rows carry no bit-mask gate: `xor_mask` is
+                // about a known FLAG bit, and a pose lane is spatial.
+                vals: None,
+                volcano_blind: false,
             };
             match r.classify(take, t.saturating_sub(1), &row) {
                 Some(i) if r.rules[i].status == RuleStatus::Deviation => idxs.push(i),
@@ -187,7 +195,8 @@ fn roster_excuse(
     }
     // The boundary t grades the pair (t-1 → t) — rules scope on the
     // pair tick, the same key `verify-deltas` classifies under.
-    let tags = crate::verify::classify_pair(Some(r), take, t.saturating_sub(1), pd, ctx);
+    let tags =
+        crate::verify::classify_pair(Some(r), take, t.saturating_sub(1), pd, ctx, blind_kills);
     for tag in tags
         .missing
         .iter()
@@ -280,6 +289,34 @@ fn building_patches_probe(world: &mut World) {
     }
 }
 
+/// `MGC_REPLAY_VOLCANO_GUARD=1` (round 163): turn
+/// `volcano_register_revalidate` ON over the replay's retail set.
+///
+/// ⭐ THIS IS THE ONE PROBE THAT MAKES A TAKE *MORE* GRADEABLE, not
+/// less. `tools/mc_exe_tickpatch.py --volcano-guard` installs the
+/// DOS-side half of this same law, so a take recorded on
+/// `*_RECVG.EXE` IS the guarded simulation. Graded against the
+/// faithful port arm such a take reports the port's own blind
+/// register writes as divergences (`flags` rows whose
+/// `port - retail` is a constant `0x400` — the plume soft-kill —
+/// and `f26 = 250` kicks); with this probe both halves of the patch
+/// are on and the take grades against what actually produced it.
+///
+/// ⚠⚠ A `horizon=END` measured under this probe certifies the port
+/// against the GUARDED BINARY, not against retail. Keep the two
+/// numbers apart in every report and in the sweep baseline.
+/// (Set BOTH this and the sim's `MGC_FORCE_VOLCANO_GUARD`.)
+fn volcano_guard_probe(world: &mut World) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("MGC_REPLAY_VOLCANO_GUARD").is_some()) {
+        let mut p = world.patches();
+        if !p.volcano_register_revalidate {
+            p.volcano_register_revalidate = true;
+            world.set_patches(p);
+        }
+    }
+}
+
 /// One free-run tick, MC1/HW — `Simulation::step`'s faithful path in
 /// integer space: dead/falling input override, Accelerate expiry
 /// edge, knock drain at the tick head, then `World::tick_flight` —
@@ -290,6 +327,7 @@ fn building_patches_probe(world: &mut World) {
 /// respawn/teleport/speed-zero mailboxes back into the carpet.
 fn step_mc1(world: &mut World, ch: &mut Chain, inp: Mc1Input, cmd: PlayerCommand) {
     building_patches_probe(world);
+    volcano_guard_probe(world);
     let falling = world.player_falling();
     let dead = world.player_dead();
     // Only the COMMAND handler stops at death (sub_46840 is skipped
@@ -399,6 +437,7 @@ fn book_cheat(world: &World, cheat: Option<recover::Cheat>, stats: &mut RStats) 
 
 fn step_mc2(world: &mut World, ch: &mut Chain, inp: Mc1Input, cmd: PlayerCommand) {
     building_patches_probe(world);
+    volcano_guard_probe(world);
     let falling = world.player_falling();
     let dead = world.player_dead();
     let end_seized = world.mc2_end_pose().is_some();
@@ -2261,6 +2300,10 @@ fn run_mc1(
             } else {
                 step_mc1(&mut world, ch, inp, cmd);
             }
+            // ⭐ Drained EVERY tick, paused or not, so it can never
+            // carry a previous tick's slots into this boundary — the
+            // exact-volcano gate is only exact if it is per-tick.
+            let blind_kills = world.take_volcano_blind_kills();
             if world.take_restart() {
                 restart_at = Some(tick.t);
             }
@@ -2622,6 +2665,7 @@ fn run_mc1(
                         &pd,
                         slot,
                         &rctx,
+                        &blind_kills,
                     )
                 };
                 if args.stop_at_div && !boundary_clean && !(excused && args.resync_deviations) {
@@ -3501,6 +3545,11 @@ fn run_mc2(
                         &pd,
                         slot,
                         &rctx,
+                        // MC2 has its own volcano twin (`mc2_summit18_tick`),
+                        // but no MC2 take is recorded on a guarded binary yet,
+                        // so nothing is threaded here. Empty = no such rule
+                        // can match, which is the safe default.
+                        &[],
                     )
                 };
                 if args.stop_at_div && !boundary_clean && !(excused && args.resync_deviations) {
@@ -4300,6 +4349,7 @@ mod tests {
                 &PairDiff::default(),
                 681,
                 &ctx,
+                &[],
             ),
             "the pose channel must be scopeable — the player is just another pool record"
         );
@@ -4330,7 +4380,8 @@ mod tests {
             &z,
             &PairDiff::default(),
             681,
-            &ctx
+            &ctx,
+            &[],
         ));
         // Off the wound's rect (t=42813's pose head, 100 tiles away).
         assert!(!roster_excuse(
@@ -4341,7 +4392,8 @@ mod tests {
             &z,
             &PairDiff::default(),
             681,
-            &off_rect
+            &off_rect,
+            &[]
         ));
         // A lane the rule does not name.
         let unnamed = [("pose.act_speed", 80_i64, -16_i64)];
@@ -4353,7 +4405,8 @@ mod tests {
             &unnamed,
             &PairDiff::default(),
             681,
-            &ctx
+            &ctx,
+            &[],
         ));
         // ALL-OR-NOTHING: a claimed lane beside an unclaimed one.
         let mixed = [("pose.z", 1446_i64, 1444_i64), ("pose.x", 0, 1)];
@@ -4365,7 +4418,8 @@ mod tests {
             &mixed,
             &PairDiff::default(),
             681,
-            &ctx
+            &ctx,
+            &[],
         ));
         // A different take.
         assert!(!roster_excuse(
@@ -4376,9 +4430,87 @@ mod tests {
             &z,
             &PairDiff::default(),
             681,
-            &ctx
+            &ctx,
+            &[],
         ));
         assert!(st.roster_ticks.is_empty(), "nothing may be booked");
+    }
+
+    /// ⭐ THE BIT-EXACT VALUE GATE (round 163). `xor_mask` matches a
+    /// row only when `retail ^ port` is EXACTLY the mask — that bit
+    /// and no other, in either direction. This is what lets the
+    /// volcano plume's blind `flags |= 0x400` be registered ONCE,
+    /// take-agnostically, so a recording captured on the
+    /// volcano-guarded `*_RECVG.EXE` and one captured on the plain
+    /// recorder both grade clean without either declaring its binary.
+    #[test]
+    fn an_xor_mask_rule_matches_only_that_bit_in_either_direction() {
+        use crate::roster::{Roster, RowCtx, RowKind};
+        let r: Roster = serde_json::from_str(
+            r#"{"rules":[{"id":"volcano-plume","status":"deviation","note":"",
+                 "kind":"field","fields":["flags"],"xor_mask":1024}]}"#,
+        )
+        .expect("rule parses");
+        let row = |want: i64, got: i64| RowCtx {
+            kind: RowKind::Field,
+            slot: Some(876),
+            class: 9,
+            model: 9,
+            field: Some("flags"),
+            pos: None,
+            vals: Some((want, got)),
+            volcano_blind: true,
+        };
+        // The guarded-binary arm: the PORT set 0x400, retail did not.
+        assert_eq!(r.classify("mc1hwl13", 15047, &row(196742, 197766)), Some(0));
+        // The unguarded arm, same rule, opposite direction — this is
+        // the whole point of xor over subtraction.
+        assert_eq!(r.classify("mc1hwl8", 9454, &row(1029, 5)), Some(0));
+        // A different bit is NOT this deviation.
+        assert_eq!(r.classify("mc1hwl13", 15047, &row(12, 13)), None);
+        // 0x400 set AND another bit moved: not a lone plume kill.
+        assert_eq!(r.classify("mc1hwl13", 15047, &row(12, 1038)), None);
+        // Same delta, different bits (2048 - 1024): xor catches what a
+        // subtraction gate would have waved through.
+        assert_eq!(r.classify("mc1hwl13", 15047, &row(1024, 2048)), None);
+        // A row whose sides are not integral can never match.
+        let mut float_row = row(0, 0);
+        float_row.vals = None;
+        assert_eq!(r.classify("mc1hwl13", 15047, &float_row), None);
+    }
+
+    /// ⭐⭐⭐ THE MECHANISM GATE — and the regression this round paid
+    /// for. `xor_mask: 1024` alone was measured EXCUSING A REAL PORT
+    /// DEFECT (mc1hwl21's lightning-beam self-seizure, w163b),
+    /// because `0x400` is the generic death/reap bit and not the
+    /// volcano's. `volcano_blind_write` asks the port's own sim which
+    /// slots it actually blind-stamped, so a death-flag row the
+    /// volcano did NOT write can never be claimed.
+    #[test]
+    fn the_volcano_rule_claims_only_slots_the_volcano_actually_wrote() {
+        use crate::roster::{Roster, RowCtx, RowKind};
+        let r: Roster = serde_json::from_str(
+            r#"{"rules":[{"id":"volcano-plume","status":"deviation","note":"",
+                 "kind":"field","fields":["flags"],"xor_mask":1024,
+                 "volcano_blind_write":true}]}"#,
+        )
+        .expect("rule parses");
+        let row = |blind: bool| RowCtx {
+            kind: RowKind::Field,
+            slot: Some(981),
+            class: 10,
+            model: 0,
+            field: Some("flags"),
+            pos: None,
+            vals: Some((196742, 197766)),
+            volcano_blind: blind,
+        };
+        // The volcano really did stamp this slot this tick.
+        assert_eq!(r.classify("mc1hwl13", 826, &row(true)), Some(0));
+        // ⚠ THE REGRESSION: same field, same bit, same direction —
+        // but the volcano did not write it. This is the mc1hwl21
+        // shape, and it must NOT be excused.
+        assert_eq!(r.classify("mc1hwl21", 27902, &row(false)), None);
     }
 
     /// `RowKind::Pose` is its own kind so no `field`-scoped rule — nor
@@ -4401,6 +4533,8 @@ mod tests {
             model: 0,
             field: Some("pose.z"),
             pos: Some((143.95, 61.57)),
+            vals: None,
+            volcano_blind: false,
         };
         // The field-scoped rule is skipped; only the kind-less one can
         // see a pose row at all, and `roster_excuse` still needs every

@@ -56,6 +56,11 @@ cat > "$DST/build" <<'WRAP'
 set -eu
 cd "$(dirname "$(readlink -f "$0")")"
 export CARGO_TARGET_DIR="$(pwd)/../.cargo-target-$(basename "$(pwd)")"
+# ⚠ THE DISTRO CARGO CANNOT BUILD THIS TREE (95 × E0658 unstable
+# features). The toolchain is the user-local rustup; a sandbox that
+# inherits a bare PATH gets /usr/bin/cargo and fails at the first
+# build. Source it here so a dig never has to know.
+[ -r "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 exec nice -n 10 cargo build --release "$@"
 WRAP
 cat > "$DST/conform" <<'WRAP'

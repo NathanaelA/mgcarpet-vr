@@ -124,6 +124,46 @@ pub(crate) fn no_mc1_self_seize() -> bool {
     })
 }
 
+/// `MGC_NO_MC1_BEAM_SELF_SEIZE=1` — the A/B arm for the LIGHTNING
+/// BEAM's half of the self-seizure class ([`no_mc1_self_seize`]),
+/// dug in round 163 (w163b) on the mc1hw storm takes.
+///
+/// ⭐⭐⭐ THE BEAM IS THE ONE SELF-SEIZURE SITE WHOSE `sub_41E80` RUNS
+/// **BEFORE** THE ALLOCATION, SO THE REBORN CHILD SURVIVES. Every
+/// other site in the class reaps the child it seized with its closing
+/// `sub_41E80(a1)`. `sub_535E0_53920` (the m9 beam, :63272-63449) has
+/// **no** `+16 |= 0x400` of its own at all: the death bit is the last
+/// statement of the FLIGHT step `sub_534C0_53800` (:63267-68,
+/// HIDDEN.EXE 0x6C2F5 `cmpb $0,(%esp)` / `je` / `call 0x5ABB8`, and
+/// 0x5ABB8 = HW VA 0x421C0 = `orb $4,0x11(%eax)`), which runs before
+/// the segment chain is laid. When the chain's `NewEvent_37680` hands
+/// back the beam's OWN record the ctor memsets it — clearing that
+/// death bit (`movl $8,0x10(%ebx)` at 0x5014B) and stamping
+/// `+24 = own slot` (`mov %ax,0x18(%ebx)` at 0x5015E, after
+/// `idiv $0xa4`) — and the beam's record ends the tick ALIVE, as one
+/// of its own state-14 segments.
+///
+/// And because the chain's owner copy is a MEMORY re-read of the
+/// beam's `+24` once per segment (HIDDEN.EXE 0x6C412/0x6C416,
+/// inside the loop that closes at 0x6C5AD) and again at the endpoint
+/// blast (0x6C61F/0x6C623), every segment laid after the seizure —
+/// and the blast — inherits the beam's SLOT NUMBER as its owner. The
+/// port hoisted `owner` once before the loop and set the death bit
+/// after it, so it stamped the caster instead and re-killed the
+/// reborn segment.
+///
+/// WITNESS (guard probe on, so this is not the volcano): mc1hwl15
+/// t=6434, storm cloud 318's second bolt at slot 872 — retail `flags`
+/// 12 / `id` 872 on the beam's slot and `id` 872 on the 12 segments
+/// plus the (10,0) endpoint at 925; the port read 1036 / 120
+/// (`PLAYER_TARGET`) on all of them. Same shape at mc1hwl15 t=6440
+/// (beam 920), mc1hwl13 t=15048 (beam 876) and mc1hwl11 t=41680
+/// (beam 992) — the head slot's `id` is always its own slot number.
+pub(crate) fn no_mc1_beam_self_seize() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_BEAM_SELF_SEIZE").is_some())
+}
+
 /// `MGC_NO_PARTNER_SOFTKILL_FIX=1` restores the port's invented
 /// `flags & 0x400 == 0` clause in [`Gen::ball_merge_candidates`]'
 /// tile-ring walk. Retail's `sub_11D10` has NO reap test: an
@@ -4728,12 +4768,31 @@ impl Gen {
                 break; // expired midair (≤ 10 steps for life 9)
             }
         }
+        // ⭐⭐⭐ THE BEAM DIES AT THE END OF THE FLIGHT, NOT AT THE END
+        // OF THE HANDLER. `sub_41E80_421C0(a1)` is the LAST statement
+        // of the flight step `sub_534C0_53800` (:63267-68), not of
+        // `sub_535E0_53920` — which has no `+16 |= 0x400` anywhere
+        // (its whole body is `return v18`). HIDDEN.EXE `0x6C2F5:
+        // 80 3c 24 00` `cmpb $0,(%esp)` / `74 09 je 0x6C304` /
+        // `53 push %ebx` / `e8 b7 e8 fe ff call 0x5ABB8`, and
+        // 0x5ABB8 (= HW VA 0x421C0) is exactly
+        // `8b 44 24 04 / 80 48 11 04` = `orb $4,0x11(%eax)`. The
+        // beam's own flight loop condition re-reads that very bit
+        // (`8a 63 11 mov 0x11(%ebx),%ah` / `f6 c4 04 test $4,%ah`
+        // at 0x6C355-0x6C35C), so the bit is set BEFORE the segment
+        // chain is laid. Ours set it after the chain, which matters
+        // only on the self-seizure below — and there it is the whole
+        // divergence. See [`no_mc1_beam_self_seize`].
+        if !no_mc1_beam_self_seize() {
+            self.ent[i].flags |= 0x400;
+        }
         self.ent[i].f30 = yaw0;
         self.ent[i].f32 = pitch0;
         // ---- the segment chain (:63329-63420): 8·steps+1 segments
         // along the straight spawn-heading path, sub-step = speed/8.
         let beam_slot = i;
-        let owner = self.ent[i].id24;
+        let owner0 = self.ent[i].id24;
+        let live_owner = !no_mc1_beam_self_seize();
         let substep = self.ent[i].f126 / 8; // v33 = 48
         let scale = (substep / 4) as i32; // offset unit = 12
         let mut delta = (0u16, 0u16, 0i16);
@@ -4750,6 +4809,22 @@ impl Gen {
                 // one -1 — one rendered frame each under the
                 // state-14 pre-decrement test (:63345-56).
                 {
+                    // ⭐ `+24` IS A MEMORY RE-READ, ONCE PER SEGMENT.
+                    // HIDDEN.EXE 0x6C412 `66 8b 43 18`
+                    // `mov 0x18(%ebx),%ax` / 0x6C416 `66 89 46 18`
+                    // `mov %ax,0x18(%esi)` sits INSIDE the chain loop
+                    // (which closes at 0x6C5AD `jge 0x6C3FB`), so the
+                    // segment that seizes the beam's own record — and
+                    // is therefore re-stamped by `NewEvent` with
+                    // `+24 = own slot` (0x5015E `66 89 43 18`) —
+                    // changes the owner every later segment and the
+                    // endpoint blast inherit. See
+                    // [`no_mc1_beam_self_seize`].
+                    let owner = if live_owner {
+                        self.ent[i].id24
+                    } else {
+                        owner0
+                    };
                     let e = &mut self.ent[s];
                     e.class64 = 9;
                     e.model65 = 9;
@@ -4793,7 +4868,16 @@ impl Gen {
             let off = (v32 * scale) as i16;
             disp = (base.0, base.1, base.2.wrapping_add(off));
             let mut p = (disp.0, disp.1, 0i16);
-            Self::polar_step(&mut p, yaw0.wrapping_add(0x200) & 0x7FF, 0, off);
+            // ⭐ THE PERPENDICULAR DIRECTION IS ANOTHER LIVE `+30`
+            // READ, not the saved `yaw0`: HIDDEN.EXE 0x6C582
+            // `66 8b 43 1e mov 0x1e(%ebx),%ax` / 0x6C586
+            // `80 c4 02 add $2,%ah` / 0x6C58B `80 e4 07 and $7,%ah`
+            // — inside the chain loop. After a self-seizure the
+            // beam's `+30` is the memset 0, so retail's zigzag plane
+            // swings to a fixed 0x200 for every remaining segment
+            // (the residual x/y rows on slots 874..893).
+            let zig_yaw = if live_owner { self.ent[i].f30 } else { yaw0 };
+            Self::polar_step(&mut p, zig_yaw.wrapping_add(0x200) & 0x7FF, 0, off);
             disp.0 = p.0;
             disp.1 = p.1;
             v30 -= 1;
@@ -4813,6 +4897,25 @@ impl Gen {
         // the beam's own +24, and the scan's first test is `+24 !=
         // ours` ([`Gen::victim_scan`]).
         let hit = self.victim_scan(i, ctx);
+        // …and the ENDPOINT reads `+24` again: HIDDEN.EXE 0x6C61F
+        // `66 8b 43 18` / 0x6C623 `66 89 46 18` — the same
+        // `mov 0x18(%ebx),%ax` pair, this time into the blast. So the
+        // blast's `+24`, and `sub_526C0_52A00(a1, …)`'s accuracy
+        // scoring, both see the POST-chain owner.
+        let owner = if live_owner {
+            self.ent[i].id24
+        } else {
+            owner0
+        };
+        // `v19[15] = *(a1+30)` / `v19[16] = *(a1+32)` (0x6C627/0x6C62B
+        // and 0x6C635/0x6C63F) are live reads too — a seized beam's
+        // blast therefore carries the ctor's 0/0, not the flight
+        // heading (mc1hwl15 t=6434 slot 925 `heading`/`pitch`).
+        let (yaw_out, pitch_out) = if live_owner {
+            (self.ent[i].f30, self.ent[i].f32)
+        } else {
+            (yaw0, pitch0)
+        };
         let (f69, f44, f140, f146) = {
             let e = &self.ent[i];
             (e.f69, e.f44, e.f140, e.f146)
@@ -4898,8 +5001,8 @@ impl Gen {
             let e = &mut self.ent[fx];
             if !seized {
                 e.id24 = owner;
-                e.f30 = yaw0;
-                e.f32 = pitch0;
+                e.f30 = yaw_out;
+                e.f32 = pitch_out;
             }
             e.f146 = match hit {
                 Some(MailTarget::Pool(j)) => j as u16,
@@ -4908,7 +5011,12 @@ impl Gen {
             };
             e.f44 = if quartered { f44 >> 2 } else { f44 };
         }
-        self.ent[i].flags |= 0x400;
+        // (The death bit was set by the FLIGHT, above — retail's
+        // `sub_535E0_53920` has none of its own. The pre-dig arm
+        // keeps it here.)
+        if no_mc1_beam_self_seize() {
+            self.ent[i].flags |= 0x400;
+        }
         false
     }
 
@@ -5626,7 +5734,8 @@ impl Gen {
                 // self-kicks the new driver (mc1l49 t=29062); the blind
                 // plume kill below soft-kills whatever inherited the old
                 // plume's slot (mc1l45: a rival's Fireball token).
-                let revalidate = ctx.patches.volcano_register_revalidate && !ctx.strict;
+                let revalidate = ctx.patches.volcano_register_revalidate
+                    && (!ctx.strict || crate::engine::features::force_volcano_guard());
                 let kick_ok = !revalidate
                     || prev != i
                         && prev < self.ent.len()
@@ -5663,6 +5772,7 @@ impl Gen {
                         let pl = self.plume as usize;
                         if pl != 0 && pl < self.ent.len() && plume_ok(self, pl) {
                             self.ent[pl].flags |= 0x400;
+                            self.volcano_blind.0.push(pl as u16);
                         }
                         self.plume = p as u16;
                     }
@@ -5670,6 +5780,7 @@ impl Gen {
                     let pl = self.plume as usize;
                     if pl != 0 && pl < self.ent.len() && plume_ok(self, pl) {
                         self.ent[pl].flags |= 0x400;
+                        self.volcano_blind.0.push(pl as u16);
                     }
                     self.plume = match self.spawn_effect(19, x, y, g) {
                         Some(p) => {

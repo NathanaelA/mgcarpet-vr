@@ -532,7 +532,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                 .or_else(|| pmap.get(&slot))
                                 .map(|e| (e.class, e.model, e.x, e.y))
                         };
-                        let mut tg = classify_pair(roster.as_ref(), &take, pt, &pd, &ctx);
+                        let mut tg = classify_pair(roster.as_ref(), &take, pt, &pd, &ctx, &[]);
                         // SLOT-DESYNC pass (computed rule, roster.rs):
                         // balanced same-(class,model) missing/extra
                         // residue = free-list slot-order desync. Runs
@@ -700,6 +700,10 @@ pub(crate) fn classify_pair(
     t: u64,
     pd: &PairDiff,
     ctx: &dyn Fn(u16) -> Option<(u8, u8, f64, f64)>,
+    // Slots the port's volcano plume handover blind-stamped this
+    // tick — see `Rule::volcano_blind_write`. Empty is always safe:
+    // it simply means no such rule can match.
+    blind_kills: &[u16],
 ) -> crate::roster::RuleTags {
     use crate::roster::{RowCtx, RowKind, RuleTags, Tag};
     let pos = |slot: u16| ctx(slot).map(|(_, _, x, y)| (x, y));
@@ -717,6 +721,8 @@ pub(crate) fn classify_pair(
             model: *m,
             field: None,
             pos: pos(*slot),
+            vals: None,
+            volcano_blind: false,
         }));
     }
     for (slot, c, m) in &pd.extra {
@@ -727,6 +733,8 @@ pub(crate) fn classify_pair(
             model: *m,
             field: None,
             pos: pos(*slot),
+            vals: None,
+            volcano_blind: false,
         }));
     }
     for d in &pd.fields {
@@ -741,6 +749,13 @@ pub(crate) fn classify_pair(
             model: m,
             field: Some(d.field),
             pos: p,
+            // Both sides integral, or no value gate is possible.
+            vals: d
+                .want
+                .parse::<i64>()
+                .ok()
+                .zip(d.got.parse::<i64>().ok()),
+            volcano_blind: d.slot.is_some_and(|sl| blind_kills.contains(&sl)),
         }));
     }
     tags

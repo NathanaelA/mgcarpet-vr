@@ -611,6 +611,57 @@ pub(crate) fn castle_arm_registers() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_ARM_REGISTERS").is_none())
 }
 
+/// ⭐⭐⭐ THE BALL-CLAIM ARM'S SPELL TERM IS THE POSSESS **TOKEN
+/// REGISTER**, NOT A `known` FLAG — the same shape as the two castle
+/// arms above, on the arm nobody had re-read. `sub_14230`
+/// (:18439-52) opens on `sub_14E60(a1, 3u)`: `pool + 164 *
+/// wizext->var_676[3]`, bounded only from BELOW. A rival who KNOWS
+/// Possess but whose token was scattered, spent or never re-minted
+/// has a 0 register, and retail refuses arm 7 outright — the cascade
+/// falls through to arm 8, the mana hunt (`sub_14B10`).
+///
+/// Verbatim from the shipped binaries (`CARPET.EXE` file 0x2CA28,
+/// `HIDDEN.EXE` file 0x2CC28 — the SAME VA 0x14230 in both listings,
+/// `reference/remc1/sub_main.cpp` banner `(00014230)` and
+/// `reference/remc1hw/sub_main.cpp` banner `(00014230)`), the head of
+/// `sub_14230` is:
+///
+/// ```text
+///   2cc28  53              push %ebx
+///   2cc29  56              push %esi
+///   2cc2a  8b 5c 24 0c     mov  0xc(%esp),%ebx
+///   2cc2e  6a 03           push $0x3          <- SPELL 3
+///   2cc30  53              push %ebx
+///   2cc31  e8 22 0c 00 00  call 0x2d858       <- sub_14E60 (VA 0x14E60)
+///   2cc39  85 c0           test %eax,%eax
+///   2cc3b  0f 84 b9 00 00 00  je 0x2ccfa      <- register 0 => return 0
+/// ```
+///
+/// and `sub_14E60`'s own bound (HIDDEN.EXE 0x2D858-0x2D89E) is
+/// `movswl 0x2a4(%edx,%eax,2),%edx` (SIGNED) … `cmp %edx,%eax ; jbe
+/// ; ret` / `xor %eax,%eax ; ret` — so the term is exactly
+/// `(i16)owned[3] > 0`. `sub_14230` has EXACTLY ONE caller in both
+/// shipped binaries (an `e8 rel32` scan finds one site, VA 0x137A9,
+/// inside the cascade `sub_13170`), so this is the whole call path.
+///
+/// WITNESS — `mc1hwl8` t=24661, wizard 6 (ent 60): his wizext carries
+/// `owned = [(0,33),(2,43),(4,51),(13,889),(15,912),(16,49),(17,52),
+/// (20,50),(23,53)]` — **no entry for spell 3**. Retail's arm 7 dies
+/// on the first term and the cascade lands on HuntMana (`+415` = 13)
+/// with creature 192 in `+146`; the port read `known[3]` (true),
+/// opened the ball claim and re-pointed him at mana BALL 611
+/// (class 10, model 39). 697 of the take's 704 rows were that one
+/// `slot 60 chase` lane, in two clusters that begin and end exactly
+/// where retail's `+415` enters and leaves state 13.
+///
+/// See the site in [`World::rival_selector`].
+/// `MGC_NO_MC1_POSSESS_ARM_REGISTER=1` restores the pre-dig
+/// `known[3]` gate.
+pub(crate) fn possess_arm_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_POSSESS_ARM_REGISTER").is_none())
+}
+
 /// ⭐⭐⭐ `sub_14E60` (:18769-77) — THE MANIFESTATION RESOLVER — IS A
 /// BARE ARRAY INDEX AND NOTHING ELSE:
 ///
@@ -3749,7 +3800,16 @@ impl World {
         // (1768 > 1000) kept him parked on a freed balloon slot.
         let m16 = self.rivals[ri].owned[16] as usize;
         let claim_open = m16 == 0 || self.rivals[ri].mana_max <= self.g.ent[m16].f136.max(0) as u32;
-        if self.rivals[ri].known[3] && claim_open && self.rival_pick_ball_target(ri, i) {
+        // ⭐⭐⭐ The spell term is `sub_14E60(a1, 3u)` — the POSSESS
+        // TOKEN REGISTER, bounded only from below — not `known[3]`.
+        // See [`possess_arm_register`] for the shipped bytes and the
+        // mc1hwl8 t=24661 witness.
+        let claim_spell = if possess_arm_register() {
+            self.rivals[ri].owned[3] as i16 > 0
+        } else {
+            self.rivals[ri].known[3]
+        };
+        if claim_spell && claim_open && self.rival_pick_ball_target(ri, i) {
             self.rivals[ri].state = AiState::Possess;
             return;
         }
@@ -9013,6 +9073,14 @@ mod tests {
             let i = w.rivals[ri].ent as usize;
             w.rivals[ri].known[3] = true;
             w.rivals[ri].allowed[3] = true;
+            // `sub_14230`'s FIRST term is `sub_14E60(a1, 3u)` — the
+            // POSSESS TOKEN REGISTER, not the book flag (see
+            // [`possess_arm_register`]); this world's book only mints
+            // spell 16, so seat the register by hand or the arm dies
+            // above the price gate this test is about.
+            let t3 = w.g.new_event().expect("possess token");
+            w.g.ent[t3].class64 = 12;
+            w.rivals[ri].owned[3] = t3 as u16;
             let m16 = w.rivals[ri].owned[16] as usize;
             w.g.ent[m16].f136 = price;
             w.rivals[ri].mana_max = 1768;
