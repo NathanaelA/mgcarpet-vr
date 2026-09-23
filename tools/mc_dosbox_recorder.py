@@ -404,6 +404,14 @@ EXE_MB_PERIOD = 0x18  # u32 configured spin period (PIT counts)
 # same static base it derives for the MC2 input frame (struct_host - 0xD41A0).
 EXE_MB2_BASE = 0x1842C0  # guest-linear addr of the MC2 mailbox (obj3 tail)
 EXE_MB2_MAGIC = b"MGCTTIK2"  # 8 bytes the MC2 stub writes once, on first frame
+# Where it lands in the static frame the recorder pins: the tickpatch's
+# 0x1842C0 is a remc2-named VA (obj3 link base 0xD0000 + vsize), and the
+# D41A0-anchored runtime frame sits −0xB0E98 from that space, exactly as
+# for the input registers and the terrain planes above. Measured
+# 2026-09-23: the go-live spin on `static_base + 0x1842C0` saw an empty
+# page while the magic scan found the mailbox at delta −0xB0E98 — so
+# `find_mailbox` had been taking its scan fallback on every MC2 take.
+EXE_MB2_FRAME = EXE_MB2_BASE + MC2_DATA_DELTA
 
 # The shared plane order (both engines keep them contiguous, in this
 # order, off the build's `terrain_guest` base — the same order retail's
@@ -749,16 +757,45 @@ class Located:
     build: Optional[BuildVariant] = None  # which retail build is running
     mailbox_host: Optional[int] = None  # host addr of the EXE tick-patch mailbox
     mailbox_period: Optional[int] = None  # its configured spin period (PIT counts)
+    # The stub counter at which go-live was DETECTED (wait_for_mailbox_tick);
+    # the first capture's counter minus this is the number of windows the
+    # recorder missed at the start. None on the RNG-probe (unpatched) path.
+    live_counter: Optional[int] = None
     # Host addresses of the layout's terrain planes (parallel to
     # Layout.terrain_planes); None = terrain channel unavailable.
     terrain_hosts: Optional[tuple] = None
+    # Host addresses where the static-frame landmark was found, scanned
+    # early (while the level was still generating) so pin_externals
+    # needs no scan of its own on the go-live critical path.
+    static_hits: Optional[list] = None
+
+
+def validate_hits(
+    mem: GuestMem, layout: Layout, hits: list
+) -> tuple[Optional[Located], str]:
+    """Re-validate known needle hits (no scan): the first that passes the
+    pool census, or (None, why). Cheap enough to poll every few ms while
+    a freshly loaded level is still spawning its carpet."""
+    last = "hit(s) rejected"
+    for region, struct_host in hits:
+        data = mem.pread(struct_host, layout.struct_size)
+        if data is None:
+            continue
+        ok, why = _validate_struct(data, layout)
+        if ok:
+            return Located(region=region, struct_host=struct_host), ""
+        last = why
+    return None, last
 
 
 def locate_struct(
-    mem: GuestMem, layout: Layout, needle: bytes, needle_off: int
+    mem: GuestMem, layout: Layout, needle: bytes, needle_off: int,
+    hits_out: Optional[list] = None,
 ) -> Located:
     """Scan rw regions for the needle, derive the struct base, validate
-    against pool sanity (player = class 3; ≥1 castle = class 3 model 2)."""
+    against pool sanity (player = class 3; ≥1 castle = class 3 model 2).
+    `hits_out`, when given, receives every needle hit (valid or not) so
+    the caller can re-validate them without another scan."""
     hits: list[tuple[Region, int]] = []
     for r in rw_regions(mem.pid, layout.struct_size):
         blob = mem.read_region(r)
@@ -770,19 +807,15 @@ def locate_struct(
             if base >= 0 and base + layout.struct_size <= len(blob):
                 hits.append((r, r.lo + base))
             i = blob.find(needle, i + 1)
+    if hits_out is not None:
+        hits_out[:] = hits
     if not hits:
         raise SystemExit(
             "level-record needle not found — is the level loaded?"
         )
-    last = "hit(s) rejected"
-    for region, struct_host in hits:
-        data = mem.pread(struct_host, layout.struct_size)
-        if data is None:
-            continue
-        ok, why = _validate_struct(data, layout)
-        if ok:
-            return Located(region=region, struct_host=struct_host)
-        last = why
+    loc, last = validate_hits(mem, layout, hits)
+    if loc is not None:
+        return loc
     raise SystemExit(f"{len(hits)} needle hit(s), none valid: {last}")
 
 
@@ -867,36 +900,50 @@ def _owner_chain_ok(data: bytes, layout: Layout, struct_guest: int) -> bool:
     return False
 
 
-def find_static_base(
-    mem: GuestMem, layout: Layout, struct_data: bytes
-) -> Optional[tuple[int, BuildVariant, int]]:
-    """Locate the STATIC frame that holds the game's globals (wall clock,
-    raw input, struct pointer). DOS4GW does NOT map the heap and the
-    static segment with a single affine base, so the struct (found by the
-    level-record needle) and the globals live in independent frames; this
-    finds the static one by its own content landmark. Scan for byte_99B58,
-    derive the static base, read the struct-pointer global there, and
-    accept when it resolves against the heap struct's own owner_ptr chain.
-    Returns (static_base, build, struct_guest) or None."""
+def scan_static_needle(mem: GuestMem, layout: Layout) -> list[int]:
+    """Every host address where the static-frame landmark (byte_99B58)
+    occurs. The slow half of find_static_base (~180 ms: it reads all of
+    guest memory), independent of the pool — so it can run early, while
+    the level is still generating, off the go-live critical path."""
+    hits: list[int] = []
     for r in rw_regions(mem.pid, 1 << 16):
         blob = mem.read_region(r)
         if blob is None:
             continue
         i = blob.find(layout.static_needle)
         while i >= 0:
-            hit = r.lo + i
-            for v in layout.build_variants:
-                static_base = hit - v.static_needle_guest
-                if static_base < 0:
-                    continue
-                pv = mem.pread(static_base + v.struct_ptr_guest, 4)
-                if pv is None:
-                    continue
-                struct_guest = struct.unpack("<I", pv)[0]
-                if struct_guest and _owner_chain_ok(
-                        struct_data, layout, struct_guest):
-                    return static_base, v, struct_guest
+            hits.append(r.lo + i)
             i = blob.find(layout.static_needle, i + 1)
+    return hits
+
+
+def find_static_base(
+    mem: GuestMem, layout: Layout, struct_data: bytes,
+    hits: Optional[list] = None,
+) -> Optional[tuple[int, BuildVariant, int]]:
+    """Locate the STATIC frame that holds the game's globals (wall clock,
+    raw input, struct pointer). DOS4GW does NOT map the heap and the
+    static segment with a single affine base, so the struct (found by the
+    level-record needle) and the globals live in independent frames; this
+    finds the static one by its own content landmark. Scan for byte_99B58
+    (or take `hits` from an earlier scan_static_needle), derive the static
+    base, read the struct-pointer global there, and accept when it
+    resolves against the heap struct's own owner_ptr chain.
+    Returns (static_base, build, struct_guest) or None."""
+    if hits is None:
+        hits = scan_static_needle(mem, layout)
+    for hit in hits:
+        for v in layout.build_variants:
+            static_base = hit - v.static_needle_guest
+            if static_base < 0:
+                continue
+            pv = mem.pread(static_base + v.struct_ptr_guest, 4)
+            if pv is None:
+                continue
+            struct_guest = struct.unpack("<I", pv)[0]
+            if struct_guest and _owner_chain_ok(
+                    struct_data, layout, struct_guest):
+                return static_base, v, struct_guest
     return None
 
 
@@ -944,13 +991,27 @@ def wait_for_struct(
     player may still be in menus / intro FMVs."""
     deadline = None if timeout <= 0 else time.time() + timeout
     last_note = 0.0
+    hits: list = []
+    static_hits: Optional[list] = None
+
+    def done(loc: Located) -> Located:
+        loc.static_hits = static_hits
+        return loc
+
     while True:
         if not ensure_attached(mem, launch_root, child):
             raise SystemExit("dosbox exited before gameplay started")
         try:
-            return locate_struct(mem, layout, needle, needle_off)
+            return done(locate_struct(mem, layout, needle, needle_off, hits))
         except (SystemExit, OSError) as exc:
             reason = str(exc)
+        # The needle is in place: the static-frame landmark (MC1/HW) is
+        # too, and its ~180 ms scan is the one slow step pin_externals
+        # would otherwise take on the critical path between the census
+        # passing and the first window (MC1: ~17 ms wide, BEFORE tick 1).
+        # Scan it now, while the generator is still running.
+        if hits and static_hits is None and layout.static_needle:
+            static_hits = scan_static_needle(mem, layout)
         now = time.time()
         if now - last_note > 3.0:
             print(f"waiting for gameplay to start… ({reason})",
@@ -958,7 +1019,24 @@ def wait_for_struct(
             last_note = now
         if deadline and now > deadline:
             raise SystemExit("timed out waiting for the struct to populate")
-        time.sleep(0.25)
+        # The needle is in place but the pool is still filling (the
+        # level-load's carpet spawn is what the census waits for): re-check
+        # the hits we have every 1 ms, and rescan only if they stay
+        # invalid for a long time (a stale hit — a load buffer, a level
+        # change). Measured on MC2 (2026-09-23): the carpet is spawned
+        # INSIDE frame 1's compute and window 1 opens 13 ms after the
+        # census can pass, for ~10 ms; a full rescan costs ~186 ms and is
+        # blind for all of it, so rescanning every 250 ms lost window 1
+        # whenever the census passed mid-scan.
+        if hits:
+            until = now + 10.0
+            while time.time() < until:
+                time.sleep(0.001)
+                loc, _ = validate_hits(mem, layout, hits)
+                if loc is not None:
+                    return done(loc)
+        else:
+            time.sleep(0.25)
 
 
 def _live_probe(mem: GuestMem, loc: Located, layout: Layout):
@@ -1559,7 +1637,8 @@ def _terrain_cells(layout: Layout) -> int:
     return w * h
 
 
-def pin_terrain(mem: GuestMem, loc: Located, layout: Layout) -> None:
+def pin_terrain(mem: GuestMem, loc: Located, layout: Layout,
+                quiet: bool = False) -> None:
     """Resolve the terrain-plane block to per-plane host addresses and
     validate them. Leaves ``loc.terrain_hosts`` None (and the recording
     on format 1, no terrain channel) when the block cannot be resolved
@@ -1573,17 +1652,22 @@ def pin_terrain(mem: GuestMem, loc: Located, layout: Layout) -> None:
     MC1/HW shading is hard-clamped to [28,47] by every writer AND
     all-zero until the level generator's final bake — one check gates
     both alignment and readiness; MC2 height is generator-clamped ≤196
-    (terraform can push a handful of cells past — soft 99% bound)."""
+    (terraform can push a handful of cells past — soft 99% bound).
+    `quiet` silences the failure notes (the go-live spin retries this
+    every ~250 ms through the bake; only the final verdict is news)."""
+    def say(*a, **k):
+        if not quiet:
+            print(*a, **k)
     if not layout.terrain_planes:
-        print("terrain: this layout declares no terrain planes — recording "
+        say("terrain: this layout declares no terrain planes — recording "
               "without the terrain channel", file=sys.stderr)
         return
     if loc.static_base is None or loc.build is None:
-        print("terrain: no static frame — recording without the terrain "
+        say("terrain: no static frame — recording without the terrain "
               "channel", file=sys.stderr)
         return
     if loc.build.terrain_guest == 0:
-        print(f"terrain: build {loc.build.name} has no terrain base address "
+        say(f"terrain: build {loc.build.name} has no terrain base address "
               "— recording without the terrain channel", file=sys.stderr)
         return
     n = _terrain_cells(layout)
@@ -1601,7 +1685,7 @@ def pin_terrain(mem: GuestMem, loc: Located, layout: Layout) -> None:
         if layout.terrain_cave_byte_off:
             mt = mem.pread(loc.struct_host + layout.terrain_cave_byte_off, 1)
             kind = {0: "day", 1: "night", 2: "cave"}.get(mt[0] if mt else -1, "?")
-            print(f"terrain: {kind} level — capturing the ceiling plane too",
+            say(f"terrain: {kind} level — capturing the ceiling plane too",
                   file=sys.stderr)
     hosts, why = [], {}
     for name, off in planes:
@@ -1609,7 +1693,7 @@ def pin_terrain(mem: GuestMem, loc: Located, layout: Layout) -> None:
         a = mem.pread(host, n)
         b = mem.pread(host, n)
         if a is None or b is None or a != b:
-            print(f"terrain: plane '{name}' unreadable/unstable @host "
+            say(f"terrain: plane '{name}' unreadable/unstable @host "
                   f"0x{host:x} — recording without the terrain channel",
                   file=sys.stderr)
             return
@@ -1638,12 +1722,12 @@ def pin_terrain(mem: GuestMem, loc: Located, layout: Layout) -> None:
     if not fatal:
         for nm, w in why.items():
             if w is not None:
-                print(f"terrain: plane '{nm}' is outside the generator's "
+                say(f"terrain: plane '{nm}' is outside the generator's "
                       f"clamp ({w}), but shading vouches for the frame — "
                       f"keeping the terrain channel", file=sys.stderr)
     if fatal:
         nm, w = fatal[0]
-        print(f"terrain: plane '{nm}' failed validation ({w}) — "
+        say(f"terrain: plane '{nm}' failed validation ({w}) — "
               "recording without the terrain channel", file=sys.stderr)
         return
     loc.terrain_hosts = tuple(hosts)
@@ -1894,11 +1978,11 @@ def find_mailbox(mem: GuestMem, loc: Located, layout: Layout) -> None:
     running — the recorder then uses the legacy tear-gate path unchanged.
 
     MC1 (CARPET/HIDDEN_REC): magic MGCTTIK1 @ 0x132C40, has a spin period.
-    MC2 (NETHERW_REC): magic MGCTTIK2 @ 0x1842C0, signal-only (no period);
-    the same static base the MC2 input frame uses (struct_host - 0xD41A0)
-    maps it, since struct + mailbox are both in obj3 (contiguous)."""
+    MC2 (NETHERW_REC): magic MGCTTIK2 @ named VA 0x1842C0, signal-only (no
+    period); it lives in the same static frame as the MC2 input registers
+    (struct_host - 0xD41A0) at the same −0xB0E98 shift (EXE_MB2_FRAME)."""
     if layout.family == "mc2":
-        magic, mb_base, has_period = EXE_MB2_MAGIC, EXE_MB2_BASE, False
+        magic, mb_base, has_period = EXE_MB2_MAGIC, EXE_MB2_FRAME, False
     elif layout.family == "mc1":
         magic, mb_base, has_period = EXE_MB_MAGIC, EXE_MB_BASE, True
     else:
@@ -1930,6 +2014,144 @@ def read_mailbox(mem: GuestMem, loc: Located) -> Optional[tuple[int, int]]:
         return None
     tick, inwin = struct.unpack("<II", v)
     return tick, inwin
+
+
+def wait_for_mailbox_tick(
+    mem: GuestMem, loc: Located, layout: Layout, timeout: float,
+    launch_root: int, child: Optional[subprocess.Popen],
+) -> bool:
+    """Go-live for a tick-patched exe: spin on the stub's mailbox until its
+    monotonic counter MOVES, and pin the mailbox the instant it does.
+
+    The mailbox sits at a fixed guest address off the static frame that
+    `pin_externals` establishes during the level load, so this needs no
+    scan — one 16-byte read (magic, counter, in_window) per turn of a
+    0.1 ms loop. Two cases, one signal: a fresh process writes the magic
+    and counter=1 together on the first sub-step; a warm one (menu → the
+    next level) still carries the previous level's magic with the counter
+    parked, and the first sub-step bumps it. Either way the first WINDOW
+    is caught, not the first tick's aftermath: the MC1 stub raises
+    in_window before it calls the tick fn and holds it ≥ `floor` PIT
+    counts even on that first call, so counter 1's window is the
+    post-init, pre-tick world — a true t=0. (The MC2 stub opens its window
+    after the frame driver, so its first window is t=1 — one tick late,
+    every take, instead of the 2..11 the RNG probe lost.)
+
+    Replaces `wait_until_live`'s 150 ms RNG poll, which by construction
+    returned ≥1 tick late plus a uniform 0..150 ms (the census over the
+    corpus at 2026-09-23: MC1/HW record 0 sat 1..24 ticks in, MC2 2..11,
+    with same-level retakes disagreeing — latency, not a settle). While
+    spinning, retries the terrain pin every ~250 ms (it fails until the
+    generator's final bake) so record 0 carries the planes.
+
+    False when the layout has no mailbox or no static frame was pinned —
+    the caller then falls back to the RNG probe. Sets `loc.live_counter`
+    to the counter value seen at go-live."""
+    if layout.family == "mc2":
+        magic, mb_base, has_period = EXE_MB2_MAGIC, EXE_MB2_FRAME, False
+    elif layout.family == "mc1":
+        magic, mb_base, has_period = EXE_MB_MAGIC, EXE_MB_BASE, True
+    else:
+        return False
+    if loc.static_base is None:
+        return False
+    host = loc.static_base + mb_base
+    deadline = None if timeout <= 0 else time.time() + timeout
+
+    def peek() -> Optional[tuple[bool, int, int]]:
+        v = mem.pread(host, 16)  # magic @+0, counter @+8, in_window @+0xC
+        if v is None:
+            return None
+        return (v[:8] == magic,) + struct.unpack("<II", v[8:16])
+
+    def go_live(ctr: int, how: str) -> bool:
+        loc.mailbox_host = host
+        loc.live_counter = ctr
+        if has_period:
+            pv = mem.pread(host + EXE_MB_PERIOD, 4)
+            if pv is not None:
+                loc.mailbox_period = struct.unpack("<I", pv)[0]
+        print(f"gameplay is live — counter {ctr} ({how}); recording.",
+              file=sys.stderr)
+        return True
+
+    first = peek()
+    parked = first[1] if first and first[0] else None
+    # A fresh process whose FIRST window is open right now: the counter
+    # is process-lifetime, so magic + counter 1 + in_window can only be
+    # frame 1's window, and the game is parked in it — capture it rather
+    # than wait for it to move. (MC2, 2026-09-23: the carpet the struct
+    # census waits for is spawned by frame 1 itself, so the recorder
+    # reaches this point ~13 ms into that window.) A warm process's
+    # open window is ambiguous (the stub leaves in_window raised when a
+    # level exits to the menu), so any other counter waits for a move.
+    if first and first[0] and first[1] == 1 and first[2] == 1:
+        return go_live(1, "first window open on arrival")
+
+    def rng() -> Optional[int]:
+        # The gameplay RNG alone — NOT `_live_probe`, whose wall-clock
+        # half is a free-running PIT counter that moves while the sim is
+        # frozen (MC1), which would trip the fallback below instantly.
+        d = mem.pread(loc.struct_host + layout.rng_off, 4)
+        return None if d is None else struct.unpack("<I", d)[0]
+
+    rng0 = rng()
+    rng_moved_at: Optional[float] = None
+    print("waiting for the first sub-step (spinning on the tick-patch "
+          f"mailbox @host 0x{host:x}"
+          + (f", counter parked at {parked}, in_window {first[2]}"
+             if parked is not None else ", magic not written yet")
+          + ")…", file=sys.stderr)
+    last_note = last_slow = time.time()
+    while True:
+        cur = peek()
+        if cur is not None and cur[0] and cur[1] != parked:
+            return go_live(cur[1], f"parked {parked}")
+        # Belt and braces: the gameplay RNG is the signal the old probe
+        # used. If it moves while the mailbox at the expected address has
+        # not, the sim IS live and the assumption about the address (or
+        # the stub) is wrong — say exactly what was seen, find the
+        # mailbox the old way (a magic scan), and go live regardless, so
+        # this path is never worse than the probe it replaced.
+        rng1 = rng()
+        if rng_moved_at is None and rng0 is not None and rng1 is not None \
+                and rng1 != rng0:
+            rng_moved_at = time.time()
+        # The MC2 stub bumps its counter AFTER the frame driver, so a
+        # frame's RNG step is visible before its counter step: give the
+        # counter a grace period well past one frame before concluding
+        # it is not going to move.
+        if rng_moved_at is not None and time.time() - rng_moved_at > 0.5:
+            print(f"! sim went live (rng {rng0:#x} → {rng1:#x}) but the "
+                  f"mailbox @host 0x{host:x} shows "
+                  + (f"magic, counter {cur[1]} (parked {parked})"
+                     if cur and cur[0] else
+                     f"no magic ({cur[1]:#x} at +8)" if cur else
+                     "an unreadable page")
+                  + " — scanning for it instead", file=sys.stderr)
+            find_mailbox(mem, loc, layout)
+            if loc.mailbox_host is not None:
+                print(f"! mailbox found by scan @host 0x{loc.mailbox_host:x} "
+                      f"(delta {loc.mailbox_host - host:+#x} from the "
+                      "static-base address)", file=sys.stderr)
+            else:
+                print("! no mailbox magic anywhere — recording with the "
+                      "tear gate", file=sys.stderr)
+            return True
+        time.sleep(0.0001)
+        now = time.time()
+        if now - last_slow > 0.25:  # the slow work, off the hot loop
+            last_slow = now
+            if not ensure_attached(mem, launch_root, child):
+                raise SystemExit("dosbox exited before gameplay began")
+            if loc.terrain_hosts is None:
+                pin_terrain(mem, loc, layout, quiet=True)
+            if now - last_note > 3.0:
+                print("waiting for the first sub-step (level loading, "
+                      "paused, or still in a menu)…", file=sys.stderr)
+                last_note = now
+            if deadline and now > deadline:
+                raise SystemExit("timed out waiting for gameplay to begin")
 
 
 def capture_windowed(
@@ -1988,12 +2210,15 @@ def poll_loop_windowed(
     args: argparse.Namespace,
     launch_root: int,
     child: Optional[subprocess.Popen],
+    hdr: dict,
 ) -> None:
     """Capture loop for a tick-patched exe. Every snapshot is window-clean
     by construction and the sub-step counter is authoritative, so this is
     the +63 tear-gate loop with the guesswork removed: continuity is the
     counter delta, and there is no first-record deferral (the anchor is
-    already vouched-for)."""
+    already vouched-for). Writes `hdr` itself, at the first capture, so
+    it can stamp `exe_patch.first_counter` — the raw stub counter behind
+    t=0, which dates record 0 absolutely (see docs/RECORDING.md)."""
     period = 1.0 / args.poll_hz if args.poll_hz > 0 else 0.0
     # Between windows we only re-read the 8-byte mailbox (the peek gate above),
     # so polling is cheap — spin tight to avoid sleeping through a window that
@@ -2041,6 +2266,14 @@ def poll_loop_windowed(
         data, terrain, ctr = cap
         if prev_ctr is None:
             base, prev_ctr = ctr, ctr
+            hdr["capture"]["exe_patch"]["first_counter"] = ctr
+            hdr["capture"]["exe_patch"]["live_counter"] = loc.live_counter
+            late = (ctr - loc.live_counter
+                    if loc.live_counter is not None else None)
+            print(f"first capture: stub counter {ctr}"
+                  + (f", {late} window(s) missed since go-live"
+                     if late else ""), file=sys.stderr)
+            sink.write(hdr)
             sink.write(attach_terrain(
                 build_record(0, data, layout, mem, loc, not args.no_state),
                 differ, terrain))
@@ -2496,11 +2729,17 @@ def main() -> None:
     pin_terrain(mem, loc, layout)
 
     # Retail's world sim + wall clock don't advance until gameplay proper
-    # begins (a 'get ready' pause or menu leaves the pool frozen). Wait for
-    # the gameplay RNG (struct+4, stepped only inside the sim tick) to move
-    # before recording, so snapshots start on the first live tick.
+    # begins (a 'get ready' pause or menu leaves the pool frozen). With a
+    # tick-patched exe, spin on the stub's mailbox and start on its FIRST
+    # window (the counter moving IS the first sub-step, and for MC1 that
+    # window precedes the tick call — t=0 exactly). Otherwise fall back to
+    # watching the gameplay RNG (struct+4, stepped only inside the sim
+    # tick) move — which cannot see a tick until it has happened.
     if not args.no_wait_live:
-        wait_until_live(mem, loc, layout, args.wait_timeout, launch_root, child)
+        if not wait_for_mailbox_tick(mem, loc, layout, args.wait_timeout,
+                                     launch_root, child):
+            wait_until_live(mem, loc, layout, args.wait_timeout,
+                            launch_root, child)
 
     # The pre-live pin legitimately fails while a level is still
     # GENERATING (the shading validator doubles as the readiness
@@ -2512,8 +2751,10 @@ def main() -> None:
         pin_terrain(mem, loc, layout)
 
     # Detect a tick-patched exe (CARPET/HIDDEN_REC.EXE or NETHERW_REC.EXE): its
-    # stub exposes a mailbox once the sim has ticked once, so probe AFTER go-live.
-    find_mailbox(mem, loc, layout)
+    # stub exposes a mailbox once the sim has ticked once, so probe AFTER
+    # go-live (the mailbox spin above already pinned it when it ran).
+    if loc.mailbox_host is None:
+        find_mailbox(mem, loc, layout)
     if loc.mailbox_host is not None:
         pacing = (f"spin-period {loc.mailbox_period} counts"
                   if loc.mailbox_period is not None else "signal-only")
@@ -2521,9 +2762,13 @@ def main() -> None:
               f"({pacing}) — windowed capture, tear gate not needed.",
               file=sys.stderr)
 
+    hdr = build_header(args, layout, loc, cmd)
     if args.once:
         if loc.mailbox_host is not None:
             cap = capture_windowed(mem, loc, layout, args.samples, args.retries)
+            if cap:
+                hdr["capture"]["exe_patch"]["first_counter"] = cap[2]
+                hdr["capture"]["exe_patch"]["live_counter"] = loc.live_counter
             cap = cap[:2] if cap else None
         else:
             cap = capture_clean(mem, loc, layout, args.samples, args.retries)
@@ -2535,16 +2780,19 @@ def main() -> None:
             TerrainDiffer() if loc.terrain_hosts is not None else None,
             terrain)
         print_sanity(rec)
-        sink.write(build_header(args, layout, loc, cmd))
+        sink.write(hdr)
         sink.write(rec)
         sink.close()
         return
 
-    sink.write(build_header(args, layout, loc, cmd))
     try:
         if loc.mailbox_host is not None:
-            poll_loop_windowed(mem, loc, layout, sink, args, launch_root, child)
+            # The windowed loop writes the header itself, at the first
+            # capture, so it can stamp the stub counter behind t=0.
+            poll_loop_windowed(mem, loc, layout, sink, args, launch_root,
+                               child, hdr)
         else:
+            sink.write(hdr)
             poll_loop(mem, loc, layout, sink, args, launch_root, child)
     except KeyboardInterrupt:
         print("\ninterrupted.", file=sys.stderr)
@@ -2583,7 +2831,9 @@ def pin_externals(mem: GuestMem, loc: Located, layout: Layout) -> None:
     data = mem.pread(loc.struct_host, layout.struct_size)
     if data is None:
         return
-    found = find_static_base(mem, layout, data)
+    found = find_static_base(mem, layout, data, loc.static_hits)
+    if found is None and loc.static_hits is not None:
+        found = find_static_base(mem, layout, data)  # stale pre-scan: rescan
     if found is not None:
         loc.static_base, loc.build, loc.struct_guest = found
 

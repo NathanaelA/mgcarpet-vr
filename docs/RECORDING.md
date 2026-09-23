@@ -69,9 +69,10 @@ the recording carries no terrain channel.
 address half), plus free-form capture provenance (DOSBox version,
 cycles). The `capture` object also carries `tear_gate` (bool: emit-time
 inter-tick gating ran) and, for a tick-patched exe,
-`window_gated: true` with `exe_patch: {mailbox_guest, spin_period_counts}`
-(see "Tick-patched capture") — where each `t` is the stub's
-authoritative sub-step counter.
+`window_gated: true` with `exe_patch: {mailbox_guest, spin_period_counts,
+first_counter, live_counter}` (see "Tick-patched capture") — where each
+`t` is the stub's authoritative sub-step counter, relative to
+`first_counter` (the raw counter behind t=0).
 
 `source:"port"` adds `"sim"`, the **sim-config closure** — everything
 that feeds the state hash, pinned so `--replay` can refuse (or
@@ -523,9 +524,20 @@ continuity. This is strictly stronger than the tear gate (a
 between-tick window is guaranteed by construction, not inferred) and
 `t` is the stub's authoritative sub-step index, not a `+63`-mode
 estimate. Such recordings stamp `capture.window_gated: true` and
-`capture.exe_patch: {mailbox_guest, spin_period_counts}`; consumers may
-treat window-gated snapshots as tear-free without re-running
-`pair_clean`. To avoid re-scanning a window it has already captured, the
+`capture.exe_patch: {mailbox_guest, spin_period_counts, first_counter,
+live_counter}`; consumers may treat window-gated snapshots as tear-free
+without re-running `pair_clean`. `first_counter` is the raw stub counter
+of record 0 and `live_counter` the value at which the recorder saw the
+counter start moving; they differ only when the recorder missed windows
+at the start. The counter is process-lifetime (the stub initialises it
+once, on its first call), so for a fresh launch it dates record 0
+absolutely: the MC1 stub opens its window BEFORE the tick call, so
+`first_counter: 1` is the post-init, pre-tick world (t=0 = sub-step 0,
+and generally record 0 is the state after `first_counter − 1` ticks);
+the MC2 stub opens it AFTER the frame driver, so `first_counter: 1` is
+the state after frame 1. Recordings without these fields predate the
+mailbox go-live (2026-09-23) and start a latency-random 1..24 ticks in
+(the port reads that phase from record 0 — `record0_settle`). To avoid re-scanning a window it has already captured, the
 recorder reads only the 8-byte mailbox first and pulls the full struct
 only when `in_window==1` **and** the counter has advanced past the last
 emitted frame.
@@ -564,7 +576,11 @@ obj3's real base by reading the game's own fixed-up `GameTimerTurn` disp,
 and both `vsize`s are page-aligned (same segment-limit requirement as
 MC1). Continuity is the counter's delta — **never** the per-player `Turn`,
 which advances mid-frame inside `PlayerEvents` and so cannot gate the
-tear. Window-gated MC2 recordings stamp `spin_period_counts: null`. Old
+tear. The recorder also goes live off this mailbox: it spins on the
+counter (a 16-byte read at the fixed address, no scan) and starts on the
+first window it sees move, instead of polling the gameplay RNG — which
+could only ever notice a tick after it had happened, ≥1 tick plus up to
+150 ms late. Window-gated MC2 recordings stamp `spin_period_counts: null`. Old
 tear-gated MC2 takes are unaffected; only RE-RECORDED takes get the
 window (retiring the per-entity torn-slot exclusion). The tear gate
 remains the path for any unpatched exe.
