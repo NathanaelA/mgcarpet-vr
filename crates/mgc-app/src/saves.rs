@@ -287,6 +287,18 @@ pub fn ext_stats(e: &[i32; EXT_LEN]) -> Option<mgc_sim::engine::stats::LevelStat
     Some(st)
 }
 
+/// A new campaign's `str_611`: all zero EXCEPT the two quick-slot
+/// hands, which are −1 ("none"). A zeroed block reads as
+/// `left = right = 0` — Fireball in BOTH hands — and the carry's
+/// "keep the hand if still possessed" validation passes it (Fireball is
+/// always seeded), overriding the level-start Fireball/Possession pair.
+fn str611_fresh() -> [u8; 505] {
+    let mut b = [0u8; 505];
+    b[S611_LEFT..S611_LEFT + 2].copy_from_slice(&(-1i16).to_le_bytes());
+    b[S611_RIGHT..S611_RIGHT + 2].copy_from_slice(&(-1i16).to_le_bytes());
+    b
+}
+
 impl Default for Mc2Save {
     fn default() -> Self {
         Self {
@@ -297,7 +309,7 @@ impl Default for Mc2Save {
             game_settings: [0; 16],
             levels_completed: 0,
             level_flags: 0,
-            str611: [0; 505],
+            str611: str611_fresh(),
             main_stats: [[0; 5]; 25],
             secret_stats: [[0; 5]; 5],
             main_ext: [[-1; EXT_LEN]; 25],
@@ -804,6 +816,15 @@ mod tests {
         assert_eq!(st.mana_rows(), [834, 400, 766]);
         assert_eq!(st.spells_fixed_pct10(), 667);
         assert_eq!(ext_stats(&s.main_ext[5]), None);
+    }
+
+    #[test]
+    fn mc2_fresh_save_binds_no_hand() {
+        // Player report 09-24: a new campaign started with Fireball in
+        // BOTH hands — the zeroed str_611 read as left = right = 0.
+        let book = Mc2Save::default().book();
+        assert_eq!((book.left, book.right), (-1, -1));
+        assert!(book.owned.iter().all(|&o| !o));
     }
 
     #[test]

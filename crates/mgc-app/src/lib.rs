@@ -10152,8 +10152,12 @@ fn apply_campaign_book(w: &mut mgc_sim::engine::world::World, run: &CampaignRun)
             }
             // The rest of retail's sub_549A0 carry: selected tiers +
             // the cycle ring (raw), hands kept where still possessed
-            // (the L:1332-35 validation).
-            w.mc2_install_selector_carry(&book.sel, &book.ring, book.left, book.right);
+            // (the L:1332-35 validation). A book that owns nothing is
+            // a fresh campaign: its hand fields carry no choice (a
+            // slot saved before the first level may hold a zeroed
+            // 0/0 = Fireball twice), so the level-start pair stands.
+            let (left, right) = if grants.is_empty() { (-1, -1) } else { (book.left, book.right) };
+            w.mc2_install_selector_carry(&book.sel, &book.ring, left, right);
         }
         _ => {
             if run.save.mc1().is_none() {
