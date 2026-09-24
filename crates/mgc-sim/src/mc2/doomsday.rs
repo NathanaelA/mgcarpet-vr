@@ -1613,6 +1613,9 @@ impl World {
                     _ => self.g.mc2_spawn_m19(p.0, p.1, p.2),
                 };
                 if let Some(s) = spawned {
+                    // `dword_0x364D2++` (EF:13341) — the stats ledger's
+                    // creature census, on a successful summon.
+                    self.g.stats.0.census += 1;
                     // The summoned-creature writes (EF:13388-13425):
                     // stage tag 17, parent = the pyramid,
                     // and the ACTION OVERRIDES over the creators'
@@ -1645,8 +1648,8 @@ impl World {
                     // the total-creatures-spawned DENOMINATOR of the
                     // level-complete "creatures killed %" stat
                     // (EF:43498-505; ++ at EF:13390/32988, boxed-in
-                    // walkers decrement, EF:8860). TODO: wire it when
-                    // the stats screen is ported — no sim consumer today.
+                    // walkers decrement, EF:8860) — wired as
+                    // `engine::stats`'s census, bumped above.
                     e.f30 = ang;
                     e.f34 = ang;
                     e.tick70 = match sel {
@@ -1736,7 +1739,8 @@ impl World {
     /// dies (model 10 = the pyramid spared; model 27's branch heads
     /// get the action-221 teardown instead).
     fn mc2_kill_all_creatures(&mut self) {
-        for e in self.g.ent.iter_mut().skip(1) {
+        let mut hints = Vec::new();
+        for (j, e) in self.g.ent.iter_mut().enumerate().skip(1) {
             if e.class64 != 5 || e.model65 == 10 {
                 continue;
             }
@@ -1771,7 +1775,13 @@ impl World {
             } else {
                 e.act_life = -1;
                 e.f38 = PLAYER_TARGET;
+                hints.push(j);
             }
+        }
+        // The victims' next inbox zeroes the latch; the stats ledger
+        // keeps retail's PLAYER_TARGET stamp.
+        for j in hints {
+            self.g.stats.0.hint(j, PLAYER_TARGET);
         }
     }
 }

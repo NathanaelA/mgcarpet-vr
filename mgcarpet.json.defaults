@@ -102,6 +102,7 @@
       "reflections": true,
       "rival_tags": "auto",
       "sky": true,
+      "stats_screen": true,
       "vsync": true
     }
   },

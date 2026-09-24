@@ -205,6 +205,86 @@ pub struct Mc2Save {
     /// Per-secret-level score stats, 5×5 (`x_DWORD_17DDBCx`;
     /// sub_82AB0 EF:47027-33).
     pub secret_stats: [[i32; 5]; 5],
+    /// The ENHANCED absolutes beside each stats row (player rulings
+    /// 2026-09-24), indexed by the `EXT_*` constants: the kill
+    /// breakdown and the counts behind the percentages. All −1 = not
+    /// recorded (a retail save, or a level won before the row
+    /// existed). Not part of the retail record: they ride an optional
+    /// tail ([`MC2_EXT_TAG`]) after the 1319 bytes, written only when
+    /// some row is recorded, so a save without one stays
+    /// byte-identical to retail's.
+    pub main_ext: [[i32; EXT_LEN]; 25],
+    pub secret_ext: [[i32; EXT_LEN]; 5],
+}
+
+/// The stats tail's tag (after [`MC2_SIZE`]): `"MGK3"`, then 30 rows
+/// × [`EXT_LEN`] i32 (main 0..25, secret 0..5). The first cut's
+/// `"MGK2"` tail (nine columns, no denominators — it cannot give
+/// tenths) is not read: those rows show the bare percentages.
+pub const MC2_EXT_TAG: [u8; 4] = *b"MGK3";
+/// One row of the stats tail: creatures dead (by anyone), by you, by
+/// rivals, by nature, still alive, spells found, hits, shots, owned
+/// mana, spells offered, the seedless world mana, dwelling mana.
+/// Every percentage is derived from these at display time (see
+/// [`ext_stats`]).
+pub const EXT_LEN: usize = 12;
+pub const EXT_KILLED: usize = 0;
+pub const EXT_YOU: usize = 1;
+pub const EXT_RIVALS: usize = 2;
+pub const EXT_NATURE: usize = 3;
+pub const EXT_ALIVE: usize = 4;
+pub const EXT_SPELLS: usize = 5;
+pub const EXT_HITS: usize = 6;
+pub const EXT_SHOTS: usize = 7;
+pub const EXT_MANA: usize = 8;
+pub const EXT_OFFERED: usize = 9;
+pub const EXT_MANA_WORLD: usize = 10;
+pub const EXT_MANA_HOUSES: usize = 11;
+
+/// A level's tail row from its stats.
+pub fn ext_row(st: &mgc_sim::engine::stats::LevelStats) -> [i32; EXT_LEN] {
+    let mut e = [0u32; EXT_LEN];
+    e[EXT_KILLED] = st.deaths_total();
+    e[EXT_YOU] = st.deaths_player();
+    e[EXT_RIVALS] = st.deaths_rivals();
+    e[EXT_NATURE] = st.deaths_environment();
+    e[EXT_ALIVE] = st.alive;
+    e[EXT_SPELLS] = st.spells_found_fixed;
+    e[EXT_HITS] = st.offensive_hits;
+    e[EXT_SHOTS] = st.offensive_shots;
+    e[EXT_MANA] = st.mana_owned;
+    e[EXT_OFFERED] = st.spells_offered_fixed;
+    e[EXT_MANA_WORLD] = st.mana_world;
+    e[EXT_MANA_HOUSES] = st.mana_houses;
+    e.map(|n| n.min(i32::MAX as u32) as i32)
+}
+
+/// The stats a tail row recorded, for [`LevelStats`]'s derivations
+/// (the rivals' kills folded into rival slot 1). `None` when the row
+/// was not recorded.
+///
+/// [`LevelStats`]: mgc_sim::engine::stats::LevelStats
+pub fn ext_stats(e: &[i32; EXT_LEN]) -> Option<mgc_sim::engine::stats::LevelStats> {
+    if e.iter().any(|&n| n < 0) {
+        return None;
+    }
+    let u = |k: usize| e[k] as u32;
+    let mut st = mgc_sim::engine::stats::LevelStats {
+        mc2: true,
+        alive: u(EXT_ALIVE),
+        spells_found_fixed: u(EXT_SPELLS),
+        spells_offered_fixed: u(EXT_OFFERED),
+        offensive_hits: u(EXT_HITS),
+        offensive_shots: u(EXT_SHOTS),
+        mana_world: u(EXT_MANA_WORLD),
+        mana_owned: u(EXT_MANA),
+        mana_houses: u(EXT_MANA_HOUSES),
+        ..Default::default()
+    };
+    st.deaths[0] = u(EXT_YOU);
+    st.deaths[1] = u(EXT_RIVALS);
+    st.deaths[8] = u(EXT_NATURE);
+    Some(st)
 }
 
 impl Default for Mc2Save {
@@ -220,6 +300,8 @@ impl Default for Mc2Save {
             str611: [0; 505],
             main_stats: [[0; 5]; 25],
             secret_stats: [[0; 5]; 5],
+            main_ext: [[-1; EXT_LEN]; 25],
+            secret_ext: [[-1; EXT_LEN]; 5],
         }
     }
 }
@@ -259,6 +341,16 @@ impl Mc2Save {
                 *v = i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
             }
         }
+        let tail = &b[MC2_SIZE..];
+        if tail.len() >= 4 + 30 * EXT_LEN * 4 && tail[..4] == MC2_EXT_TAG {
+            let rows = s.main_ext.iter_mut().chain(s.secret_ext.iter_mut());
+            for (r, row) in rows.enumerate() {
+                for (k, v) in row.iter_mut().enumerate() {
+                    let o = 4 + (r * EXT_LEN + k) * 4;
+                    *v = i32::from_le_bytes(tail[o..o + 4].try_into().unwrap());
+                }
+            }
+        }
         Ok(s)
     }
 
@@ -286,6 +378,13 @@ impl Mc2Save {
             }
         }
         debug_assert_eq!(b.len(), MC2_SIZE);
+        let rows = || self.main_ext.iter().chain(self.secret_ext.iter());
+        if rows().flatten().any(|&v| v >= 0) {
+            b.extend_from_slice(&MC2_EXT_TAG);
+            for v in rows().flatten() {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+        }
         b
     }
 }
@@ -596,7 +695,14 @@ fn write_slot_in(
 
     // Best effort from here on.
     let retail = retail_path_in(root, tag, slot);
-    if let Err(e) = std::fs::write(&retail, &save.campaign) {
+    // The retail record only: MC2's native stats tail
+    // ([`MC2_EXT_TAG`]) stays in the `.mgcs`.
+    let record = if tag == "mc2" {
+        &save.campaign[..save.campaign.len().min(MC2_SIZE)]
+    } else {
+        &save.campaign[..]
+    };
+    if let Err(e) = std::fs::write(&retail, record) {
         eprintln!("save: retail export to {} failed: {e}", retail.display());
     }
     Ok(())
@@ -673,6 +779,31 @@ mod tests {
         // entry 1's activated word: offset 88 + 17 + 12.
         assert_eq!(bytes[88 + 17 + 12], 2);
         assert_eq!(Mc2Save::decode(&bytes).unwrap(), s);
+    }
+
+    #[test]
+    fn mc2_stats_extension_rides_the_tail() {
+        let mut s = Mc2Save::default();
+        assert_eq!(s.encode().len(), MC2_SIZE, "no extension, no tail");
+        s.main_ext[6] = [30, 12, 10, 8, 5, 2, 40, 55, 1234, 3, 2000, 400];
+        s.secret_ext[2] = [0; EXT_LEN];
+        let bytes = s.encode();
+        assert_eq!(bytes.len(), MC2_SIZE + 4 + 30 * EXT_LEN * 4);
+        assert_eq!(Mc2Save::decode(&bytes).unwrap(), s);
+        // The retail record alone (retail reads 1319 bytes): unknown.
+        let bare = Mc2Save::decode(&bytes[..MC2_SIZE]).unwrap();
+        assert_eq!(bare.main_ext[6], [-1; EXT_LEN]);
+        // The first cut's nine-column MGK2 tail is not read.
+        let mut old = bytes[..MC2_SIZE].to_vec();
+        old.extend_from_slice(b"MGK2");
+        old.extend(std::iter::repeat_n(0u8, 30 * 9 * 4));
+        assert_eq!(Mc2Save::decode(&old).unwrap().main_ext[6], [-1; EXT_LEN]);
+        // A recorded row derives the enhanced rows.
+        let st = ext_stats(&s.main_ext[6]).unwrap();
+        assert_eq!(st.deaths_total(), 30);
+        assert_eq!(st.mana_rows(), [834, 400, 766]);
+        assert_eq!(st.spells_fixed_pct10(), 667);
+        assert_eq!(ext_stats(&s.main_ext[5]), None);
     }
 
     #[test]

@@ -22,6 +22,7 @@ mod movie;
 mod replay;
 mod saves;
 mod settings;
+mod stats_screen;
 mod ui;
 mod worldmap;
 
@@ -216,10 +217,17 @@ struct CampaignRun {
     /// Installed into each fresh world, refreshed at the won edge.
     /// All-zero on MC2 runs.
     mc1_ring: [u8; 24],
+    /// MC2: the levels whose stats tables the map shows on its next
+    /// entry, oldest first (retail map mode 4). A win routed to the
+    /// map queues its level. A win routed STRAIGHT into a secret level
+    /// (the alternate portal) queues it too — retail never showed that
+    /// table — so the map later shows both, one key each.
+    map_stats: Vec<u32>,
 }
 
 /// The slot's campaign record, native file first: `(retail-format
-/// bytes, the native header's MC1 cycle ring)`. The ring rides only
+/// bytes, the native header's MC1 cycle ring, its MC2 owed stats
+/// tables)`. The ring rides only
 /// the native container (`None` from a retail import or a
 /// version-recovery — those simply start with an empty ring).
 ///
@@ -241,7 +249,7 @@ fn campaign_record(
     tag: &str,
     slot: usize,
     new_game: bool,
-) -> Result<Option<(Vec<u8>, Option<[u8; 24]>)>, String> {
+) -> Result<Option<(Vec<u8>, Option<[u8; 24]>, Vec<u32>)>, String> {
     if new_game {
         return Ok(None);
     }
@@ -257,7 +265,11 @@ fn campaign_record(
                     // path's job, not the campaign opener's.
                     println!("campaign {tag}: slot {} holds a mid-level save", slot + 1);
                 }
-                return Ok(Some((pkg.campaign, pkg.header.mc1_spell_ring)));
+                return Ok(Some((
+                    pkg.campaign,
+                    pkg.header.mc1_spell_ring,
+                    pkg.header.mc2_map_stats,
+                )));
             }
             // A container this build cannot apply. The campaign record
             // inside is retail's byte layout, so it survives any
@@ -272,7 +284,7 @@ fn campaign_record(
                     slot + 1,
                     rec.save_version
                 );
-                return Ok(Some((rec.campaign, None)));
+                return Ok(Some((rec.campaign, None, Vec::new())));
             }
         }
     }
@@ -284,7 +296,7 @@ fn campaign_record(
             retail.display()
         );
         return std::fs::read(&retail)
-            .map(|b| Some((b, None)))
+            .map(|b| Some((b, None, Vec::new())))
             .map_err(|e| format!("{}: {e}", retail.display()));
     }
     Ok(None)
@@ -329,8 +341,9 @@ impl CampaignRun {
             Some(s) => campaign_record(id.tag(), s, new_game)?,
             None => None,
         };
-        let mc1_ring = record.as_ref().and_then(|(_, r)| *r).unwrap_or([0; 24]);
-        let record = record.map(|(b, _)| b);
+        let mc1_ring = record.as_ref().and_then(|(_, r, _)| *r).unwrap_or([0; 24]);
+        let map_stats = record.as_ref().map(|(_, _, m)| m.clone()).unwrap_or_default();
+        let record = record.map(|(b, _, _)| b);
         match id {
             CampaignId::Mc1 | CampaignId::Mc1Hw => {
                 let save = if let Some(bytes) = record {
@@ -377,6 +390,7 @@ impl CampaignRun {
                     save: CampaignSave::Mc1(save),
                     next: None,
                     mc1_ring,
+                    map_stats: Vec::new(),
                 })
             }
             CampaignId::Mc2 => {
@@ -418,6 +432,7 @@ impl CampaignRun {
                     save: CampaignSave::Mc2(save),
                     next: None,
                     mc1_ring: [0; 24],
+                    map_stats,
                 })
             }
         }
@@ -478,6 +493,9 @@ impl CampaignRun {
         if self.id != campaign::CampaignId::Mc2 && self.mc1_ring != [0; 24] {
             header.mc1_spell_ring = Some(self.mc1_ring);
         }
+        // MC2: tables still owed (a secret level's parent, saved from
+        // inside the secret level).
+        header.mc2_map_stats = self.map_stats.clone();
         mgc_formats::mgcs::SavePackage {
             header,
             campaign: self.campaign_bytes(),
@@ -1958,6 +1976,8 @@ enum Screen {
     Map,
     /// A full-screen FMV run (intro / cutscene / outro).
     Movie,
+    /// The MC1/HW end-of-level performance screen (retail PPERF).
+    Stats,
 }
 
 /// What follows a finished (or skipped) FMV chain. Every movie in the
@@ -1971,6 +1991,20 @@ enum AfterMovie {
     Map,
     /// Leave the game — the outro is the last thing either campaign
     /// shows.
+    Quit,
+    /// The MC1/HW performance screen (retail's menu state 5 follows
+    /// the level FMV), then the given step.
+    Stats(StatsThen),
+}
+
+/// Where the MC1/HW performance screen hands over.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatsThen {
+    /// The main menu (retail `mainMenuSelector = 2`).
+    Menu,
+    /// The campaign's closing movie, then out.
+    Outro,
+    /// Leave (single-level mode).
     Quit,
 }
 
@@ -1995,6 +2029,8 @@ enum UiAtlas {
     FrontendUi,
     /// The FMV player's resolved frame (re-uploaded as it decodes).
     Movie,
+    /// The performance screen's CPU-composed frame.
+    Stats,
 }
 
 /// The running session, mutably — the gameplay paths' accessor.
@@ -2293,6 +2329,13 @@ struct App {
     cutscenes_played: [bool; 6],
     /// What to do once the chain finishes or the player skips it.
     movie_then: AfterMovie,
+    /// The finished level's performance numbers, captured at the won
+    /// edge (the session is gone by the time the screen shows).
+    stats_card: Option<stats_screen::StatsCard>,
+    /// The running performance screen — owns the frame while
+    /// `screen == Screen::Stats` — and where it hands over.
+    stats_screen: Option<stats_screen::Mc1Stats>,
+    stats_then: StatsThen,
     /// Which surface owns the frame (see [`Screen`]). Frontend
     /// screens hold no session — the level is constructed on launch
     /// and torn down on exit.
@@ -2534,6 +2577,9 @@ impl App {
             boot_intro: has_campaign,
             cutscenes_played: [false; 6],
             movie_then: AfterMovie::Menu,
+            stats_card: None,
+            stats_screen: None,
+            stats_then: StatsThen::Menu,
             ui_atlas: UiAtlas::None,
             frontend_audio_accum: 0.0,
             frontend_ui: None,
@@ -3373,7 +3419,7 @@ impl App {
                     }
                 }
                 // A movie owns the whole screen and takes no pointer.
-                Screen::Movie => {}
+                Screen::Movie | Screen::Stats => {}
             }
         }
         // Retail pause suspends ALL sound; resumed sounds pick up
@@ -5108,6 +5154,10 @@ impl App {
             wm.anchor_to(save, Some(cur));
             wm.set_parked(cur);
         }
+        // Retail map mode 4: the finished level's stats table first.
+        if let (Some(wm), Some(run)) = (&mut self.worldmap, &mut self.campaign) {
+            wm.show_stats(std::mem::take(&mut run.map_stats));
+        }
         self.frontend_music();
     }
 
@@ -5518,6 +5568,7 @@ impl App {
             Screen::Menu => self.menu_screen_frame(dt, event_loop),
             Screen::Map => self.map_screen_frame(dt, event_loop),
             Screen::Movie => self.movie_screen_frame(dt, event_loop),
+            Screen::Stats => self.stats_screen_frame(dt, event_loop),
             // Level with no session (a failed campaign launch mid-
             // exit): nothing to draw.
             Screen::Level => {}
@@ -5708,6 +5759,84 @@ impl App {
             AfterMovie::Menu => self.enter_main_menu(),
             AfterMovie::Map => self.open_map_screen(event_loop),
             AfterMovie::Quit => event_loop.exit(),
+            AfterMovie::Stats(then) => self.enter_stats_screen(then, event_loop),
+        }
+    }
+
+    /// Open the performance screen over the captured card; with no
+    /// card or no baked PPERF, go straight on.
+    fn enter_stats_screen(&mut self, then: StatsThen, event_loop: &ActiveEventLoop) {
+        let card = self.stats_card.take().filter(|_| self.cfg.render.preference.stats_screen);
+        let screen = card.and_then(|c| {
+            stats_screen::Mc1Stats::load(&get_baked_directory().join("assets/mc1-ui"), c)
+                .map_err(|e| eprintln!("note: performance screen unavailable: {e}"))
+                .ok()
+        });
+        match screen {
+            Some(st) => {
+                // Like a movie, the screen owns the frame with no
+                // level behind it (its sounds and music die here).
+                self.teardown_session();
+                if let Some(a) = &mut self.audio {
+                    a.stop_music();
+                }
+                self.stats_screen = Some(st);
+                self.stats_then = then;
+                self.screen = Screen::Stats;
+                self.ui_atlas = UiAtlas::None;
+                self.set_grab(false);
+            }
+            None => self.leave_stats_screen(then, event_loop),
+        }
+    }
+
+    fn leave_stats_screen(&mut self, then: StatsThen, event_loop: &ActiveEventLoop) {
+        self.stats_screen = None;
+        self.ui_atlas = UiAtlas::None;
+        match then {
+            StatsThen::Menu => self.enter_main_menu(),
+            // Unskippable in retail (`PlayInfoFmv(0, ..)`).
+            StatsThen::Outro => self.play_movies(
+                &[movie::Cue::unskippable("outro")],
+                AfterMovie::Quit,
+                event_loop,
+            ),
+            StatsThen::Quit => event_loop.exit(),
+        }
+    }
+
+    /// One performance-screen frame: CPU-composed 640×400, uploaded
+    /// as the UI atlas.
+    fn stats_screen_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        let size = self.view_size();
+        let Some(st) = &mut self.stats_screen else {
+            let then = self.stats_then;
+            self.leave_stats_screen(then, event_loop);
+            return;
+        };
+        st.tick(dt);
+        if st.done() {
+            let then = self.stats_then;
+            self.leave_stats_screen(then, event_loop);
+            return;
+        }
+        while st.take_chime() {
+            if let Some(a) = &mut self.audio
+                && self.cfg.audio.sound
+            {
+                let (bank, id) = stats_screen::CHIME;
+                if let Err(e) = a.play_bank_sample(bank, id, false) {
+                    eprintln!("note: stats chime: {e}");
+                }
+            }
+        }
+        let (rgba, quads) = st.frame(size);
+        let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
+        q.extend(quads);
+        if let Some(r) = &mut self.renderer {
+            r.load_ui_atlas(640, 400, &rgba);
+            self.ui_atlas = UiAtlas::Stats;
+            r.set_ui_quads(q);
         }
     }
 
@@ -6026,7 +6155,7 @@ impl App {
         if w.fullscreen().is_none() || self.grabbed {
             return;
         }
-        if matches!(self.screen, Screen::Map | Screen::Movie)
+        if matches!(self.screen, Screen::Map | Screen::Movie | Screen::Stats)
             || (self.screen == Screen::Menu && self.is_mc2())
         {
             return;
@@ -7294,8 +7423,54 @@ impl App {
                 // it.
                 self.won_handled = true;
                 println!("{} completed", sess.level.label);
+                // The performance screen's numbers (MC1/HW — MC2's
+                // table rides the save; see `campaign_complete`).
+                if w.game() != mgc_sim::ids::GameId::Mc2 {
+                    let st = w.level_stats();
+                    use mgc_sim::engine::stats::fmt10;
+                    let [castle, houses, unclaimed] = st.mana_rows();
+                    println!(
+                        "stats: killed {}% (retail {}%: {} of census {}) \
+                         deaths you/rivals/nature {}/{}/{} alive {} · \
+                         accuracy {}% · spells {}% (retail {}%) · mana {}% (retail {}%) \
+                         castle/dwellings/unclaimed {castle}/{houses}/{unclaimed} · \
+                         overall {}% (retail {}%)",
+                        fmt10(st.cleared_pct10()),
+                        st.killed_pct,
+                        st.kills,
+                        st.census,
+                        st.deaths_player(),
+                        st.deaths_rivals(),
+                        st.deaths_environment(),
+                        st.alive,
+                        fmt10(st.offensive_accuracy_pct10()),
+                        fmt10(st.spells_fixed_pct10()),
+                        st.spells_pct,
+                        fmt10(st.mana_pct10()),
+                        st.mana_pct,
+                        fmt10(st.overall_enhanced_pct10()),
+                        st.overall_pct,
+                    );
+                    self.stats_card = Some(stats_screen::StatsCard::new(
+                        st,
+                        sess.sim.tick,
+                        sess.level.level_number as usize,
+                        w.game() == mgc_sim::ids::GameId::Mc1Hw,
+                        &sess.level.etext,
+                    ));
+                }
                 if let Some(run) = &mut self.campaign {
-                    campaign_complete(run, sess.level.level_number, w);
+                    campaign_complete(run, sess.level.level_number, sess.sim.tick, w);
+                    // MC2 only: the map, or a secret level first.
+                    if run.id == campaign::CampaignId::Mc2
+                        && matches!(
+                            run.next,
+                            Some(campaign::NextStep::MapScreen | campaign::NextStep::Level(_))
+                        )
+                        && self.cfg.render.preference.stats_screen
+                    {
+                        run.map_stats.push(sess.level.level_number);
+                    }
                 }
                 self.quit_fade = Some(0.0);
             }
@@ -7410,7 +7585,11 @@ impl App {
                             }
                             self.quit_fade = None;
                             let win = mc1_win_movie();
-                            self.play_movies(&[win], AfterMovie::Menu, event_loop);
+                            self.play_movies(
+                                &[win],
+                                AfterMovie::Stats(StatsThen::Menu),
+                                event_loop,
+                            );
                         } else {
                             // MC2's direct level chain (the
                             // demon-mouth secret dive).
@@ -7435,15 +7614,16 @@ impl App {
                         // continues as free play.
                         println!("campaign complete!");
                         self.quit_fade = None;
-                        // Unskippable in retail
-                        // (`PlayInfoFmv(0, ..)`).
-                        self.play_movies(
-                            &[movie::Cue::unskippable("outro")],
-                            AfterMovie::Quit,
-                            event_loop,
-                        );
+                        // The last level's performance screen, then
+                        // the (unskippable) outro.
+                        self.enter_stats_screen(StatsThen::Outro, event_loop);
                     }
-                    None => event_loop.exit(),
+                    // Single-level mode: the performance screen (when
+                    // one was captured), then out.
+                    None => {
+                        self.quit_fade = None;
+                        self.enter_stats_screen(StatsThen::Quit, event_loop);
+                    }
                 }
             }
         }
@@ -7623,6 +7803,17 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // The performance screen leaves on a LEFT click
+                // (retail tests `mouseLeftButton` alone, :60048).
+                if self.screen == Screen::Stats {
+                    if down
+                        && button == MouseButton::Left
+                        && let Some(st) = &mut self.stats_screen
+                    {
+                        st.dismiss();
+                    }
+                    return;
+                }
                 // The exit-confirm dialog owns the pointer: OK
                 // confirms, Cancel dismisses, everything else (and
                 // any fire-through) is swallowed.
@@ -7759,9 +7950,10 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if self.screen == Screen::Map {
-                    // The world-map screen owns the pointer: a click
-                    // on a portal starts the carpet leg there; the
-                    // level launches when it arrives.
+                    // The world-map screen owns the pointer: a left
+                    // click on a portal starts the carpet leg there
+                    // (the level launches when it arrives); a right
+                    // click on a completed one shows its stats table.
                     if down && matches!(button, MouseButton::Left | MouseButton::Right) {
                         let size = self.view_size();
                         let cursor = self.cursor;
@@ -7769,7 +7961,11 @@ impl ApplicationHandler for App {
                             &mut self.worldmap,
                             self.campaign.as_ref().and_then(|c| c.save.mc2()),
                         ) {
-                            wm.click(save, size, cursor);
+                            if button == MouseButton::Left {
+                                wm.click(save, size, cursor);
+                            } else {
+                                wm.right_click(save, size, cursor);
+                            }
                         }
                     }
                     return;
@@ -8071,6 +8267,23 @@ impl ApplicationHandler for App {
                     if down && let Some(m) = &mut self.movie {
                         m.skip();
                     }
+                    return;
+                }
+                // Any key leaves the performance screen (retail
+                // `lastPressedKey`, :60048).
+                if self.screen == Screen::Stats {
+                    if down && let Some(st) = &mut self.stats_screen {
+                        st.dismiss();
+                    }
+                    return;
+                }
+                // So does the MC2 map's stats table (MI:3217-22).
+                if down
+                    && self.screen == Screen::Map
+                    && let Some(wm) = &mut self.worldmap
+                    && wm.stats_open()
+                {
+                    wm.dismiss_stats();
                     return;
                 }
                 if down && event.logical_key == Key::Named(NamedKey::Escape) {
@@ -8749,6 +8962,8 @@ struct Args {
     fullscreen: Option<bool>,
     /// FMV playback override (config `render.preference.movies`).
     movies: Option<bool>,
+    /// End-of-level stats override (`render.preference.stats_screen`).
+    stats_screen: Option<bool>,
     /// Anti-aliasing override (`render.preference.anti_aliasing`).
     anti_aliasing: Option<config::AntiAliasing>,
     /// Movie-subtitle override (`render.preference.movie_subtitles`).
@@ -8842,6 +9057,7 @@ fn parse_args() -> Result<Args, String> {
     let mut vsync = None;
     let mut fullscreen = None;
     let mut movies = None;
+    let mut stats_screen = None;
     let mut anti_aliasing = None;
     let mut movie_subtitles = None;
     let mut fps = None;
@@ -9064,6 +9280,8 @@ fn parse_args() -> Result<Args, String> {
             "--movie-subtitles" => movie_subtitles = Some(true),
             "--no-movie-subtitles" => movie_subtitles = Some(false),
             "--no-movies" => movies = Some(false),
+            "--stats" => stats_screen = Some(true),
+            "--no-stats" => stats_screen = Some(false),
             "--fps" => fps = Some(true),
             "--no-fps" => fps = Some(false),
             "--thrust" => {
@@ -9203,7 +9421,7 @@ fn parse_args() -> Result<Args, String> {
                      [--horizon-cull|--no-horizon-cull] \
                      [--light-sources|--no-light-sources] \
                      [--vsync|--no-vsync] [--fullscreen|--windowed] \
-                     [--movies|--no-movies] [--anti-aliasing off|msaa|1.5x|2x] \
+                     [--movies|--no-movies] [--stats|--no-stats] [--anti-aliasing off|msaa|1.5x|2x] \
                      [--fps|--no-fps] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
@@ -9277,6 +9495,7 @@ fn parse_args() -> Result<Args, String> {
         vsync,
         fullscreen,
         movies,
+        stats_screen,
         anti_aliasing,
         movie_subtitles,
         fps,
@@ -9973,13 +10192,69 @@ fn mc1_win_movie() -> movie::Cue {
 /// or the mini-menu. A free function because it runs inside the
 /// redraw's `&mut sim.world` borrow (field-disjoint from
 /// `self.campaign`).
-fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::world::World) {
+fn campaign_complete(
+    run: &mut CampaignRun,
+    level: u32,
+    ticks: u64,
+    w: &mgc_sim::engine::world::World,
+) {
     use campaign::{CampaignId, NextStep};
     match run.id {
         CampaignId::Mc2 => {
             let Some(save) = run.save.mc2_mut() else {
                 return;
             };
+            // The level's score row (`CollectLevelStats_5C530` →
+            // `sub_82AB0`, EF:47327-66): [spells, accuracy, kills,
+            // mana, seconds] into the main table by level, or the
+            // secret table by portal index. The ENHANCED rows (see
+            // `engine::stats`), like MC1's performance screen.
+            let st = w.level_stats();
+            // Retail's integer row carries the enhanced tenths rounded
+            // to whole percent; the tail keeps the absolutes the map
+            // table derives its tenths from.
+            use mgc_sim::engine::stats::{fmt10, whole};
+            let row = [
+                whole(st.spells_fixed_pct10()) as i32,
+                whole(st.offensive_accuracy_pct10()) as i32,
+                whole(st.cleared_pct10()) as i32,
+                whole(st.mana_pct10()) as i32,
+                (ticks / mgc_sim::TICK_RATE_HZ as u64).min(i32::MAX as u64) as i32,
+            ];
+            let [castle, houses, unclaimed] = st.mana_rows();
+            println!(
+                "stats: killed {}% (retail {}%: {} of census {}) deaths you/rivals/nature \
+                 {}/{}/{} alive {} · accuracy {}% · spells {}% · mana {}% (retail {}%) \
+                 castle/dwellings/unclaimed {castle}/{houses}/{unclaimed}",
+                fmt10(st.cleared_pct10()),
+                st.killed_pct,
+                st.kills,
+                st.census,
+                st.deaths_player(),
+                st.deaths_rivals(),
+                st.deaths_environment(),
+                st.alive,
+                fmt10(st.offensive_accuracy_pct10()),
+                fmt10(st.spells_fixed_pct10()),
+                fmt10(st.mana_pct10()),
+                st.mana_pct,
+            );
+            // The absolutes behind the row (player rulings 2026-09-24,
+            // as MC1's screen). See `saves::EXT_*`.
+            let ext = saves::ext_row(&st);
+            if level <= 24 {
+                save.main_stats[level as usize] = row;
+                save.main_ext[level as usize] = ext;
+            } else if let Some(i) = save
+                .secrets
+                .iter()
+                .take_while(|p| p.activated != 0)
+                .position(|p| p.level as u32 == level)
+                && i < save.secret_stats.len()
+            {
+                save.secret_stats[i] = row;
+                save.secret_ext[i] = ext;
+            }
             // Book carry: serialize the live book into str_611 (all
             // XP banked — the between-levels shape).
             let v = w.mc2_book_view();
@@ -10542,6 +10817,9 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     }
     if let Some(v) = args.movies {
         cfg.render.preference.movies = v;
+    }
+    if let Some(v) = args.stats_screen {
+        cfg.render.preference.stats_screen = v;
     }
     if let Some(v) = args.anti_aliasing {
         cfg.render.preference.anti_aliasing = v;

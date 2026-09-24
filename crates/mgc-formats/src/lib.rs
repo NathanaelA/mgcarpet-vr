@@ -137,7 +137,13 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    class passes (the sub_31C10 snow pass + the steep→1 rock
 ///    relabel) — snow ground (type 6) replaces the temperate grass
 ///    the old bake painted. MC1/MC2 planes byte-identical.
-pub const BAKE_EPOCH: u32 = 23;
+/// 24: `assets/mc1-ui` gains the end-of-level performance screen:
+///    `pperf-bg.bin` / `pperf-pal.bin` (DATA/SCREENS/PPERF, 320×200)
+///    and `sfont2.bin`/`.json` (DATA/SCREENS/SFONT2, the screen's
+///    20-px face, glyph id = char − 31). Both optional to the app.
+/// 25: `assets/mc1-ui` gains `level-names.json` — the 50 world names
+///    of CARPET.EXE and HIDDEN.EXE (the performance screen's title).
+pub const BAKE_EPOCH: u32 = 25;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

@@ -7858,6 +7858,12 @@ impl World {
         mut drive: Option<&mut FlightDrive<'_>>,
         post: Option<PlayerPose>,
     ) {
+        // Retail seats the MC2 human (and runs `sub_574A0`) inside the
+        // first tick; the port seats at load and the campaign book
+        // lands after construction, so the census waits for tick 1.
+        if std::mem::take(&mut self.g.stats.0.mc2_spell_census_due) {
+            self.stats_mc2_spell_census();
+        }
         let mut player = player;
         // ⭐ THE SPEED TOKEN'S DIRECTION SOURCE. Echo the human's
         // flight COMMAND register (`speed_0xc_12`) into the world
@@ -18269,6 +18275,123 @@ impl World {
         (self.g.kills, self.g.shots, self.g.hits)
     }
 
+    /// The end-of-level performance numbers ([`crate::engine::stats`]):
+    /// retail's raw counters and derived rows, plus the enhanced
+    /// every-death tally. Call it at the won edge, before teardown.
+    ///
+    /// Retail derivations: MC1 `sub_448E0` (:54626-757), MC2
+    /// `CollectLevelStats_5C530` (EF:43749-881).
+    pub fn level_stats(&self) -> crate::engine::stats::LevelStats {
+        use crate::engine::stats::{LevelStats, pct};
+        let led = &self.g.stats.0;
+        let mc2 = self.game == GameId::Mc2;
+        let mut s = LevelStats {
+            mc2,
+            kills: self.g.kills,
+            census: led.census,
+            shots: self.g.shots,
+            hits: self.g.hits,
+            banked: self.player.banked,
+            world_mana: self.player.world_mana,
+            has_castle: self.player_castle_bound().is_some(),
+            deaths: led.deaths,
+            alive: self.g.stats_alive_creatures(),
+            offensive_shots: led.offensive_shots,
+            offensive_hits: led.offensive_hits,
+            ..Default::default()
+        };
+        // The enhanced mana rows (player ruling 2026-09-25): the census
+        // (`sub_48230` / `sub_60F00`, run every tick) without its seed
+        // — MC1's intrinsic 1000, MC2's 1 — which no player can ever
+        // collect, so a cleared level reads 100 %. Owned is the whole
+        // ceiling above the wizard's base (castle store, balloons on
+        // their way, claimed balls, dwellings); the dwellings are the
+        // census's own house tally.
+        let seed = if mc2 { 1 } else { WIZARD_BASE_MANA };
+        s.mana_world = self.player.world_mana.saturating_sub(seed);
+        s.mana_owned = self.player.mana_max.saturating_sub(WIZARD_BASE_MANA);
+        s.mana_houses = self.g.banked_houses.max(0) as u32;
+        if mc2 {
+            // EF:43794-99: census dword j offered, `array_0x403[j]`
+            // (picked up this level) found. Already per spell.
+            for j in 0..crate::mc2::rivals::MC2_SPELLS {
+                if led.offer_dword(j) != 0 {
+                    s.spells_offered += 1;
+                    if led.mc2_found & (1 << j) != 0 {
+                        s.spells_found += 1;
+                    }
+                }
+            }
+            // Enhanced (player ruling 2026-09-24): retail's census runs
+            // after the load consumed the dis −1 / 0 records, so it
+            // sees only jars a later disposition brings. Count every
+            // authored jar the wizard did not start with.
+            s.spells_offered_fixed = led.mc2_offered.count_ones();
+            s.spells_found_fixed = (led.mc2_offered & led.mc2_found).count_ones();
+        } else {
+            // :54653-66 — DWORD i of the byte-indexed census (the
+            // retail census bug: dword i covers MODELS 4i..4i+3) gates
+            // owned spell i (`+676[i]`).
+            for i in 0..SPELL_COUNT {
+                let owned = self.player.owned[i] != 0;
+                if led.offer_dword(i) != 0 {
+                    s.spells_offered += 1;
+                    s.spells_found += owned as u32;
+                }
+                // What the census meant: jar MODEL m offers spell m.
+                if led.offer_byte(i) != 0 {
+                    s.spells_offered_fixed += 1;
+                    s.spells_found_fixed += owned as u32;
+                }
+            }
+        }
+        // Creatures killed: 100·kills/census, 100 without a census
+        // (both games; MC2 also floors at 0).
+        s.killed_pct = if led.census > 0 {
+            (100 * self.g.kills as i64 / led.census as i64).clamp(0, 100) as u32
+        } else {
+            100
+        };
+        s.accuracy_pct = pct(self.g.hits, self.g.shots);
+        s.spells_pct = pct(s.spells_found, s.spells_offered);
+        s.mana_pct = if mc2 {
+            // EF:43820-34: 0 without a castle; the census total drops
+            // its seed of 1, and a non-positive total reads 100.
+            let world = self.player.world_mana as i64 - 1;
+            if !s.has_castle {
+                0
+            } else if world <= 0 {
+                100
+            } else {
+                (100 * self.player.banked as i64 / world).clamp(0, 100) as u32
+            }
+        } else {
+            // :54718-27 — the castle pointer is never null (slot 0
+            // is a real record), so the row is houses + castle store
+            // over the world total whether or not a castle stands.
+            pct(self.player.banked, self.player.world_mana)
+        };
+        // :54730-54 — the mean of the APPLICABLE rows, Mana always.
+        if !mc2 {
+            let mut sum = s.mana_pct;
+            let mut n = 1;
+            if s.spells_offered != 0 {
+                sum += s.spells_pct;
+                n += 1;
+            }
+            if led.census != 0 {
+                sum += s.killed_pct;
+                n += 1;
+            }
+            if self.g.shots != 0 {
+                sum += s.accuracy_pct;
+                n += 1;
+            }
+            s.overall_pct = sum / n;
+        }
+        s
+    }
+
     /// The village-aggro ("wanted") timer — remaining ticks of
     /// militia hostility toward the player (+528 semantics).
     pub fn player_aggro(&self) -> i16 {
@@ -18286,6 +18409,16 @@ impl World {
     /// spawn seam (misfit + optional placeholder), which keeps the
     /// authored population visible.
     fn mc2_generate_events(&mut self) {
+        // The stats ledger's per-level jar set: every spell the level
+        // authors a class-15 jar for, read BEFORE any pass consumes a
+        // record (the enhanced "Spells found" denominator).
+        let mut jars = 0u32;
+        for r in self.table.iter().skip(1) {
+            if r.class == 15 && (r.model as usize) < crate::mc2::rivals::MC2_SPELLS {
+                jars |= 1 << r.model;
+            }
+        }
+        self.g.stats.0.mc2_jars = jars;
         if sculpt_trace() {
             // The authored sculptor THINGS, before any pass consumes them.
             for (i, r) in self.table.iter().enumerate().skip(1) {
@@ -19564,6 +19697,7 @@ impl World {
         // sub_4A1E0 (EF:32967): firing a disposition arms every kind-7
         // StageVar keyed to it (a no-op when no StageVars are loaded).
         self.mc2_stagevar_arm_disposition(dis);
+        self.stats_disposition_census(dis);
         // sub_37220 (:43825) / sub_49F90 (Level.cpp:1271) — called at
         // the top of BOTH fire routines (sub_37440 :43960, sub_4A1E0
         // EF:32966): every disposition fire re-ranks the allocator
@@ -19615,6 +19749,14 @@ impl World {
                         r.swi_id
                     );
                 }
+                // MC2 `sub_4A1E0` (EF:33016-18): the creature census
+                // counts every fired class-5 record, spawned or not.
+                if self.game == GameId::Mc2
+                    && self.table[i].class == 5
+                    && crate::engine::stats::mc2_census_counts(self.table[i].model)
+                {
+                    self.g.stats.0.census += 1;
+                }
                 self.spawn_from_thing(i);
                 if one_shot {
                     self.table[i].class = 0;
@@ -19627,6 +19769,64 @@ impl World {
         self.g.mc2_recycle.stack.clear();
         // sub_4A1E0 tail (EF:32994): re-arm the watch-by-model gates.
         self.mc2_stagevar_rearm_watchers();
+    }
+
+    /// The stats ledger's load census at a disposition fire. `dis 0`
+    /// is the level load in both games (`sub_37440(0, …)` :43931,
+    /// `sub_4A1E0(0, …)` EF:32982): both reset the creature census;
+    /// MC1 then counts the WHOLE table — every class-5 record of a
+    /// scored model, whatever its disposition (:43944-50) — and bumps
+    /// the spell-offer census per class-12 record (:43954). MC2
+    /// counts per fired record inside the loop instead.
+    fn stats_disposition_census(&mut self, dis: u16) {
+        if dis != 0 {
+            return;
+        }
+        self.g.stats.0.census = 0;
+        if self.game == GameId::Mc2 {
+            // sub_4A1E0 also memsets the spell census (EF:32985); the
+            // seating re-counts it (`stats_mc2_spell_census`).
+            self.g.stats.0.clear_spell_census();
+            self.g.stats.0.mc2_spell_census_due = true;
+            return;
+        }
+        self.g.stats.0.clear_spell_census();
+        for i in 1..self.table.len() {
+            let r = self.table[i];
+            match r.class {
+                5 if !matches!(r.model, 9 | 12 | 13 | 14 | 15) => {
+                    self.g.stats.0.census += 1;
+                }
+                12 => self.g.stats.0.mc1_offer(r.model),
+                _ => {}
+            }
+        }
+    }
+
+    /// MC2 `sub_574A0` (EF:40130-43), run at the end of the human's
+    /// seating (`sub_5CF40` EF:59780): every class-15 record left in
+    /// the level table whose spell the wizard does not already hold.
+    /// (The load has consumed the dis −1 / dis 0 records by then, so
+    /// this counts only spells that arrive by a later disposition —
+    /// retail's arithmetic, kept as is.) Skipped in multiplayer.
+    pub(crate) fn stats_mc2_spell_census(&mut self) {
+        // The enhanced offer set (player ruling 2026-09-24): every jar
+        // the level authors for a spell the wizard does not start
+        // with — consumed or not.
+        let held = (0..crate::mc2::rivals::MC2_SPELLS)
+            .filter(|&s| self.mc2_book.ent[s] != 0)
+            .fold(0u32, |m, s| m | 1 << s);
+        self.g.stats.0.mc2_offered = self.g.stats.0.mc2_jars & !held;
+        self.g.stats.0.clear_spell_census();
+        for i in 1..self.table.len() {
+            let r = self.table[i];
+            if r.class == 15 {
+                let s = r.model as usize;
+                if s < crate::mc2::rivals::MC2_SPELLS && self.mc2_book.ent[s] == 0 {
+                    self.g.stats.0.mc2_offer(r.model);
+                }
+            }
+        }
     }
 
     /// The MODEL of the THING at `slot` in the level table (used by the
@@ -20618,6 +20818,11 @@ impl World {
             // the on-demand token goes, this jar becomes the earned one.
             self.dev_release(model as usize);
             self.g.mc2_spell_tokens.0 |= 1 << model;
+            // `array_0x403[a2] = 1` (EF:56044) — "found this level",
+            // the stats derive's numerator (`engine::stats`).
+            if (model as u32) < 32 {
+                self.g.stats.0.mc2_found |= 1 << model;
+            }
             self.entities_dirty = true;
             if t == model.wrapping_mul(3).wrapping_add(2) {
                 // The self-replenishing state drops a replacement.
@@ -24645,6 +24850,8 @@ impl World {
         w.put(inert);
         // v25 joiner — see the SNAPSHOT_VERSION history.
         w.put(mc1_frame);
+        // v26 joiner — the stats ledger (lives on `Gen`, which skips it).
+        w.put(&g.stats.0);
     }
 
     /// Overwrite this world's state from the stream, keeping the
@@ -24714,6 +24921,7 @@ impl World {
         self.ghost = r.get()?;
         self.inert = r.get()?;
         self.mc1_frame = r.get()?;
+        self.g.stats.0 = r.get()?;
         // THE BOUND-CASTLE REGISTER IS RE-DERIVED, NOT STORED. The
         // wire format does not carry `Gen::castle_reg` (see the field
         // doc on `World::Snapshot`), and a bump would invalidate every
@@ -26271,6 +26479,19 @@ mod tests {
         w.g.proj_tick(p, &ctx);
         assert!(w.g.ent[p].flags & 0x400 != 0, "fixture: the effect allocated and the bolt died");
         assert_eq!((w.g.shots, w.g.hits), (4, 3), "…and the stats land with the allocation");
+
+        // The ENHANCED tally (player ruling 2026-09-24) follows retail's
+        // shots — minus the possession lob (model 1), which retail
+        // counts but the performance screen's Accuracy does not.
+        let led = |w: &World| (w.g.stats.0.offensive_shots, w.g.stats.0.offensive_hits);
+        assert_eq!(led(&w), (4, 3), "fireballs: the tally matches retail's");
+        w.g.free_entity(parked.pop().unwrap());
+        w.g.free_entity(parked.pop().unwrap());
+        w.g.ent[v].act_life = 10_000;
+        let p = bolt(&mut w, 1, v as u16);
+        w.g.proj_tick(p, &ctx);
+        assert_eq!(w.g.shots, 5, "fixture: retail counts the possession lob");
+        assert_eq!(led(&w), (4, 3), "the possession lob is not an offensive shot");
     }
 
     /// THE DANGER ARM'S ACQUIRE CASES (round 154, w154f). `sub_54520`
@@ -31883,6 +32104,67 @@ mod tests {
         );
         let (kills, _, _) = w.combat_stats();
         assert_eq!(kills, 1, "the execution credits the castle owner");
+        let st = w.level_stats();
+        assert_eq!(st.deaths_player(), 1, "the ledger bills the crush to the castle's owner");
+        assert_eq!(st.deaths_total(), 1, "the owned creature and the m16 still stand");
+    }
+
+    /// THE STATS LEDGER BILLS EVERY DEATH (engine::stats). A player
+    /// kill feeds retail's `+359` AND the ledger; a latch-less death
+    /// (a direct `act_life = -1`, no mail) is the ENVIRONMENT's and
+    /// feeds only the ledger; the retail census is the load table's
+    /// scored class-5 count, and the enhanced denominator is deaths
+    /// plus the living.
+    #[test]
+    fn stats_ledger_bills_every_creature_death() {
+        let mut w = bare_creature_world(2); // wild lunger, table census 1
+        let other = w.g.spawn_creature(2, 100 << 8, 100 << 8, 3200).unwrap();
+        let far = PlayerPose::level(10 << 8, 10 << 8, 3400, 0);
+        let st = w.level_stats();
+        assert_eq!(st.census, 1, "retail counts the LOAD TABLE, not later spawns");
+        assert_eq!(st.alive, 2);
+        assert_eq!(st.cleared_pct10(), 0);
+
+        let life = w.g.ent[1].act_life;
+        w.g.ent[1].mail[0] = (life as u32 + 1, PLAYER_TARGET);
+        w.g.ent[other].act_life = -1;
+        for _ in 0..40 {
+            w.tick(far, PlayerCommand::default());
+        }
+        let st = w.level_stats();
+        assert_eq!(st.kills, 1, "retail credits the player's kill alone");
+        assert_eq!(st.deaths_player(), 1);
+        assert_eq!(st.deaths_environment(), 1, "no latch, no mail: the environment");
+        assert_eq!(st.alive, 0);
+        assert_eq!(st.cleared_pct10(), 1000, "both dead: the level is clear");
+        assert_eq!(st.killed_pct, 100, "retail: 1 kill over a census of 1");
+    }
+
+    /// FIRE BILLS ITS WIZARD (player ruling 2026-09-24). A tree's
+    /// standing fire takes the BROADCASTER's `+24`, which can name
+    /// another fire record rather than a wizard, so the killer walk
+    /// follows `+24` hop by hop. A self-owned record (the allocator's
+    /// default) is the environment.
+    #[test]
+    fn stats_killer_walks_the_fire_owner_chain() {
+        use crate::engine::stats::Killer;
+        let mut w = bare_creature_world(2);
+        let (x, y, z) = (100 << 8, 100 << 8, 3200);
+        let seed = w.g.spawn_effect(0, x, y, z).unwrap();
+        let flame = w.g.spawn_effect(6, x, y, z).unwrap();
+        w.g.ent[seed].id24 = PLAYER_TARGET;
+        w.g.ent[flame].id24 = seed as u16;
+        assert_eq!(
+            w.g.stats_killer_of(flame as u16),
+            Killer::Player,
+            "the tree's flame → the fire that lit it → the player"
+        );
+        w.g.ent[seed].id24 = seed as u16;
+        assert_eq!(
+            w.g.stats_killer_of(flame as u16),
+            Killer::Environment,
+            "an unowned seed fire: nature"
+        );
     }
 
     /// ⭐⭐⭐ THE ACTION-6 CREATE-CASTLE TOKEN PIN LIVES INSIDE THE
@@ -35274,6 +35556,62 @@ mod tests {
         let husk = w.debug_pool().1.into_iter().find(|e| e.class == 2).unwrap();
         assert_eq!(husk.state, 2, "burned down to the char state");
         assert_eq!(count(&w, 10, 6), 0, "the fire burned out");
+    }
+
+    /// End to end: the player's bolt fells a tree, its standing fire
+    /// kills a creature at its foot, and the ledger bills the PLAYER
+    /// (player ruling 2026-09-24: attributable fire bills its wizard).
+    #[test]
+    fn a_burning_tree_the_player_lit_bills_its_kills_to_the_player() {
+        use crate::mc1::combat::MailTarget;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 2,
+            model: 0,
+            x: 112,
+            y: 110,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 3, assets());
+        w.tick(away(), PlayerCommand::default());
+        let t = find_slot(&w, 2, 0);
+        let (tx, ty) = (w.g.ent[t].x, w.g.ent[t].y);
+        let gz = w.g.ground_z(tx, ty) as i16;
+        let c = w.g.spawn_creature(2, tx, ty, gz).unwrap();
+        w.g.ent[c].act_life = 1;
+        w.g.ent[c].max_life = 1;
+        // As in play: the ch0 mail comes from the player's BOLT (its
+        // `+24` = the player's tag), and the bolt is gone by the time
+        // the flame kills. The flame copies the broadcaster's `+24`.
+        // (Any record stands in for the bolt — only its `+24` is read —
+        // placed far off so it touches nothing.)
+        let bolt = w.g.spawn_effect(0, 10 << 8, 10 << 8, gz).unwrap();
+        w.g.ent[bolt].id24 = PLAYER_TARGET;
+        w.g.mail_write(MailTarget::Pool(t), 0, 400, bolt as u16);
+        w.tick(away(), PlayerCommand::default());
+        w.g.free_entity(bolt);
+        for _ in 0..200 {
+            w.tick(away(), PlayerCommand::default());
+            if w.level_stats().deaths_total() > 0 {
+                break;
+            }
+        }
+        let st = w.level_stats();
+        assert_eq!(st.deaths_total(), 1, "fixture: the fire killed the creature");
+        assert_eq!(st.deaths_player(), 1, "the player lit it: the player's kill");
     }
 
     /// **THE CO-TILE PAINT ORDER REACHES THE RENDERER.** The relink is
@@ -41519,6 +41857,31 @@ mod tests {
             ceiling: Vec::new(),
         };
         World::new_for_game(planes, things, 1, assets(), GameId::Mc2)
+    }
+
+    /// THE MC2 SPELL STAT COUNTS EVERY AUTHORED JAR (player ruling
+    /// 2026-09-24). Retail's `sub_574A0` runs at the seating, after the
+    /// dis-0 fire consumed the jars placed at load (30 of the campaign's
+    /// 89), so it sees only the later-disposition ones; the enhanced
+    /// count takes every jar the level authors minus the spells the
+    /// wizard starts with ({0, 1}).
+    #[test]
+    fn mc2_spell_stat_counts_every_authored_jar() {
+        let mut w = mc2_world_from(&[
+            mc2_thing(1, 15, 0, 100, 100, 0), // held at start
+            mc2_thing(2, 15, 3, 101, 100, 0), // placed at load
+            mc2_thing(3, 15, 5, 102, 100, 0), // placed at load
+            mc2_thing(4, 15, 7, 103, 100, 9), // a later disposition
+        ]);
+        w.tick(PlayerPose::level(10 << 8, 10 << 8, 3400, 0), PlayerCommand::default());
+        let st = w.level_stats();
+        assert_eq!(st.spells_offered, 1, "retail sees only the dis-9 jar");
+        assert_eq!(st.spells_offered_fixed, 3, "spells 3, 5 and 7; 0 was held");
+        assert_eq!(st.spells_found_fixed, 0);
+        w.g.stats.0.mc2_found |= 1 << 3; // the collect block's bit
+        let st = w.level_stats();
+        assert_eq!(st.spells_found_fixed, 1);
+        assert_eq!(st.spells_fixed_pct10(), 333);
     }
 
     fn mc2_thing(slot: u32, class: u16, model: u16, x: u16, y: u16, dis_id: u16) -> Thing {

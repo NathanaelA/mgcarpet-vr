@@ -1342,6 +1342,28 @@ impl Gen {
         (tok != 0 && e.class64 == 15).then_some(e.model65 as u16)
     }
 
+    /// `sub_65780` (EF:63195-236) for a human-owned impact, into the
+    /// ENHANCED accuracy tally of the stats ledger. Retail's model gate
+    /// passes 0, 1, 3, 7, 8, 9, 12, 17, 25 and 28, then bills
+    /// `shots++` (`+0x165`) to the owner wizard's block, and `hits++`
+    /// (`+0x169`) when the struck record and the flyer's aimed
+    /// `word_0x96_150` are both pool records sharing one OWNER id.
+    /// The possession bolts (models 1 and 17) are left out, as in
+    /// MC1 (player ruling 2026-09-24). Retail's own counters are not
+    /// kept: no MC2 lane grades them and `Gen::shots` is hashed.
+    fn mc2_shot_stats(&mut self, model: u8, struck: u16, aimed: u16) {
+        if !matches!(model, 0 | 3 | 7..=9 | 12 | 25 | 28) {
+            return;
+        }
+        let pooled = |s: u16| s != 0 && s != PLAYER_TARGET && (s as usize) < self.ent.len();
+        let hit = pooled(struck)
+            && pooled(aimed)
+            && self.ent[struck as usize].id24 == self.ent[aimed as usize].id24;
+        let led = &mut self.stats.0;
+        led.offensive_shots += 1;
+        led.offensive_hits += hit as u32;
+    }
+
     /// Impact-effect spawn (the sub_65820 expiry block, EF:62972-96):
     /// spawn `(f68, f69)` at the flyer's position, hand it the id,
     /// heading, victim and carried damage. Routed: fire, big
@@ -2043,6 +2065,16 @@ impl Gen {
                 self.ent[i].flags |= 0x400;
             }
             return;
+        }
+        // `sub_65780` — the owner's accuracy counters. Every impact
+        // worker folded here calls it inside its `if (effect)` arm,
+        // so a dry pool or a swallowing mine counts nothing; the basic
+        // possession `CastPosses_65F60` (action 1) never calls it. The
+        // dart's non-wizard fork (`sub_662E0` EF:63531-36) passes NO
+        // struck record and mints nothing, yet still counts the shot.
+        if id == PLAYER_TARGET && act != 1 {
+            let struck = if (fc, fm) == (10, 26) && spawned.is_none() { 0 } else { victim };
+            self.mc2_shot_stats(self.ent[i].model65, struck, lock);
         }
         if let Some(s) = spawned {
             // ⭐ THE LEADER STAMP IS NOT UNIVERSAL. Three retail impact
@@ -5548,6 +5580,68 @@ mod debuff_knock_tests {
             "sub_66610's blocker arm is a bare position copy \
              (EF:63605-08) — a beam parks at the player's RAW origin"
         );
+    }
+
+    /// `sub_65780` — the human's MC2 accuracy tally. A shot counts once
+    /// the impact's effect mints; it is a hit when the struck record and
+    /// the flyer's aimed `word_0x96_150` share an owner id. The
+    /// possession bolts (models 1 / 17) stay out of the enhanced
+    /// tally, and the dart's non-wizard fork counts a shot with no
+    /// struck record.
+    #[test]
+    fn the_human_impact_bills_the_mc2_accuracy_tally() {
+        let mut g = flat_gen();
+        let ball = g
+            .spawn_mana_ball(40 * 256, 40 * 256, 400)
+            .expect("the sphere");
+        let fire = |g: &mut Gen, model: u8, act: u8, payload: (u8, u8), aim: u16| {
+            let b = g.new_event().expect("bolt slot");
+            let e = &mut g.ent[b];
+            e.class64 = 9;
+            e.model65 = model;
+            e.tick70 = act;
+            e.id24 = PLAYER_TARGET;
+            e.x = 40 * 256;
+            e.y = 40 * 256;
+            e.z = 400;
+            e.f68 = payload.0;
+            e.f69 = payload.1;
+            e.f146 = aim;
+            b
+        };
+        let tally = |g: &Gen| (g.stats.0.offensive_shots, g.stats.0.offensive_hits);
+
+        let b = fire(&mut g, 0, 0, (10, 0), ball as u16);
+        g.mc2_proj_impact(b, ball as u16, &ctx(), None);
+        assert_eq!(tally(&g), (1, 1), "an aimed fireball on its target is a hit");
+
+        let b = fire(&mut g, 0, 0, (10, 0), 0);
+        g.mc2_proj_impact(b, ball as u16, &ctx(), None);
+        assert_eq!(tally(&g), (2, 1), "an unaimed strike is a shot, not a hit");
+
+        let b = fire(&mut g, 0, 0, (10, 0), ball as u16);
+        g.mc2_proj_impact(b, 0, &ctx(), None);
+        assert_eq!(tally(&g), (3, 1), "a terrain stop is a miss");
+
+        let b = fire(&mut g, 1, 1, (10, 12), ball as u16);
+        g.mc2_proj_impact(b, ball as u16, &ctx(), None);
+        let b = fire(&mut g, 17, 18, (10, 54), ball as u16);
+        g.mc2_proj_impact(b, ball as u16, &ctx(), None);
+        assert_eq!(tally(&g), (3, 1), "possession is not an offensive shot");
+
+        let b = fire(&mut g, 7, 13, (10, 26), ball as u16);
+        g.mc2_proj_impact(b, ball as u16, &ctx(), None);
+        assert_eq!(tally(&g), (4, 1), "the dart's non-wizard fork: a shot, no struck record");
+
+        let b = fire(&mut g, 0, 0, (10, 0), ball as u16);
+        g.ent[b].id24 = 557;
+        g.mc2_proj_impact(b, ball as u16, &ctx(), None);
+        assert_eq!(tally(&g), (4, 1), "a rival's shot is not the human's");
+
+        let b = fire(&mut g, 0, 0, (10, 0), ball as u16);
+        while g.new_event().is_some() {}
+        g.mc2_proj_impact(b, ball as u16, &ctx(), None);
+        assert_eq!(tally(&g), (4, 1), "a dry pool mints nothing and counts nothing");
     }
 }
 

@@ -1385,6 +1385,11 @@ pub(crate) struct Gen {
     pub(crate) kills: u32,
     pub(crate) shots: u32,
     pub(crate) hits: u32,
+    /// The end-of-level stats ledger ([`super::stats`]) — retail's
+    /// censuses plus the enhanced every-death tally. Bookkeeping only:
+    /// no handler reads it, so it hashes to nothing, and the World
+    /// stream carries it (snapshot v26).
+    pub(crate) stats: HashSilent<super::stats::StatsLedger>,
     /// The wizard's danger-music countdown (Type_160 v_46): armed to
     /// 100 by processed hits (sub_46540's blocks call sub_46520) and
     /// by a projectile acquiring the player as target (:64013); the
@@ -5712,6 +5717,7 @@ impl Gen {
             player_rebound: false,
             player_chain: PlayerChain::default(),
             kills: 0,
+            stats: HashSilent(Default::default()),
             shots: 0,
             hits: 0,
             player_danger: 0,
@@ -8467,6 +8473,9 @@ impl Gen {
                                     self.ent[j].act_life = -1;
                                     self.ent[j].f38 = owner;
                                     self.ent[j].f40 = owner;
+                                    // The victim's next inbox zeroes
+                                    // the latch; the ledger keeps it.
+                                    self.stats.0.hint(j, owner);
                                 }
                                 _ => {}
                             }
@@ -11441,6 +11450,8 @@ impl Gen {
         let z = self.ground_z(x, y) as i16;
         self.ent[i].z = z;
         if let Some(crab) = self.spawn_creature(5, x, y, z) {
+            // `++dword_38C9F` (:31131) — the stats ledger's census.
+            self.stats.0.census += 1;
             let owner = self.ent[crab].id24;
             if let Some(flash) = self.spawn_creator(1, x, y, z) {
                 self.ent[flash].id24 = owner;
@@ -12401,6 +12412,8 @@ impl Gen {
             kills,
             shots,
             hits,
+            // Carried by the WORLD stream's v26 tail (`World::snap_put`).
+            stats: _,
             player_danger,
             banked_houses,
             // Save-silent like `castle_reg` (see the field doc): the

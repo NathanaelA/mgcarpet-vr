@@ -369,7 +369,14 @@ impl Audio {
     /// stolen. Voices are taken from the top of the range, away from
     /// the mixer's allocation order.
     pub fn play_movie_sample(&mut self, id: u32, looped: bool) -> Result<(), String> {
-        let bank = self.movie_bank;
+        self.play_bank_sample(self.movie_bank, id, looped)
+    }
+
+    /// Play sample `id` (1-based, as retail indexes it) out of `bank`
+    /// on a movie voice, leaving the movie bank selection alone — for
+    /// frontend screens that load their own bank (MC1's PPERF chime,
+    /// bank 13).
+    pub fn play_bank_sample(&mut self, bank: u32, id: u32, looped: bool) -> Result<(), String> {
         let Some(bundle) = &self.bundle else {
             return Err("no audio bundle loaded".into());
         };

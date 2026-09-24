@@ -694,6 +694,30 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · preference",
+            label: "stats_screen",
+            class: Preference,
+            key: None,
+            cli: Some("--no-stats"),
+            cfg_path: "render.preference.stats_screen",
+            // Retail always shows them, so ON is the faithful reading.
+            read: |c| Val::Toggle {
+                on: c.render.preference.stats_screen,
+                faithful: c.render.preference.stats_screen,
+            },
+            desc: "Show the end-of-level stats: the performance screen after \
+                   a Magic Carpet level (it waits for a key), and the stats \
+                   table on the Magic Carpet 2 map after a win.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.stats_screen = v,
+                descs: [
+                    "Go straight on after a level.",
+                    "Show them (as the original does).",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · preference",
             label: "movie_subtitles",
             class: Preference,
             key: None,

@@ -2950,14 +2950,29 @@ impl Gen {
         if !self.mc1_shot_counts(self.ent[i].model65) {
             return;
         }
-        self.shots += 1;
         let aimed = if no_mc1_hit_stat_aim_latch() {
             self.ent[i].f146
         } else {
             self.mc1_aim_latch.0
         };
-        if self.mc1_shot_hit(struck, aimed) {
+        let hit = self.mc1_shot_hit(struck, aimed);
+        self.mc1_note_shot(self.ent[i].model65, hit);
+    }
+
+    /// Bill one gated shot: retail's `shots++` / `hits++`, plus the
+    /// ENHANCED accuracy tally in the stats ledger, which leaves out
+    /// the possession lob (model 1). Player ruling 2026-09-24: it gets
+    /// lobbed wholesale into mana-ball nests and dwellings, so counting
+    /// it made Accuracy meaningless. The ledger is hash-silent.
+    fn mc1_note_shot(&mut self, model: u8, hit: bool) {
+        self.shots += 1;
+        if hit {
             self.hits += 1;
+        }
+        if model != 1 {
+            let led = &mut self.stats.0;
+            led.offensive_shots += 1;
+            led.offensive_hits += hit as u32;
         }
     }
 
@@ -4922,10 +4937,8 @@ impl Gen {
         };
         let stats_pre_spawn = owner == PLAYER_TARGET && no_mc1_shot_stats_alloc_guard();
         if stats_pre_spawn && self.mc1_shot_counts(self.ent[i].model65) {
-            self.shots += 1;
-            if self.mc1_shot_hit(hit, f146) {
-                self.hits += 1;
-            }
+            let scored = self.mc1_shot_hit(hit, f146);
+            self.mc1_note_shot(self.ent[i].model65, scored);
         }
         // Enhanced-lightning presentation feed: the resolved strike,
         // muzzle → chain endpoint (hash-silent, drained by the
@@ -4971,10 +4984,8 @@ impl Gen {
                 && !stats_pre_spawn
                 && self.mc1_shot_counts(self.ent[i].model65)
             {
-                self.shots += 1;
-                if self.mc1_shot_hit(hit, f146) {
-                    self.hits += 1;
-                }
+                let scored = self.mc1_shot_hit(hit, f146);
+                self.mc1_note_shot(self.ent[i].model65, scored);
             }
             let quartered = match hit {
                 Some(MailTarget::Pool(j)) => {
@@ -7510,7 +7521,14 @@ impl Gen {
                     continue;
                 }
                 match class {
-                    2 | 5 => self.ent[j].act_life = -1,
+                    2 | 5 => {
+                        self.ent[j].act_life = -1;
+                        // Retail stamps no killer; the stats ledger
+                        // bills the field's owner.
+                        if class == 5 {
+                            self.stats.0.hint(j, own);
+                        }
+                    }
                     // sub_12B50 (:31296) — the field's wizard arm is
                     // the binary's OTHER single-target write, so the
                     // 7000 stacks onto a stale amount rather than

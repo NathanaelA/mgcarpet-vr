@@ -1199,6 +1199,11 @@ impl Gen {
         if row_flags & Mc2BehaviorRow::DIE_ON_WATER != 0 || on_water {
             self.ent[i].act_life = -1;
         }
+        // `if (life == -1 && dword_0x364D2) dword_0x364D2--` (EF:8806-
+        // 09) — the stats ledger's census un-counts the suicide.
+        if self.ent[i].act_life == -1 && self.stats.0.census != 0 {
+            self.stats.0.census -= 1;
+        }
         4
     }
 
@@ -2070,6 +2075,9 @@ impl Gen {
             }
             j = self.ent[j].f54 as usize;
         }
+        // The stats ledger's every-death tally (not retail — see
+        // `engine::stats`), after the chain inherit.
+        self.stats_note_death(i);
         let killer = self.ent[i].f38;
         let model = self.ent[i].model65;
         // PreKillEntity_1C890 (EF:9543-51): credit gates on killer
@@ -3625,6 +3633,9 @@ impl Gen {
                             // parent and wandered instead of hunting.
                             self.ent[j].act_life = -1;
                             self.ent[j].f38 = owner;
+                            // The victim's next inbox zeroes the
+                            // latch; the stats ledger keeps it.
+                            self.stats.0.hint(j, owner);
                             if crate::mc2::roster::clear_tile_attacker_stamp() {
                                 self.ent[j].f40 = owner;
                             } else {

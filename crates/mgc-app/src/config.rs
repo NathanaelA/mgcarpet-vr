@@ -303,6 +303,11 @@ pub struct RenderPreference {
     /// case. Off is a Preference, not a fidelity gap: nothing in the
     /// simulation reads it.
     pub movies: bool,
+    /// Show the end-of-level stats: MC1/HW's performance screen and
+    /// MC2's table on the map. ON is the faithful setting (retail
+    /// always shows them); off is a Preference — nothing in the
+    /// simulation reads it, and the ledger is kept either way.
+    pub stats_screen: bool,
     /// Edge smoothing for the 3D view. See [`AntiAliasing`].
     ///
     /// No retail analogue — DOS drew one 320x200 buffer and filtered
@@ -394,6 +399,7 @@ impl Default for RenderPreference {
             vsync: true,
             fullscreen: true,
             movies: true,
+            stats_screen: true,
             anti_aliasing: AntiAliasing::Off,
             movie_subtitles: false,
             rival_tags: RivalTags::default(),

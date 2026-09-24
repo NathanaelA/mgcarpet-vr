@@ -80,6 +80,21 @@ const SND_TRAVEL: u8 = 19;
 /// The frontend click (every menu/map button, MI:2414).
 const SND_CLICK: u8 = 14;
 
+/// `LevelsNames_D9204` (EF:2305) — the MC2 level names by level
+/// number (main 0-24, secrets 30-34, multiplayer 50-59), as the
+/// executable carries them (trailing spaces trimmed at the draw).
+const MC2_LEVEL_NAMES: [&str; 61] = [
+    "1. Jahwl", "2. Kopahk", "3. Myrnan Gor", "4. Arachnium", "5. T'Klom", "6. Phyrydia",
+    "7. Perilium", "8. Ul Buthnen", "9. Evirith Gor", "10. Cymmeria ", "11. Tropolos ",
+    "12. Jaleen ", "13. Galiphur ", "14. Tunuk ", "15. Zyggogg ", "16. Darklava ",
+    "17. C'lannesh ", "18. Gleph ", "19. Baraghan ", "20. Ammyridia ", "21. Cresidan ",
+    "22. Hodor ", "23. Jathnar ", "24. Malak ", "25. Uluth ", "26. ", "27. ", "28. ", "29. ",
+    "30. ", "Karakir ", "Ymbul", "Pav Durivium", "Beleem", "Ommosyth", "36. ", "37. ", "38. ",
+    "39. ", "40. ", "41. ", "42. ", "43. ", "44. ", "45. ", "46. ", "47. ", "48. ", "49. ",
+    "50. ", "Thrull", "Keevur", "Braak", "Trapox", "Hibren Zhor", "Jinople", "Dethrem",
+    "Canquin", "Zephulum", "Verune", "0",
+];
+
 /// One drawable/clickable portal, resolved from the campaign record.
 struct Portal {
     level: u32,
@@ -386,6 +401,12 @@ pub struct WorldMap {
     /// descriptions at 23+level, dialog titles 421/422/467.
     strings: Vec<String>,
     dialog: Option<Dialog>,
+    /// The end-game stats table (`DrawEndGameTable_82C20`) up for this
+    /// level — retail map mode 4 (entry after a completed level).
+    stats: Option<u32>,
+    /// Tables still to show after this one (a secret level's parent
+    /// comes first — see `CampaignRun::map_stats`).
+    stats_next: std::collections::VecDeque<u32>,
     pending_action: Option<MapAction>,
     pending_button: Option<MapButton>,
     /// The pending level's description text stays up until a portal
@@ -438,6 +459,16 @@ pub struct WorldMap {
     /// after a secret (`SetAnimationVariables_7DA70` call sites,
     /// MI:2975-3013).
     faces: (f32, f32),
+}
+
+/// A stats-table row: a stat, a breakdown sub-row (indented), or a
+/// row packed into the block above it at the stat's indent ("Mana
+/// unclaimed" — no half-line gap before it).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowKind {
+    Main,
+    Sub,
+    Packed,
 }
 
 impl WorldMap {
@@ -584,6 +615,8 @@ impl WorldMap {
             font: font_rects,
             strings,
             dialog: None,
+            stats: None,
+            stats_next: Default::default(),
             pending_action: None,
             pending_button: None,
             desc_dismissed: false,
@@ -1097,7 +1130,37 @@ impl WorldMap {
     /// sample (the scroll widget's scancode-1 arm, MI:5660-63 + the
     /// sample at :5686-87); otherwise back to the menu (retail
     /// NewGameDraw returns 2, MI:3430-31).
+    /// Put up the stats table for `level` (retail map mode 4, the
+    /// entry after a completed level — MI:985).
+    /// Several levels queue up in order: each dismissal shows the next.
+    pub fn show_stats(&mut self, levels: Vec<u32>) {
+        self.stats_next = levels.into();
+        self.stats = self.stats_next.pop_front();
+    }
+
+    /// Take the table down, bringing up the next queued one. True when
+    /// a table was up (the input is consumed).
+    fn next_stats(&mut self) -> bool {
+        if self.stats.is_none() {
+            return false;
+        }
+        self.stats = self.stats_next.pop_front();
+        true
+    }
+
+    /// The stats table is up (any key or click takes it down, MI:3217-22).
+    pub fn stats_open(&self) -> bool {
+        self.stats.is_some()
+    }
+
+    pub fn dismiss_stats(&mut self) {
+        self.next_stats();
+    }
+
     pub fn escape(&mut self) {
+        if self.next_stats() {
+            return;
+        }
         if self.dialog.take().is_some() {
             self.sounds.push(SND_CLICK);
         } else {
@@ -1348,7 +1411,231 @@ impl WorldMap {
                 }
             }
         }
+        if let Some(level) = self.stats {
+            self.stats_table_quads(save, level, scale, &mut quads);
+        }
         quads
+    }
+
+    /// `DrawEndGameTable_82C20` (MI:4765-4860): a frame of tiled
+    /// sprites — 275 along the top and bottom at y = 50, 274 down the
+    /// sides over a darkened interior — with the level name centred on
+    /// top. The row values are the save's per-level table
+    /// (`sub_82AB0`).
+    ///
+    /// Retail: 12 side blocks, width = 2 glyph widths per char of the
+    /// longest label, Spells / Accuracy / Kills / Mana as `%3d%%` on
+    /// one line each, a blank, the time `%02d:%02d:%02d`, over a light
+    /// darkening. Deliberate layout (player rulings 2026-09-24), when
+    /// the save's stats tail recorded the absolutes:
+    /// - Each stat takes ONE line, as MC1's screen composes it: the
+    ///   label on the left, "N (P%)" right-aligned on the same line
+    ///   (player ruling 2026-09-25 — the panel fits itself to the
+    ///   widest line, so the earlier two-line split bought nothing),
+    ///   then a half-line gap after the stat's block. Accuracy reads "H hits, M misses (P%)" (bare "P%" before the
+    ///   first shot, or from a save that predates the MC2 shot count).
+    /// - Kills carries four one-line sub-rows: by you / rivals /
+    ///   nature, and still alive. "Mana claimed" carries two: in castle
+    ///   (with what is on its way) and in dwellings; "Mana unclaimed"
+    ///   closes its block, unindented (player ruling 2026-09-25:
+    ///   unclaimed is not a part of what was claimed).
+    /// - Percentages carry one decimal, rounded half up with strict
+    ///   ends, each breakdown summing to 100.0; Mana leaves out the
+    ///   census's uncollectable seed (player ruling 2026-09-25).
+    /// - Time Taken sits one line off the bottom.
+    /// - The panel is wider, and the interior darker, so the rows read
+    ///   over the narration subtitles beneath.
+    ///
+    /// Without the tail the same layout shows the bare percentages.
+    fn stats_table_quads(&self, save: &Mc2Save, level: u32, scale: f32, quads: &mut Vec<UiQuad>) {
+        use mgc_sim::engine::stats::fmt10;
+        let (row, ext) = if level <= 24 {
+            (
+                save.main_stats.get(level as usize).copied(),
+                save.main_ext.get(level as usize).copied(),
+            )
+        } else {
+            let i = save
+                .secrets
+                .iter()
+                .take_while(|p| p.activated != 0)
+                .position(|p| p.level as u32 == level);
+            (
+                i.and_then(|i| save.secret_stats.get(i).copied()),
+                i.and_then(|i| save.secret_ext.get(i).copied()),
+            )
+        };
+        let Some(v) = row else { return };
+        // The absolutes (ENHANCED): present only when this build
+        // recorded the win.
+        let ext = ext.as_ref().and_then(crate::saves::ext_stats);
+        let label = |id: usize, fb: &str| {
+            self.strings
+                .get(id)
+                .filter(|s| !s.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| fb.to_string())
+        };
+        let name = MC2_LEVEL_NAMES
+            .get(level as usize)
+            .map_or(String::new(), |n| n.trim_end().to_string());
+        let np = |n: u32, p: u32| format!("{n} ({}%)", fmt10(p));
+        let bare = |p: i32| format!("{p}%");
+
+        // The rows: (label, value, kind). `v` = [spells, accuracy,
+        // kills, mana, seconds] — retail's whole percentages, shown
+        // only for a row without the tail.
+        use RowKind::{Main, Packed, Sub};
+        let mut rows: Vec<(String, String, RowKind)> = Vec::with_capacity(12);
+        let spells = ext.as_ref().map_or(bare(v[0]), |e| np(e.spells_found_fixed, e.spells_fixed_pct10()));
+        rows.push((label(386, "Spells found"), spells, Main));
+        let accuracy = match &ext {
+            Some(e) if e.offensive_shots > 0 => format!(
+                "{} hits, {} misses ({}%)",
+                e.offensive_hits,
+                e.offensive_shots.saturating_sub(e.offensive_hits),
+                fmt10(e.offensive_accuracy_pct10())
+            ),
+            Some(e) => format!("{}%", fmt10(e.offensive_accuracy_pct10())),
+            None => bare(v[1]),
+        };
+        rows.push((label(385, "Accuracy"), accuracy, Main));
+        let kills = ext.as_ref().map_or(bare(v[2]), |e| np(e.deaths_total(), e.cleared_pct10()));
+        rows.push((label(384, "Creatures Killed"), kills, Main));
+        if let Some(e) = &ext {
+            let k = e.kill_split10();
+            for (i, (l, n)) in [
+                ("by you", e.deaths_player()),
+                ("by rivals", e.deaths_rivals()),
+                ("by nature", e.deaths_environment()),
+                ("still alive", e.alive),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                rows.push((format!("- {l}"), np(n, k[i]), Sub));
+            }
+        }
+        let mana = ext.as_ref().map_or(bare(v[3]), |e| {
+            let [c, h, _] = e.mana_rows();
+            np(c + h, e.mana_pct10())
+        });
+        let mana_label = label(377, "Mana");
+        match &ext {
+            Some(e) => {
+                let m = e.mana_split10();
+                let n = e.mana_rows();
+                rows.push((format!("{mana_label} claimed"), mana, Main));
+                rows.push(("- in castle".into(), np(n[0], m[0]), Sub));
+                rows.push(("- in dwellings".into(), np(n[1], m[1]), Sub));
+                rows.push((format!("{mana_label} unclaimed"), np(n[2], m[2]), Packed));
+            }
+            None => rows.push((mana_label, mana, Main)),
+        }
+        let t = v[4].max(0);
+        let time = (
+            label(394, "Time Taken"),
+            format!("{:02}:{:02}:{:02}", t / 3600, t % 3600 / 60, t % 60),
+        );
+
+        // Retail sizes by `spritestr[65]` — FONT1 glyph 65 ('@').
+        let (cw, ch) = self
+            .font
+            .get(65)
+            .copied()
+            .flatten()
+            .map_or((8.0, 10.0), |(_, _, w, h)| (w, h));
+        let (tw, th) = self.rects.get(275).copied().flatten().map_or((16.0, 16.0), |r| (r.2, r.3));
+        let (sw, sh) = self.rects.get(274).copied().flatten().map_or((16.0, 16.0), |r| (r.2, r.3));
+        let lh = ch + 1.0;
+        // Width: retail's rule, widened to fit every line with a
+        // margin, and never narrower than a comfortable minimum.
+        let max_len = rows
+            .iter()
+            .map(|r| r.0.chars().count())
+            .chain([name.chars().count(), time.0.chars().count()])
+            .max()
+            .unwrap_or(0) as f32;
+        let widest = rows
+            .iter()
+            .map(|(l, val, kind)| {
+                let indent = if *kind == Sub { 2.0 * cw } else { 0.0 };
+                indent + self.text_width(l) + self.text_width(val) + 4.0 * cw
+            })
+            .chain([
+                self.text_width(&name),
+                self.text_width(&time.0) + self.text_width(&time.1) + 4.0 * cw,
+            ])
+            .fold(0.0f32, f32::max);
+        let mut fw = (2.0 * cw * max_len).max(widest + 2.0 * sw + 6.0 * cw).max(240.0);
+        if fw % tw != 0.0 {
+            fw = ((fw / tw).floor() + 1.0) * tw;
+        }
+        let begin_x = (320.0 - fw / 2.0).floor();
+        let top = 50.0;
+        let inner_top = top + th;
+        let y0 = 2.0 * sw + 50.0;
+        let base = y0 + 5.0 + 2.0;
+        // Content: one line per row, a half-line after each stat's
+        // block; then a blank line, the time, and one line of margin to
+        // the bottom.
+        let mut ys = Vec::with_capacity(rows.len());
+        let mut y = base + lh;
+        for i in 0..rows.len() {
+            ys.push(y);
+            y += lh;
+            let next_packed = rows.get(i + 1).is_some_and(|r| r.2 != Main);
+            if !next_packed {
+                y += lh / 2.0;
+            }
+        }
+        let blocks = ((y + 2.0 * lh - inner_top) / sh).ceil().max(12.0);
+        let inner_h = blocks * sh;
+        let time_y = inner_top + inner_h - 2.0 * lh;
+
+        quads.push(crate::ui::solid(
+            [
+                (begin_x + sw) * scale,
+                inner_top * scale,
+                (fw - 2.0 * sw) * scale,
+                inner_h * scale,
+            ],
+            [0.0, 0.0, 0.0, 0.85],
+        ));
+        let mut x = 0.0;
+        while x < fw {
+            if let Some(q) = self.screen_sprite(275, (begin_x + x, top), scale) {
+                quads.push(q);
+            }
+            if let Some(q) = self.screen_sprite(275, (begin_x + x, inner_top + inner_h), scale) {
+                quads.push(q);
+            }
+            x += tw;
+        }
+        for b in 0..blocks as usize {
+            let y = inner_top + b as f32 * sh;
+            if let Some(q) = self.screen_sprite(274, (begin_x, y), scale) {
+                quads.push(q);
+            }
+            if let Some(q) = self.screen_sprite(274, (begin_x + fw - sw, y), scale) {
+                quads.push(q);
+            }
+        }
+        let white = [1.0, 1.0, 1.0, 1.0];
+        let x3 = cw + begin_x;
+        // The title, centred between x3 and x3 + fw − cw (DrawText_7FAE0).
+        let span = fw - cw;
+        let tx = x3 + (span - self.text_width(&name)) / 2.0;
+        quads.extend(self.text_quads(&name, tx, y0, white, scale));
+        let left = begin_x + sw + 2.0 * cw;
+        let right = begin_x + fw - sw - 2.0 * cw;
+        for ((l, val, kind), &y) in rows.iter().zip(&ys) {
+            let lx = if *kind == Sub { left + 2.0 * cw } else { left };
+            quads.extend(self.text_quads(l, lx, y, white, scale));
+            quads.extend(self.text_quads(val, right - self.text_width(val), y, white, scale));
+        }
+        quads.extend(self.text_quads(&time.0, left, time_y, white, scale));
+        quads.extend(self.text_quads(&time.1, right - self.text_width(&time.1), time_y, white, scale));
     }
 
     /// This frame's quads: background crop, ambient dressing, trail
@@ -1548,6 +1835,9 @@ impl WorldMap {
     /// click hit anything.
     pub fn click(&mut self, save: &Mc2Save, size: (f32, f32), cursor: (f32, f32)) -> bool {
         let (sx, sy) = crate::ui::unletterbox(cursor, size, VIEW_W, VIEW_H);
+        if self.next_stats() {
+            return true;
+        }
         if self.dialog.is_some() {
             return self.dialog_click(sx, sy);
         }
@@ -1609,6 +1899,39 @@ impl WorldMap {
         }
         false
     }
+
+    /// A right click: retail map mode 5 (MI:3409-50). Over a
+    /// completed main portal (`activated_18 == 1`) or a completed
+    /// secret one (`activated_12 == 1`) it puts up that level's stats
+    /// table: the main portal's index, the secret's level number. A
+    /// table already up comes down, as any button does (MI:3217-22).
+    /// Nothing travels, and nothing answers while a dialog pumps or
+    /// the carpet is moving. Returns true when the click hit anything.
+    pub fn right_click(&mut self, save: &Mc2Save, size: (f32, f32), cursor: (f32, f32)) -> bool {
+        let (sx, sy) = crate::ui::unletterbox(cursor, size, VIEW_W, VIEW_H);
+        if self.next_stats() {
+            return true;
+        }
+        if self.dialog.is_some() || self.travel.is_some() || self.glide.is_some() {
+            return false;
+        }
+        let (mx, my) = (sx + self.scroll.0, sy + self.scroll.1);
+        let hit = MC2_PORTAL_HIT as f32;
+        let done = Self::portals(save).into_iter().find(|p| {
+            matches!(p.state, PortalState::Flag | PortalState::SecretDone)
+                && mx >= p.pos.0
+                && mx < p.pos.0 + hit
+                && my >= p.pos.1
+                && my < p.pos.1 + hit
+        });
+        match done {
+            Some(p) => {
+                self.show_stats(vec![p.level]);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1622,6 +1945,22 @@ mod tests {
         }
     }
 
+    /// A secret level's parent queues ahead of it: the map shows the
+    /// parent's table first, then the secret's, one dismissal each.
+    #[test]
+    fn stats_tables_queue_in_order() {
+        let mut wm = bare();
+        wm.show_stats(vec![4, 30]);
+        assert_eq!(wm.stats, Some(4), "the parent's table first");
+        wm.dismiss_stats();
+        assert_eq!(wm.stats, Some(30), "then the secret level's");
+        assert!(wm.stats_open());
+        wm.escape();
+        assert!(!wm.stats_open(), "the queue is spent");
+        wm.show_stats(Vec::new());
+        assert!(!wm.stats_open(), "an empty queue shows nothing");
+    }
+
     fn bare() -> WorldMap {
         WorldMap {
             atlas: Vec::new(),
@@ -1632,6 +1971,8 @@ mod tests {
             font: Vec::new(),
             strings: Vec::new(),
             dialog: None,
+            stats: None,
+            stats_next: Default::default(),
             pending_action: None,
             pending_button: None,
             desc_dismissed: false,
@@ -1706,6 +2047,25 @@ mod tests {
         assert!(wm.travel.is_none());
         // A click out in the sea hits nothing.
         assert!(!wm.click(&save, size, (600.0, 100.0)));
+    }
+
+    /// Retail map mode 5: a right click on a COMPLETED portal shows its
+    /// table and never travels; the pending portal answers nothing.
+    #[test]
+    fn right_click_on_a_completed_portal_shows_its_table() {
+        let mut wm = bare();
+        let size = (1280.0, 960.0); // 2× scale
+        wm.scroll = (400.0, 800.0); // portal 0 (420, 820) under (50, 50)
+        let pending = save_with(0);
+        assert!(!wm.right_click(&pending, size, (50.0, 50.0)), "the pending portal");
+        assert!(!wm.stats_open());
+        let save = save_with(3);
+        assert!(wm.right_click(&save, size, (50.0, 50.0)), "portal 0 is completed");
+        assert_eq!(wm.stats, Some(0), "its own table");
+        assert!(wm.travel.is_none(), "a right click never flies");
+        assert!(wm.right_click(&save, size, (600.0, 100.0)), "any button takes it down");
+        assert!(!wm.stats_open());
+        assert!(!wm.right_click(&save, size, (600.0, 100.0)), "the sea hits nothing");
     }
 
     #[test]

@@ -6228,6 +6228,10 @@ impl Gen {
             self.mc2_prekill(i, M25_BASE);
             return;
         }
+        // The full-size parent never reaches the prekill (it splits
+        // here and reaps in state 5), so the stats ledger bills it
+        // here — once; each mini bills through its own prekill.
+        self.stats_note_death(i);
         let (x, y, z, mana, killer) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f140, e.f40)
@@ -6244,6 +6248,9 @@ impl Gen {
         self.mc2_corpse_burst(i);
         self.ent[i].tick70 = M25_BASE + 5;
         self.ent[i].f71 = 0;
+        // `dword_0x364D2 += 3` (EF:19129) — the stats census, on
+        // every split (the minis or not).
+        self.stats.0.census += 3;
     }
 
     /// The 3-mini spawn loop of `sub_28CE0` (:19110-70).

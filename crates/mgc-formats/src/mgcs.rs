@@ -130,6 +130,13 @@ pub struct SaveHeader {
     /// MC2 slots and on pre-ring saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mc1_spell_ring: Option<[u8; 24]>,
+    /// MC2: the stats tables the map still owes, oldest first — a
+    /// secret level's parent, won through the alternate portal, whose
+    /// table waits for the next map entry. Native-only; saved
+    /// mid-level so a resume shows both tables. Empty (and omitted)
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mc2_map_stats: Vec<u32>,
 }
 
 /// The mid-level half of the header. The level itself lives in
@@ -172,7 +179,9 @@ pub struct SavePackage {
     pub header: SaveHeader,
     /// The retail campaign record verbatim (142 B MC1/HW, 1319 B
     /// MC2), including the opaque blobs the native format has no use
-    /// for. Carried so the `.gam` export stays byte-exact.
+    /// for. Carried so the `.gam` export stays byte-exact. MC2 may
+    /// append a native tail (the stats absolutes, `MGK3`), which the
+    /// export trims.
     pub campaign: Vec<u8>,
     /// `mgc_sim::Simulation::snapshot()`. Absent on a hub save.
     pub snapshot: Option<Vec<u8>>,
@@ -371,6 +380,7 @@ pub fn hub_header(game: Game, label: String, campaign_level: u32, level: u32) ->
         bake_epoch: BAKE_EPOCH,
         resume: None,
         mc1_spell_ring: None,
+        mc2_map_stats: Vec::new(),
     }
 }
 
@@ -408,6 +418,25 @@ mod tests {
             !back.is_in_level(),
             "a hub slot resumes at the campaign screen"
         );
+    }
+
+    /// The owed MC2 stats tables ride the header (a save taken inside
+    /// a secret level), and a header without them keeps its old shape.
+    #[test]
+    fn owed_map_stats_ride_the_header() {
+        let mut header = hub_header(Game::MagicCarpet2, "SECRET".into(), 4, 30);
+        header.resume = Some(in_level());
+        header.mc2_map_stats = vec![4];
+        let save = SavePackage {
+            header,
+            campaign: campaign(),
+            snapshot: Some(vec![1, 2, 3]),
+        };
+        let back = read(std::io::Cursor::new(&to_bytes(&save).unwrap())).unwrap();
+        assert_eq!(back.header.mc2_map_stats, vec![4]);
+        let plain = hub_header(Game::MagicCarpet2, "HUB".into(), 4, 4);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("mc2_map_stats"), "omitted while empty");
     }
 
     #[test]

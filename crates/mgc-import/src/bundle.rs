@@ -886,6 +886,39 @@ pub fn bake_mc2_audio(
         .collect())
 }
 
+/// The 50 world names of an MC1/HW EXE: consecutive NUL-terminated
+/// literals `"<n>. <Name>"` after `"Text Omitted"` (the compiler's
+/// alignment filler sits between some of them, hence the search per
+/// ordinal rather than a split). None unless all 50 read cleanly.
+fn exe_level_names(exe: &[u8]) -> Option<Vec<String>> {
+    fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+        hay.get(from..)?
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .map(|i| i + from)
+    }
+    let mut at = find(exe, b"Text Omitted\0", 0)?;
+    let mut out = Vec::with_capacity(50);
+    for n in 1..=50 {
+        let tag = format!("{n}. ");
+        let k = find(exe, tag.as_bytes(), at)?;
+        // Each name follows its predecessor closely; a far hit is not
+        // the table.
+        if k - at > 64 {
+            return None;
+        }
+        let start = k + tag.len();
+        let len = exe[start..].iter().position(|&b| b == 0)?;
+        let name = std::str::from_utf8(&exe[start..start + len]).ok()?;
+        if name.is_empty() || len > 32 || !name.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+            return None;
+        }
+        out.push(name.to_string());
+        at = start + len;
+    }
+    Some(out)
+}
+
 /// The MC1/HW frontend bundle → `assets/mc1-ui/`: the 320×200 main
 /// menu (bg + palette + MMMASK hotspot bitmap + MMSPR button/dialog
 /// sprites), the GLOBE/TIMER menu animations (Bullfrog FMV deltas,
@@ -1217,6 +1250,81 @@ pub fn bake_mc1_menu(src: &GameSource, out_dir: &Path) -> Result<Vec<(String, St
         file: "SCROLL.DAT".into(),
         sha256: hex(&Sha256::digest(&scroll_raw)),
     });
+
+    // PPERF: the end-of-level performance screen (sub_4E5B0 :60003-
+    // 60010 — PPERF.DAT over PPERF.PAL, menu state 5 after the level
+    // FMV). Optional like the scroll: an older bake just has no
+    // stats backdrop.
+    if src.exists("DATA/SCREENS/PPERF.DAT") && src.exists("DATA/SCREENS/PPERF.PAL") {
+        let pbg = get("DATA/SCREENS/PPERF.DAT")?;
+        let ppal = get("DATA/SCREENS/PPERF.PAL")?;
+        if pbg.len() == 64_000 && ppal.len() == 768 {
+            emit("pperf-bg.bin", &pbg)?;
+            emit("pperf-pal.bin", &ppal)?;
+            // SFONT2: the screen's font (:60012-17, `dword_96894 =
+            // SFont2Tab + 6` — glyph id = char − 31, SFONT1's layout),
+            // drawn in its own colours through PPERF.PAL.
+            if src.exists("DATA/SCREENS/SFONT2.DAT") && src.exists("DATA/SCREENS/SFONT2.TAB") {
+                let dat = get("DATA/SCREENS/SFONT2.DAT")?;
+                let tab = get("DATA/SCREENS/SFONT2.TAB")?;
+                let glyphs = crate::hspr::decode(&dat, &tab).map_err(|e| {
+                    BakeError::Level(
+                        Path::new("DATA/SCREENS/SFONT2.DAT").to_path_buf(),
+                        0,
+                        e.to_string(),
+                    )
+                })?;
+                let packed = sprites::pack(&glyphs, UI_ATLAS_WIDTH);
+                emit("sfont2.bin", &packed.atlas)?;
+                emit(
+                    "sfont2.json",
+                    &serde_json::to_vec_pretty(&packed.index).expect("sfont2 index serializes"),
+                )?;
+                sources.push(BundleSource {
+                    file: "SFONT2.DAT".into(),
+                    sha256: hex(&Sha256::digest(&dat)),
+                });
+            }
+            for f in ["PPERF.DAT", "PPERF.PAL"] {
+                sources.push(BundleSource {
+                    file: f.into(),
+                    sha256: hex(&Sha256::digest(&get(&format!("DATA/SCREENS/{f}"))?)),
+                });
+            }
+        } else {
+            eprintln!(
+                "note: mc1: PPERF sizes bg {} pal {} — skipping the stats backdrop",
+                pbg.len(),
+                ppal.len()
+            );
+        }
+    }
+
+    // The world names the performance screen titles itself with
+    // (retail `dword_999B8[level]`, drawn at (40, 8)): "1. Al Jahan" ..
+    // "50. Volcania", string literals in each EXE's data object right
+    // after "Text Omitted". HIDDEN.EXE carries its own list. Optional
+    // — the app falls back to "Level N".
+    let mut names = serde_json::Map::new();
+    for (key, exe) in [("mc1", "CARPET.EXE"), ("mc1hw", "HIDDEN.EXE")] {
+        let Ok(raw) = src.read(exe) else { continue };
+        match exe_level_names(&raw) {
+            Some(list) => {
+                names.insert(key.into(), list.into());
+                sources.push(BundleSource {
+                    file: exe.into(),
+                    sha256: hex(&Sha256::digest(&raw)),
+                });
+            }
+            None => eprintln!("note: mc1: no level-name table in {exe}"),
+        }
+    }
+    if !names.is_empty() {
+        emit(
+            "level-names.json",
+            &serde_json::to_vec_pretty(&names).expect("level names serialize"),
+        )?;
+    }
 
     // FONT1 glyph masks (slot labels, dialog text).
     let dat = get("DATA/FONT1.DAT")?;
@@ -1928,4 +2036,25 @@ fn bake_variant(
         &serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
     )?;
     Ok(outputs)
+}
+
+#[cfg(test)]
+mod level_name_tests {
+    use super::exe_level_names;
+
+    /// Both EXEs yield their 50 names through the real source layers
+    /// (GOG: `CARPET/` inside the CD image). Skips without gamedata.
+    #[test]
+    fn world_names_from_the_install() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../gamedata");
+        let Some(src) = crate::gamedata::Gamedata::locate(&root).mc1 else {
+            eprintln!("skip: no MC1 gamedata");
+            return;
+        };
+        let mc1 = exe_level_names(&src.read("CARPET.EXE").unwrap()).expect("CARPET.EXE names");
+        assert_eq!((mc1[0].as_str(), mc1[49].as_str()), ("Al Jahan", "Volcania"));
+        let hw = exe_level_names(&src.read("HIDDEN.EXE").unwrap()).expect("HIDDEN.EXE names");
+        assert_eq!((hw[0].as_str(), hw[8].as_str()), ("Goyaan", "Rama'Q"));
+        assert_eq!(hw[25..], mc1[25..], "HW reuses MC1's names from 26 on");
+    }
 }

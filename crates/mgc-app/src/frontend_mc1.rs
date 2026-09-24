@@ -124,14 +124,14 @@ impl Movie {
 }
 
 /// An indexed sprite bank (MMSPR / FONT1) kept CPU-side for blits.
-struct Bank {
+pub(crate) struct Bank {
     atlas: Vec<u8>,
     atlas_w: usize,
     rects: Vec<Option<(usize, usize, usize, usize)>>,
 }
 
 impl Bank {
-    fn load(dir: &Path, bin: &str, json: &str) -> Result<Self, String> {
+    pub(crate) fn load(dir: &Path, bin: &str, json: &str) -> Result<Self, String> {
         let atlas = std::fs::read(dir.join(bin)).map_err(|e| format!("{bin}: {e}"))?;
         let index: mgc_formats::bundle::SpriteIndex = serde_json::from_slice(
             &std::fs::read(dir.join(json)).map_err(|e| format!("{json}: {e}"))?,
@@ -158,51 +158,50 @@ impl Bank {
     }
 
     /// Blit sprite pixels (index 0 transparent) into the screen.
-    fn blit(&self, id: usize, x: i32, y: i32, buf: &mut [u8]) {
+    pub(crate) fn blit(&self, id: usize, x: i32, y: i32, buf: &mut [u8]) {
+        self.blit_in(id, x, y, None, buf, (W, H));
+    }
+
+    /// Blit a glyph as a solid color mask (fonts are 1-bit masks).
+    pub(crate) fn blit_mask(&self, id: usize, x: i32, y: i32, color: u8, buf: &mut [u8]) {
+        self.blit_in(id, x, y, Some(color), buf, (W, H));
+    }
+
+    /// The blit on a screen of any size (`dims` = width, height):
+    /// `ink` = Some paints every set pixel that index (a mask font),
+    /// None copies the sprite's own indices (index 0 transparent).
+    pub(crate) fn blit_in(
+        &self,
+        id: usize,
+        x: i32,
+        y: i32,
+        ink: Option<u8>,
+        buf: &mut [u8],
+        dims: (usize, usize),
+    ) {
         let Some((sx, sy, w, h)) = self.rects.get(id).copied().flatten() else {
             return;
         };
+        let (bw, bh) = dims;
         for row in 0..h {
             let py = y + row as i32;
-            if py < 0 || py >= H as i32 {
+            if py < 0 || py >= bh as i32 {
                 continue;
             }
             for col in 0..w {
                 let px = x + col as i32;
-                if px < 0 || px >= W as i32 {
+                if px < 0 || px >= bw as i32 {
                     continue;
                 }
                 let p = self.atlas[(sy + row) * self.atlas_w + sx + col];
                 if p != 0 {
-                    buf[py as usize * W + px as usize] = p;
+                    buf[py as usize * bw + px as usize] = ink.unwrap_or(p);
                 }
             }
         }
     }
 
-    /// Blit a glyph as a solid color mask (fonts are 1-bit masks).
-    fn blit_mask(&self, id: usize, x: i32, y: i32, color: u8, buf: &mut [u8]) {
-        let Some((sx, sy, w, h)) = self.rects.get(id).copied().flatten() else {
-            return;
-        };
-        for row in 0..h {
-            let py = y + row as i32;
-            if py < 0 || py >= H as i32 {
-                continue;
-            }
-            for col in 0..w {
-                let px = x + col as i32;
-                if px < 0 || px >= W as i32 {
-                    continue;
-                }
-                if self.atlas[(sy + row) * self.atlas_w + sx + col] != 0 {
-                    buf[py as usize * W + px as usize] = color;
-                }
-            }
-        }
-    }
-
-    fn width_of(&self, id: usize) -> usize {
+    pub(crate) fn width_of(&self, id: usize) -> usize {
         self.rects
             .get(id)
             .copied()

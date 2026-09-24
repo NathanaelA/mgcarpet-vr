@@ -10,4 +10,5 @@
 //! columns and rosters plug into this chassis from `mc1` and `mc2`.
 
 pub mod features;
+pub mod stats;
 pub mod world;

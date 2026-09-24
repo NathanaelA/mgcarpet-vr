@@ -3695,6 +3695,10 @@ impl Gen {
             }
             s = self.ent[s].f54 as usize;
         }
+        // The stats ledger's every-death tally (not retail — see
+        // `engine::stats`); after the chain inherit, so a segment's
+        // killer bills the head.
+        self.stats_note_death(i);
         // Kill credit (:21840-50): the human player, chain heads only,
         // spell-track models excluded. The reward itself is the ball.
         if self.ent[i].f38 == PLAYER_TARGET

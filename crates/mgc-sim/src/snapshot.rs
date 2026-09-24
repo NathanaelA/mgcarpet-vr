@@ -147,7 +147,14 @@ const MAGIC: u32 = 0x5343_474D;
 ///     a resume that restarted it at 0 diverged from the live world
 ///     the next time a panel flashed (the level-005 round trip, 328
 ///     ticks in). Joins the World stream after `inert`.
-pub const SNAPSHOT_VERSION: u32 = 25;
+/// 26: `Gen::stats` — the end-of-level stats ledger (retail's
+///     creature + spell-offer censuses, the enhanced every-death tally
+///     and its direct-kill hints). A resume that dropped it would show
+///     a performance screen counting only the post-load half of the
+///     level. Joins the World stream after `mc1_frame`.
+/// 27: the ledger gains the possession-free accuracy tally
+///     (`offensive_shots` / `offensive_hits`) at its tail.
+pub const SNAPSHOT_VERSION: u32 = 27;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,6 +238,13 @@ pub(crate) struct Reader<'a> {
 impl<'a> Reader<'a> {
     fn new(buf: &'a [u8]) -> Self {
         Reader { buf, pos: 0 }
+    }
+
+    /// A cursor over a bare section — for codec unit tests elsewhere
+    /// in the crate.
+    #[cfg(test)]
+    pub(crate) fn for_test(buf: &'a [u8]) -> Self {
+        Reader::new(buf)
     }
 
     fn remaining(&self) -> usize {
