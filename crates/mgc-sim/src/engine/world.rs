@@ -1303,6 +1303,13 @@ pub struct World {
 /// `word_0x36DFE`, EF:60367-80 — level-000 ends through the 12
 /// arm). The pose is the scripted carpet in engine units; the app
 /// mirrors it while active.
+/// See [`World::mc2_end_view`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mc2EndView {
+    pub arrived: bool,
+    pub portal: Option<(f32, f32, f32)>,
+}
+
 #[derive(Clone, Copy, Debug, Hash)]
 struct Mc2EndSeq {
     /// `byte_0x46_70`.
@@ -21895,6 +21902,25 @@ impl World {
             Some(s) if s.phase >= 12 => 1.0,
             _ => 0.0,
         }
+    }
+
+    /// The ending sequence's progress for the app's filmed exit
+    /// (`render.enhancement.mc2_fancy_exit`) — a read-only view, None
+    /// while no sequence runs. `arrived` is true from the tick the
+    /// flight ends (phase 10, the fade arm) on; `portal` is the fly-to
+    /// marker in flyer space (x, altitude, z tiles), None when the
+    /// sequence found no marker.
+    pub fn mc2_end_view(&self) -> Option<Mc2EndView> {
+        self.mc2_endseq.map(|s| {
+            let portal = (s.target != 0)
+                .then(|| self.g.ent.get(s.target as usize))
+                .flatten()
+                .map(|e| (e.x as f32 / 256.0, e.z as f32 / 256.0, e.y as f32 / 256.0));
+            Mc2EndView {
+                arrived: s.phase >= 10,
+                portal,
+            }
+        })
     }
 
     /// The level is WON — the true terminator, distinct from
@@ -53261,11 +53287,21 @@ mod tests {
              (sub_6F7E0, file 0x94019) — and it persists as the target"
         );
         assert!(!w.won(), "the trip alone must not end the level");
+        // The app's filmed-exit view: the portal is the mouth, and
+        // `arrived` is still false on the seize.
+        let v = w.mc2_end_view().expect("view while seized");
+        assert!(!v.arrived);
+        let (px, _, pz) = v.portal.expect("the mouth is the portal");
+        assert!((px - 110.0).abs() < 1.0 && (pz - 100.0).abs() < 1.0);
         // Run the sequence out: decelerate, aim east, launch, glue,
         // arrive (< 0x180), fade 32 — well inside 1000 ticks.
         let mut won_at = None;
+        let mut arrived_fade = None;
         for t in 0..1000 {
             w.tick(pose, PlayerCommand::default());
+            if arrived_fade.is_none() && w.mc2_end_view().is_some_and(|v| v.arrived) {
+                arrived_fade = Some(w.end_fade());
+            }
             if w.won() {
                 won_at = Some(t);
                 break;
@@ -53278,6 +53314,10 @@ mod tests {
             "the scripted carpet stopped at the mouth (x = {ex})"
         );
         assert!(w.end_fade() >= 1.0, "faded to black");
+        // The carpet vanishes on the arrival tick, where the fade has
+        // barely begun — the portal flash lands on a lit screen.
+        let f = arrived_fade.expect("arrival is reported before the win");
+        assert!(f < 0.1, "fade {f} at arrival");
     }
 
     /// ⭐⭐ **THE ENDING TRIGGER'S REACH IS AUTHORED, AND IT IS HUGE.**

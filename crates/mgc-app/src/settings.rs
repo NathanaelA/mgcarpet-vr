@@ -1081,6 +1081,29 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Render,
+            group: "render · enhancement",
+            label: "mc2_fancy_exit",
+            class: Enhancement,
+            key: None,
+            cli: None,
+            cfg_path: "render.enhancement.mc2_fancy_exit",
+            read: toggle!(c => render.enhancement.mc2_fancy_exit),
+            desc: "MC2's level exit, filmed from behind: the view floats \
+                   out to a chase camera and watches the carpet speed \
+                   into the portal, which flashes as it vanishes. The \
+                   flight itself is retail's.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.enhancement.mc2_fancy_exit = v,
+                descs: [
+                    "First-person exit flight, as retail (without its \
+                     motion blur).",
+                    "Chase-camera exit: the carpet flies into the portal \
+                     and vanishes in a flash.",
+                ],
+            },
+        },
         // ---- render · debug ---------------------------------------------
         Spec {
             domain: Render,

@@ -1684,22 +1684,23 @@ fn interp_carpet(a: &Flyer, b: &Flyer, alpha: f32) -> (f32, f32, f32, f32) {
 /// smooth motion is off — and an instrument added to only the first
 /// is an instrument that disappears the moment the player turns
 /// smooth motion off. (The old ghost had exactly that gap.)
+///
+/// `subject` is decided by [`App::subject_visible`]: the carpet is
+/// also drawn outside a replay, by the filmed MC2 exit.
 fn push_replay_instruments(
     out: &mut Vec<Billboard>,
     driver: Option<&replay::ReplayDriver>,
-    third_person: bool,
+    subject: bool,
     game: mgc_sim::ids::GameId,
     carpet: (f32, f32, f32, f32),
     bank: f32,
     dims: &impl Fn(u16) -> Option<(u16, u16, u16)>,
 ) {
-    let Some(d) = driver else { return };
     let (x, y, z, yaw) = carpet;
-    if third_person
-        && let Some(b) = entities::human_billboard(game, x, y, z, yaw, bank, dims)
-    {
+    if subject && let Some(b) = entities::human_billboard(game, x, y, z, yaw, bank, dims) {
         out.push(b);
     }
+    let Some(d) = driver else { return };
     if replay_ghost_wanted()
         && let Some(g) = replay::ghost_billboard(d, game, dims)
     {
@@ -1714,6 +1715,36 @@ fn push_replay_instruments(
 fn replay_ghost_wanted() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("MGC_REPLAY_GHOST").is_ok_and(|v| v != "0"))
+}
+
+/// The filmed MC2 exit's float-out: seconds for the view to travel
+/// from the eye onto the chase boom. The sequence's coast + aim +
+/// 12-tick countdown run ~1-2 s before the launch, so the boom is
+/// seated before the carpet speeds off.
+const FANCY_EXIT_FLOAT: f32 = 1.0;
+/// The filmed exit's arrival flash: peak white opacity, and seconds
+/// to clear.
+const FANCY_EXIT_FLASH_PEAK: f32 = 0.85;
+/// The warp sample the filmed exit plays as the carpet vanishes: MC2's
+/// teleporter pad (`World` pad arm, `snd_player(22)`).
+const SND_TELEPORT_WARP: u8 = 22;
+const FANCY_EXIT_FLASH: f32 = 0.35;
+/// Seconds for the used portal to collapse (player: the exact timing
+/// against the fade does not matter — it may still be shrinking when
+/// the screen goes black).
+const FANCY_EXIT_SHRINK: f32 = 1.5;
+
+/// Collapse the used portal's sprite to scale `k` about its own
+/// centre. The portal is the sprite whose feet stand on the marker's
+/// plan position (a static marker, so an exact-ish match).
+fn shrink_portal(set: &mut [Billboard], portal: (f32, f32, f32), k: f32) {
+    let wrap_d = |d: f32| (d + 128.0).rem_euclid(256.0) - 128.0;
+    for b in set.iter_mut() {
+        if wrap_d(b.x - portal.0).abs() < 0.25 && wrap_d(b.z - portal.2).abs() < 0.25 {
+            b.y += b.world_h * (1.0 - k) * 0.5;
+            b.world_h *= k;
+        }
+    }
 }
 
 /// `--thirdperson`: the render camera for a replay watched from
@@ -2298,6 +2329,14 @@ struct App {
     /// heading, the elastic eye and the subject's smoothed bank,
     /// stepped once per rendered frame.
     chase: camera::ChaseCam,
+    /// The filmed MC2 exit's clock (`render.enhancement.mc2_fancy_exit`):
+    /// seconds since the view started floating out of the eye onto the
+    /// chase boom. None while no filmed exit runs.
+    fancy_exit_t: Option<f32>,
+    /// Seconds since the filmed exit's ARRIVAL tick (the carpet's
+    /// vanish): drives the screen flash and the portal's shrink.
+    /// Runs in either view, None otherwise.
+    fancy_arrived_t: Option<f32>,
     /// `--record`: the destination path, then the live recorder.
     record_path: Option<PathBuf>,
     recorder: Option<replay::PortRecorder>,
@@ -2563,6 +2602,8 @@ impl App {
             replay: None,
             third_person,
             chase: camera::ChaseCam::default(),
+            fancy_exit_t: None,
+            fancy_arrived_t: None,
             record_path,
             recorder: None,
             rec_toggles: serde_json::Map::new(),
@@ -4491,6 +4532,38 @@ impl App {
     /// option, but it also needs smooth_motion (the flame is built on
     /// the interpolated pose timeline) — with smooth_motion off the
     /// classic sprites draw regardless of the option.
+    /// The filmed MC2 exit's view of the ending sequence
+    /// (`render.enhancement.mc2_fancy_exit`): Some while the sequence
+    /// runs AND the option is on.
+    fn fancy_exit_view(&self) -> Option<mgc_sim::engine::world::Mc2EndView> {
+        if !self.cfg.render.enhancement.mc2_fancy_exit {
+            return None;
+        }
+        self.session.as_deref()?.sim.world.as_ref()?.mc2_end_view()
+    }
+
+    /// Is the player's own carpet on screen? Under `--thirdperson`
+    /// replay, always; during the filmed MC2 exit, until the arrival
+    /// tick — it vanishes into the portal (either view).
+    fn subject_visible(&self) -> bool {
+        let chase = self.third_person && self.replay.is_some();
+        match self.fancy_exit_view() {
+            Some(v) => !v.arrived,
+            None => chase,
+        }
+    }
+
+    /// The used portal collapsing after the filmed exit's arrival:
+    /// its position and this frame's scale (1 → 0 over
+    /// `FANCY_EXIT_SHRINK` seconds). None before arrival or without
+    /// a portal.
+    fn portal_shrink(&self) -> Option<((f32, f32, f32), f32)> {
+        let t = self.fancy_arrived_t?;
+        let portal = self.fancy_exit_view()?.portal?;
+        let k = (t / FANCY_EXIT_SHRINK).clamp(0.0, 1.0);
+        Some((portal, 1.0 - k * k * (3.0 - 2.0 * k)))
+    }
+
     fn enhanced_fire(&self) -> bool {
         self.cfg.render.enhancement.fire == config::FireEffects::Enhanced
             && self.cfg.render.enhancement.smooth_motion
@@ -4517,6 +4590,8 @@ impl App {
         }
         let enhanced_fire = self.enhanced_fire();
         let enhanced_lightning = self.enhanced_lightning();
+        let subject = self.subject_visible();
+        let shrink = self.portal_shrink();
         let Some(r) = &mut self.renderer else { return };
         let poses = entities::lerp_poses(&sess.pose_prev, &sess.pose_cur, alpha.clamp(0.0, 1.0));
         let index = sess.level.sprites.as_ref().map(|(i, _)| i);
@@ -4560,12 +4635,15 @@ impl App {
         push_replay_instruments(
             &mut billboards,
             self.replay.as_ref(),
-            self.third_person,
+            subject,
             sess.level.game,
             interp_carpet(&sess.prev_flyer, &sess.sim.flyer, alpha),
             self.chase.bank_now(),
             &dims,
         );
+        if let Some((portal, k)) = shrink {
+            shrink_portal(&mut billboards, portal, k);
+        }
         r.set_billboards(billboards);
         // Enhanced fire: the procedural crater (walls + smoke) goes
         // FIRST so it wins density-cap slots; then the velocity-aware
@@ -4628,6 +4706,8 @@ impl App {
     fn sync_world(&mut self) {
         let enhanced_fire = self.enhanced_fire();
         let enhanced_lightning = self.enhanced_lightning();
+        let subject = self.subject_visible();
+        let shrink = self.portal_shrink();
         // A fire/lightning-option flip must re-derive the sprite/
         // particle sets even while PAUSED (no ticks → entities never
         // dirty, and apply_smooth_motion skips) — treat it as an
@@ -4824,12 +4904,15 @@ impl App {
                 push_replay_instruments(
                     &mut set,
                     self.replay.as_ref(),
-                    self.third_person,
+                    subject,
                     level.game,
                     (f.x, f.y, f.z, f.yaw),
                     self.chase.bank_now(),
                     &dims,
                 );
+                if let Some((portal, k)) = shrink {
+                    shrink_portal(&mut set, portal, k);
+                }
                 r.set_billboards(set);
                 r.set_health_bars(bars);
                 r.set_lights(&lights);
@@ -6754,7 +6837,51 @@ impl App {
         // carpet so the flight can be watched (`camera.rs`). The boom
         // frames the CARPET PLANE, not the eye — half a tile at three
         // tiles' range is a sixth of the frame.
-        let cam = if self.third_person && self.replay.is_some() {
+        // The filmed MC2 exit (`mc2_fancy_exit`) takes the chase boom
+        // too, floating out of the eye over `FANCY_EXIT_FLOAT` seconds;
+        // under a `--thirdperson` replay the boom is already up.
+        let chase_view = self.third_person && self.replay.is_some();
+        let end_view = self.fancy_exit_view();
+        let was_arrived = self.fancy_arrived_t.is_some();
+        self.fancy_arrived_t = match end_view {
+            Some(v) if v.arrived => Some(self.fancy_arrived_t.map_or(0.0, |t| t + dt)),
+            _ => None,
+        };
+        // The warp: the teleporter pad's own sample (22, the pad's
+        // `snd_player(22)`) on the frame the carpet vanishes — an app
+        // sound, so the sim's sound stream stays retail's.
+        if !was_arrived
+            && self.fancy_arrived_t.is_some()
+            && self.cfg.audio.sound
+            && let Some(a) = &mut self.audio
+        {
+            let listener = mgc_audio::Listener {
+                pos: (0, 0, 0),
+                yaw: 0,
+            };
+            a.event(SND_TELEPORT_WARP, mgc_audio::Source::Player, &listener);
+        }
+        let float = match end_view {
+            Some(_) if chase_view => None,
+            Some(_) => {
+                let t = match self.fancy_exit_t {
+                    Some(t) => t + dt,
+                    None => {
+                        // Seat a fresh boom: its first step lands
+                        // straight on the chase pose we blend toward.
+                        self.chase = camera::ChaseCam::default();
+                        0.0
+                    }
+                };
+                self.fancy_exit_t = Some(t);
+                Some(t)
+            }
+            None => {
+                self.fancy_exit_t = None;
+                None
+            }
+        };
+        let cam = if chase_view || float.is_some() {
             let aspect = self
                 .window
                 .as_ref()
@@ -6768,7 +6895,11 @@ impl App {
             // camera so the sprite leans as the view swings.
             let bank = camera::motion_bank((a.x, a.z, a.yaw), (b.x, b.z, b.yaw), TICK_DT);
             self.chase.bank(bank, dt);
-            third_person_camera(&mut self.chase, &eye, carpet_y, &sess.sim, aspect, dt)
+            let boom = third_person_camera(&mut self.chase, &eye, carpet_y, &sess.sim, aspect, dt);
+            match float {
+                Some(t) => camera::blend_view(&eye, &boom, t / FANCY_EXIT_FLOAT),
+                None => boom,
+            }
         } else {
             eye
         };
@@ -7238,8 +7369,11 @@ impl App {
             // — the pure scan twin). Split options 2026-07-23.
             let want_cross = self.cfg.render.preference.crosshair;
             let want_hints = self.cfg.render.debug.autoaim_hints;
+            // The filmed MC2 exit has left the eye and the controls
+            // are seized — nothing to aim.
             if (want_cross || want_hints)
                 && !self.book_open()
+                && self.fancy_exit_t.is_none()
                 && vitals.state == mgc_sim::engine::world::LifeState::Alive
             {
                 let f = &sess.sim.flyer;
@@ -7473,6 +7607,15 @@ impl App {
                     }
                 }
                 self.quit_fade = Some(0.0);
+            }
+            // The filmed exit's flash: white on the arrival tick,
+            // gone in `FANCY_EXIT_FLASH` seconds — drawn UNDER the
+            // fade, which is just starting and darkens it as it goes.
+            if let Some(t) = self.fancy_arrived_t {
+                let a = FANCY_EXIT_FLASH_PEAK * (1.0 - t / FANCY_EXIT_FLASH);
+                if a > 0.0 {
+                    quads.push(ui::solid([0.0, 0.0, size.0, size.1], [1.0, 1.0, 1.0, a]));
+                }
             }
             let fade = w.end_fade().max(self.quit_fade.unwrap_or(0.0));
             if fade > 0.0 {

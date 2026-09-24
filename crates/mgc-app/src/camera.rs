@@ -278,6 +278,30 @@ pub fn motion_bank(prev: (f32, f32, f32), cur: (f32, f32, f32), tick_dt: f32) ->
     mgc_sim::enhanced_bank(turn_rate, fwd_speed)
 }
 
+/// The filmed MC2 exit's float-out: the view `k` (0..1, clamped) of
+/// the way from the first-person `eye` to the chase `boom`, eased at
+/// both ends. Positions take the short way round the torus, angles
+/// the short arc; the eye's bank unwinds to the boom's level world.
+/// No terrain resolve: both ends are clear and the path is a boom's
+/// length.
+pub fn blend_view(
+    eye: &mgc_render::CameraView,
+    boom: &mgc_render::CameraView,
+    k: f32,
+) -> mgc_render::CameraView {
+    let k = k.clamp(0.0, 1.0);
+    let k = k * k * (3.0 - 2.0 * k);
+    mgc_render::CameraView {
+        x: wrap(eye.x + wrap_delta(boom.x - eye.x) * k),
+        y: eye.y + (boom.y - eye.y) * k,
+        z: wrap(eye.z + wrap_delta(boom.z - eye.z) * k),
+        yaw: eye.yaw + wrap_angle(boom.yaw - eye.yaw) * k,
+        pitch: eye.pitch + (boom.pitch - eye.pitch) * k,
+        roll: eye.roll + wrap_angle(boom.roll - eye.roll) * k,
+        fov_y: eye.fov_y + (boom.fov_y - eye.fov_y) * k,
+    }
+}
+
 /// The floor/ceiling clearance clamp the boom resolve ends on.
 fn clamp_vertical(
     mut p: [f32; 3],
@@ -545,6 +569,34 @@ mod tests {
         // The seam: a step across x = 0 is one tile, not 255.
         let seam = motion_bank((0.2, 128.0, 0.0), (255.9, 128.0, 0.0), dt);
         assert_eq!(seam, 0.0);
+    }
+
+    /// The filmed exit's float-out starts ON the eye, ends ON the
+    /// boom, and crosses the seam and the ±π yaw cut the short way.
+    #[test]
+    fn blend_view_runs_eye_to_boom_the_short_way() {
+        let v = |x: f32, yaw: f32, roll: f32| mgc_render::CameraView {
+            x,
+            y: 10.0,
+            z: 128.0,
+            yaw,
+            pitch: 0.0,
+            roll,
+            fov_y: FOV,
+        };
+        let eye = v(255.5, 3.0, 0.3);
+        let boom = v(1.5, -3.0, 0.0);
+        let start = blend_view(&eye, &boom, 0.0);
+        assert_eq!((start.x, start.yaw, start.roll), (eye.x, eye.yaw, eye.roll));
+        let end = blend_view(&eye, &boom, 1.0);
+        assert!((end.x - boom.x).abs() < 1e-4);
+        assert!((wrap_angle(end.yaw - boom.yaw)).abs() < 1e-4);
+        assert!(end.roll.abs() < 1e-6);
+        // Midway: across the seam (x near 0.5), not back through 128;
+        // across the yaw cut (near π), not through 0.
+        let mid = blend_view(&eye, &boom, 0.5);
+        assert!((mid.x - 0.5).abs() < 1e-3, "x {}", mid.x);
+        assert!(mid.yaw.abs() > 3.0, "yaw {}", mid.yaw);
     }
 
 }

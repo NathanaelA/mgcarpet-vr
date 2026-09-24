@@ -87,6 +87,7 @@
       "map_marker_icons": false,
       "map_marker_scale": 1.0,
       "map_owned_buildings": false,
+      "mc2_fancy_exit": false,
       "smooth_motion": true,
       "smooth_shading": true
     },

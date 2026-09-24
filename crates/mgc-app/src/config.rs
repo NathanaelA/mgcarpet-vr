@@ -550,6 +550,15 @@ pub struct RenderEnhancement {
     /// envelope) vs the retail zigzag flash sprites. Defaults to
     /// classic. Needs smooth_motion like fire.
     pub lightning: LightningEffects,
+    /// MC2's level exit, filmed (deliberate deviation, player design
+    /// 2026-09-24): when the ending sequence seizes the carpet, the
+    /// view floats out of the eye onto the third-person chase boom
+    /// and watches the carpet speed at the portal; it vanishes on the
+    /// arrival tick as the portal flashes, then retail's fade runs.
+    /// Presentation only — the scripted flight is the sim's, untouched.
+    /// Retail's own motion blur is not ported either way. Default OFF:
+    /// the entity pool stays a stock run's only enhancement.
+    pub mc2_fancy_exit: bool,
 }
 
 impl Default for RenderEnhancement {
@@ -566,6 +575,7 @@ impl Default for RenderEnhancement {
             map_extent_fog: false,
             fire: FireEffects::default(),
             lightning: LightningEffects::default(),
+            mc2_fancy_exit: false,
         }
     }
 }
