@@ -119,6 +119,9 @@ the DEFAULT outcome, not an oversight.
 LANDED") exists and why it keeps paying. The refactor is the structural
 fix for what §5 currently catches by hand, one law at a time.
 
+⭐ **2026-09-24: the twin map exists — [`ARM-CENSUS.md`](ARM-CENSUS.md)** (143 clusters, each
+with its arms, differences and a retail recording ask). Record against it before collapsing.
+
 **Shape of the work, when it is time:**
 - Start from the laws that already have kill switches and fixtures —
   each one names a retail routine and every port arm that implements
