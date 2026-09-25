@@ -834,6 +834,32 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · preference",
+            label: "window_size",
+            class: Preference,
+            key: None,
+            cli: None,
+            cfg_path: "render.preference.window_size",
+            read: |c| Val::Choice {
+                cur: match c.render.preference.window_size {
+                    crate::config::WindowSize::W1280x960 => 0,
+                    crate::config::WindowSize::W1600x1200 => 1,
+                },
+                faithful: 0,
+                variants: &["1280x960", "1600x1200"],
+            },
+            desc: "The window's size when not fullscreen. It can still be \
+                   resized by hand; the next start opens at this size again.",
+            ctl: Ctl::Choice {
+                set: |c, i| c.render.preference.window_size = crate::config::WindowSize::ALL[i],
+                descs: &[
+                    "1280 × 960, twice the original 640 × 480 (default).",
+                    "1600 × 1200, two and a half times 640 × 480.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · preference",
             label: "anti_aliasing",
             class: Preference,
             key: None,

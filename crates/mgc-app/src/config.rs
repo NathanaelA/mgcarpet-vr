@@ -301,6 +301,12 @@ pub struct RenderPreference {
     /// with no retail analogue (DOS was 320×200/640×480 exclusive),
     /// hence Preference — fidelity-free either way.
     pub fullscreen: bool,
+    /// The game window's size when not fullscreen. Two fixed sizes,
+    /// both 4:3 multiples of 640×480 so the UI lands on whole pixels
+    /// (player ruling 2026-09-25: keep it simple until players ask for
+    /// more). The window stays resizable by hand; a hand resize is not
+    /// remembered.
+    pub window_size: WindowSize,
     /// Play the full-screen FMV movies (intro, MC2 cutscenes, outro).
     /// ON is the faithful setting — retail plays them and offers no
     /// way to turn them off; the switch exists because a 3165-frame
@@ -405,6 +411,7 @@ impl Default for RenderPreference {
             fog_distance: 90,
             vsync: true,
             fullscreen: true,
+            window_size: WindowSize::default(),
             movies: true,
             stats_screen: true,
             anti_aliasing: AntiAliasing::Off,
@@ -420,6 +427,30 @@ impl Default for RenderPreference {
 /// hooked per drawn class-3 model-0/1 sprite at :5010-17). Retail MC2
 /// ships it ON with a "Player Names" toggle (PlayerInput.cpp:1503);
 /// retail MC1 has no such tag at all.
+/// The windowed sizes (see [`RenderPreference::window_size`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowSize {
+    /// 2× 640×480: the long-standing default.
+    #[default]
+    #[serde(rename = "1280x960")]
+    W1280x960,
+    /// 2.5× 640×480.
+    #[serde(rename = "1600x1200")]
+    W1600x1200,
+}
+
+impl WindowSize {
+    pub const ALL: [WindowSize; 2] = [WindowSize::W1280x960, WindowSize::W1600x1200];
+
+    /// Physical pixels.
+    pub fn dims(self) -> (u32, u32) {
+        match self {
+            WindowSize::W1280x960 => (1280, 960),
+            WindowSize::W1600x1200 => (1600, 1200),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RivalTags {
@@ -1525,7 +1556,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 43;
+const DEFAULTS_VERSION: u64 = 45;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

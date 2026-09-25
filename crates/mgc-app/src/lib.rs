@@ -2884,6 +2884,17 @@ impl App {
     /// through and alt-tab costs nothing. The surface follows through
     /// the `Resized` event winit posts for the size change — nothing
     /// here touches the renderer.
+    /// Size the window to `render.preference.window_size` — windowed
+    /// only; fullscreen covers the monitor.
+    fn apply_window_size(&self) {
+        if let Some(window) = &self.window
+            && !self.cfg.render.preference.fullscreen
+        {
+            let (w, h) = self.cfg.render.preference.window_size.dims();
+            let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
+        }
+    }
+
     fn apply_fullscreen(&self) {
         if let Some(window) = &self.window {
             window.set_fullscreen(
@@ -3165,10 +3176,16 @@ impl App {
                     r.set_vsync(self.cfg.render.preference.vsync);
                 }
             }
+            // The launcher is always a window: its Display row takes
+            // effect when the game starts (`start_from_launcher`).
+            "render.preference.fullscreen" | "render.preference.window_size"
+                if self.screen == Screen::Launcher => {}
             "render.preference.fullscreen" => {
                 self.apply_fullscreen();
+                self.apply_window_size();
                 self.reassert_pointer();
             }
+            "render.preference.window_size" => self.apply_window_size(),
             // The supersample factor is live; MSAA is baked into every
             // pipeline, so it only takes effect next launch. Say so
             // rather than leaving the player wondering why nothing
@@ -5949,6 +5966,12 @@ impl App {
             }
             None => {}
         }
+        let monitor = self
+            .window
+            .as_ref()
+            .and_then(|w| w.current_monitor())
+            .map(|m| (m.size().width, m.size().height));
+        l.set_monitor(monitor);
         let (rgba, quads) = l.frame(size, self.cursor, &self.cfg);
         if let Some(r) = &mut self.renderer {
             if let Some(rgba) = rgba {
@@ -6018,6 +6041,7 @@ impl App {
         }
         // The launcher ran windowed; the game takes the configured mode.
         self.apply_fullscreen();
+        self.apply_window_size();
         self.ui_atlas = UiAtlas::None;
         self.screen = Screen::Menu;
         self.boot_intro = true;
@@ -7951,7 +7975,10 @@ impl ApplicationHandler for App {
         };
         let attrs = Window::default_attributes()
             .with_title(title)
-            .with_inner_size(winit::dpi::PhysicalSize::new(1280u32, 960u32))
+            .with_inner_size({
+                let (w, h) = self.cfg.render.preference.window_size.dims();
+                winit::dpi::PhysicalSize::new(w, h)
+            })
             // Borderless from the first frame when the config says so,
             // so a fullscreen launch never flashes a 4:3 window first.
             // The launcher is always a window (player ruling

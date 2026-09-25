@@ -29,8 +29,9 @@
 //! those options rather than stored. A group already hand-tuned when
 //! the launcher opened also offers "Custom", which puts the hand-tuned
 //! values back. Changes apply and persist the way the options menu's
-//! do. Not yet functional: the Display row cycles placeholder values
-//! and applies nothing.
+//! do. The Display row picks borderless fullscreen or one of the fixed
+//! window sizes that fit the monitor; the launcher itself stays a
+//! window, and the choice takes effect when the game starts.
 
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
@@ -41,7 +42,7 @@ use mgc_render::UiQuad;
 
 use crate::bakecheck::{self, BakeStatus};
 use crate::campaign::CampaignId;
-use crate::config::Config;
+use crate::config::{Config, WindowSize};
 use crate::settings::{self, Preset, PresetGroup};
 
 const FONT: &[u8] = include_bytes!("../../../assets/launcher/DejaVuSerif-Bold.ttf");
@@ -107,14 +108,39 @@ fn button_rect(start: bool) -> Rect {
 
 /// What an option row sets.
 enum RowKind {
+    /// Fullscreen or a window size (`render.preference.fullscreen` /
+    /// `window_size`).
+    Display,
     /// A preset group.
     Preset(&'static PresetGroup),
-    /// Not wired yet: cycles these values, applies nothing.
-    Placeholder(&'static [&'static str]),
+}
+
+/// A Display row choice.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mode {
+    Fullscreen,
+    Window(WindowSize),
+}
+
+impl Mode {
+    fn of(cfg: &Config) -> Mode {
+        let p = &cfg.render.preference;
+        if p.fullscreen { Mode::Fullscreen } else { Mode::Window(p.window_size) }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Mode::Fullscreen => "Fullscreen".into(),
+            Mode::Window(w) => {
+                let (x, y) = w.dims();
+                format!("Window {x} × {y}")
+            }
+        }
+    }
 }
 
 const OPTIONS: [(&str, RowKind); 3] = [
-    ("Display", RowKind::Placeholder(&["Borderless fullscreen", "Window 1280 × 960"])),
+    ("Display", RowKind::Display),
     ("Controls", RowKind::Preset(&settings::CONTROLS_PRESET)),
     ("Visuals", RowKind::Preset(&settings::VISUALS_PRESET)),
 ];
@@ -182,12 +208,13 @@ pub struct Launcher {
     selected: Option<usize>,
     focus: Focus,
     hover: Option<Hit>,
-    /// The placeholder rows' positions.
-    options: [usize; 3],
+    /// The monitor the window is on (physical px), when known: a
+    /// window size that does not fit is not offered.
+    monitor: Option<(u32, u32)>,
     /// Per row: the config as the launcher found it, kept when that
     /// row's preset group was hand-tuned (its "Custom").
     custom: [Option<Config>; 3],
-    /// Preset rows changed since the app last looked (their registry
+    /// Option paths changed since the app last looked (registry
     /// paths), to apply and persist.
     changed: Vec<&'static str>,
     pending: Option<Action>,
@@ -211,7 +238,7 @@ impl Launcher {
             selected: None,
             focus: Focus::Cards,
             hover: None,
-            options: [0; 3],
+            monitor: None,
             custom: std::array::from_fn(|row| match &OPTIONS[row].1 {
                 RowKind::Preset(g) if g.current(cfg).is_none() => Some(cfg.clone()),
                 _ => None,
@@ -319,10 +346,29 @@ impl Launcher {
         (list, at)
     }
 
+    pub fn set_monitor(&mut self, monitor: Option<(u32, u32)>) {
+        self.monitor = monitor;
+    }
+
+    /// The Display row's choices: fullscreen, then each window size
+    /// that fits the monitor (and the configured one regardless).
+    fn modes(&self, cfg: &Config) -> Vec<Mode> {
+        let cur = Mode::of(cfg);
+        let mut list = vec![Mode::Fullscreen];
+        for w in WindowSize::ALL {
+            let (x, y) = w.dims();
+            let fits = self.monitor.is_none_or(|(mw, mh)| x <= mw && y <= mh);
+            if fits || cur == Mode::Window(w) {
+                list.push(Mode::Window(w));
+            }
+        }
+        list
+    }
+
     /// The row's value as shown.
     fn value(&self, row: usize, cfg: &Config) -> String {
         match &OPTIONS[row].1 {
-            RowKind::Placeholder(values) => values[self.options[row]].to_string(),
+            RowKind::Display => Mode::of(cfg).label(),
             RowKind::Preset(g) => match g.current(cfg) {
                 Some(p) => p.label().to_string(),
                 None => "Custom".to_string(),
@@ -332,13 +378,20 @@ impl Launcher {
 
     fn step_option(&mut self, row: usize, right: bool, cfg: &mut Config) {
         match &OPTIONS[row].1 {
-            RowKind::Placeholder(values) => {
-                let n = values.len();
-                self.options[row] = if right {
-                    (self.options[row] + 1) % n
-                } else {
-                    (self.options[row] + n - 1) % n
-                };
+            RowKind::Display => {
+                let list = self.modes(cfg);
+                let n = list.len();
+                let at = list.iter().position(|&m| m == Mode::of(cfg)).unwrap_or(0);
+                let next = if right { (at + 1) % n } else { (at + n - 1) % n };
+                let p = &mut cfg.render.preference;
+                match list[next] {
+                    Mode::Fullscreen => p.fullscreen = true,
+                    Mode::Window(w) => {
+                        p.fullscreen = false;
+                        p.window_size = w;
+                    }
+                }
+                self.changed.extend(["render.preference.fullscreen", "render.preference.window_size"]);
             }
             RowKind::Preset(g) => {
                 let (list, at) = self.choices(row, g, cfg);
@@ -357,7 +410,7 @@ impl Launcher {
         }
     }
 
-    /// The preset rows changed since the last call (registry paths).
+    /// The option paths changed since the last call (registry paths).
     pub fn take_changed(&mut self) -> Vec<&'static str> {
         std::mem::take(&mut self.changed)
     }
@@ -920,6 +973,27 @@ mod tests {
         assert_eq!(img.map(|b| b.len()), Some(320 * 240 * 4));
         assert_eq!(quads.len(), 1);
         assert!(l.frame((320.0, 240.0), (0.0, 0.0), &cfg).0.is_none(), "unchanged: no re-compose");
+    }
+
+    /// Row 0 is Display: fullscreen, then the window sizes that fit.
+    #[test]
+    fn the_display_row_offers_the_sizes_that_fit() {
+        let root = std::env::temp_dir().join(format!("mgc-launcher-d-{}", std::process::id()));
+        let mut cfg = Config::default();
+        cfg.gamedata = Some(root.join("no-such-gamedata"));
+        let mut l = Launcher::new(&root, &cfg);
+        l.set_monitor(Some((1920, 1080)));
+        assert_eq!(l.value(0, &cfg), "Fullscreen");
+        l.step_option(0, true, &mut cfg);
+        assert_eq!(l.value(0, &cfg), "Window 1280 × 960");
+        assert!(!cfg.render.preference.fullscreen);
+        l.step_option(0, true, &mut cfg);
+        assert_eq!(l.value(0, &cfg), "Fullscreen", "1600 × 1200 does not fit 1080 rows");
+        l.set_monitor(Some((2560, 1440)));
+        l.step_option(0, false, &mut cfg);
+        assert_eq!(l.value(0, &cfg), "Window 1600 × 1200");
+        assert_eq!(cfg.render.preference.window_size, WindowSize::W1600x1200);
+        assert!(l.take_changed().contains(&"render.preference.window_size"));
     }
 
     /// Row 1 is Controls: stepping writes the preset, the value reads
