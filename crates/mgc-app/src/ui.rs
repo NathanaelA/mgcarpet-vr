@@ -1584,11 +1584,6 @@ const SPR_BALLOON_GLYPH: usize = 50; // +count 1..3 = the balloon-roster glyph
 const SPR_WIZ_EMPTY: usize = 54; // no-wizard slot
 const SPR_WIZ_ALERT: usize = 55; // castle-under-attack flash
 const SPR_SPELL_ICON: usize = 6; // spell icon base: [spell + 6]
-/// HUD panel background translucency — the original's panels blend over
-/// the framebuffer (transparency is ALWAYS on, not a toggle). We
-/// approximate with an alpha over the sky; the icons/glyphs/bars stay
-/// opaque (drawn raw in retail).
-const PANEL_TINT: [f32; 4] = [1.0, 1.0, 1.0, mgc_render::HUD_PANEL_ALPHA];
 /// Life-bar color (remc1 uses palette index 0x7B, a team red).
 const LIFE_RED: [f32; 4] = [0.85, 0.15, 0.12, 1.0];
 /// Collected/banked mana bar (sub_22E50 :27377, color v29 =
@@ -1762,9 +1757,9 @@ pub fn hud_quads(
     // place the anchor is spelled out.
     let f = HudFrame::new(w, h);
     let s = f.s;
-    // Panel-background tint: translucent (faithful MC1, always-on
-    // transparency) or opaque (the MC2 readability toggle).
-    let panel_tint = if transparent { PANEL_TINT } else { WHITE };
+    // Panels draw untinted; `transparent` fades the WHOLE strip at
+    // the end (see the tail of this function).
+    let panel_tint = WHITE;
 
     // --- Wizard stat strip (sub_22E50): three 128-wide sub-panels. ---
     // Tiles pack from x=2: [40] radar frame (124w), then sub-panels at
@@ -2123,6 +2118,17 @@ pub fn hud_quads(
                 let (fw, fh) = assets.sprite_dims(frame).unwrap_or((64.0, 44.0));
                 quads.push(solid([px, 2.0 * s, fw * s, fh * s], LOCKED_WASH));
             }
+        }
+    }
+    // HUD transparency: ONE alpha over everything the strip draws —
+    // panels, icons, glyphs, bars, meters alike (player ruling
+    // 2026-09-25). Retail MC1 blended only the panel backgrounds and
+    // blitted the icons raw on top, but with the option on, opaque
+    // icons floating over see-through panels read as a bug; the radar
+    // markers take the same alpha in the renderer (`minimap_alpha`).
+    if transparent {
+        for q in &mut quads {
+            q.tint[3] *= mgc_render::HUD_PANEL_ALPHA;
         }
     }
     quads

@@ -1700,9 +1700,10 @@ const MC2_MAP_VIEW_SPAN_TILES: f32 = MC2_MAP_VIEW_H * 204.0 / 256.0;
 /// at 128 tiles across; `+`/`-` adjust it at runtime.
 const MINIMAP_DIAM: f32 = 128.0;
 const MINIMAP_ZOOM: f32 = 128.0;
-/// HUD transparency alpha (radar + panels; kept in sync with ui.rs's
-/// PANEL_TINT). The whole HUD blends over the sky in faithful MC1.
-pub const HUD_PANEL_ALPHA: f32 = 0.62;
+/// HUD transparency alpha: the radar disc and its markers here, and
+/// every quad of the app's HUD strip (`ui::hud_quads`). Was 0.62 —
+/// barely legible; halved the transparency (player ruling 2026-09-25).
+pub const HUD_PANEL_ALPHA: f32 = 0.81;
 /// Runtime radar-zoom bounds (`+`/`-`): from a tight 32-tile crop out
 /// to a near-whole-world 224 tiles.
 const MINIMAP_ZOOM_MIN: f32 = 32.0;
@@ -5745,6 +5746,14 @@ impl Renderer {
             let keep = 1.0 - self.overlay_fade;
             for q in &mut stamp_quads {
                 q.tint[3] *= keep;
+            }
+        }
+        // In flight the stamps ARE the radar's markers: they take the
+        // radar's HUD transparency, or they float opaque over a
+        // see-through disc. (The map screen is not HUD.)
+        if !self.map_view && self.minimap_alpha < 1.0 {
+            for q in &mut stamp_quads {
+                q.tint[3] *= self.minimap_alpha;
             }
         }
 
