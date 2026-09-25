@@ -212,7 +212,22 @@ fn fs_main(in: VsOut) -> FsOut {
     }
     var out: FsOut;
     out.color = vec4<f32>(rgb, in.alpha);
-    out.depth = in.anchor_depth;
+    // The anchor tile's painter depth, unless this fragment's OWN plan
+    // distance is nearer. The quad spans sideways along the camera's
+    // right axis, so a sprite off to one side reaches back across the
+    // view line and its inner fragments sit plan-NEARER than its tile.
+    // Keyed to the anchor alone, every terrain pixel behind them with
+    // plan distance below the anchor's beat the sprite: a disc (centred
+    // under the camera, radius = anchor depth) punched through its
+    // middle — glaring under a steep look-down at a wide sprite passing
+    // below the carpet (castle flag, player report 2026-09-25). Along a
+    // descending ray plan distance only grows, so the fragment's own
+    // plan distance orders it truly against the ground behind it, while
+    // ground genuinely in front still wins. Narrow sprites ahead keep
+    // the anchor (their fragments never undercut it), so the co-tile
+    // chain order and the never-clipped-by-its-own-wall law stand.
+    let own = clamp(length(in.world.xz - globals.camera.xz) / DEPTH_RANGE, 0.0, 0.999999);
+    out.depth = min(in.anchor_depth, own);
     return out;
 }
 
