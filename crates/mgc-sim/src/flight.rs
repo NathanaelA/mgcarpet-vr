@@ -373,111 +373,143 @@ pub fn mc1_move_duel(
     ground: &dyn Fn(u16, u16) -> i16,
     gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> (bool, (u16, u16, i16)),
 ) -> Mc1Moved {
-    // The Accelerate override writes BOTH the target and the actual
-    // speed (:65171-78) — and it lands BEFORE the command integration:
-    // retail's write happens at the spell TOKEN's walk slot, below the
-    // carpet dispatch, so the brake press below steps a boosted
-    // ±160/±240 target (and clamps it back into the ±80 band) while
-    // the actual speed starts its chase from the boosted value.
-    if let Some(k) = accel_over {
-        let v = (k * 80.0) as i16; // 3×80 held / 2×80 released, signed
-        st.tgt_speed = v;
-        st.act_speed = v;
-    }
+    mc1_move_duel_with(st, inp, accel_over, knock, duel, ground, gate, None)
+}
 
-    // ---- sub_46840 (:55760-:55821): command integration, pre-move ----
-    // ⚠ THE WHOLE BLOCK IS SKIPPED ON THE DEATH FALL (`no_command`):
-    // retail dispatches state 2 to `sub_45FC0`, which calls `sub_455D0`
-    // without it, so the target speed and the strafe register freeze
-    // where the last live tick left them — including the strafe's
-    // 4/tick release decay, which is why a carpet that dies mid-strafe
-    // keeps sliding sideways all the way down.
-    //
-    // Up/Down step the target ±16/tick held, clamp ±80 (:55766-80).
-    // A press that MOVES the target arms the v_14 latch (:55780) —
-    // during a boost only the RESISTING press passes the bounds test
-    // (the boosted target sits outside the ±80 band), and the latch is
-    // what ends the burst at the token's next pass (:65146-50).
-    let mut dir: i16 = 0;
-    if !inp.no_command {
-        if inp.speed_up && st.tgt_speed < 80 {
-            dir = 1;
-        }
-        if inp.speed_down && st.tgt_speed > -80 {
-            dir = -1;
-        }
-        if dir != 0 {
-            st.tgt_speed = (st.tgt_speed + 16 * dir).clamp(-80, 80);
-        }
-        // Strafe: ±16/tick held clamp ±80 (:55783-96); released, decay
-        // 4/tick toward 0 with a sign-flip snap (:55800-19). The bit
-        // tests are SEQUENTIAL (:55783-86) — both strafes held resolves
-        // to RIGHT, never to release (pose-channel-measured on mc1l0
-        // t=3189/3305: retail steps +16 under the 0xE move byte).
-        let mut sdir: i16 = 0;
-        if inp.strafe_left {
-            sdir = -1;
-        }
-        if inp.strafe_right {
-            sdir = 1;
-        }
-        if sdir != 0 {
-            st.strafe = (st.strafe + 16 * sdir).clamp(-80, 80);
-        } else if st.strafe != 0 {
-            let s = st.strafe.signum();
-            st.strafe -= 4 * s;
-            if st.strafe.signum() != s {
-                st.strafe = 0;
-            }
-        }
-    }
-
-    // ---- sub_455D0 (:55110), statement order ----
-    // (a) filter integration + yaw from filtered roll (:55143-46).
-    st.roll_f += ((2 * inp.stick_x as i32 - st.roll_f as i32) / 4) as i16;
-    st.pitch_f += ((2 * inp.stick_y as i32 - st.pitch_f as i32) / 4) as i16;
-    st.yaw = ((st.yaw as i32 + st.roll_f as i32 / 8) & 0x7FF) as u16;
-
-    // (b) actual speed chases the target in ±16 sign steps (:55147-50).
-    let d = st.tgt_speed - st.act_speed;
-    if d != 0 {
-        st.act_speed += d.signum() * 16;
-    }
-
-    // (c) vertical: climb authority + aim publication (:55151-95).
-    let mut cand = (st.x, st.y, st.z);
+/// MC1's climb ramp (:55151-67): authority `z − ground − 1024`
+/// clamped ±256 folds into the effective pitch (climbs ramp, dives
+/// pass raw); a carpet AT REST above the 1024 soft ceiling sinks 8 —
+/// returned as the candidate altitude. Reads the published
+/// `aim_pitch`; shared with the enhanced kernel.
+pub(crate) fn mc1_climb_ramp(st: &mut Mc1State, ground: &dyn Fn(u16, u16) -> i16, s: i16) -> i16 {
     let g = ground(st.x, st.y) as i32; // :55151, at the pre-move position
-    // v5 = z − ground − 1024 clamped ±256: −256 = full climb
-    // authority, 0 at the soft ceiling, +256 = fully inverted.
     let v5 = (st.z as i32 - g - 1024).clamp(-256, 256);
-    st.aim_pitch = (st.pitch_f as u16) & 0x7FF; // published +32 (:55158-60)
     let mut v6 = st.aim_pitch as i32;
     if v6 > 1024 {
         v6 -= 2048;
     }
-    let s = st.act_speed;
     if s != 0 && v6 != 0 {
         let dive = (s > 0 && v6 > 0) || (s < 0 && v6 < 0);
         st.eff_pitch = if dive {
-            // Descent passes the raw aim (:55176/:55186).
             st.aim_pitch
         } else {
-            // Climb scaled by authority (−v5)/256, truncating
-            // (:55181/:55191), re-masked to 11 bits (:55193-95).
             ((((v6 * -v5) / 256) as i16) as u16) & 0x7FF
         };
     } else if s == 0 && st.z as i32 > g + 1024 {
-        // Speed-0 sink above the soft ceiling (:55171-72);
-        // eff_pitch deliberately left stale.
-        cand.2 = st.z - 8;
+        return st.z - 8;
     }
-    // The polar step (:55196): horizontal = s·cos(eff), z −= s·sin(eff).
-    Gen::polar_step(&mut cand, st.yaw, st.eff_pitch, st.act_speed);
+    st.z
+}
 
-    // (d) strafe: second polar step at yaw+512, pitch 0 (:55197-203).
-    if st.strafe != 0 {
-        Gen::polar_step(&mut cand, st.yaw.wrapping_add(512) & 0x7FF, 0, st.strafe);
-    }
+/// [`mc1_move_duel`] with an optional [`CarpetPropel`] kernel in
+/// place of the faithful propulsion (the speed keys, the pose filter,
+/// the speed chase, the climb ramp and the forward/strafe steps).
+#[allow(clippy::too_many_arguments)]
+pub fn mc1_move_duel_with<'p>(
+    st: &mut Mc1State,
+    inp: &Mc1Input,
+    accel_over: Option<f32>,
+    knock: Option<(u16, i16)>,
+    duel: Option<Mc1DuelGrip>,
+    ground: &dyn Fn(u16, u16) -> i16,
+    gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> (bool, (u16, u16, i16)),
+    propel: Option<&mut (dyn CarpetPropel + 'p)>,
+) -> Mc1Moved {
+    let mut dir: i16 = 0;
+    let mut cand = if let Some(k) = propel {
+        let climb = |st: &mut Mc1State, s: i16| {
+            let z = mc1_climb_ramp(st, ground, s);
+            let mut p = (st.x, st.y, z);
+            Gen::polar_step(&mut p, st.yaw, st.eff_pitch, s);
+            p.2
+        };
+        k.propel(st, (0, 0), false, &climb)
+    } else {
+        // The Accelerate override writes BOTH the target and the actual
+        // speed (:65171-78) — and it lands BEFORE the command integration:
+        // retail's write happens at the spell TOKEN's walk slot, below the
+        // carpet dispatch, so the brake press below steps a boosted
+        // ±160/±240 target (and clamps it back into the ±80 band) while
+        // the actual speed starts its chase from the boosted value.
+        if let Some(k) = accel_over {
+            let v = (k * 80.0) as i16; // 3×80 held / 2×80 released, signed
+            st.tgt_speed = v;
+            st.act_speed = v;
+        }
+
+        // ---- sub_46840 (:55760-:55821): command integration, pre-move ----
+        // ⚠ THE WHOLE BLOCK IS SKIPPED ON THE DEATH FALL (`no_command`):
+        // retail dispatches state 2 to `sub_45FC0`, which calls `sub_455D0`
+        // without it, so the target speed and the strafe register freeze
+        // where the last live tick left them — including the strafe's
+        // 4/tick release decay, which is why a carpet that dies mid-strafe
+        // keeps sliding sideways all the way down.
+        //
+        // Up/Down step the target ±16/tick held, clamp ±80 (:55766-80).
+        // A press that MOVES the target arms the v_14 latch (:55780) —
+        // during a boost only the RESISTING press passes the bounds test
+        // (the boosted target sits outside the ±80 band), and the latch is
+        // what ends the burst at the token's next pass (:65146-50).
+        if !inp.no_command {
+            if inp.speed_up && st.tgt_speed < 80 {
+                dir = 1;
+            }
+            if inp.speed_down && st.tgt_speed > -80 {
+                dir = -1;
+            }
+            if dir != 0 {
+                st.tgt_speed = (st.tgt_speed + 16 * dir).clamp(-80, 80);
+            }
+            // Strafe: ±16/tick held clamp ±80 (:55783-96); released, decay
+            // 4/tick toward 0 with a sign-flip snap (:55800-19). The bit
+            // tests are SEQUENTIAL (:55783-86) — both strafes held resolves
+            // to RIGHT, never to release (pose-channel-measured on mc1l0
+            // t=3189/3305: retail steps +16 under the 0xE move byte).
+            let mut sdir: i16 = 0;
+            if inp.strafe_left {
+                sdir = -1;
+            }
+            if inp.strafe_right {
+                sdir = 1;
+            }
+            if sdir != 0 {
+                st.strafe = (st.strafe + 16 * sdir).clamp(-80, 80);
+            } else if st.strafe != 0 {
+                let s = st.strafe.signum();
+                st.strafe -= 4 * s;
+                if st.strafe.signum() != s {
+                    st.strafe = 0;
+                }
+            }
+        }
+
+        // ---- sub_455D0 (:55110), statement order ----
+        // (a) filter integration + yaw from filtered roll (:55143-46).
+        st.roll_f += ((2 * inp.stick_x as i32 - st.roll_f as i32) / 4) as i16;
+        st.pitch_f += ((2 * inp.stick_y as i32 - st.pitch_f as i32) / 4) as i16;
+        st.yaw = ((st.yaw as i32 + st.roll_f as i32 / 8) & 0x7FF) as u16;
+
+        // (b) actual speed chases the target in ±16 sign steps (:55147-50).
+        let d = st.tgt_speed - st.act_speed;
+        if d != 0 {
+            st.act_speed += d.signum() * 16;
+        }
+
+        // (c) vertical: climb authority + aim publication (:55151-95).
+        let mut cand = (st.x, st.y, st.z);
+        st.aim_pitch = (st.pitch_f as u16) & 0x7FF; // published +32 (:55158-60)
+        // v5 = z − ground − 1024 clamped ±256 folds the climb; the speed-0
+        // sink above the soft ceiling (:55171-72) lands in the candidate.
+        cand.2 = mc1_climb_ramp(st, ground, st.act_speed);
+        // The polar step (:55196): horizontal = s·cos(eff), z −= s·sin(eff).
+        Gen::polar_step(&mut cand, st.yaw, st.eff_pitch, st.act_speed);
+
+        // (d) strafe: second polar step at yaw+512, pitch 0 (:55197-203).
+        if st.strafe != 0 {
+            Gen::polar_step(&mut cand, st.yaw.wrapping_add(512) & 0x7FF, 0, st.strafe);
+        }
+        cand
+    };
 
     // (e) knock displacement (v_22/v_24, :55204-19; decay lives with
     // the caller's Type_160 emulation).
@@ -783,6 +815,94 @@ pub fn mc2_move(
     gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> Mc2GateOut,
     stuck: &dyn Fn((u16, u16, i16), bool) -> bool,
 ) -> Mc2Moved {
+    mc2_move_with(
+        st, ext, inp, accel_over, knock, leash, ground, ceiling, gate, stuck, None,
+    )
+}
+
+/// The swappable PROPULSION stage of both faithful movers
+/// ([`mc1_move_duel_with`], [`mc2_move_with`]): how the player's input
+/// becomes this tick's candidate position. The faithful movers run
+/// retail's blocks inline; the enhanced controls plug a kernel in
+/// here and inherit EVERYTHING else — MC2's whirlwind crank, the
+/// well's pitch seizure, the stop veto, the knock, the displacement
+/// mailbox, the duel leash/grip, the web decay, the commit gate, the
+/// vertical resolution, MC1's carpet flutter — so a world interaction
+/// can never again reach one control mode and not the other (the
+/// 2026-09-25 parity audit: webs, both duels, Speed cancel,
+/// gravity-well pull, whirl spin, flutter were all missing).
+pub trait CarpetPropel {
+    /// Step the pose (yaw, pitch, speed) from the player's input and
+    /// return the candidate position — `st.x/y/z` stay the CURRENT
+    /// position for the gate.
+    ///
+    /// `web` = MC2's (slow level, paralyze) — (0, 0) in MC1.
+    /// `seized_pitch`: MC2's gravity-well seizure wrote
+    /// `st.pitch_f`/`aim_pitch` this tick. `climb(st, s)` is the
+    /// game's own pitch→altitude law (retail's climb ramp, MC1's
+    /// at-rest sink included) for forward speed `s`: it updates
+    /// `st.eff_pitch` and returns the candidate altitude.
+    fn propel(
+        &mut self,
+        st: &mut Mc1State,
+        web: (u8, u8),
+        seized_pitch: bool,
+        climb: &dyn Fn(&mut Mc1State, i16) -> i16,
+    ) -> (u16, u16, i16);
+
+    /// The heading the WORLD sees is the hull yaw plus this offset
+    /// (11-bit units): the enhanced controls cast along the crosshair,
+    /// not the hull (player ruling).
+    fn aim_heading_offset(&self) -> i16 {
+        0
+    }
+}
+
+/// Block (2)'s climb ramp (EF:59645-66): authority −256..+256
+/// normalized by the row band, folded into the effective pitch with
+/// the four-quadrant raw/ramped law (climb toward the band ramps,
+/// dives pass raw). Reads the published `aim_pitch`; `s` is the
+/// forward speed this tick. Shared with the enhanced kernel.
+pub(crate) fn mc2_climb_ramp(
+    st: &mut Mc1State,
+    ext: &Mc2Ext,
+    ground: &dyn Fn(u16, u16) -> i16,
+    s: i16,
+) {
+    let g = ground(st.x, st.y) as i32;
+    let band = ext.row.band as i32;
+    let alt_diff = (((st.z as i32 - g - band) << 10) / band).clamp(-256, 256);
+    let mut v6 = st.aim_pitch as i32;
+    if v6 > 1024 {
+        v6 -= 2048;
+    }
+    if s != 0 && v6 != 0 {
+        let dive = (s > 0 && v6 > 0) || (s < 0 && v6 < 0);
+        st.eff_pitch = if dive {
+            st.aim_pitch
+        } else {
+            // Round-toward-zero fold (the −sign·255 >> 8 idiom).
+            ((((v6 * -alt_diff) / 256) as i16) as u16) & 0x7FF
+        };
+    }
+}
+
+/// [`mc2_move`] with an optional [`CarpetPropel`] kernel in place of the
+/// faithful propulsion blocks.
+#[allow(clippy::too_many_arguments)]
+pub fn mc2_move_with<'p>(
+    st: &mut Mc1State,
+    ext: &mut Mc2Ext,
+    inp: &Mc1Input,
+    accel_over: Option<f32>,
+    knock: Option<(u16, i16)>,
+    leash: Option<(u16, i16)>,
+    ground: &dyn Fn(u16, u16) -> i16,
+    ceiling: &dyn Fn(u16, u16) -> Option<i16>,
+    gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> Mc2GateOut,
+    stuck: &dyn Fn((u16, u16, i16), bool) -> bool,
+    propel: Option<&mut (dyn CarpetPropel + 'p)>,
+) -> Mc2Moved {
     let mut moved = Mc2Moved::default();
 
     // The modal park (big map / spell book): the input pass zeroes
@@ -807,7 +927,7 @@ pub fn mc2_move(
     // all freeze while the mover keeps running. Only `AddPlayer03_00`
     // (state 0) calls `sub_5F380`, at EF:59967, and the `life < 0`
     // flip to state 2 is that function's TAIL.
-    if !inp.no_command {
+    if propel.is_none() && !inp.no_command {
         let mut dir: i16 = 0;
         if inp.speed_up && st.tgt_speed < 80 {
             dir = 1;
@@ -841,7 +961,9 @@ pub fn mc2_move(
 
     // The speed-up spell override (EF:56189 arms it; the channel's
     // shape is shared with MC1's Accelerate).
-    if let Some(k) = accel_over {
+    if propel.is_none()
+        && let Some(k) = accel_over
+    {
         let v = (k * 80.0) as i16;
         st.tgt_speed = v;
         st.act_speed = v;
@@ -851,8 +973,15 @@ pub fn mc2_move(
     // (0) pose: the filtered delta (EF:38060-66, ÷4 toward zero),
     // slow-scaled while the web slow is active (EF:59622-30), then
     // yaw as a RATE and the published absolute aim pitch.
-    let dr = ((2 * inp.stick_x as i32 - st.roll_f as i32) / 4) as i16;
-    let dp = ((2 * inp.stick_y as i32 - st.pitch_f as i32) / 4) as i16;
+    // A kernel steers by its own law, so the stick leaves roll alone:
+    // the filter just relaxes it (the whirlwind crank's residual spin).
+    let sx = if propel.is_some() { 0 } else { inp.stick_x as i32 };
+    let dr = ((2 * sx - st.roll_f as i32) / 4) as i16;
+    let dp = if propel.is_some() {
+        0 // the kernel owns pitch
+    } else {
+        ((2 * inp.stick_y as i32 - st.pitch_f as i32) / 4) as i16
+    };
     // ⭐⭐⭐ THE FUNNEL'S CRANK LANDS BETWEEN THE INPUT PASS AND THE
     // MOVER — AND THE STOP VETO DOES NOT SWALLOW IT.
     // `rollDelta_0x4_4` is computed in `PlayerEvents_51BB0`
@@ -895,7 +1024,8 @@ pub fn mc2_move(
     // (0x5ea55 / 0x5ea5b) at the quake's slot: after `dp` was taken off
     // the un-seized accumulator (0x774b2), before `sub_5D530` adds it
     // (0x81d7e), and a vetoed tick keeps both 512s.
-    if std::mem::take(&mut ext.flood_spin) {
+    let seized_pitch = std::mem::take(&mut ext.flood_spin);
+    if seized_pitch {
         st.pitch_f = 512;
         st.aim_pitch = 512;
     }
@@ -926,67 +1056,67 @@ pub fn mc2_move(
     }
     st.yaw = ((st.yaw as i32 + st.roll_f as i32 / 8) & 0x7FF) as u16; // EF:59635
 
-    // (1) actual speed chases the target in ±16 sign steps
-    // (EF:59636-44).
-    let d = st.tgt_speed - st.act_speed;
-    if d != 0 {
-        st.act_speed += d.signum() * 16;
-    }
-
-    // (2) the climb ramp — the row-data band (EF:59645-66): authority
-    // −256..+256 normalized by the band, folded into the effective
-    // pitch with the same four-quadrant raw/ramped law as MC1 (climb
-    // toward the band ramps, dives pass raw).
-    let mut cand = (st.x, st.y, st.z);
-    let g = ground(st.x, st.y) as i32;
-    let band = ext.row.band as i32;
-    let alt_diff = (((st.z as i32 - g - band) << 10) / band).clamp(-256, 256);
-    st.aim_pitch = (st.pitch_f as u16) & 0x7FF; // published (EF:59651-52)
-    let mut v6 = st.aim_pitch as i32;
-    if v6 > 1024 {
-        v6 -= 2048;
-    }
-    let s = st.act_speed;
-    if s != 0 && v6 != 0 {
-        let dive = (s > 0 && v6 > 0) || (s < 0 && v6 < 0);
-        st.eff_pitch = if dive {
-            st.aim_pitch
-        } else {
-            // Round-toward-zero fold (the −sign·255 >> 8 idiom).
-            ((((v6 * -alt_diff) / 256) as i16) as u16) & 0x7FF
+    // Blocks (1)-(4) are PROPULSION — the one stage a swapped-in
+    // [`CarpetPropel`] kernel replaces (the enhanced controls). Every
+    // block before and after is shared by both control modes.
+    let mut cand = if let Some(k) = propel {
+        let row = ext.row;
+        let climb = |st: &mut Mc1State, s: i16| {
+            let ramp = Mc2Ext { row, ..Mc2Ext::default() };
+            mc2_climb_ramp(st, &ramp, ground, s);
+            let mut p = (st.x, st.y, st.z);
+            Gen::polar_step(&mut p, st.yaw, st.eff_pitch, s);
+            p.2
         };
-    }
-    // (No speed-0 sink here — MC2's sink is the post-gate row-0xe
-    // buoyancy; eff_pitch stays stale on the zero branches, verbatim.)
-
-    // (3) forward polar step, slow/mobilize-scaled (EF:59668-80).
-    let fwd = if ext.move_speed > 0 {
-        ext.slow_scale(st.act_speed as i32) as i16
-    } else if ext.mobilize > 0 {
-        0
+        k.propel(st, (ext.move_speed, ext.mobilize), seized_pitch, &climb)
     } else {
-        st.act_speed
-    };
-    Gen::polar_step(&mut cand, st.yaw, st.eff_pitch, fwd);
-    mc2_move_trace(|| {
-        format!(
-            "  fwd yaw={} eff={} fwd={fwd} -> {cand:?}",
-            st.yaw, st.eff_pitch
-        )
-    });
+        // (1) actual speed chases the target in ±16 sign steps
+        // (EF:59636-44).
+        let d = st.tgt_speed - st.act_speed;
+        if d != 0 {
+            st.act_speed += d.signum() * 16;
+        }
 
-    // (4) strafe at yaw+512, same scaling (EF:59681-93).
-    if st.strafe != 0 {
-        let sf = if ext.move_speed > 0 {
-            ext.slow_scale(st.strafe as i32) as i16
+        // (2) the climb ramp — the row-data band (EF:59645-66): authority
+        // −256..+256 normalized by the band, folded into the effective
+        // pitch with the same four-quadrant raw/ramped law as MC1 (climb
+        // toward the band ramps, dives pass raw).
+        let mut cand = (st.x, st.y, st.z);
+        st.aim_pitch = (st.pitch_f as u16) & 0x7FF; // published (EF:59651-52)
+        mc2_climb_ramp(st, ext, ground, st.act_speed);
+        // (No speed-0 sink here — MC2's sink is the post-gate row-0xe
+        // buoyancy; eff_pitch stays stale on the zero branches, verbatim.)
+
+        // (3) forward polar step, slow/mobilize-scaled (EF:59668-80).
+        let fwd = if ext.move_speed > 0 {
+            ext.slow_scale(st.act_speed as i32) as i16
         } else if ext.mobilize > 0 {
             0
         } else {
-            st.strafe
+            st.act_speed
         };
-        Gen::polar_step(&mut cand, st.yaw.wrapping_add(512) & 0x7FF, 0, sf);
-        mc2_move_trace(|| format!("  strafe sf={sf} -> {cand:?}"));
-    }
+        Gen::polar_step(&mut cand, st.yaw, st.eff_pitch, fwd);
+        mc2_move_trace(|| {
+            format!(
+                "  fwd yaw={} eff={} fwd={fwd} -> {cand:?}",
+                st.yaw, st.eff_pitch
+            )
+        });
+
+        // (4) strafe at yaw+512, same scaling (EF:59681-93).
+        if st.strafe != 0 {
+            let sf = if ext.move_speed > 0 {
+                ext.slow_scale(st.strafe as i32) as i16
+            } else if ext.mobilize > 0 {
+                0
+            } else {
+                st.strafe
+            };
+            Gen::polar_step(&mut cand, st.yaw.wrapping_add(512) & 0x7FF, 0, sf);
+            mc2_move_trace(|| format!("  strafe sf={sf} -> {cand:?}"));
+        }
+        cand
+    };
 
     // (5) the moveBoost knockback impulse (EF:59695-711) — the cap
     // 128 / decay −4 / snap <4 law lives in the world's knock channel

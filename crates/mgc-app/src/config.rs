@@ -1385,7 +1385,7 @@ pub struct GameplayCheat {
     /// unclamp the enhanced-altitude band, so q/e may pin the desired
     /// altitude anywhere up to the GLOBAL lift ceiling (the level's
     /// highest terrain + the 4-tile soft-ceiling margin) instead of
-    /// the per-game ground-relative band (1024/3072 over terrain).
+    /// the per-game ground-relative band (retail's: 1024, 3072 in MC2 caves).
     /// Live-applied; toggle at runtime with L. G-class.
     pub weightless: bool,
 }

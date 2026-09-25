@@ -313,11 +313,19 @@ fn flight_tier_golden_state_hashes() {
     // the background balls evolve identically under both movers.
     // ENHANCED re-pinned with the same ball-ctor stamps — the
     // background balls carry them under either mover.
+    // ⭐ ENHANCED A-C re-pinned for THE ONE-DISPATCH REFACTOR
+    // (2026-09-25, player-ordered after the parity audit): on a live
+    // world the enhanced controls are now a propulsion kernel inside
+    // the shared walk-slot dispatch (`flight::CarpetPropel`), so this
+    // track inherits the retail tail — the MC1 wall gate, the
+    // ground+128 floor (was the float mover's 0.75 tile), the knock,
+    // the duel grip, the carpet LCG — and the integer carpet is the
+    // authority. FAITHFUL holds byte-for-byte, as does the corpus.
     const ENHANCED: [u64; 4] = [
         0xaa7db5a0faa4bb22, // post-init
-        0xce8720d8d1a66c07, // A
-        0x3810b8f34d3c7498, // B: strafe+turn now banks on forward speed
-        0x72dcfeb390936e84, // C
+        0xdc4f67b3a55f9730, // A
+        0x23a3b46417e2241d, // B
+        0x66d0f688639ac536, // C
     ];
     assert_eq!(
         (faithful, enhanced),

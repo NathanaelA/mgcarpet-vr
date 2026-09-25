@@ -369,6 +369,7 @@ fn step_mc1(world: &mut World, ch: &mut Chain, inp: Mc1Input, cmd: PlayerCommand
     // that stranded the above-carpet mail a full tick: mc1l48 t=51 /
     // mc1l6 t=1618 / mc1l32-quick t=17696.)
     let mut drive = FlightDrive {
+        propel: None,
         s: &mut ch.s,
         inp,
         over: None,
@@ -493,6 +494,7 @@ fn step_mc2(world: &mut World, ch: &mut Chain, inp: Mc1Input, cmd: PlayerCommand
     // The tick-head sample here is only the input gate and the row.
     let over = world.accel_override();
     let mut drive = FlightDrive {
+        propel: None,
         s: &mut ch.s,
         inp,
         over,

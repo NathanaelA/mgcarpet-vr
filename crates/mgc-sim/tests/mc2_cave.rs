@@ -1307,6 +1307,151 @@ fn mc2_cave_enhanced_funnel_never_breaches_ceiling() {
     );
 }
 
+/// The enhanced LIFT reaches retail's own cave ceiling: ground+3072,
+/// cave row 104's band (player ruling 2026-09-25 — retail constants
+/// set the lift's range; a same-day 1024 cave cap was reverted), and
+/// never through the roof. Both thrust models: they reach the
+/// desired-altitude law through the same shared tail.
+#[test]
+fn mc2_cave_enhanced_lift_reaches_the_retail_cave_ceiling() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    for thrust in [mgc_sim::ThrustModel::Mc1, mgc_sim::ThrustModel::Enhanced] {
+        let Some(w) = build_world(&root) else {
+            eprintln!("skipping: no ceiling plane");
+            return;
+        };
+        let (p, c) = (w.planes(), w.ceiling_plane().to_vec());
+        // A tall open chamber: a 5x5 corner patch of flat-ish floor
+        // with more headroom than 3072 + the 384 roof margin, so
+        // only the lift band can stop the climb.
+        let mut spot = None;
+        'scan: for zw in 8..240usize {
+            for x in 8..240usize {
+                let t0 = zw * 256 + x;
+                let ok = (0..5).all(|dz| {
+                    (0..5).all(|dx| {
+                        let t = (zw + dz) * 256 + x + dx;
+                        p.angle[t] & 8 == 0
+                            && c[t] as i32 - p.height[t] as i32 > 115
+                            && (p.height[t] as i32 - p.height[t0] as i32).abs() <= 2
+                    })
+                });
+                if ok {
+                    spot = Some((x, zw));
+                    break 'scan;
+                }
+            }
+        }
+        let Some((x, zw)) = spot else {
+            panic!("no tall chamber found on level-014");
+        };
+        let mut sim = mgc_sim::Simulation::with_world(w);
+        sim.thrust_model = thrust;
+        sim.set_altitude_model(mgc_sim::AltitudeModel::ExtendedLift);
+        let (fx, fz) = (x as f32 + 2.0, zw as f32 + 2.0);
+        let g0 = sim.world.as_ref().unwrap().ground_height_tiles(fx, fz);
+        sim.flyer.x = fx;
+        sim.flyer.z = fz;
+        sim.flyer.y = g0 + 1.0;
+        sim.flyer.pitch = 0.0;
+        sim.sync_carpet_from_flyer();
+        sim.set_altitude_model(mgc_sim::AltitudeModel::Faithful);
+        sim.set_altitude_model(mgc_sim::AltitudeModel::ExtendedLift);
+        for _ in 0..200 {
+            sim.step(&mgc_sim::FlightInput {
+                lift: 1.0,
+                ..Default::default()
+            });
+        }
+        let f = sim.flyer;
+        let g = sim.world.as_ref().unwrap().ground_height_tiles(f.x, f.z);
+        let over = (f.y - g) * 256.0;
+        eprintln!("{thrust:?}: chamber ({x},{zw}), held {over:.1} over ground");
+        let (ex, ez) = ((f.x * 256.0) as u16, (f.z * 256.0) as u16);
+        let roof = sim.world.as_ref().unwrap().player_cave_ceiling(ex, ez).unwrap() as f32;
+        let want = 3072f32.min(roof - g * 256.0);
+        assert!(want > 2048.0, "the chamber is tall enough to tell 3072 from 1024");
+        assert!(
+            (over - want).abs() <= 2.0,
+            "{thrust:?}: the cave lift must reach min(ground+3072, roof) = {want}, held {over:.1}"
+        );
+    }
+}
+
+/// Flying into a cave wall under Speed kills the spell (retail's
+/// `moveTest_5D0A0` refusal → `zero_speed` → the token cancel,
+/// EF:59602) — under BOTH control modes. The enhanced controls used
+/// to keep the boost and shove into the wall until it expired (parity
+/// audit 2026-09-25); they now share retail's gate.
+#[test]
+fn mc2_cave_wall_cancels_speed_under_both_controls() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    for thrust in [mgc_sim::ThrustModel::Mc1, mgc_sim::ThrustModel::Enhanced] {
+        let Some(w) = build_world(&root) else {
+            eprintln!("skipping: no ceiling plane");
+            return;
+        };
+        let (p, c) = (w.planes(), w.ceiling_plane().to_vec());
+        let open = |x: usize, z: usize| {
+            let t = z * 256 + x;
+            p.angle[t] & 8 == 0 && c[t] as i32 - p.height[t] as i32 > 60
+        };
+        let sealed = |x: usize, z: usize| p.angle[z * 256 + x] & 8 != 0;
+        // A corridor ending in a broad sealed wall to the north (-Z):
+        // four open tiles in a column, a 7-wide sealed face beyond.
+        let mut spot = None;
+        'scan: for zw in 12..240usize {
+            for x in 8..240usize {
+                let run = (0..4).all(|d| (0..3).all(|dx| open(x + dx - 1, zw + d)));
+                let wall = (0..7).all(|dx| sealed(x + dx - 3, zw - 1) && sealed(x + dx - 3, zw - 2));
+                if run && wall {
+                    spot = Some((x, zw));
+                    break 'scan;
+                }
+            }
+        }
+        let Some((x, zw)) = spot else {
+            panic!("no sealed cave wall found on level-014");
+        };
+        let mut sim = mgc_sim::Simulation::with_world(w);
+        sim.thrust_model = thrust;
+        let (fx, fz) = (x as f32 + 0.5, zw as f32 + 3.5);
+        let g0 = sim.world.as_ref().unwrap().ground_height_tiles(fx, fz);
+        sim.flyer.x = fx;
+        sim.flyer.z = fz;
+        sim.flyer.y = g0 + 1.5;
+        sim.flyer.yaw = 0.0; // -Z: straight at the wall
+        sim.flyer.pitch = 0.0;
+        sim.sync_carpet_from_flyer();
+        sim.world.as_mut().unwrap().debug_arm_mc2_speed(3);
+        let fly = mgc_sim::FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        };
+        sim.step(&fly);
+        assert!(
+            sim.world.as_ref().unwrap().accel_override().is_some(),
+            "{thrust:?}: the boost is live before the wall"
+        );
+        let mut hit = None;
+        for t in 0..120 {
+            sim.step(&fly);
+            if sim.world.as_ref().unwrap().accel_override().is_none() {
+                hit = Some(t);
+                break;
+            }
+        }
+        eprintln!("{thrust:?}: wall at ({x},{}), boost cancelled at {hit:?}", zw - 1);
+        assert!(hit.is_some(), "{thrust:?}: the cave wall must cancel Speed");
+    }
+}
+
 /// The mc2:23 spawn-embedded-in-rock case: level-023's (3,4) wizard
 /// start at (134,47) lies in baked-sealed
 /// rock — the entry cavern is carved at LOAD by an authored (10,82)

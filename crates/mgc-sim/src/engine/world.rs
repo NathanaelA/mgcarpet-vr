@@ -668,6 +668,10 @@ pub struct FlightDrive<'a> {
     /// class-3 dispatch inside the ascending entity walk
     /// (`AddPlayer03_00_5E010` EF:59993). See [`Mc2Drive`].
     pub mc2: Option<Mc2Drive<'a>>,
+    /// The enhanced controls' propulsion kernel, or `None` for the
+    /// faithful blocks. Everything else in the dispatch — both games
+    /// — is shared; see [`crate::flight::CarpetPropel`].
+    pub propel: Option<&'a mut dyn crate::flight::CarpetPropel>,
 }
 
 /// The MC2 mover's extra drive channels. `ext` is the carpet's
@@ -1590,6 +1594,8 @@ pub struct FlockProbeRow {
     pub attacker: u16,
     /// Per-tick cadence byte (f63).
     pub cadence: u8,
+    /// The attack sub-state (f71 = MC2 `byte_0x46_70`).
+    pub sub: u8,
     /// Raw flag word — bit 27 = the move-core block latch (retail
     /// `byte[2] & 4`: the last move hit the terrain fence).
     pub flags: u32,
@@ -6779,7 +6785,7 @@ impl World {
             d.s.aim_pitch = 0;
             d.s.roll_f = 0;
             d.s.pitch_f = 0;
-            return conformance::integer_pose(d.s);
+            return Self::walk_pose(d);
         }
         // ⭐⭐ THE SPEED SPELL WRITES THE CARPET'S REGISTERS ITSELF, AT
         // THE TOKEN'S OWN WALK SLOT — it is not a thrust model the
@@ -6795,7 +6801,14 @@ impl World {
         // and the token wrote 240 afterwards. Consumed here for the
         // below-carpet case; the drivers take the above-carpet one off
         // `take_speed_base` after the turn.
-        if let Some(base) = self.pending_speed_base.take() {
+        // ⚖ NAMED DEVIATION (enhanced controls): the speed-base mail
+        // (the Speed token's sustain/restore, `GetScroll_69DB0`) is
+        // dropped — the enhanced kernel takes the boost from
+        // `accel_override` and keeps its own momentum at the expiry.
+        let enhanced = d.propel.is_some();
+        if let Some(base) = self.pending_speed_base.take()
+            && !enhanced
+        {
             d.s.tgt_speed = base;
             d.s.act_speed = base;
         }
@@ -7044,7 +7057,7 @@ impl World {
         let moved = {
             let w: &Self = self;
             let m = d.mc2.as_mut().expect("mc2 drive");
-            crate::flight::mc2_move(
+            crate::flight::mc2_move_with(
                 d.s,
                 m.ext,
                 &d.inp,
@@ -7059,6 +7072,7 @@ impl World {
                 &|x, y| w.player_cave_ceiling(x, y),
                 &|cur, prop| w.player_mc2_gate(cur, prop),
                 &|pos, latched| w.player_mc2_stuck(pos, latched),
+                d.propel.as_deref_mut(),
             )
         };
         // `word_0xe_14` for the token passes above this slot — MC2 had
@@ -7141,14 +7155,17 @@ impl World {
         // BELOW the carpet reads last tick's decayed value and one
         // ABOVE reads this tick's — which is exactly what publishing
         // it here reproduces.
-        self.g.mc2_mobilize.0 = d.mc2.as_ref().map_or(0, |m| m.ext.mobilize) as i32;
         // The web-slow level rides the same re-push (retail keeps
         // `moveSpeed_0x14C_332` on the same `str_164` and decays it in
         // this very dispatch, `mc2_move` step 8) — the echo the (10,65)
         // stagger stamp gates on (wave 125, dig P).
-        self.g.mc2_slow.0 = d.mc2.as_ref().map_or(0, |m| m.ext.move_speed) as i32;
+        if let Some(m) = d.mc2.as_ref() {
+            self.publish_mc2_web_latch(m.ext.mobilize, m.ext.move_speed);
+        } else {
+            self.publish_mc2_web_latch(0, 0);
+        }
         self.emit_carpet_probe(probe_pre, (d.s.x, d.s.y, d.s.z));
-        conformance::integer_pose(d.s)
+        Self::walk_pose(d)
     }
 
     fn step_player_flight(&mut self, d: &mut FlightDrive<'_>) -> PlayerPose {
@@ -7162,7 +7179,13 @@ impl World {
         // integration. A token ABOVE the carpet posts after this
         // step; its mail is taken by the DRIVER after the turn
         // (replay.rs step_mc1 / the MC2 driver's shape).
-        if let Some(base) = self.pending_speed_base.take() {
+        // ⚖ NAMED DEVIATION (enhanced controls) — the MC2 dispatch's
+        // twin: the Accelerate sustain/restore mail is dropped; the
+        // kernel takes the boost from `accel_override`.
+        let enhanced = d.propel.is_some();
+        if let Some(base) = self.pending_speed_base.take()
+            && !enhanced
+        {
             d.s.tgt_speed = base;
             d.s.act_speed = base;
         }
@@ -7235,7 +7258,7 @@ impl World {
             // difference on its own: retail 37, ours 36.
             d.s.tick_ctr = d.s.tick_ctr.wrapping_add(1);
             self.publish_carpet_rand(d.s);
-            return conformance::integer_pose(d.s);
+            return Self::walk_pose(d);
         }
         // FALLING (sub_45FC0 :55463): `sub_455D0` alone — the command
         // handler never runs, so the mover keeps steering on the live
@@ -7303,7 +7326,7 @@ impl World {
         }
         let moved = {
             let w: &Self = self;
-            crate::flight::mc1_move_duel(
+            crate::flight::mc1_move_duel_with(
                 d.s,
                 &d.inp,
                 d.over,
@@ -7311,6 +7334,7 @@ impl World {
                 duel_grip,
                 &|x, y| w.ground_z_engine(x, y),
                 &|cur, prop| w.player_wall_gate_fixed(cur, prop),
+                d.propel.as_deref_mut(),
             )
         };
         // ⭐ THE DUEL GRIP DRAGS THE CASTER'S HEADING, not only his
@@ -7356,10 +7380,16 @@ impl World {
         // tgt parked at −80 — retail arms the kill and the token
         // dies, the port ran the burst out; five cancels across the
         // take's accel play).
-        self.mc1_v14 = match self.player.accel {
-            1 => !d.inp.no_command && d.inp.speed_down,
-            -1 => !d.inp.no_command && d.inp.speed_up,
-            _ => moved.speed_touched,
+        // ⚖ The enhanced controls brake the boost immediately
+        // (`accel_brake_immediate`) and never arm the v14 latch.
+        self.mc1_v14 = if enhanced {
+            false
+        } else {
+            match self.player.accel {
+                1 => !d.inp.no_command && d.inp.speed_down,
+                -1 => !d.inp.no_command && d.inp.speed_up,
+                _ => moved.speed_touched,
+            }
         };
         if moved.flutter {
             self.push_player_sound(46);
@@ -7384,13 +7414,24 @@ impl World {
         }
         self.publish_carpet_rand(d.s);
         self.emit_carpet_probe(probe_pre, (d.s.x, d.s.y, d.s.z));
-        conformance::integer_pose(d.s)
+        Self::walk_pose(d)
     }
 
     /// Publish a carpet pose that landed mid-walk (`sub_455D0`'s move,
     /// or the pair-mode snap to the recorded N+1 sample) to the two
     /// channels the higher-slot walkers read: the aggro/awake ctx and
     /// the `human_pose` register the wizard/rival lanes probe.
+    /// The carpet pose the world adopts from the walk-slot mover: the
+    /// integer carpet, with the heading turned to the enhanced
+    /// kernel's AIM (casts launch along the crosshair, player ruling).
+    fn walk_pose(d: &FlightDrive<'_>) -> PlayerPose {
+        let mut p = conformance::integer_pose(d.s);
+        if let Some(k) = d.propel.as_deref() {
+            p.heading = p.heading.wrapping_add(k.aim_heading_offset() as u16) & 0x7FF;
+        }
+        p
+    }
+
     fn adopt_walk_pose(&mut self, player: PlayerPose, ctx: &mut MobCtx) {
         *ctx = MobCtx {
             px: player.x,
@@ -7561,7 +7602,7 @@ impl World {
     /// slot reads the record's PRE-move pose — the t=563 replay-wall
     /// law (the carpet must not lag a rising tower by one tick).
     pub fn tick_flight(&mut self, drive: &mut FlightDrive<'_>, cmd: PlayerCommand) {
-        let entry = conformance::integer_pose(drive.s);
+        let entry = Self::walk_pose(drive);
         self.tick_inner(entry, cmd, Some(&mut *drive), None);
         // "Next frame's token fires measure from THIS frame's settled
         // carpet" — the cast-phase stamp can only see the ENTRY pose
@@ -7573,7 +7614,7 @@ impl World {
         // 3238) — the stale entry stamp held last tick's aim mid
         // mouse-flick (pitch ≈ −2, z 7 low) and skewed the spawn and
         // the homing re-aim.
-        self.mc1_cast_pose = conformance::integer_pose(drive.s);
+        self.mc1_cast_pose = Self::walk_pose(drive);
         // An ABOVE-carpet speed token's `+126` write (burst END ±80 or
         // the sustain 2×/3× base) is still MAILED here — the driver
         // lands it on the carpet after this call — so the settled
@@ -9977,7 +10018,7 @@ impl World {
                 if let Some(d) = drive.as_deref_mut() {
                     if let Some((bearing, dist)) = self.take_player_hurl() {
                         self.apply_player_hurl(d, bearing, dist);
-                        player = conformance::integer_pose(d.s);
+                        player = Self::walk_pose(d);
                         self.adopt_walk_pose(player, &mut ctx);
                     }
                 } else if !hurl_published {
@@ -10086,7 +10127,7 @@ impl World {
                 // records: zero hits, life 8 -> 7. The other eight
                 // bursts never reached him either way.
                 if !no_mc2_whirl_seat_republish() {
-                    player = conformance::integer_pose(d.s);
+                    player = Self::walk_pose(d);
                     self.adopt_walk_pose(player, &mut ctx);
                 }
             }
@@ -17618,6 +17659,15 @@ impl World {
 
     /// The raw types-2/21 factor: 0.0 inactive, ±3.0 while the cast
     /// button is held, ±2.0 channeling after release (:65169/:65175).
+    /// Arm an MC2 Speed window directly (tests): the forward channel
+    /// at tier `factor`, with no token — only a cancel ends it.
+    #[doc(hidden)]
+    pub fn debug_arm_mc2_speed(&mut self, factor: u8) {
+        self.player.accel = 1;
+        self.player.accel_mc2_factor = factor as _;
+        self.player.speed_boost = factor as f32;
+    }
+
     pub fn player_speed_boost(&self) -> f32 {
         self.player.speed_boost
     }
@@ -23070,20 +23120,6 @@ impl World {
                 .is_some_and(|e| e.flags & crate::mc2::mobs::F_STOP != 0)
     }
 
-    /// The same one-shot, read AND cleared — for the ENHANCED mover,
-    /// which has no walk slot and so never reaches the clear in
-    /// [`Self::step_player_flight_mc2`]. Without it a grab's `byte[1]
-    /// |= 8` would stay latched on the human's record until a funnel
-    /// teardown swept it.
-    pub(crate) fn mc2_take_player_stop_veto(&mut self) -> bool {
-        let stop = self.mc2_player_stop_veto();
-        if stop {
-            let cs = self.mc2_carpet_slot as usize;
-            self.g.ent[cs].flags &= !crate::mc2::mobs::F_STOP;
-        }
-        stop
-    }
-
     /// This tick's DOOMSDAY HURL-AWAY BEAM on the human, as
     /// `(bearing, distance)` — see
     /// [`crate::engine::features::PlayerHurl`]. Drained on read at the
@@ -23501,6 +23537,21 @@ impl World {
         }
     }
 
+    /// Re-push the carpet's web latches (paralyze `mobilize`, slow
+    /// `move_speed`) to the pool-side mirrors the creature brains and
+    /// the next web stamp read ([`Gen::mc2_mobilize`] /
+    /// [`Gen::mc2_slow`]). EVERY mover that decays the ext must call
+    /// this after its decay: the stamp sets the mirror itself, so a
+    /// mover that never re-pushes leaves it latched forever — every
+    /// later web then reads "already stunned" (no damage, no kick,
+    /// just the tint) and the m20 rush commits on a free wizard. That
+    /// was the enhanced-thrust mover until 2026-09-25 (player report,
+    /// mc2l3 "harmless spiders").
+    pub fn publish_mc2_web_latch(&mut self, mobilize: u8, move_speed: u8) {
+        self.g.mc2_mobilize.0 = mobilize as i32;
+        self.g.mc2_slow.0 = move_speed as i32;
+    }
+
     /// Pending MC2 debuff-stamp hits on the player — (slow webs,
     /// paralyze webs) since the last drain; the boundary feeds them
     /// into the flight ext's `slow_hit`/`stun_hit`.
@@ -23532,13 +23583,6 @@ impl World {
         match self.g.verbs.commit_gate {
             CommitGateVerb::Mc1 | CommitGateVerb::Mc2 => self.g.player_wall_slide(cur, prop),
         }
-    }
-
-    /// Seam-telemetry hook for the boundary verbs the flyer consumes
-    /// through `&self` closures (commit gate, flight model) — the sim
-    /// boundary notes their fallbacks here, where `&mut` exists.
-    pub(crate) fn note_verb_fallback(&mut self, kind: VerbKind) {
-        self.g.note_verb_fallback(kind);
     }
 
     /// Emit a player-anchored sound from the sim boundary (the move's
@@ -24352,6 +24396,7 @@ impl World {
                 target: e.f146,
                 attacker: e.f40,
                 cadence: e.f63,
+                sub: e.f71,
                 flags: e.flags,
             })
             .collect()
@@ -28068,6 +28113,7 @@ mod tests {
         for tick in 0..2 {
             {
                 let mut drive = FlightDrive {
+                    propel: None,
                     s: &mut s,
                     inp: crate::flight::Mc1Input::default(),
                     over: None,
@@ -28151,6 +28197,7 @@ mod tests {
         let mut accel_was_active = false;
         {
             let mut drive = FlightDrive {
+                propel: None,
                 s: &mut s,
                 inp: crate::flight::Mc1Input::default(),
                 over: None,
@@ -28632,6 +28679,7 @@ mod tests {
             ..Default::default()
         };
         let mut d = FlightDrive {
+            propel: None,
             s: &mut st,
             inp: crate::flight::Mc1Input::default(),
             over: None,
@@ -34103,6 +34151,7 @@ mod tests {
         };
         let mut accel_was_active = false;
         let mut drive = FlightDrive {
+            propel: None,
             s: &mut s,
             inp: crate::flight::Mc1Input::default(),
             over: None,
@@ -34265,6 +34314,7 @@ mod tests {
         };
         let mut accel_was_active = false;
         let mut drive = FlightDrive {
+            propel: None,
             s: &mut s,
             inp: crate::flight::Mc1Input::default(),
             over: None,
@@ -43641,6 +43691,7 @@ mod tests {
         };
         let mut accel_was_active = false;
         let mut drive = FlightDrive {
+            propel: None,
             s: &mut s,
             inp: crate::flight::Mc1Input::default(),
             over: None,
@@ -46867,6 +46918,7 @@ mod tests {
         let mut accel_was_active = false;
         let (x0, y0) = (s.x, s.y);
         let mut drive = FlightDrive {
+            propel: None,
             s: &mut s,
             inp: crate::flight::Mc1Input::default(),
             over: None,
@@ -46952,6 +47004,7 @@ mod tests {
         let mut accel_was_active = false;
         let entry = (s.x, s.y, s.z);
         let mut drive = FlightDrive {
+            propel: None,
             s: &mut s,
             inp: crate::flight::Mc1Input::default(),
             over: None,
@@ -47023,6 +47076,7 @@ mod tests {
             };
             let mut accel_was_active = false;
             let mut drive = FlightDrive {
+                propel: None,
                 s: &mut s,
                 inp: crate::flight::Mc1Input::default(),
                 over: None,
@@ -47167,6 +47221,7 @@ mod tests {
                     ext: &mut crate::flight::Mc2Ext,
                     a: &mut bool| {
             let mut drive = FlightDrive {
+                propel: None,
                 s,
                 inp: crate::flight::Mc1Input::default(),
                 over: None,
@@ -47243,6 +47298,7 @@ mod tests {
         let mut accel_was_active = false;
         {
             let mut drive = FlightDrive {
+                propel: None,
                 s: &mut s,
                 inp: crate::flight::Mc1Input::default(),
                 over: None,
@@ -47293,6 +47349,7 @@ mod tests {
         let held = (s.x, s.y);
         {
             let mut drive = FlightDrive {
+                propel: None,
                 s: &mut s,
                 inp: crate::flight::Mc1Input::default(),
                 over: None,
@@ -47380,6 +47437,7 @@ mod tests {
             let mut accel_was_active = false;
             {
                 let mut drive = FlightDrive {
+                    propel: None,
                     s: &mut s,
                     inp: crate::flight::Mc1Input::default(),
                     over: None,
@@ -47684,6 +47742,325 @@ mod tests {
     /// tick's arm), so BOTH halves are pinned here: the mc2l3 t=1294
     /// row is the refusal, and the success half is what proves the
     /// setup was live.
+    /// ⭐ THE ENHANCED MOVER MUST RELEASE THE PARALYZE MIRROR. The
+    /// web stamp sets [`Gen::mc2_mobilize`] itself; only a mover's
+    /// re-push ever clears it. The faithful walk re-pushes in its
+    /// dispatch, the enhanced-thrust mover did not — so after the
+    /// first web the mirror stayed 1 forever and every later web read
+    /// "already stunned": no damage, no kick, only the tint (player
+    /// report 2026-09-25, mc2l3 "harmless spiders"). Both thrust
+    /// models must agree: latched through the 10-tick stun, then free.
+    #[test]
+    fn the_paralyze_mirror_releases_under_both_thrust_models() {
+        for thrust in [crate::ThrustModel::Mc1, crate::ThrustModel::Enhanced] {
+            let mut sim = crate::Simulation::with_world(mc2_flat_world());
+            sim.thrust_model = thrust;
+            sim.step(&crate::FlightInput::default());
+            // What the (10,66) stamp does (proj.rs): queue the hit AND
+            // set the mirror at once.
+            {
+                let w = sim.world.as_mut().unwrap();
+                w.g.mc2_debuffs.stun = 1;
+                w.g.mc2_mobilize.0 = 1;
+            }
+            let mut held = 0;
+            for _ in 0..30 {
+                sim.step(&crate::FlightInput::default());
+                if sim.world.as_ref().unwrap().g.mc2_mobilize.0 != 0 {
+                    held += 1;
+                }
+            }
+            assert_eq!(
+                sim.world.as_ref().unwrap().g.mc2_mobilize.0,
+                0,
+                "{thrust:?}: the paralyze mirror must release after the stun"
+            );
+            assert!(
+                (8..=11).contains(&held),
+                "{thrust:?}: the mirror holds for the ~10-tick stun, held {held}"
+            );
+        }
+    }
+
+    /// ⭐⭐⭐ THRUST-MODEL PARITY (MC2). The control mode may change
+    /// how the PLAYER's input becomes motion — nothing else. With idle
+    /// input the two carpets must be indistinguishable to the world
+    /// through every interaction the world applies to the carpet:
+    /// knock, webs, the gravity-well pull, whirlwind seizure + residual
+    /// spin, hurl, teleport, the duel leash. The fixture corpus only
+    /// ever drives the classic mover, so this is the ONLY guard on the
+    /// enhanced one (player report 2026-09-25: the web latch, the
+    /// tornado before it, the duel leash / Speed cancel / well pull
+    /// the audit found after).
+    #[test]
+    fn mc2_thrust_models_agree_on_every_world_interaction() {
+        use crate::engine::features::PlayerWhirl;
+        type Inject = fn(&mut World);
+        let scenarios: &[(&str, Inject)] = &[
+            ("idle", |_| {}),
+            ("knock", |w| w.g.player_knock = (512, 80)),
+            ("web", |w| {
+                w.g.mc2_debuffs.stun = 1;
+                w.g.mc2_mobilize.0 = 1;
+            }),
+            ("slow", |w| {
+                w.g.mc2_debuffs.slow = 1;
+                w.g.mc2_slow.0 = 1;
+            }),
+            // A LIVE gravity well: the one-turn pull/knock mailboxes
+            // are wiped at the tick top, so they can only be armed
+            // mid-walk by the real entity (a between-tick poke never
+            // reaches the dispatch).
+            ("gravity well", |w| {
+                let (x, y, _) = w.human_pose;
+                let z = w.g.ground_z(x, y.wrapping_sub(1500)) as i16;
+                w.g.mc2_spawn_flood(x, y.wrapping_sub(1500), z).expect("well");
+            }),
+            ("whirl seize + spin", |w| {
+                let (x, y, z) = w.human_pose;
+                w.g.player_whirl = PlayerWhirl {
+                    armed: true,
+                    grab: Some((x.wrapping_add(200), y, z + 100, 700)),
+                    bumps: 4,
+                    ..Default::default()
+                }
+            }),
+            // (The doomsday HURL is the same one-turn mailbox, armed only
+            // by the pyramid beam; its record write reaches the kernel
+            // through the same follow path as the teleport and the
+            // whirl seizure above.)
+            ("teleport", |w| w.pending_teleport = Some((120.5, 90.5, None))),
+            ("duel leash", |w| {
+                let (x, y, _) = w.human_pose;
+                let m = w.g.new_event().expect("token slot");
+                w.g.ent[m].class64 = 15;
+                w.g.ent[m].f26 = 30_000;
+                w.mc2_book.ent[14] = m as u16;
+                let o = w.g.new_event().expect("opponent slot");
+                w.g.ent[o].class64 = 3;
+                w.g.ent[o].act_life = 5000;
+                w.g.ent[o].x = x;
+                w.g.ent[o].y = y.wrapping_sub(1600);
+                w.g.ent[o].z = 3500;
+                w.mc2_duel = Some((o as u16, 1024, 0));
+            }),
+        ];
+        const RAD: f32 = std::f32::consts::TAU / 2048.0;
+        let run = |thrust: crate::ThrustModel, inject: Inject| {
+            let mut sim = crate::Simulation::with_world(mc2_flat_world());
+            sim.thrust_model = thrust;
+            let g = sim.world.as_ref().unwrap().ground_height_tiles(100.5, 100.5);
+            sim.flyer.x = 100.5;
+            sim.flyer.z = 100.5;
+            sim.flyer.y = g + 1.5;
+            sim.flyer.yaw = 0.0;
+            sim.flyer.pitch = 0.0;
+            sim.sync_carpet_from_flyer();
+            let mut trail = Vec::new();
+            for t in 0..40 {
+                if t == 8 {
+                    inject(sim.world.as_mut().unwrap());
+                }
+                sim.step(&crate::FlightInput::default());
+                let w = sim.world.as_ref().unwrap();
+                let yaw = ((sim.flyer.yaw / RAD).round() as i32 & 0x7FF) as u16;
+                trail.push((
+                    t,
+                    w.human_pose,
+                    yaw,
+                    w.g.mc2_mobilize.0,
+                    w.g.mc2_slow.0,
+                    w.mc1_v14,
+                    w.mc2_duel.is_some(),
+                    w.player.life,
+                ));
+            }
+            trail
+        };
+        let mut bad = Vec::new();
+        let idle = run(crate::ThrustModel::Mc1, scenarios[0].1);
+        for (name, inject) in scenarios {
+            let a = run(crate::ThrustModel::Mc1, *inject);
+            if *name != "idle" && a == idle {
+                bad.push(format!("{name}: VACUOUS — the injection changed nothing"));
+            }
+            let b = run(crate::ThrustModel::Enhanced, *inject);
+            if let Some((ra, rb)) = a.iter().zip(&b).find(|(ra, rb)| ra != rb) {
+                bad.push(format!("{name}: first split\n  classic  {ra:?}\n  enhanced {rb:?}"));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "(t, pose, yaw, mobilize, slow, v14, duel, life)\n{}",
+            bad.join("\n")
+        );
+    }
+
+    /// ⭐⭐⭐ THRUST-MODEL PARITY (MC1/HW) — the MC2 test's twin. Idle
+    /// input from 5 tiles up (the at-rest sink above the soft ceiling),
+    /// long enough for the carpet LCG's flutter draw (tick 64): the
+    /// knock, a teleport and the duel grip must reach both control
+    /// modes identically.
+    #[test]
+    fn mc1_thrust_models_agree_on_every_world_interaction() {
+        type Inject = fn(&mut World);
+        let scenarios: &[(&str, Inject)] = &[
+            ("idle", |_| {}),
+            ("knock", |w| w.g.player_knock = (700, 90)),
+            ("teleport", |w| w.pending_teleport = Some((120.5, 90.5, None))),
+            ("duel grip", |w| {
+                let (x, y, _) = w.human_pose;
+                let o = w.g.new_event().expect("victim slot");
+                w.g.ent[o].class64 = 3;
+                w.g.ent[o].act_life = 5000;
+                w.g.ent[o].x = x.wrapping_add(900);
+                w.g.ent[o].y = y.wrapping_sub(2400);
+                w.g.ent[o].z = 4500;
+                w.set_duel_latch(o as u16, 1024);
+            }),
+        ];
+        const RAD: f32 = std::f32::consts::TAU / 2048.0;
+        let run = |thrust: crate::ThrustModel, inject: Inject| {
+            let mut sim = crate::Simulation::with_world(flat_world());
+            sim.thrust_model = thrust;
+            let g = sim.world.as_ref().unwrap().ground_height_tiles(100.5, 100.5);
+            sim.flyer.x = 100.5;
+            sim.flyer.z = 100.5;
+            sim.flyer.y = g + 5.0;
+            sim.flyer.yaw = 0.0;
+            sim.flyer.pitch = 0.0;
+            sim.sync_carpet_from_flyer();
+            let mut trail = Vec::new();
+            for t in 0..80 {
+                if t == 8 {
+                    inject(sim.world.as_mut().unwrap());
+                }
+                sim.step(&crate::FlightInput::default());
+                let w = sim.world.as_ref().unwrap();
+                let yaw = ((sim.flyer.yaw / RAD).round() as i32 & 0x7FF) as u16;
+                trail.push((
+                    t,
+                    w.human_pose,
+                    yaw,
+                    w.duel.map(|(v, c, _)| (v, c)),
+                    w.mc1_v14,
+                    sim.carpet.rand,
+                    w.player.life,
+                ));
+            }
+            trail
+        };
+        let mut bad = Vec::new();
+        let idle = run(crate::ThrustModel::Mc1, scenarios[0].1);
+        for (name, inject) in scenarios {
+            let a = run(crate::ThrustModel::Mc1, *inject);
+            if *name != "idle" && a == idle {
+                bad.push(format!("{name}: VACUOUS — the injection changed nothing"));
+            }
+            let b = run(crate::ThrustModel::Enhanced, *inject);
+            if let Some((ra, rb)) = a.iter().zip(&b).find(|(ra, rb)| ra != rb) {
+                bad.push(format!("{name}: first split\n  classic  {ra:?}\n  enhanced {rb:?}"));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "(t, pose, yaw, duel, v14, carpet rand, life)\n{}",
+            bad.join("\n")
+        );
+    }
+
+    /// The enhanced kernel still FLIES on a live world, both games:
+    /// full thrust spools up to the classic cruise (80 units/tick —
+    /// the float mover's 7.5 tiles/s design point) along the heading,
+    /// and the world sees that as the carpet's signed speed.
+    #[test]
+    fn the_enhanced_kernel_cruises_at_the_classic_top_speed() {
+        for (game, world) in [("mc1", flat_world()), ("mc2", mc2_flat_world())] {
+            let mut sim = crate::Simulation::with_world(world);
+            sim.thrust_model = crate::ThrustModel::Enhanced;
+            let g = sim.world.as_ref().unwrap().ground_height_tiles(100.5, 100.5);
+            sim.flyer.x = 100.5;
+            sim.flyer.z = 100.5;
+            sim.flyer.y = g + 1.5;
+            sim.flyer.yaw = 0.0;
+            sim.flyer.pitch = 0.0;
+            sim.sync_carpet_from_flyer();
+            let fly = crate::FlightInput {
+                thrust: 1.0,
+                ..Default::default()
+            };
+            for _ in 0..80 {
+                sim.step(&fly);
+            }
+            let (x0, y0, _) = sim.world.as_ref().unwrap().human_pose;
+            sim.step(&fly);
+            let (x1, y1, _) = sim.world.as_ref().unwrap().human_pose;
+            let dx = x1.wrapping_sub(x0) as i16 as i32;
+            let dy = y1.wrapping_sub(y0) as i16 as i32;
+            assert!(dx.abs() <= 1, "{game}: yaw 0 flies straight -Y (dx {dx})");
+            assert!((-81..=-78).contains(&dy), "{game}: cruise step {dy}, want ~-80");
+            assert!(
+                (78..=81).contains(&sim.carpet.act_speed),
+                "{game}: published speed {}",
+                sim.carpet.act_speed
+            );
+        }
+    }
+
+    /// Under the enhanced controls the WORLD's heading is the AIM
+    /// (hull yaw + the chase lead) — casts launch along the crosshair
+    /// (player ruling) — while the hull turns toward it.
+    #[test]
+    fn the_enhanced_world_heading_is_the_crosshair() {
+        let mut sim = crate::Simulation::with_world(flat_world());
+        sim.thrust_model = crate::ThrustModel::Enhanced;
+        let g = sim.world.as_ref().unwrap().ground_height_tiles(100.5, 100.5);
+        sim.flyer.x = 100.5;
+        sim.flyer.z = 100.5;
+        sim.flyer.y = g + 1.5;
+        sim.sync_carpet_from_flyer();
+        sim.step(&crate::FlightInput {
+            yaw_delta: 0.4,
+            ..Default::default()
+        });
+        const RAD: f32 = std::f32::consts::TAU / 2048.0;
+        let hull = sim.carpet.yaw as i32;
+        let lead = (sim.aim_lead / RAD).round() as i32;
+        let cast = sim.world.as_ref().unwrap().mc1_cast_pose.heading as i32;
+        assert!(lead > 20, "the chase is still closing (lead {lead})");
+        assert_eq!(cast, (hull + lead) & 0x7FF, "casts follow the crosshair");
+    }
+
+    /// MC1's carpet flutter (sound 46, the every-64th-tick LCG roll,
+    /// :55294-99) plays on the SAME ticks under both control modes —
+    /// the enhanced mover never played it before the one-dispatch
+    /// refactor (parity audit 2026-09-25).
+    #[test]
+    fn the_carpet_flutter_plays_under_both_controls() {
+        let run = |thrust: crate::ThrustModel| {
+            let mut sim = crate::Simulation::with_world(flat_world());
+            sim.thrust_model = thrust;
+            let g = sim.world.as_ref().unwrap().ground_height_tiles(100.5, 100.5);
+            sim.flyer.x = 100.5;
+            sim.flyer.z = 100.5;
+            sim.flyer.y = g + 1.5;
+            sim.sync_carpet_from_flyer();
+            let mut ticks = Vec::new();
+            for t in 0..64 * 60 {
+                sim.step(&crate::FlightInput::default());
+                let pose = conformance::integer_pose(&sim.carpet);
+                let audio = sim.world.as_mut().unwrap().take_audio(pose);
+                if audio.events.iter().any(|e| e.id == 46) {
+                    ticks.push(t);
+                }
+            }
+            ticks
+        };
+        let classic = run(crate::ThrustModel::Mc1);
+        assert!(!classic.is_empty(), "the flutter rolls within 60 draws");
+        assert_eq!(run(crate::ThrustModel::Enhanced), classic);
+    }
+
     #[test]
     fn an_m20_commits_its_rush_only_while_the_wizard_is_paralyzed() {
         let run = |mobilize: u8| -> u8 {
@@ -54118,6 +54495,7 @@ mod tests {
             ..Default::default()
         };
         let mut d = FlightDrive {
+            propel: None,
             s: &mut st,
             inp: crate::flight::Mc1Input::default(),
             over: None,
@@ -54207,6 +54585,7 @@ mod tests {
             };
             let mut accel_was_active = false;
             let mut drive = FlightDrive {
+                propel: None,
                 s: &mut s,
                 inp: crate::flight::Mc1Input::default(),
                 over: None,
@@ -54295,6 +54674,7 @@ mod tests {
         };
         let mut accel_was_active = false;
         let mut drive = FlightDrive {
+            propel: None,
             s: &mut s,
             inp: crate::flight::Mc1Input::default(),
             over: None,
