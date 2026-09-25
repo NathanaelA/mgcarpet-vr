@@ -16,6 +16,7 @@ mod config;
 mod entities;
 mod frontend;
 mod frontend_mc1;
+mod launcher_screen;
 mod menu;
 mod minimenu;
 mod movie;
@@ -149,6 +150,8 @@ impl WorldInit {
 /// The parameters the initial `load_level` ran with, kept so a
 /// campaign level switch rebuilds through the exact same path.
 struct LaunchParams {
+    /// Boot to the launcher (a plain start — see `launcher_screen`).
+    launcher: bool,
     tileset: Option<u8>,
     terrain_features: bool,
     pool_slots: Option<usize>,
@@ -2009,6 +2012,9 @@ enum Screen {
     Movie,
     /// The MC1/HW end-of-level performance screen (retail PPERF).
     Stats,
+    /// The launcher (a plain start): pick a game, then its campaign
+    /// boots as `--campaign` would.
+    Launcher,
 }
 
 /// What follows a finished (or skipped) FMV chain. Every movie in the
@@ -2062,6 +2068,9 @@ enum UiAtlas {
     Movie,
     /// The performance screen's CPU-composed frame.
     Stats,
+    /// The launcher's CPU-composed frame (re-uploaded only when it
+    /// changes).
+    Launcher,
 }
 
 /// The running session, mutably — the gameplay paths' accessor.
@@ -2375,6 +2384,8 @@ struct App {
     /// `screen == Screen::Stats` — and where it hands over.
     stats_screen: Option<stats_screen::Mc1Stats>,
     stats_then: StatsThen,
+    /// The launcher, while `screen == Screen::Launcher`.
+    launcher: Option<launcher_screen::Launcher>,
     /// Which surface owns the frame (see [`Screen`]). Frontend
     /// screens hold no session — the level is constructed on launch
     /// and torn down on exit.
@@ -2492,7 +2503,9 @@ impl App {
         // used to stay `None` for the whole run, so re-enabling in
         // the menu was a no-op until a restart (player-reported).
         let mut audio = None;
-        if cfg.audio.sound || cfg.audio.music {
+        // The launcher plays nothing and may have no bake to play it
+        // from; the chosen game opens its own device.
+        if (cfg.audio.sound || cfg.audio.music) && !launch.launcher {
             let audio_bank = level.as_ref().map_or(0, |l| l.audio_bank);
             let audio_dir = match &level {
                 Some(l) => l.audio_dir.clone(),
@@ -2591,7 +2604,9 @@ impl App {
             // temple; MC1/HW: the globe menu) with NO level loaded —
             // the frontend is the loader; a session is constructed
             // when the player launches one.
-            screen: if has_campaign {
+            screen: if launch.launcher {
+                Screen::Launcher
+            } else if has_campaign {
                 Screen::Menu
             } else {
                 Screen::Level
@@ -2621,6 +2636,7 @@ impl App {
             stats_card: None,
             stats_screen: None,
             stats_then: StatsThen::Menu,
+            launcher: None,
             ui_atlas: UiAtlas::None,
             frontend_audio_accum: 0.0,
             frontend_ui: None,
@@ -2641,6 +2657,12 @@ impl App {
             // blip of menu MIDI under the opening (player-reported).
             // The chain hands back to `enter_main_menu`, which starts
             // it properly.
+            None if app.screen == Screen::Launcher => {
+                app.launcher = Some(launcher_screen::Launcher::new(
+                    &get_baked_directory(),
+                    app.cfg.gamedata.as_deref(),
+                ));
+            }
             None if !app.boot_intro => app.frontend_music(),
             None => {}
         }
@@ -3460,7 +3482,7 @@ impl App {
                     }
                 }
                 // A movie owns the whole screen and takes no pointer.
-                Screen::Movie | Screen::Stats => {}
+                Screen::Movie | Screen::Stats | Screen::Launcher => {}
             }
         }
         // Retail pause suspends ALL sound; resumed sounds pick up
@@ -5590,6 +5612,10 @@ impl App {
     /// One frontend frame (`screen != Level`): the P options menu
     /// over a frozen screen, or the live menu/map frame.
     fn frontend_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        if self.screen == Screen::Launcher {
+            self.launcher_frame(event_loop);
+            return;
+        }
         // The launch intro, on the first frontend frame there is a
         // window to show it in. Retail runs it BEFORE the main menu
         // (a campaign booted straight into a level — `--level` — gets
@@ -5652,6 +5678,7 @@ impl App {
             Screen::Map => self.map_screen_frame(dt, event_loop),
             Screen::Movie => self.movie_screen_frame(dt, event_loop),
             Screen::Stats => self.stats_screen_frame(dt, event_loop),
+            Screen::Launcher => self.launcher_frame(event_loop),
             // Level with no session (a failed campaign launch mid-
             // exit): nothing to draw.
             Screen::Level => {}
@@ -5886,6 +5913,88 @@ impl App {
             ),
             StatsThen::Quit => event_loop.exit(),
         }
+    }
+
+    /// One launcher frame: poll the background bake, act on the
+    /// player's choice, and re-upload the frame when it changed.
+    fn launcher_frame(&mut self, event_loop: &ActiveEventLoop) {
+        let size = self.view_size();
+        let Some(l) = &mut self.launcher else {
+            event_loop.exit();
+            return;
+        };
+        l.tick();
+        match l.take_action() {
+            Some(launcher_screen::Action::Exit) => {
+                event_loop.exit();
+                return;
+            }
+            Some(launcher_screen::Action::Start(id)) => {
+                self.start_from_launcher(id, event_loop);
+                return;
+            }
+            None => {}
+        }
+        let (rgba, quads) = l.frame(size, self.cursor);
+        if let Some(r) = &mut self.renderer {
+            if let Some(rgba) = rgba {
+                r.load_ui_atlas(size.0.max(1.0) as u32, size.1.max(1.0) as u32, &rgba);
+                self.ui_atlas = UiAtlas::Launcher;
+            } else if self.ui_atlas != UiAtlas::Launcher {
+                // Another screen took the atlas slot: compose afresh.
+                l.invalidate();
+                return;
+            }
+            r.set_ui_quads(quads);
+        }
+    }
+
+    /// Start the game the launcher picked: its campaign boots exactly
+    /// as `--campaign` would (the intro chain, then the retail main
+    /// menu), in this same window.
+    fn start_from_launcher(&mut self, id: campaign::CampaignId, event_loop: &ActiveEventLoop) {
+        let run = match CampaignRun::start(id, None, false) {
+            Ok(run) => run,
+            Err(e) => {
+                eprintln!("error: cannot start the {} campaign: {e}", id.tag());
+                event_loop.exit();
+                return;
+            }
+        };
+        println!("launcher: starting the {} campaign", id.tag());
+        // The campaign carry replaces the instrument (as at a
+        // `--campaign` boot).
+        self.cfg.dev.plausible_spellbook = false;
+        self.campaign = Some(run);
+        self.launcher = None;
+        let is_mc2 = self.is_mc2();
+        // The selection surfaces and the map layout follow the game.
+        self.selector = self.cfg.gameplay.enhancement.spell_selector.resolve(is_mc2);
+        self.pane = self.selector.ctrl_pane.then(|| {
+            if is_mc2 {
+                ui::SelectorPane::mc2()
+            } else {
+                ui::SelectorPane::mc1()
+            }
+        });
+        if let Some(r) = &mut self.renderer {
+            r.set_map_layout(if self.selector.map_book {
+                mgc_render::MapScreenLayout::Mc1Book
+            } else {
+                mgc_render::MapScreenLayout::Mc2Split
+            });
+        }
+        if self.cfg.audio.sound || self.cfg.audio.music {
+            self.ensure_audio();
+        }
+        if let Some(w) = &self.window {
+            w.set_title(&format!("Magic Carpet — {} campaign", id.tag()));
+        }
+        // The launcher ran windowed; the game takes the configured mode.
+        self.apply_fullscreen();
+        self.ui_atlas = UiAtlas::None;
+        self.screen = Screen::Menu;
+        self.boot_intro = true;
     }
 
     /// One performance-screen frame: CPU-composed 640×400, uploaded
@@ -6238,8 +6347,10 @@ impl App {
         if w.fullscreen().is_none() || self.grabbed {
             return;
         }
-        if matches!(self.screen, Screen::Map | Screen::Movie | Screen::Stats)
-            || (self.screen == Screen::Menu && self.is_mc2())
+        if matches!(
+            self.screen,
+            Screen::Map | Screen::Movie | Screen::Stats | Screen::Launcher
+        ) || (self.screen == Screen::Menu && self.is_mc2())
         {
             return;
         }
@@ -7817,11 +7928,11 @@ impl ApplicationHandler for App {
             .with_inner_size(winit::dpi::PhysicalSize::new(1280u32, 960u32))
             // Borderless from the first frame when the config says so,
             // so a fullscreen launch never flashes a 4:3 window first.
+            // The launcher is always a window (player ruling
+            // 2026-09-25): fullscreen is the game's, applied when the
+            // launcher hands over.
             .with_fullscreen(
-                self.cfg
-                    .render
-                    .preference
-                    .fullscreen
+                (self.cfg.render.preference.fullscreen && self.screen != Screen::Launcher)
                     .then_some(winit::window::Fullscreen::Borderless(None)),
             );
         let window = match event_loop.create_window(attrs) {
@@ -7937,6 +8048,15 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let down = state == ElementState::Pressed;
+                if self.screen == Screen::Launcher {
+                    if down && button == MouseButton::Left {
+                        let size = self.view_size();
+                        if let Some(l) = &mut self.launcher {
+                            l.click(size, self.cursor);
+                        }
+                    }
+                    return;
+                }
                 // Retail's movie abort takes either mouse button as
                 // readily as a key (`lastPressedKey || mouseLeft ||
                 // mouseRight`, remc1 sub_10300).
@@ -8398,7 +8518,17 @@ impl ApplicationHandler for App {
                     self.objective_held = down;
                 }
                 if down && self.alt_held && event.logical_key == Key::Named(NamedKey::Enter) {
-                    self.toggle_fullscreen();
+                    // The launcher stays a window (see `resumed`).
+                    if self.screen != Screen::Launcher {
+                        self.toggle_fullscreen();
+                    }
+                    return;
+                }
+                // The launcher owns the keyboard.
+                if self.screen == Screen::Launcher {
+                    if down && let Some(l) = &mut self.launcher {
+                        l.key(&event.logical_key);
+                    }
                     return;
                 }
                 // A movie owns the screen: ANY key abandons the rest
@@ -9009,6 +9139,8 @@ impl ApplicationHandler for App {
 
 struct Args {
     level: PathBuf,
+    /// `--level` was given (a plain start boots the launcher instead).
+    level_explicit: bool,
     /// `--campaign <mc1|mc1hw|mc2>`: run the game's campaign — level
     /// order, exit routing, cross-level spell carry, retail-format
     /// saves under `saves/<game>/`. Overrides `--level`.
@@ -9159,6 +9291,7 @@ struct Args {
 
 fn parse_args() -> Result<Args, String> {
     let mut level = get_baked_directory().join("mc1/level-000.mgcl");
+    let mut level_explicit = false;
     let mut campaign_id = None;
     let mut slot = None;
     let mut new_game = false;
@@ -9249,6 +9382,7 @@ fn parse_args() -> Result<Args, String> {
         match arg.as_str() {
             "--level" => {
                 level = resolve_level_arg(&it.next().ok_or("--level needs a path or game:index")?)?;
+                level_explicit = true;
             }
             "--campaign" => {
                 let v = it.next().ok_or("--campaign needs mc1, mc1hw or mc2")?;
@@ -9597,6 +9731,7 @@ fn parse_args() -> Result<Args, String> {
     }
     Ok(Args {
         level,
+        level_explicit,
         campaign: campaign_id,
         slot,
         new_game,
@@ -11208,9 +11343,23 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         awake_range
     };
 
+    // A plain start — no level, campaign, take or headless
+    // instrument — boots the launcher, which needs no baked data: it
+    // judges (and if need be bakes) the tree itself, in the window.
+    let launcher = !args.level_explicit
+        && args.campaign.is_none()
+        && args.replay.is_none()
+        && args.replay_check.is_none()
+        && args.record.is_none()
+        && args.screenshot.is_none()
+        && args.map.is_none()
+        && args.flock_probe.is_none();
+
     // First-run / stale-epoch auto-bake: regenerate the baked tree
     // from the original game data before touching it.
-    if let Err(e) = bakecheck::ensure_baked(&level_path, cfg.gamedata.as_deref()) {
+    if !launcher
+        && let Err(e) = bakecheck::ensure_baked(&level_path, cfg.gamedata.as_deref())
+    {
         eprintln!("error: {e}");
         return std::process::ExitCode::FAILURE;
     }
@@ -11235,7 +11384,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         None if cfg.dev.plausible_spellbook => SpellbookSeed::Plausible,
         None => SpellbookSeed::Level,
     };
-    let mut boot_level = if campaign_run.is_some() && !headless {
+    let mut boot_level = if (campaign_run.is_some() && !headless) || launcher {
         None
     } else {
         match load_level(
@@ -11443,6 +11592,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         config_path,
         campaign_run,
         LaunchParams {
+            launcher,
             tileset: args.tileset,
             terrain_features: args.terrain_features,
             pool_slots,

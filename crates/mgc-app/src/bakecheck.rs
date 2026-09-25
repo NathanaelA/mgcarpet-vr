@@ -211,6 +211,48 @@ pub fn ensure_baked(level_path: &Path, config_gamedata: Option<&Path>) -> Result
     Ok(())
 }
 
+/// What the launcher knows about the baked tree without touching it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BakeStatus {
+    /// Why the whole tree needs (re)generating — a missing or stale
+    /// bundle, or an unfinished bake; `None` = the tree is current.
+    pub tree: Option<String>,
+    /// Per game (MC1, Hidden Worlds, MC2): the tree is current AND
+    /// the game's first level is baked at this build's epoch.
+    pub games: [bool; 3],
+}
+
+/// The launcher's order of the games' baked directories.
+pub const GAME_DIRS: [&str; 3] = ["mc1", "mc1hw", "mc2"];
+
+/// Judge the baked tree at `baked_root` — the same stamps
+/// [`ensure_baked`] checks, per game, and never a bake.
+pub fn status(baked_root: &Path) -> BakeStatus {
+    let tree = bundle_staleness(baked_root).or_else(|| manifest_staleness(baked_root));
+    let games = std::array::from_fn(|i| {
+        tree.is_none()
+            && level_staleness(&baked_root.join(GAME_DIRS[i]).join("level-000.mgcl")).is_none()
+    });
+    BakeStatus { tree, games }
+}
+
+/// The original game data a bake would read (see [`ensure_baked`]).
+pub fn gamedata(config_gamedata: Option<&Path>) -> Option<PathBuf> {
+    locate_gamedata(config_gamedata)
+}
+
+/// Bake the whole tree from `gamedata` into `baked_root` (staged —
+/// an interrupted bake leaves the old tree intact). The launcher's
+/// background bake; the caller re-reads [`status`] afterwards.
+pub fn bake(gamedata: &Path, baked_root: &Path) -> Result<(), String> {
+    println!("baking game data: {} -> {}", gamedata.display(), baked_root.display());
+    let summary = mgc_import::bake::bake_all_staged(gamedata, baked_root)?;
+    if summary.manifest.is_empty() {
+        return Err(format!("no game data found under {}", gamedata.display()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

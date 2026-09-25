@@ -36,7 +36,9 @@ AI tools.
 2. Copy your installed GOG game directories into a `gamedata/` folder
    next to the binary — see [gamedata/README.md](gamedata/README.md)
    for the expected layout. Any subset works (MC1 only is fine).
-3. Run it. The easiest way — no command line needed — is to
+3. Run it. Starting `mgcarpet` with no arguments opens the
+   **launcher**: pick one of the three games (a game whose data is not
+   baked yet is crossed out) and press Start. You can also skip it and
    double-click the campaign launcher for the game you want to play:
 
    * `magic-carpet-1` — the Magic Carpet campaign
@@ -49,7 +51,7 @@ AI tools.
    The `mgcarpet` binary itself does the same and more, from a shell:
 
    ```sh
-   ./mgcarpet                 # single level mc1:0 (dev default)
+   ./mgcarpet                 # the launcher
 
    ./mgcarpet --level mc1:9   # a specific level (mc1 | mc1hw | mc2)
 
@@ -62,6 +64,8 @@ AI tools.
    On first run the game finds no baked data and **bakes it from your
    GOG installs automatically** (once per machine; also after an
    upgrade that changes the bake — the data carries an epoch stamp).
+   The launcher does this in the background and lights up each game's
+   card when it is done.
    To point elsewhere than `gamedata/`, set `MGC_GAMEDATA` or
    `"gamedata"` in `mgcarpet.json`.
 
