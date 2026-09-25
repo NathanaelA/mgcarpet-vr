@@ -1,7 +1,11 @@
 //! The authenticity-matrix config, in two layers.
 //!
 //! Project stance: the authentic original behavior is always the
-//! default, and every modern enhancement is an opt-in flip.
+//! default, and every modern enhancement is an opt-in flip — EXCEPT
+//! where a player ruling picks an enhanced default. The controls
+//! default to the ENHANCED preset (2026-09-25,
+//! `settings::CONTROLS_PRESET`); the classic preset is one choice away
+//! in the launcher and the options menu.
 //! Until a real in-game options screen exists, the flips live in:
 //!
 //! - **`mgcarpet.json.defaults`** — the default baseline, EVERY option
@@ -654,16 +658,17 @@ pub struct ControlPreferences {
     /// preference, 1.0 = default).
     pub mouse_sensitivity: f32,
     /// Per-axis fractions of the general sensitivity, 0.0..=1.0
-    /// (shown as 0–100%). X (horizontal/turn) DEFAULTS TO HALF —
-    /// player ruling 2026-07-23: full-rate X saturates the enhanced
-    /// turn damper into an all-or-nothing feel; half stretches it
-    /// back into a fluid range. Y (vertical/aim) defaults to full.
+    /// (shown as 0–100%). X (horizontal/turn) is a CONTROLS PRESET
+    /// member: full under Enhanced (the default), half under Classic
+    /// (player ruling 2026-09-25; the 2026-07-23 ruling had made half
+    /// the default). Y (vertical/aim) defaults to full.
     pub mouse_sensitivity_x: f32,
     pub mouse_sensitivity_y: f32,
     /// Invert the mouse Y axis. `invert_y = true` means mouse-up/forward
     /// = nose DOWN (dive), like a flight stick — the polarity BOTH
-    /// originals ship — and it is the DEFAULT. `false` = mouse-up = nose
-    /// up (the FPS convention). Pure preference.
+    /// originals ship, and the Classic preset's. `false` = mouse-up =
+    /// nose up (the FPS convention), the Enhanced preset's and so the
+    /// default. Pure preference.
     pub invert_y: bool,
     /// The retail MC2 "Flight Assistance" option (options-menu case
     /// 5 flips `byte_0x36DEA_fly_asistant`; the idle auto-center in
@@ -675,14 +680,17 @@ pub struct ControlPreferences {
     pub fly_assistant: FlyAssistant,
 }
 
+/// The Enhanced controls preset is the default (see
+/// `settings::CONTROLS_PRESET`, whose masks these must match — pinned
+/// by `the_default_controls_are_the_enhanced_preset`).
 impl Default for ControlPreferences {
     fn default() -> Self {
         Self {
-            bindings: Bindings::default(),
+            bindings: Bindings::Wasd,
             mouse_sensitivity: 1.0,
-            mouse_sensitivity_x: 0.5,
+            mouse_sensitivity_x: 1.0,
             mouse_sensitivity_y: 1.0,
-            invert_y: true,
+            invert_y: false,
             fly_assistant: FlyAssistant::default(),
         }
     }
@@ -713,10 +721,12 @@ impl FlyAssistant {
     }
 }
 
-/// The flight-control tiers: two ORTHOGONAL enums, freely combinable,
-/// authentic values as defaults. Enums rather than booleans by design
-/// (room for named alternates like `mc2` or `torso-aim` later).
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+/// The flight-control tiers: two ORTHOGONAL enums, freely combinable.
+/// Enums rather than booleans by design (room for named alternates
+/// like `mc2` or `torso-aim` later). Both default to ENHANCED — the
+/// Enhanced controls preset (player ruling 2026-09-25); each enum's
+/// own `Default` stays the faithful tier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ControlModels {
     /// Thrust + steering model. G-CLASS (physics — a replay taped
@@ -726,6 +736,15 @@ pub struct ControlModels {
     /// up/down keys (no original equivalent); it never bypasses wall
     /// blocking and float-up is capped at the level's highest terrain.
     pub altitude: AltitudeModel,
+}
+
+impl Default for ControlModels {
+    fn default() -> Self {
+        Self {
+            thrust: ThrustModel::Enhanced,
+            altitude: AltitudeModel::Enhanced,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1502,7 +1521,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 40;
+const DEFAULTS_VERSION: u64 = 41;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp
@@ -1653,7 +1672,9 @@ mod tests {
             !c.render.enhancement.hud_transparency.transparent(),
             "hud opaque by default"
         );
-        assert!(c.controls.preferences.invert_y, "flight-stick polarity");
+        // The controls are the Enhanced preset (player ruling
+        // 2026-09-25): mouse up climbs.
+        assert!(!c.controls.preferences.invert_y, "FPS polarity (Enhanced preset)");
         assert!(!c.controls.preferences.fly_assistant.on());
         assert!(c.audio.subtitles.on());
         assert_eq!(c.sim.options.game_speed, GameSpeed::Normal);

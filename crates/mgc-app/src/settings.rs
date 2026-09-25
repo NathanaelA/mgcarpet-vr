@@ -288,6 +288,125 @@ impl Spec {
     }
 }
 
+/// A preset: one named mask over a group of options (player ruling
+/// 2026-09-25). Choosing a preset writes every member option; the
+/// group's current preset is never stored. It is READ BACK from the
+/// member values: the preset whose mask they all match, or "custom"
+/// when they match none (a hand-tuned member). So there is nothing new
+/// to persist, and nothing to fall out of step with the options it
+/// names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Preset {
+    Enhanced,
+    Classic,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 2] = [Preset::Enhanced, Preset::Classic];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Preset::Enhanced => "Enhanced",
+            Preset::Classic => "Classic",
+        }
+    }
+}
+
+/// A group of options set together by [`Preset`]s.
+pub struct PresetGroup {
+    /// The group's registry row. A VIRTUAL path (no config field):
+    /// persisting or applying it means doing so for every member.
+    pub cfg_path: &'static str,
+    /// The config paths a preset writes, and the only ones it reads
+    /// back.
+    pub members: &'static [&'static str],
+    /// Write the preset's mask.
+    pub apply: fn(&mut Config, Preset),
+}
+
+/// Controls (player ruling 2026-09-25). Enhanced is the default
+/// config; Classic is how both originals fly.
+pub const CONTROLS_PRESET: PresetGroup = PresetGroup {
+    cfg_path: "controls.preset",
+    members: &[
+        "controls.preferences.bindings",
+        "controls.preferences.mouse_sensitivity_x",
+        "controls.preferences.invert_y",
+        "controls.models.thrust",
+        "controls.models.altitude",
+    ],
+    apply: |c, p| {
+        use crate::config::{AltitudeModel, Bindings, ThrustModel};
+        let (prefs, models) = (&mut c.controls.preferences, &mut c.controls.models);
+        match p {
+            Preset::Enhanced => {
+                prefs.bindings = Bindings::Wasd;
+                prefs.mouse_sensitivity_x = 1.0;
+                prefs.invert_y = false;
+                models.thrust = ThrustModel::Enhanced;
+                models.altitude = AltitudeModel::Enhanced;
+            }
+            Preset::Classic => {
+                prefs.bindings = Bindings::Classic;
+                prefs.mouse_sensitivity_x = 0.5;
+                prefs.invert_y = true;
+                models.thrust = ThrustModel::Classic;
+                models.altitude = AltitudeModel::Classic;
+            }
+        }
+    },
+};
+
+/// Every preset group, in launcher row order.
+pub const PRESET_GROUPS: [&PresetGroup; 1] = [&CONTROLS_PRESET];
+
+/// The preset group whose registry row is `cfg_path`, if any.
+pub fn preset_group(cfg_path: &str) -> Option<&'static PresetGroup> {
+    PRESET_GROUPS.into_iter().find(|g| g.cfg_path == cfg_path)
+}
+
+/// The value at a dotted path of a serialized config.
+fn json_at<'a>(v: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
+    path.split('.').fold(v, |v, seg| &v[seg])
+}
+
+/// Two serialized option values agree. Numbers compare within a
+/// slider step's rounding (an f32 through JSON is not exact).
+fn same_value(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    match (a.as_f64(), b.as_f64()) {
+        (Some(x), Some(y)) => (x - y).abs() < 1e-3,
+        _ => a == b,
+    }
+}
+
+impl PresetGroup {
+    /// The preset every member matches, `None` = custom.
+    pub fn current(&self, c: &Config) -> Option<Preset> {
+        let have = serde_json::to_value(c).expect("config serializes");
+        Preset::ALL.into_iter().find(|&p| {
+            let mut t = c.clone();
+            (self.apply)(&mut t, p);
+            let want = serde_json::to_value(&t).expect("config serializes");
+            self.members
+                .iter()
+                .all(|m| same_value(json_at(&have, m), json_at(&want, m)))
+        })
+    }
+
+    /// Copy the members' values from `src` into `dst` (the launcher's
+    /// "Custom": back to what was set before a preset was picked).
+    pub fn copy_members(&self, dst: &mut Config, src: &Config) {
+        let mut d = serde_json::to_value(&*dst).expect("config serializes");
+        let from = serde_json::to_value(src).expect("config serializes");
+        for m in self.members {
+            let segs: Vec<&str> = m.split('.').collect();
+            let slot = segs.iter().fold(&mut d, |v, seg| &mut v[*seg]);
+            *slot = json_at(&from, m).clone();
+        }
+        *dst = serde_json::from_value(d).expect("members round-trip");
+    }
+}
+
 macro_rules! toggle {
     ($cfg:ident => $($path:tt)*) => {
         |c: &Config| Val::Toggle { on: c.$($path)*, faithful: false }
@@ -1280,6 +1399,44 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        // ---- controls · preset ------------------------------------------
+        Spec {
+            domain: Controls,
+            group: "controls · preset",
+            label: "preset",
+            class: Preference,
+            key: None,
+            cli: None,
+            cfg_path: "controls.preset",
+            read: |c| Val::Choice {
+                cur: match CONTROLS_PRESET.current(c) {
+                    Some(Preset::Enhanced) => 0,
+                    Some(Preset::Classic) => 1,
+                    None => 2,
+                },
+                faithful: 1,
+                variants: &["enhanced", "classic", "custom"],
+            },
+            desc: "Sets the controls below as a group: key bindings, mouse turn \
+                   share, Y polarity and the thrust and altitude models. Custom \
+                   means they have been tuned by hand and match neither preset; \
+                   it is shown, not chosen.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    if let Some(&p) = Preset::ALL.get(i) {
+                        (CONTROLS_PRESET.apply)(c, p);
+                    }
+                },
+                descs: &[
+                    "WASD, full mouse turn share, mouse up climbs, the \
+                     hold-to-fly thrust model and altitude keys (default).",
+                    "How both originals fly: arrow keys, half mouse turn \
+                     share, flight-stick Y, the retail thrust and \
+                     terrain-follow altitude.",
+                    "Hand-tuned: the controls below match neither preset.",
+                ],
+            },
+        },
         // ---- controls · preferences -------------------------------------
         Spec {
             domain: Controls,
@@ -1348,10 +1505,8 @@ pub fn registry() -> Vec<Spec> {
                 faithful: "50%",
             },
             desc: "Horizontal (turn) share of the mouse sensitivity, \
-                   0-100%. Defaults to 50% — at full share the enhanced \
-                   turn damper saturates on a flick (all-or-nothing \
-                   turning); half keeps the whole turn-rate range \
-                   reachable.",
+                   0-100%. Set by the controls preset: 100% under \
+                   Enhanced (the default), 50% under Classic.",
             ctl: Ctl::Slider {
                 get: |c| c.controls.preferences.mouse_sensitivity_x,
                 set: |c, v| c.controls.preferences.mouse_sensitivity_x = v,
@@ -1401,9 +1556,10 @@ pub fn registry() -> Vec<Spec> {
             ctl: Ctl::Toggle {
                 set: |c, v| c.controls.preferences.invert_y = v,
                 descs: [
-                    "Mouse up = nose up (FPS convention).",
+                    "Mouse up = nose up (FPS convention; the Enhanced \
+                     preset and the default).",
                     "Mouse up = nose down, flight-stick style (the \
-                     original polarity; default).",
+                     original polarity; the Classic preset).",
                 ],
             },
         },
@@ -2700,23 +2856,25 @@ mod tests {
     #[test]
     fn stock_run_is_enhanced_by_the_pool_alone() {
         // The deliberate default deviations (fog 50, hud opaque) are
-        // Preference-class and never flag the run. The ONE
-        // enhancement a stock run carries is the 20000-slot entity
-        // pool (player-ruled 2026-09-10; retail 1000) — so the stock
-        // verdict is ENHANCED with exactly one enhancement and no
-        // cheats, and setting the pool back to 1000 rolls up
-        // FAITHFUL.
+        // Preference-class and never flag the run. A stock run
+        // carries THREE enhancements: the 20000-slot entity pool
+        // (player-ruled 2026-09-10; retail 1000) and the Enhanced
+        // controls preset's two flight models (player-ruled
+        // 2026-09-25) — so the stock verdict is ENHANCED with no
+        // cheats, and the retail pool plus the Classic preset rolls
+        // up FAITHFUL.
         let (verdict, enh, modi, patches) = rollup(&Config::default());
         assert_eq!(modi, 0, "no cheats/instruments on by default");
-        assert_eq!(enh, 1, "the entity pool is the only stock enhancement");
+        assert_eq!(enh, 3, "the entity pool and the two enhanced flight models");
         assert_eq!(verdict, Fidelity::Enhanced);
         let mut retail_pool = Config::default();
         retail_pool.sim.parameters.entity_pool_size = None;
+        (CONTROLS_PRESET.apply)(&mut retail_pool, Preset::Classic);
         let (verdict, enh, _, _) = rollup(&retail_pool);
         assert_eq!(
             (verdict, enh),
             (Fidelity::Faithful, 0),
-            "retail pool = faithful"
+            "retail pool + classic controls = faithful"
         );
         // The default-on retail patches count apart and never flip
         // the verdict (castle_recast_cost, the one retail-default
@@ -2764,6 +2922,51 @@ mod tests {
     }
 
     #[test]
+    fn presets_apply_and_read_back() {
+        for g in PRESET_GROUPS {
+            let spec = registry().into_iter().find(|s| s.cfg_path == g.cfg_path);
+            assert!(spec.is_some(), "{}: a registry row", g.cfg_path);
+            for p in Preset::ALL {
+                let mut c = Config::default();
+                (g.apply)(&mut c, p);
+                assert_eq!(g.current(&c), Some(p), "{} {p:?}", g.cfg_path);
+            }
+            // Every member is a real option the preset actually moves.
+            let (mut e, mut k) = (Config::default(), Config::default());
+            (g.apply)(&mut e, Preset::Enhanced);
+            (g.apply)(&mut k, Preset::Classic);
+            let (e, k) = (serde_json::to_value(&e).unwrap(), serde_json::to_value(&k).unwrap());
+            for m in g.members {
+                assert!(!json_at(&e, m).is_null(), "{m}: not a config path");
+                assert!(!same_value(json_at(&e, m), json_at(&k, m)), "{m}: same in both presets");
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_controls_are_the_enhanced_preset() {
+        assert_eq!(CONTROLS_PRESET.current(&Config::default()), Some(Preset::Enhanced));
+    }
+
+    #[test]
+    fn a_hand_tuned_member_reads_custom_and_copies_back() {
+        let mut tuned = Config::default();
+        tuned.controls.preferences.mouse_sensitivity_x = 0.8;
+        assert_eq!(CONTROLS_PRESET.current(&tuned), None);
+        let mut c = tuned.clone();
+        (CONTROLS_PRESET.apply)(&mut c, Preset::Classic);
+        assert_eq!(CONTROLS_PRESET.current(&c), Some(Preset::Classic));
+        CONTROLS_PRESET.copy_members(&mut c, &tuned);
+        assert_eq!(CONTROLS_PRESET.current(&c), None);
+        assert!((c.controls.preferences.mouse_sensitivity_x - 0.8).abs() < 1e-6);
+        assert_eq!(c.controls.models.thrust, tuned.controls.models.thrust);
+        // A member off by less than a slider step still matches.
+        let mut near = Config::default();
+        near.controls.preferences.mouse_sensitivity_x = 1.0 - 1e-5;
+        assert_eq!(CONTROLS_PRESET.current(&near), Some(Preset::Enhanced));
+    }
+
+    #[test]
     fn every_ctl_setter_round_trips() {
         // Every widget setter lands where its reader looks: setting
         // each selectable value and reading it back must agree (guards
@@ -2783,6 +2986,9 @@ mod tests {
                         }
                     }
                 }
+                // A preset row's "custom" is read back, never set:
+                // see `presets_apply_and_read_back`.
+                Ctl::Choice { .. } if preset_group(spec.cfg_path).is_some() => {}
                 Ctl::Choice { set, descs } => {
                     let variants = match (spec.read)(&c) {
                         Val::Choice { variants, .. } => variants,

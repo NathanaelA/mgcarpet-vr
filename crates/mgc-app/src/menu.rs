@@ -328,14 +328,19 @@ pub fn pointer_apply(
                 _ => return false,
             };
             // Left half of the widget strip = previous, right = next
-            // (wrapping) — matching the drawn ‹ › chevrons.
-            let next = if cursor.0 < l.widget_x + l.widget_w * 0.5 {
-                (cur + n - 1) % n
-            } else {
-                (cur + 1) % n
-            };
-            set(cfg, next);
-            next != cur
+            // (wrapping) — matching the drawn ‹ › chevrons. A variant
+            // that does not land when set is shown, not chosen (a
+            // preset row's "custom"), so the step moves past it.
+            let back = cursor.0 < l.widget_x + l.widget_w * 0.5;
+            let mut next = cur;
+            for _ in 1..n {
+                next = if back { (next + n - 1) % n } else { (next + 1) % n };
+                set(cfg, next);
+                if matches!((spec.read)(cfg), Val::Choice { cur: got, .. } if got == next) {
+                    break;
+                }
+            }
+            !matches!((spec.read)(cfg), Val::Choice { cur: got, .. } if got == cur)
         }
         Ctl::Slider {
             get,

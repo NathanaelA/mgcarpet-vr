@@ -2658,10 +2658,7 @@ impl App {
             // The chain hands back to `enter_main_menu`, which starts
             // it properly.
             None if app.screen == Screen::Launcher => {
-                app.launcher = Some(launcher_screen::Launcher::new(
-                    &get_baked_directory(),
-                    app.cfg.gamedata.as_deref(),
-                ));
+                app.launcher = Some(launcher_screen::Launcher::new(&get_baked_directory(), &app.cfg));
             }
             None if !app.boot_intro => app.frontend_music(),
             None => {}
@@ -3070,6 +3067,12 @@ impl App {
     /// menu (keyed by the registry's `cfg_path`). Options read live
     /// off `self.cfg` every frame/tick need no arm here.
     fn apply_option(&mut self, cfg_path: &str) {
+        if let Some(g) = settings::preset_group(cfg_path) {
+            for m in g.members {
+                self.apply_option(m);
+            }
+            return;
+        }
         match cfg_path {
             "audio.sound" | "audio.sfx_volume" | "audio.music_volume" | "audio.speech" => {
                 if self.cfg.audio.sound {
@@ -3395,6 +3398,17 @@ impl App {
         if !spec.persists() {
             return;
         }
+        // A preset row has no config field of its own: its value IS
+        // its members'.
+        match settings::preset_group(spec.cfg_path) {
+            Some(g) => g.members.iter().for_each(|m| self.persist_path(m)),
+            None => self.persist_path(spec.cfg_path),
+        }
+    }
+
+    /// Persist one dotted config path's current value (see
+    /// [`Self::persist_option`]).
+    fn persist_path(&self, cfg_path: &str) {
         let full = match serde_json::to_value(&self.cfg) {
             Ok(v) => v,
             Err(e) => {
@@ -3403,14 +3417,14 @@ impl App {
             }
         };
         let mut leaf = &full;
-        for seg in spec.cfg_path.split('.') {
+        for seg in cfg_path.split('.') {
             leaf = &leaf[seg];
         }
         let mut root = std::fs::read_to_string(&self.cfg_file)
             .ok()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .unwrap_or_else(|| serde_json::json!({}));
-        let segs: Vec<&str> = spec.cfg_path.split('.').collect();
+        let segs: Vec<&str> = cfg_path.split('.').collect();
         let mut slot = &mut root;
         for seg in &segs[..segs.len() - 1] {
             if !slot.get(*seg).is_some_and(|v| v.is_object()) {
@@ -5935,7 +5949,7 @@ impl App {
             }
             None => {}
         }
-        let (rgba, quads) = l.frame(size, self.cursor);
+        let (rgba, quads) = l.frame(size, self.cursor, &self.cfg);
         if let Some(r) = &mut self.renderer {
             if let Some(rgba) = rgba {
                 r.load_ui_atlas(size.0.max(1.0) as u32, size.1.max(1.0) as u32, &rgba);
@@ -5946,6 +5960,18 @@ impl App {
                 return;
             }
             r.set_ui_quads(quads);
+        }
+    }
+
+    /// Apply and persist what the launcher's option rows just set,
+    /// exactly as an options-menu change.
+    fn launcher_changes(&mut self) {
+        let Some(l) = &mut self.launcher else { return };
+        for path in l.take_changed() {
+            self.apply_option(path);
+            if let Some(spec) = self.specs.iter().find(|s| s.cfg_path == path) {
+                self.persist_option(spec);
+            }
         }
     }
 
@@ -8052,8 +8078,9 @@ impl ApplicationHandler for App {
                     if down && button == MouseButton::Left {
                         let size = self.view_size();
                         if let Some(l) = &mut self.launcher {
-                            l.click(size, self.cursor);
+                            l.click(size, self.cursor, &mut self.cfg);
                         }
+                        self.launcher_changes();
                     }
                     return;
                 }
@@ -8527,8 +8554,9 @@ impl ApplicationHandler for App {
                 // The launcher owns the keyboard.
                 if self.screen == Screen::Launcher {
                     if down && let Some(l) = &mut self.launcher {
-                        l.key(&event.logical_key);
+                        l.key(&event.logical_key, &mut self.cfg);
                     }
+                    self.launcher_changes();
                     return;
                 }
                 // A movie owns the screen: ANY key abandons the rest

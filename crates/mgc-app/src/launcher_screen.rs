@@ -24,9 +24,13 @@
 //! and centred, and is re-composed only when something visible
 //! changes.
 //!
-//! Not yet functional: the Display / Controls / Effects selectors
-//! cycle placeholder values and apply nothing (the option-category
-//! work comes next).
+//! The option rows set PRESETS (`settings::PresetGroup`): a group of
+//! options written together, Enhanced or Classic, and read back from
+//! those options rather than stored. A group already hand-tuned when
+//! the launcher opened also offers "Custom", which puts the hand-tuned
+//! values back. Changes apply and persist the way the options menu's
+//! do. Not yet functional: the Display and Effects rows cycle
+//! placeholder values and apply nothing.
 
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
@@ -37,6 +41,8 @@ use mgc_render::UiQuad;
 
 use crate::bakecheck::{self, BakeStatus};
 use crate::campaign::CampaignId;
+use crate::config::Config;
+use crate::settings::{self, Preset, PresetGroup};
 
 const FONT: &[u8] = include_bytes!("../../../assets/launcher/DejaVuSerif-Bold.ttf");
 
@@ -99,12 +105,27 @@ fn button_rect(start: bool) -> Rect {
     (if start { 510.0 } else { 250.0 }, BUTTON_Y, BUTTON_W, BUTTON_H)
 }
 
-/// The option rows (placeholders — see the module docs).
-const OPTIONS: [(&str, &[&str]); 3] = [
-    ("Display", &["Borderless fullscreen", "Window 1280 × 960"]),
-    ("Controls", &["Enhanced", "Classic"]),
-    ("Effects", &["Enhanced", "Classic"]),
+/// What an option row sets.
+enum RowKind {
+    /// A preset group.
+    Preset(&'static PresetGroup),
+    /// Not wired yet: cycles these values, applies nothing.
+    Placeholder(&'static [&'static str]),
+}
+
+const OPTIONS: [(&str, RowKind); 3] = [
+    ("Display", RowKind::Placeholder(&["Borderless fullscreen", "Window 1280 × 960"])),
+    ("Controls", RowKind::Preset(&settings::CONTROLS_PRESET)),
+    ("Effects", RowKind::Placeholder(&["Enhanced", "Classic"])),
 ];
+
+/// A preset row's choice.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Choice {
+    Preset(Preset),
+    /// The hand-tuned values the launcher opened with.
+    Custom,
+}
 
 /// What the launcher asks of the app.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,7 +165,7 @@ struct ViewKey {
     selected: Option<usize>,
     focus: Focus,
     hover: Option<Hit>,
-    options: [usize; 3],
+    values: [String; 3],
     games: [bool; 3],
     status: String,
 }
@@ -161,7 +182,14 @@ pub struct Launcher {
     selected: Option<usize>,
     focus: Focus,
     hover: Option<Hit>,
+    /// The placeholder rows' positions.
     options: [usize; 3],
+    /// Per row: the config as the launcher found it, kept when that
+    /// row's preset group was hand-tuned (its "Custom").
+    custom: [Option<Config>; 3],
+    /// Preset rows changed since the app last looked (their registry
+    /// paths), to apply and persist.
+    changed: Vec<&'static str>,
     pending: Option<Action>,
     last: Option<ViewKey>,
 }
@@ -169,7 +197,8 @@ pub struct Launcher {
 impl Launcher {
     /// Judge the baked tree and, when it needs (re)generating and the
     /// original data is found, start baking it in the background.
-    pub fn new(baked_root: &Path, gamedata: Option<&Path>) -> Self {
+    pub fn new(baked_root: &Path, cfg: &Config) -> Self {
+        let gamedata = cfg.gamedata.as_deref();
         let font = FontRef::try_from_slice(FONT).expect("the launcher font is compiled in");
         let status = bakecheck::status(baked_root);
         let mut l = Launcher {
@@ -183,6 +212,11 @@ impl Launcher {
             focus: Focus::Cards,
             hover: None,
             options: [0; 3],
+            custom: std::array::from_fn(|row| match &OPTIONS[row].1 {
+                RowKind::Preset(g) if g.current(cfg).is_none() => Some(cfg.clone()),
+                _ => None,
+            }),
+            changed: Vec::new(),
             pending: None,
             last: None,
         };
@@ -269,13 +303,63 @@ impl Launcher {
         }
     }
 
-    fn step_option(&mut self, row: usize, right: bool) {
-        let n = OPTIONS[row].1.len();
-        self.options[row] = if right {
-            (self.options[row] + 1) % n
-        } else {
-            (self.options[row] + n - 1) % n
+    /// A preset row's choices, in stepping order, and the current one.
+    fn choices(&self, row: usize, g: &PresetGroup, cfg: &Config) -> (Vec<Choice>, usize) {
+        let mut list: Vec<Choice> = Preset::ALL.into_iter().map(Choice::Preset).collect();
+        if self.custom[row].is_some() {
+            list.push(Choice::Custom);
+        }
+        let cur = match g.current(cfg) {
+            Some(p) => Choice::Preset(p),
+            None => Choice::Custom,
         };
+        // Hand-tuned since the launcher opened can only be the
+        // launcher's own "Custom"; otherwise it is on the list.
+        let at = list.iter().position(|&c| c == cur).unwrap_or(list.len() - 1);
+        (list, at)
+    }
+
+    /// The row's value as shown.
+    fn value(&self, row: usize, cfg: &Config) -> String {
+        match &OPTIONS[row].1 {
+            RowKind::Placeholder(values) => values[self.options[row]].to_string(),
+            RowKind::Preset(g) => match g.current(cfg) {
+                Some(p) => p.label().to_string(),
+                None => "Custom".to_string(),
+            },
+        }
+    }
+
+    fn step_option(&mut self, row: usize, right: bool, cfg: &mut Config) {
+        match &OPTIONS[row].1 {
+            RowKind::Placeholder(values) => {
+                let n = values.len();
+                self.options[row] = if right {
+                    (self.options[row] + 1) % n
+                } else {
+                    (self.options[row] + n - 1) % n
+                };
+            }
+            RowKind::Preset(g) => {
+                let (list, at) = self.choices(row, g, cfg);
+                let n = list.len();
+                let next = if right { (at + 1) % n } else { (at + n - 1) % n };
+                match list[next] {
+                    Choice::Preset(p) => (g.apply)(cfg, p),
+                    Choice::Custom => {
+                        if let Some(tuned) = &self.custom[row] {
+                            g.copy_members(cfg, tuned);
+                        }
+                    }
+                }
+                self.changed.push(g.cfg_path);
+            }
+        }
+    }
+
+    /// The preset rows changed since the last call (registry paths).
+    pub fn take_changed(&mut self) -> Vec<&'static str> {
+        std::mem::take(&mut self.changed)
     }
 
     /// Esc leaves.
@@ -286,7 +370,7 @@ impl Launcher {
     /// Keyboard navigation: Up/Down (and Tab) walk the rows,
     /// Left/Right act within one, Enter starts (or presses the focused
     /// button).
-    pub fn key(&mut self, key: &winit::keyboard::Key) {
+    pub fn key(&mut self, key: &winit::keyboard::Key, cfg: &mut Config) {
         use winit::keyboard::{Key, NamedKey};
         let Key::Named(k) = key else { return };
         let rows = |f: Focus| match f {
@@ -306,7 +390,7 @@ impl Launcher {
                 let right = *k == NamedKey::ArrowRight;
                 match self.focus {
                     Focus::Cards => self.step_selection(right),
-                    Focus::Option(r) => self.step_option(r, right),
+                    Focus::Option(r) => self.step_option(r, right, cfg),
                     Focus::Buttons { .. } => self.focus = Focus::Buttons { start: right },
                 }
             }
@@ -320,18 +404,18 @@ impl Launcher {
     }
 
     /// A left click at a window position.
-    pub fn click(&mut self, size: (f32, f32), cursor: (f32, f32)) {
+    pub fn click(&mut self, size: (f32, f32), cursor: (f32, f32), cfg: &mut Config) {
         match hit(size, cursor) {
             Some(Hit::Card(i)) if self.status.games[i] => {
                 self.selected = Some(i);
                 self.focus = Focus::Cards;
             }
             Some(Hit::Arrow { row, right }) => {
-                self.step_option(row, right);
+                self.step_option(row, right, cfg);
                 self.focus = Focus::Option(row);
             }
             Some(Hit::Value(row)) => {
-                self.step_option(row, true);
+                self.step_option(row, true, cfg);
                 self.focus = Focus::Option(row);
             }
             Some(Hit::Button { start: true }) => self.start(),
@@ -361,7 +445,12 @@ impl Launcher {
     /// This frame: a freshly composed window-sized RGBA image when
     /// anything visible changed (`None` = the uploaded one still
     /// stands), and the one quad that shows it.
-    pub fn frame(&mut self, size: (f32, f32), cursor: (f32, f32)) -> (Option<Vec<u8>>, Vec<UiQuad>) {
+    pub fn frame(
+        &mut self,
+        size: (f32, f32),
+        cursor: (f32, f32),
+        cfg: &Config,
+    ) -> (Option<Vec<u8>>, Vec<UiQuad>) {
         let (w, h) = (size.0.max(1.0) as u32, size.1.max(1.0) as u32);
         self.hover = hit(size, cursor);
         let key = ViewKey {
@@ -369,7 +458,7 @@ impl Launcher {
             selected: self.selected,
             focus: self.focus,
             hover: self.hover,
-            options: self.options,
+            values: std::array::from_fn(|row| self.value(row, cfg)),
             games: self.status.games,
             status: self.status_line(),
         };
@@ -397,7 +486,7 @@ impl Launcher {
         }
         c.text(&self.font, &key.status, VW / 2.0, 406.0, 17.0, MUTED, Align::Center);
 
-        for (row, (label, values)) in OPTIONS.iter().enumerate() {
+        for (row, (label, _)) in OPTIONS.iter().enumerate() {
             let focused = key.focus == Focus::Option(row);
             let (_, y, _, hh) = value_rect(row);
             let base = y + hh / 2.0 + 7.0;
@@ -418,7 +507,7 @@ impl Launcher {
                 EDGE
             };
             c.stroke(r, if focused { 2.0 } else { 1.5 }, edge);
-            c.text(&self.font, values[key.options[row]], r.0 + r.2 / 2.0, base, 19.0, TEXT, Align::Center);
+            c.text(&self.font, &key.values[row], r.0 + r.2 / 2.0, base, 19.0, TEXT, Align::Center);
         }
 
         let can_start = key.selected.is_some();
@@ -814,22 +903,50 @@ mod tests {
     fn an_unbaked_tree_leaves_every_game_unavailable_and_unstartable() {
         let root = std::env::temp_dir().join(format!("mgc-launcher-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let missing = root.join("no-such-gamedata");
-        let mut l = Launcher::new(&root, Some(&missing));
+        let mut cfg = Config::default();
+        cfg.gamedata = Some(root.join("no-such-gamedata"));
+        let mut l = Launcher::new(&root, &cfg);
         assert_eq!(l.status.games, [false; 3]);
         assert!(l.status.tree.is_some());
         assert!(l.bake.is_none(), "no data found, nothing to bake");
         assert!(l.status_line().starts_with("No game data found"));
         assert_eq!(l.selected, None);
-        l.click((960.0, 720.0), (card_rect(0).0 + 10.0, card_rect(0).1 + 10.0));
-        l.key(&winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter));
+        l.click((960.0, 720.0), (card_rect(0).0 + 10.0, card_rect(0).1 + 10.0), &mut cfg);
+        l.key(&winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter), &mut cfg);
         assert_eq!(l.take_action(), None, "nothing to start");
         l.escape();
         assert_eq!(l.take_action(), Some(Action::Exit));
-        let (img, quads) = l.frame((320.0, 240.0), (0.0, 0.0));
+        let (img, quads) = l.frame((320.0, 240.0), (0.0, 0.0), &cfg);
         assert_eq!(img.map(|b| b.len()), Some(320 * 240 * 4));
         assert_eq!(quads.len(), 1);
-        assert!(l.frame((320.0, 240.0), (0.0, 0.0)).0.is_none(), "unchanged: no re-compose");
+        assert!(l.frame((320.0, 240.0), (0.0, 0.0), &cfg).0.is_none(), "unchanged: no re-compose");
+    }
+
+    /// Row 1 is Controls: stepping writes the preset, the value reads
+    /// back from the config, and a group that was hand-tuned when the
+    /// launcher opened can step back to exactly those values.
+    #[test]
+    fn the_controls_row_sets_presets_and_restores_custom() {
+        let root = std::env::temp_dir().join(format!("mgc-launcher-p-{}", std::process::id()));
+        let mut cfg = Config::default();
+        cfg.gamedata = Some(root.join("no-such-gamedata"));
+        let mut l = Launcher::new(&root, &cfg);
+        assert_eq!(l.value(1, &cfg), "Enhanced");
+        l.step_option(1, true, &mut cfg);
+        assert_eq!(l.value(1, &cfg), "Classic");
+        assert_eq!(cfg.controls.models.thrust, crate::config::ThrustModel::Classic);
+        l.step_option(1, true, &mut cfg);
+        assert_eq!(l.value(1, &cfg), "Enhanced", "no Custom to step to: it was not tuned");
+        assert_eq!(l.take_changed(), vec!["controls.preset", "controls.preset"]);
+
+        cfg.controls.preferences.mouse_sensitivity_x = 0.8;
+        let mut l = Launcher::new(&root, &cfg);
+        assert_eq!(l.value(1, &cfg), "Custom");
+        l.step_option(1, true, &mut cfg);
+        assert_eq!(l.value(1, &cfg), "Enhanced");
+        l.step_option(1, false, &mut cfg);
+        assert_eq!(l.value(1, &cfg), "Custom");
+        assert!((cfg.controls.preferences.mouse_sensitivity_x - 0.8).abs() < 1e-6);
     }
 }
 
