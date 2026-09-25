@@ -943,6 +943,28 @@ fn camera_flat_basis(cam: &CameraView) -> ([f32; 3], [f32; 3], [f32; 3]) {
     (flat_right, flat_up, fwd)
 }
 
+/// Retail's sprite near cull: a sprite a quarter tile (64 units) or
+/// less in front of the projection plane is not drawn at all — remc2
+/// GameRenderOriginal `:3498` `if (v100 > 64 && …)`, remc1 `:36843`
+/// `if (yRot > 64 && …)`. It is what keeps the view clear on a castle
+/// teleport (the carpet lands on the castle, flag and all); without it
+/// the camera-facing quad swallows the screen.
+///
+/// Retail looked up and down by SHEARING the screen, so its projection
+/// plane never tilted and its depth was the flat, yaw-only forward
+/// distance. The port pitches for real, so its projection depth is
+/// measured along the TILTED view axis — identical at pitch 0, and at
+/// a steep look-down (enhanced flight reaches ~83°) the creature under
+/// the carpet stays drawn instead of vanishing on screen, where a flat
+/// test would cut everything beneath the camera at any depth. A
+/// camera-facing quad lies in a plane normal to that axis, so its
+/// anchor's depth is the whole sprite's.
+fn retail_sprite_near_culled(pos: [f32; 3], cam: &CameraView) -> bool {
+    let (_, _, fwd) = camera_flat_basis(cam);
+    let depth = (pos[0] - cam.x) * fwd[0] + (pos[1] - cam.y) * fwd[1] + (pos[2] - cam.z) * fwd[2];
+    depth <= 64.0 / 256.0
+}
+
 fn camera_basis(cam: &CameraView) -> ([f32; 3], [f32; 3], [f32; 3]) {
     let (flat_right, flat_up, fwd) = camera_flat_basis(cam);
     // Bank: rotate right/up about fwd; positive roll tips the up
@@ -4922,6 +4944,9 @@ impl Renderer {
                 c + d
             };
             let pos = [wrap(b.x, cam.x), b.y, wrap(b.z, cam.z)];
+            if retail_sprite_near_culled(pos, cam) {
+                continue;
+            }
             let mut alpha = match b.blend {
                 2 => 1.0 / 3.0,
                 3 => 2.0 / 3.0,
@@ -6461,6 +6486,40 @@ mod tests {
             (w0[0] - cam_x).abs() <= full / 2.0 + 1.0 && (w1[0] - cam_x).abs() <= full / 2.0 + 1.0,
             "both ends resolve near the camera, not a map away"
         );
+    }
+
+    /// Retail's sprite near cull: a quarter tile along the view axis.
+    #[test]
+    fn sprite_near_cull_is_quarter_tile_view_depth() {
+        let level = CameraView {
+            x: 10.0,
+            y: 3.0,
+            z: 10.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+            fov_y: 1.0,
+        };
+        // Level, yaw 0 looks down -z: retail's flat test exactly. On
+        // the camera, beside it, a quarter tile ahead, or behind —
+        // culled at any height.
+        assert!(retail_sprite_near_culled([10.0, 3.0, 10.0], &level));
+        assert!(retail_sprite_near_culled([10.0, -40.0, 10.0], &level));
+        assert!(retail_sprite_near_culled([12.0, 3.0, 10.0], &level));
+        assert!(retail_sprite_near_culled([10.0, 3.0, 9.75], &level));
+        assert!(retail_sprite_near_culled([10.0, 3.0, 11.0], &level));
+        assert!(!retail_sprite_near_culled([10.0, 3.0, 9.7], &level));
+        assert!(!retail_sprite_near_culled([10.0, 30.0, 5.0], &level));
+        // Turned a quarter (yaw pi/2 looks down +x).
+        let side = CameraView { yaw: std::f32::consts::FRAC_PI_2, ..level };
+        assert!(!retail_sprite_near_culled([11.0, 3.0, 10.0], &side));
+        assert!(retail_sprite_near_culled([10.0, 3.0, 8.0], &side));
+        // Steep look-down: what lies beneath is in front of the lens
+        // and stays drawn; what is level with the camera is not.
+        let down = CameraView { pitch: -1.4, ..level };
+        assert!(!retail_sprite_near_culled([10.0, 1.0, 10.0], &down));
+        assert!(!retail_sprite_near_culled([10.0, -40.0, 10.0], &down));
+        assert!(retail_sprite_near_culled([10.0, 3.0, 9.0], &down));
     }
 
     /// A short bolt near the camera is untouched (offset 0): the rigid
