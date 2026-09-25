@@ -5093,6 +5093,10 @@ impl Renderer {
         self.rebuild_ssaa();
         let (dw, dh) = self.size();
         self.depth = create_depth(&self.device, dw, dh, self.samples);
+        // The MSAA buffer resolves INTO the scene buffer, so it must
+        // follow its size too — a stale one is an attachment-size
+        // mismatch and wgpu panics on the next frame.
+        self.msaa_color = self.make_msaa_target(dw, dh, "msaa-scene");
     }
 
     /// (Re)create the supersample buffer for the current window size,
