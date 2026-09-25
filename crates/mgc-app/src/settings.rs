@@ -39,10 +39,12 @@ pub const DOMAINS: [Domain; 6] = [
 ];
 
 impl Domain {
+    /// The tab title. Display only: the config keeps its own section
+    /// names (`render.*` shows as VISUALS — player ruling 2026-09-25).
     pub fn title(self) -> &'static str {
         match self {
             Domain::Sim => "SIM",
-            Domain::Render => "RENDER",
+            Domain::Render => "VISUALS",
             Domain::Controls => "CONTROLS",
             Domain::Audio => "AUDIO",
             Domain::Gameplay => "GAMEPLAY",
@@ -357,8 +359,64 @@ pub const CONTROLS_PRESET: PresetGroup = PresetGroup {
     },
 };
 
+/// Visuals — the `render` options that make up the look (player
+/// ruling 2026-09-25). Enhanced is the default config; Classic is
+/// retail's value for each, except two player rulings: Classic hides
+/// the crosshair, and smooth motion is ON under both (it only removes
+/// the 24 Hz stepping — the original's choppiness, not its look). The
+/// display settings (vsync, fullscreen, anti-aliasing), the screens
+/// (movies, stats, subtitles), the HUD and the debug overlays are not
+/// members. Six members read the same under both presets: a preset
+/// still enforces them.
+pub const VISUALS_PRESET: PresetGroup = PresetGroup {
+    cfg_path: "render.preset",
+    members: &[
+        "render.preference.crosshair",
+        "render.preference.sky",
+        "render.preference.reflections",
+        "render.preference.horizon_cull",
+        "render.preference.light_sources",
+        "render.preference.fog_distance",
+        "render.preference.rival_tags",
+        "render.enhancement.smooth_motion",
+        "render.enhancement.fire",
+        "render.enhancement.lightning",
+        "render.enhancement.map_owned_buildings",
+        "render.enhancement.map_marker_scale",
+        "render.enhancement.map_marker_icons",
+        "render.enhancement.autocontrasting_markers",
+        "render.enhancement.map_extent_fog",
+        "render.enhancement.mc2_fancy_exit",
+    ],
+    apply: |c, p| {
+        use crate::config::{FireEffects, LightningEffects, RivalTags};
+        let enhanced = p == Preset::Enhanced;
+        let (pref, enh) = (&mut c.render.preference, &mut c.render.enhancement);
+        pref.crosshair = enhanced;
+        pref.sky = true;
+        pref.reflections = true;
+        pref.horizon_cull = true;
+        pref.light_sources = true;
+        pref.fog_distance = if enhanced { 90 } else { 20 };
+        pref.rival_tags = if enhanced { RivalTags::On } else { RivalTags::Auto };
+        enh.smooth_motion = true;
+        enh.fire = if enhanced { FireEffects::Enhanced } else { FireEffects::Classic };
+        enh.lightning = if enhanced {
+            LightningEffects::Enhanced
+        } else {
+            LightningEffects::Classic
+        };
+        enh.map_owned_buildings = enhanced;
+        enh.map_marker_scale = 1.0;
+        enh.map_marker_icons = enhanced;
+        enh.autocontrasting_markers = enhanced;
+        enh.map_extent_fog = enhanced;
+        enh.mc2_fancy_exit = enhanced;
+    },
+};
+
 /// Every preset group, in launcher row order.
-pub const PRESET_GROUPS: [&PresetGroup; 1] = [&CONTROLS_PRESET];
+pub const PRESET_GROUPS: [&PresetGroup; 2] = [&CONTROLS_PRESET, &VISUALS_PRESET];
 
 /// The preset group whose registry row is `cfg_path`, if any.
 pub fn preset_group(cfg_path: &str) -> Option<&'static PresetGroup> {
@@ -507,6 +565,44 @@ pub fn registry() -> Vec<Spec> {
                     "Retail Fast: 4x, both games.",
                     "Retail's top speed, game-keyed: MC1 'Very Fast' = 16x, \
                      MC2 'Super Fast' = 8x.",
+                ],
+            },
+        },
+        // ---- render · preset --------------------------------------------
+        Spec {
+            domain: Render,
+            group: "render · preset",
+            label: "preset",
+            class: Preference,
+            key: None,
+            cli: None,
+            cfg_path: "render.preset",
+            read: |c| Val::Choice {
+                cur: match VISUALS_PRESET.current(c) {
+                    Some(Preset::Enhanced) => 0,
+                    Some(Preset::Classic) => 1,
+                    None => 2,
+                },
+                faithful: 1,
+                variants: &["enhanced", "classic", "custom"],
+            },
+            desc: "Sets the look below as a group: fog, fire and lightning, \
+                   smooth motion, rival tags, the map markers and the rest. \
+                   Custom means they have been tuned by hand and match neither \
+                   preset; it is shown, not chosen.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    if let Some(&p) = Preset::ALL.get(i) {
+                        (VISUALS_PRESET.apply)(c, p);
+                    }
+                },
+                descs: &[
+                    "Every visual enhancement on, fog pushed back to the \
+                     90-tile maximum (default).",
+                    "How the originals look: retail fog, fire and \
+                     lightning, no crosshair, no map extras (motion \
+                     stays smooth).",
+                    "Hand-tuned: the options below match neither preset.",
                 ],
             },
         },
@@ -858,7 +954,7 @@ pub fn registry() -> Vec<Spec> {
                 set: |c, v| c.render.preference.movie_subtitles = v,
                 descs: [
                     "No subtitles (an English machine with sound hears the narration).",
-                    "Show the narration as text.",
+                    "Show the narration as text (default).",
                 ],
             },
         },
@@ -1031,9 +1127,8 @@ pub fn registry() -> Vec<Spec> {
                     }
                 },
                 descs: &[
-                    "Retail fire/explosion sprites, as the original drew them \
-                     (default).",
-                    "Procedural flame, smoke and shockwave.",
+                    "Retail fire/explosion sprites, as the original drew them.",
+                    "Procedural flame, smoke and shockwave (default).",
                 ],
             },
         },
@@ -1070,10 +1165,9 @@ pub fn registry() -> Vec<Spec> {
                     }
                 },
                 descs: &[
-                    "Retail zigzag flash sprites, as the original drew them \
-                     (default).",
+                    "Retail zigzag flash sprites, as the original drew them.",
                     "Procedural fractal bolt with branches and a strike \
-                     envelope.",
+                     envelope (default).",
                 ],
             },
         },
@@ -2854,27 +2948,38 @@ mod tests {
     use crate::config::Config;
 
     #[test]
-    fn stock_run_is_enhanced_by_the_pool_alone() {
-        // The deliberate default deviations (fog 50, hud opaque) are
-        // Preference-class and never flag the run. A stock run
-        // carries THREE enhancements: the 20000-slot entity pool
-        // (player-ruled 2026-09-10; retail 1000) and the Enhanced
-        // controls preset's two flight models (player-ruled
-        // 2026-09-25) — so the stock verdict is ENHANCED with no
-        // cheats, and the retail pool plus the Classic preset rolls
-        // up FAITHFUL.
+    fn stock_run_is_enhanced_only_by_the_pool_and_the_presets() {
+        // A stock run is ENHANCED, with no cheats, and every
+        // enhancement it carries is either the 20000-slot entity pool
+        // (player-ruled 2026-09-10; retail 1000) or a member of an
+        // Enhanced preset (player-ruled 2026-09-25: the defaults ARE
+        // the Enhanced presets). The retail pool plus the Classic
+        // presets rolls up FAITHFUL.
         let (verdict, enh, modi, patches) = rollup(&Config::default());
         assert_eq!(modi, 0, "no cheats/instruments on by default");
-        assert_eq!(enh, 3, "the entity pool and the two enhanced flight models");
+        assert!(enh >= 1);
         assert_eq!(verdict, Fidelity::Enhanced);
+        for spec in registry() {
+            let deviates = (spec.read)(&Config::default()).deviates();
+            if deviates && spec.class.fidelity() == Fidelity::Enhanced {
+                assert!(
+                    spec.cfg_path == "sim.parameters.entity_pool_size"
+                        || PRESET_GROUPS.iter().any(|g| g.members.contains(&spec.cfg_path)),
+                    "{}: a stock enhancement outside the presets",
+                    spec.cfg_path
+                );
+            }
+        }
         let mut retail_pool = Config::default();
         retail_pool.sim.parameters.entity_pool_size = None;
-        (CONTROLS_PRESET.apply)(&mut retail_pool, Preset::Classic);
+        for g in PRESET_GROUPS {
+            (g.apply)(&mut retail_pool, Preset::Classic);
+        }
         let (verdict, enh, _, _) = rollup(&retail_pool);
         assert_eq!(
             (verdict, enh),
             (Fidelity::Faithful, 0),
-            "retail pool + classic controls = faithful"
+            "retail pool + classic presets = faithful"
         );
         // The default-on retail patches count apart and never flip
         // the verdict (castle_recast_cost, the one retail-default
@@ -2938,14 +3043,20 @@ mod tests {
             let (e, k) = (serde_json::to_value(&e).unwrap(), serde_json::to_value(&k).unwrap());
             for m in g.members {
                 assert!(!json_at(&e, m).is_null(), "{m}: not a config path");
-                assert!(!same_value(json_at(&e, m), json_at(&k, m)), "{m}: same in both presets");
             }
+            assert!(
+                g.members.iter().any(|m| !same_value(json_at(&e, m), json_at(&k, m))),
+                "{}: the presets differ somewhere",
+                g.cfg_path
+            );
         }
     }
 
     #[test]
-    fn the_default_controls_are_the_enhanced_preset() {
-        assert_eq!(CONTROLS_PRESET.current(&Config::default()), Some(Preset::Enhanced));
+    fn the_defaults_are_the_enhanced_presets() {
+        for g in PRESET_GROUPS {
+            assert_eq!(g.current(&Config::default()), Some(Preset::Enhanced), "{}", g.cfg_path);
+        }
     }
 
     #[test]

@@ -274,9 +274,10 @@ pub struct RenderPreference {
     /// also the cheapest frame. Values clamp to [`MAX_FOG_TILES`] =
     /// 90 at load, CLI and in the renderer (the old 255 whole-torus
     /// stop is retired). 0 = fog off (the fixed melt still runs).
-    /// DEFAULT 50 (deliberate:
-    /// retail's 20 was performance-only); the menu offers the stops
-    /// 20 (faithful) / 50 (default) / 70 (high) / 90 (max).
+    /// DEFAULT 90, the maximum and the Visuals preset's Enhanced value
+    /// (player ruling 2026-09-25; retail's 20 was performance-only, and
+    /// the Classic preset's); the menu offers the stops 20 (faithful) /
+    /// 50 / 70 / 90 (max, default).
     pub fog_distance: u32,
     /// Vertical sync (on by default — off has no visual upside, only
     /// tearing). Off releases the frame rate from the display's
@@ -327,7 +328,9 @@ pub struct RenderPreference {
     /// English install with working sound — which is what this port
     /// runs — therefore shows NONE, and hears the narration instead.
     /// OFF is that faithful reading; ON forces the strip open, which
-    /// also lifts the picture the way retail does to make room.
+    /// also lifts the picture the way retail does to make room. DEFAULT
+    /// ON (player ruling 2026-09-25) — a global default, not a preset
+    /// member.
     pub movie_subtitles: bool,
     /// The in-view rival wizard name + health-bar tags. See
     /// [`RivalTags`].
@@ -389,7 +392,7 @@ pub const MAX_FOG_TILES: u32 = 90;
 /// [`MAX_FOG_TILES`]; the old 255 whole-torus stop is retired
 /// (player-ruled 2026-08-08: the fog must never reach the melt band).
 pub const FOG_STOPS: [(u32, &str); 4] =
-    [(20, "faithful"), (50, "default"), (70, "high"), (90, "max")];
+    [(20, "faithful"), (50, "mid"), (70, "high"), (90, "max")];
 
 impl Default for RenderPreference {
     fn default() -> Self {
@@ -399,14 +402,14 @@ impl Default for RenderPreference {
             reflections: true,
             horizon_cull: true,
             light_sources: true,
-            fog_distance: 50,
+            fog_distance: 90,
             vsync: true,
             fullscreen: true,
             movies: true,
             stats_screen: true,
             anti_aliasing: AntiAliasing::Off,
-            movie_subtitles: false,
-            rival_tags: RivalTags::default(),
+            movie_subtitles: true,
+            rival_tags: RivalTags::On,
         }
     }
 }
@@ -421,7 +424,8 @@ impl Default for RenderPreference {
 #[serde(rename_all = "kebab-case")]
 pub enum RivalTags {
     /// Each game's faithful surface: MC2 tags every visible rival,
-    /// MC1 tags nothing. The authentic default.
+    /// MC1 tags nothing. The faithful value (the Classic preset's; the
+    /// config default is `On`, the Visuals preset's).
     #[default]
     Auto,
     /// Tags in both games — brings the MC2 tag to MC1 as an opt-in
@@ -447,9 +451,9 @@ impl RivalTags {
 /// procedural fire — fireball flame + comet trail (the core sprite is
 /// hidden under it), the meteor crater's two-wave flame walls with
 /// lingering smoke, and the detaching shockwave ring. Presentation
-/// only: the sim never changes, whichever is selected. Classic is the
-/// default for now — pending broader playtesting before enhanced
-/// earns default-on status.
+/// only: the sim never changes, whichever is selected. The config
+/// default is enhanced (the Visuals preset, player ruling 2026-09-25);
+/// the enum's own default stays the faithful classic.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FireEffects {
@@ -463,7 +467,7 @@ pub enum FireEffects {
 /// return-stroke → decay envelope per strike, successive strikes
 /// overlapping into a continuous stream. Presentation only: the sim
 /// (trail-node entities, blasts, damage) is identical whichever is
-/// selected. Classic is the default — pending playtesting, like fire.
+/// selected. The config default is enhanced, like fire.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LightningEffects {
@@ -560,8 +564,8 @@ pub struct RenderEnhancement {
     /// and watches the carpet speed at the portal; it vanishes on the
     /// arrival tick as the portal flashes, then retail's fade runs.
     /// Presentation only — the scripted flight is the sim's, untouched.
-    /// Retail's own motion blur is not ported either way. Default OFF:
-    /// the entity pool stays a stock run's only enhancement.
+    /// Retail's own motion blur is not ported either way. Default ON,
+    /// with the Visuals preset (player ruling 2026-09-25).
     pub mc2_fancy_exit: bool,
 }
 
@@ -571,15 +575,15 @@ impl Default for RenderEnhancement {
             smooth_shading: true,
             smooth_motion: true,
             hud_transparency: HudTransparency::default(),
-            map_owned_buildings: false,
+            map_owned_buildings: true,
             expose_jar_spells: false,
             map_marker_scale: 1.0,
-            map_marker_icons: false,
+            map_marker_icons: true,
             autocontrasting_markers: true,
-            map_extent_fog: false,
-            fire: FireEffects::default(),
-            lightning: LightningEffects::default(),
-            mc2_fancy_exit: false,
+            map_extent_fog: true,
+            fire: FireEffects::Enhanced,
+            lightning: LightningEffects::Enhanced,
+            mc2_fancy_exit: true,
         }
     }
 }
@@ -1521,7 +1525,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 41;
+const DEFAULTS_VERSION: u64 = 43;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp
@@ -1667,7 +1671,7 @@ mod tests {
     fn defaults_carry_the_documented_deviations() {
         // The documented default deviations, pinned.
         let c = Config::default();
-        assert_eq!(c.render.preference.fog_distance, 50, "fog default 50");
+        assert_eq!(c.render.preference.fog_distance, 90, "fog default 90 (Visuals preset)");
         assert!(
             !c.render.enhancement.hud_transparency.transparent(),
             "hud opaque by default"
@@ -1680,7 +1684,7 @@ mod tests {
         assert_eq!(c.sim.options.game_speed, GameSpeed::Normal);
         // The stops table brackets the default and the faithful value.
         assert!(FOG_STOPS.iter().any(|&(v, _)| v == 20));
-        assert!(FOG_STOPS.iter().any(|&(v, _)| v == 50));
+        assert!(FOG_STOPS.iter().any(|&(v, _)| v == 90));
     }
 
     #[test]

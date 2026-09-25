@@ -29,8 +29,8 @@
 //! those options rather than stored. A group already hand-tuned when
 //! the launcher opened also offers "Custom", which puts the hand-tuned
 //! values back. Changes apply and persist the way the options menu's
-//! do. Not yet functional: the Display and Effects rows cycle
-//! placeholder values and apply nothing.
+//! do. Not yet functional: the Display row cycles placeholder values
+//! and applies nothing.
 
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
@@ -116,7 +116,7 @@ enum RowKind {
 const OPTIONS: [(&str, RowKind); 3] = [
     ("Display", RowKind::Placeholder(&["Borderless fullscreen", "Window 1280 × 960"])),
     ("Controls", RowKind::Preset(&settings::CONTROLS_PRESET)),
-    ("Effects", RowKind::Placeholder(&["Enhanced", "Classic"])),
+    ("Visuals", RowKind::Preset(&settings::VISUALS_PRESET)),
 ];
 
 /// A preset row's choice.
