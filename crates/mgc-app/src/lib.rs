@@ -565,8 +565,8 @@ fn frontend_slot_row(tag: &str, i: usize, empty: &str, default_label: &str) -> (
     // Every slot shows its level; a resuming one adds how far into it
     // the run had got. Same shape as the mini-menu's rows.
     match info.resume {
-        Some(pct) => label.push_str(&format!("  L{} {pct}%", info.level)),
-        None => label.push_str(&format!("  L{}", info.level)),
+        Some(pct) => label.push_str(&format!("  L{} {pct}%", info.level_number())),
+        None => label.push_str(&format!("  L{}", info.level_number())),
     }
     if info.stale {
         // Salvaged from an older container: the progress is here, the

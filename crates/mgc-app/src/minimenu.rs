@@ -253,11 +253,17 @@ fn slot_row(info: &SlotInfo, index: usize, _saving: bool) -> (String, [f32; 4]) 
         // progress survived, the resume did not. Marked because it is
         // a LOSS — a slot that quietly stopped resuming reads as fine
         // right up until the level restarts.
-        return (format!("{n} {label}  L{} old", info.level), INK_STALE);
+        return (
+            format!("{n} {label}  L{} old", info.level_number()),
+            INK_STALE,
+        );
     }
     match info.resume {
-        Some(pct) => (format!("{n} {label}  L{} {pct}%", info.level), INK_RESUME),
-        None => (format!("{n} {label}  L{}", info.level), INK_LABEL),
+        Some(pct) => (
+            format!("{n} {label}  L{} {pct}%", info.level_number()),
+            INK_RESUME,
+        ),
+        None => (format!("{n} {label}  L{}", info.level_number()), INK_LABEL),
     }
 }
 
@@ -312,6 +318,26 @@ pub fn draw(assets: &UiAssets, m: &MiniMenu, w: f32, h: f32, cursor: (f32, f32))
 mod tests {
     use super::*;
 
+    /// A slot names its level the way players do: map 2 is "L3"
+    /// (player ruling 2026-09-26 — the map index is an implementation
+    /// detail; retail, the stats screen and the manuals count from 1).
+    #[test]
+    fn slot_rows_number_levels_from_one() {
+        let mut info = SlotInfo {
+            label: "Rain".into(),
+            occupied: true,
+            level: 2,
+            native: true,
+            ..Default::default()
+        };
+        assert_eq!(slot_row(&info, 0, false).0, "1 Rain  L3");
+        info.resume = Some(15);
+        assert_eq!(slot_row(&info, 0, false).0, "1 Rain  L3 15%");
+        info.level = 0;
+        info.resume = None;
+        assert_eq!(slot_row(&info, 0, false).0, "1 Rain  L1");
+    }
+
     fn slots(n: usize) -> Vec<SlotInfo> {
         (0..n)
             .map(|i| SlotInfo {
@@ -345,11 +371,11 @@ mod tests {
         assert_ne!(hub_text, res_text);
         assert_ne!(hub_ink, res_ink);
         assert!(
-            hub_text.contains("L7"),
+            hub_text.contains("L8"),
             "a hub slot still names its level: {hub_text}"
         );
         assert!(
-            res_text.contains("L7") && res_text.contains("15%"),
+            res_text.contains("L8") && res_text.contains("15%"),
             "a resuming slot names the level AND how far in: {res_text}"
         );
     }
@@ -393,7 +419,7 @@ mod tests {
         assert_ne!(hub_text, old_text);
         assert_ne!(hub_ink, old_ink);
         // Still names its level: the progress IS there.
-        assert!(old_text.contains("L3"), "{old_text}");
+        assert!(old_text.contains("L4"), "{old_text}");
     }
 
     /// An unreadable slot must never render as empty: an empty row is

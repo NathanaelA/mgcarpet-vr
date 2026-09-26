@@ -533,6 +533,7 @@ pub struct SlotInfo {
     pub occupied: bool,
     /// The level this slot sits at — the one it resumes into, or the
     /// one the campaign is parked in front of. Every slot has one.
+    /// The 0-based MAP index; players see [`SlotInfo::level_number`].
     pub level: u32,
     /// `Some(mana_percent)` when the slot carries a world payload and
     /// so resumes straight into play; `None` = a hub save.
@@ -558,6 +559,18 @@ pub struct SlotInfo {
     pub stale: bool,
     /// Campaign position, for the menu's level column.
     pub campaign_level: u32,
+}
+
+impl SlotInfo {
+    /// The level as players number it: map index + 1 in all three
+    /// games — retail's own numbering (the MC1/HW world list reads
+    /// "1. Al Jahan" … "50. Volcania"; MC1's blacklisted maps are
+    /// levels that simply never appear, which the official guide
+    /// lists as "not appearing in the game") and the stats screen's
+    /// "Level N".
+    pub fn level_number(&self) -> u32 {
+        self.level + 1
+    }
 }
 
 /// Probe one slot: native first, retail as the fallback.
