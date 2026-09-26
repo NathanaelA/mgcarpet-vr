@@ -61,6 +61,15 @@ const FADE_FLOOR: i32 = 4096;
 /// Sound.cpp:14 — "Original was 10"); MC1 uses the full 32. No
 /// stealing in either game — a full house drops the request.
 const MC2_CHANNELS: usize = 10;
+/// ⚖ DEVIATION — MC2's player-sourced NOTIFICATION CHIMES may steal a
+/// channel when all 10 are busy: 41 (objective pre-cue) and 61
+/// Success2 (objective advance + `sub_6DC40_improve_ability`, the
+/// spell level-up). Retail drops them on a full house like anything
+/// else, and a spell levelled through USE levels up mid-combat —
+/// exactly when the house is full — so the chime was lost there while
+/// the calmer XP-scroll pickup kept it (player report 2026-09-26).
+/// The victim is the quietest one-shot; loops are never taken.
+const MC2_PRIORITY_CHIMES: [u8; 2] = [41, 61];
 /// MC2 ids the dispatch pre-switch collapses onto owner 0 — ONE
 /// shared channel per id regardless of emitter owner (Sound.cpp:
 /// 6349-67: creature calls, gloops, door/tornado feeds).
@@ -208,6 +217,9 @@ struct Slot {
     vol: u16,
     pan: u16,
     tag: u16,
+    /// Requested through [`Source::Player`] (the owner-0 collapse
+    /// makes `tag == 0` ambiguous).
+    player: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -434,6 +446,7 @@ impl FaithfulMixer {
                     vol,
                     pan,
                     tag,
+                    player: player_sourced,
                 };
             }
         }
@@ -593,8 +606,17 @@ impl FaithfulMixer {
                 }
                 _ => {}
             }
-            let Some(free) = self.free_channel(live_mask) else {
-                continue; // all channels busy: the original drops too
+            let free = self.free_channel(live_mask).or_else(|| {
+                (self.mc2 && slot.player && MC2_PRIORITY_CHIMES.contains(&id))
+                    .then(|| self.steal_channel())
+                    .flatten()
+            });
+            let Some(free) = free else {
+                // All channels busy: the original drops too.
+                if Self::trace() {
+                    eprintln!("SNDMIX id={id} DROP:full");
+                }
+                continue;
             };
             let Some(pcm) = sample(sounds, id) else {
                 continue;
@@ -646,6 +668,21 @@ impl FaithfulMixer {
                 }
             }
         }
+    }
+
+    /// The [`MC2_PRIORITY_CHIMES`] victim: the quietest one-shot in the
+    /// MC2 budget that is not itself a priority chime. `Cmd::Play`
+    /// replaces the voice outright, so no stop is needed.
+    fn steal_channel(&self) -> Option<usize> {
+        self.channels
+            .iter()
+            .take(MC2_CHANNELS)
+            .enumerate()
+            .filter(|(_, c)| {
+                !c.looped && c.key.is_some_and(|(_, id)| !MC2_PRIORITY_CHIMES.contains(&id))
+            })
+            .min_by_key(|(_, c)| c.vol)
+            .map(|(i, _)| i)
     }
 
     fn find_channel(&self, tag: u16, id: u8) -> Option<usize> {
@@ -1027,6 +1064,51 @@ mod tests {
             m.find_channel(0, 49).is_none(),
             "a starved feed loop fades out"
         );
+    }
+
+    /// ⚖ THE LEVEL-UP CHIME ON A FULL HOUSE (player report
+    /// 2026-09-26): a spell levelled through USE levels up mid-combat,
+    /// when all 10 MC2 channels are busy, and Success2 (61) was
+    /// dropped. A player-sourced priority chime takes the quietest
+    /// one-shot; any other request still drops, and a world-sourced
+    /// 61 never steals.
+    #[test]
+    fn mc2_level_up_chime_steals_the_quietest_one_shot() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s = sounds();
+        let mut m = FaithfulMixer::new();
+        m.set_mc2(true);
+        let l = listener();
+        // Fill the house: ten one-shots from ten owners, the one on
+        // owner 5 the quietest (farthest).
+        for owner in 1..=10u16 {
+            let x = if owner == 5 { 9000 } else { 100 };
+            m.request(3, Source::World { pos: (x, 0, 0), owner }, &l);
+            m.tick(&s, &tx, m_live(&m));
+        }
+        let _ = rx.try_iter().count();
+        assert!(m.free_channel(m_live(&m)).is_none(), "the house is full");
+        let quiet = m.find_channel(5, 3).expect("owner 5 playing");
+        // An ordinary player sound drops.
+        m.request(9, Source::Player, &l);
+        m.tick(&s, &tx, m_live(&m));
+        assert!(!rx.try_iter().any(|c| matches!(c, Cmd::Play { .. })));
+        // A world-sourced 61 drops too.
+        m.request(61, Source::World { pos: (100, 0, 0), owner: 11 }, &l);
+        m.tick(&s, &tx, m_live(&m));
+        assert!(!rx.try_iter().any(|c| matches!(c, Cmd::Play { .. })));
+        // The player's level-up chime takes the quiet channel.
+        m.request(61, Source::Player, &l);
+        m.tick(&s, &tx, m_live(&m));
+        let plays: Vec<usize> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                Cmd::Play { ch, .. } => Some(ch),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(plays, vec![quiet], "61 replaced the quietest voice");
+        assert_eq!(m.channels[quiet].key, Some((0, 61)));
     }
 
     /// Liveness mask synthesized from the mixer's own bookkeeping
