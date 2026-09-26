@@ -768,8 +768,9 @@ pub struct World {
     mc2_speech_ramp: u8,
     /// The pending speech cue (the segment index retail passes to
     /// `PlayCDTrackSegmentNumber`: objective row + 1, or 9 at level
-    /// end), drained by [`World::take_audio`]. Presentation-side
-    /// transient, never hashed.
+    /// end — or [`MC2_SPEECH_SECRET`] for the hidden-realm line),
+    /// drained by [`World::take_audio`]. Presentation-side transient,
+    /// never hashed.
     mc2_speech_cue: Option<u8>,
     /// `D41A0_0.byte_0x36E03` — the APOCALYPSE latch: selects the
     /// (10,9) dome's endgame variant (no damage, sound 63, (10,91)
@@ -3792,6 +3793,34 @@ fn no_mc1_last_start_marker() -> bool {
 /// ~121k rows, ALL of the board census. Behaviourally inert after
 /// the win (the pass is skipped either way) but the word is hashed
 /// and it is the lane. Round 150 (main session).
+/// The speech cue for retail's SECRET-REALM line
+/// (`PlayCDTrackSegmentForSecretLevel_86F20`, EF:48332): speech row
+/// 25 ("You have discovered one of the demon lord's hidden realms",
+/// ETEXT 284) or 26 ("…another of…", ETEXT 285), segment 0. The row
+/// choice is `byte_0x3E4_2BE4_12226 != 0` — a per-player count of
+/// earlier levels whose hidden entrance was found (bumped in
+/// `CollectLevelStats_5C530`, EF:43790), which is campaign state the
+/// app owns, so the sim hands over the cue and the app picks the row.
+pub const MC2_SPEECH_SECRET: u8 = 0x80;
+
+/// A/B toggle for THE HIDDEN-ENTRANCE NARRATION (player report
+/// 2026-09-26: mc2:04's hidden exit appeared silently).
+/// `AddSwitch31atyp_50FF0` (EF:37326-40) — the ONLY ctor of an
+/// `(11,31)`, and every shipped `(11,31)` (levels 4/7/11/17/19, the
+/// five secret realms 30-34) is disposition-spawned, never at load —
+/// arms the objective ramp (`byte_0x36E02 = 1`) and sets
+/// `byte_0x36E0B |= 1`, which nothing clears until the next level
+/// (`LevelInit_56C00` `&= 0xFC`; `sub_48350` runs in the OUTER level
+/// loop, EF:31197). While set, `PresentObjective_59820`'s step 8 plays
+/// the secret line INSTEAD of the objective line and without the 61
+/// chime (EF:41274-84) — so every LATER objective advance on that
+/// level repeats the secret line too, retail's own quirk. Set
+/// `MGC_NO_MC2_SECRET_NARRATION` to restore the silent entrance.
+fn no_mc2_secret_narration() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SECRET_NARRATION").is_some())
+}
+
 fn no_mc2_objective_pause_head() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_OBJECTIVE_PAUSE_HEAD").is_some())
@@ -19714,6 +19743,23 @@ impl World {
         }
     }
 
+    /// `D41A0_0.byte_0x36E0B & 1` — a hidden-realm entrance was born on
+    /// this level. DERIVED rather than stored: the bit's only setter is
+    /// the `(11,31)` ctor and its only clears are at level boundaries,
+    /// and an `(11,31)` is never reaped mid-level (a tripped one only
+    /// hides, `sub_6F7E0`), so "an `(11,31)` is in the pool" is the bit
+    /// — with no new snapshot lane. See [`no_mc2_secret_narration`].
+    pub(crate) fn mc2_secret_found(&self) -> bool {
+        self.game == GameId::Mc2
+            && !no_mc2_secret_narration()
+            && self
+                .g
+                .ent
+                .iter()
+                .skip(1)
+                .any(|e| e.class64 == 11 && e.model65 == 31 && e.flags & 0x400 == 0)
+    }
+
     /// `PresentObjective_59820`'s speech-enabled arm (EF:40957-41066;
     /// docs/traces/mc2-voiceover-triggers.md §3): walk the
     /// `byte_0x36E02` ramp — ~7 quiet ticks, the sound-41 pre-cue at
@@ -19721,9 +19767,9 @@ impl World {
     /// at step 8 (61 suppressed while the cursor sits at row 0 — the
     /// briefing), then the long quiet tail to 0xC8. The retail
     /// fade-in gate (`paletteMod_51 >= 3`) has no analog here — we
-    /// have no load fade. OPEN: the type-31 beacon variant
-    /// (`byte_0x36E0B & 1` → secret-row speech + chime 41) waits on
-    /// the beacon switch port.
+    /// have no load fade. The `(11,31)` secret arm (`byte_0x36E0B & 1`,
+    /// [`World::mc2_secret_found`]) swaps step 8 for the hidden-realm
+    /// line ([`MC2_SPEECH_SECRET`]) with no 61 chime.
     fn speech_ramp_mc2(&mut self) {
         match self.mc2_speech_ramp {
             0 => {}
@@ -19733,6 +19779,12 @@ impl World {
             }
             8 => {
                 self.mc2_speech_ramp = 9;
+                // The secret arm (EF:41274-84): the hidden-realm line,
+                // no 61 chime, no objective cue.
+                if self.mc2_secret_found() {
+                    self.mc2_speech_cue = Some(MC2_SPEECH_SECRET);
+                    return;
+                }
                 if self.mc2_stage_current != 0 {
                     self.g.snd_player(61); // advance chime (EF:41019)
                 }
@@ -20144,7 +20196,17 @@ impl World {
                 // Phase 4.3 adds the slot-condition band 12..=44
                 // (docs/traces/mc2-class11-switches-class14.md);
                 // 5..=11 stay misfits (handlers OPEN in the trace).
-                (11, 0..=4 | 12..=44) => self.spawn_trigger(r.model, x, y, z),
+                (11, 0..=4 | 12..=44) => {
+                    let s = self.spawn_trigger(r.model, x, y, z);
+                    // `AddSwitch31atyp_50FF0`: a born hidden-realm
+                    // entrance arms the objective ramp; its flag half
+                    // is derived ([`World::mc2_secret_found`]). See
+                    // [`no_mc2_secret_narration`].
+                    if r.model == 31 && s.is_some() && !no_mc2_secret_narration() {
+                        self.mc2_speech_ramp = 1;
+                    }
+                    s
+                }
                 // Class-14 special map objects (creator sub_514E0
                 // :37315 + the per-model sub-creators :37332-37418).
                 // The ENDING fly-to markers (3 = the checkpoint X,
@@ -53813,6 +53875,75 @@ mod tests {
             !probe(reach),
             "one unit outside it does not — the edge is f80 + pw, exclusive"
         );
+    }
+
+    /// THE HIDDEN-REALM NARRATION (player report 2026-09-26: mc2:04's
+    /// hidden exit appeared with no voiceover). `AddSwitch31atyp_50FF0`
+    /// arms the objective ramp and sets `byte_0x36E0B & 1`; step 7
+    /// still chimes 41, step 8 plays the secret line with NO 61 chime,
+    /// and the bit holds for the rest of the level, so a later
+    /// objective advance repeats the secret line (retail's own quirk).
+    #[test]
+    fn mc2_hidden_entrance_birth_narrates_the_secret_line() {
+        let th = |slot, class, model, dis_id, swi_sz| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class,
+            model,
+            x: 100,
+            y: 100,
+            dis_id,
+            swi_sz,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        // mc2:04's own row: slot 76, disposition 6, box 4.
+        let things = vec![th(1, 11, 31, 6, 4)];
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+        // Far from the entrance: the trigger must not seize the flyer.
+        let pose = PlayerPose::from_tiles(10.0, 2.0, 10.0, 0.0, 0.0, 0.0);
+        // Run out the level-load ramp first.
+        for _ in 0..0xD0 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        let _ = w.take_audio(pose);
+        assert!(!w.mc2_secret_found(), "dis-gated: not born at load");
+        w.fire_disposition(6, true);
+        assert!(w.mc2_secret_found(), "the (11,31) is born");
+        let run_ramp = |w: &mut World| {
+            let mut cue = None;
+            let mut ids = Vec::new();
+            for _ in 0..10 {
+                w.tick(pose, PlayerCommand::default());
+                let a = w.take_audio(pose);
+                ids.extend(a.events.iter().filter(|e| e.player).map(|e| e.id));
+                cue = cue.or(a.speech);
+            }
+            (cue, ids)
+        };
+        let (cue, ids) = run_ramp(&mut w);
+        assert_eq!(cue, Some(MC2_SPEECH_SECRET), "the hidden-realm line");
+        assert!(ids.contains(&41), "the step-7 pre-cue chimes");
+        assert!(!ids.contains(&61), "the secret arm skips Success2");
+        // A later objective advance re-arms the ramp: the bit still
+        // holds, so the secret line repeats.
+        for _ in 0..0xD0 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        w.mc2_speech_ramp = 1;
+        w.mc2_stage_current = 1;
+        let (cue, ids) = run_ramp(&mut w);
+        assert_eq!(cue, Some(MC2_SPEECH_SECRET), "retail repeats the secret line");
+        assert!(!ids.contains(&61));
     }
 
     /// The (10,22) whirlwind funnel and (10,76) fire-orb satellites

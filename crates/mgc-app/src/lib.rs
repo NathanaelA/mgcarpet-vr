@@ -3731,6 +3731,19 @@ impl App {
     /// Per-sim-tick audio: drain the world's sound requests into the
     /// faithful mixer, feed the ambient rule, run the flush.
     fn audio_tick(&mut self, requested_at: Option<mgc_sim::engine::world::PlayerPose>) {
+        // The hidden-realm line's "another" arm (`byte_0x3E4_2BE4_12226
+        // != 0`, see `MC2_SPEECH_SECRET`): an earlier level's secret
+        // portal is already revealed or conquered. No campaign (a bare
+        // `--level` launch) = the first find.
+        let secret_again = self
+            .campaign
+            .as_ref()
+            .and_then(|r| r.save.mc2())
+            .is_some_and(|s| {
+                s.secrets
+                    .iter()
+                    .any(|p| p.level != 0 && matches!(p.activated, 1 | 2))
+            });
         let Some(audio) = &mut self.audio else { return };
         let Some(sess) = self.session.as_deref_mut() else {
             return;
@@ -3785,8 +3798,11 @@ impl App {
             // retail EF:41020-29, ported verbatim.
             if let Some(seg) = frame.speech {
                 let lvl = sess.level.level_number;
+                let secret = seg == mgc_sim::engine::world::MC2_SPEECH_SECRET;
                 if self.cfg.audio.sound && self.cfg.audio.speech {
-                    let (row, cseg) = if (30..=34).contains(&lvl) {
+                    let (row, cseg) = if secret {
+                        (25 + u32::from(secret_again), 0)
+                    } else if (30..=34).contains(&lvl) {
                         if seg == 9 { (10, 9) } else { (0, 4) }
                     } else {
                         (lvl, u32::from(seg))
@@ -3800,7 +3816,11 @@ impl App {
                 // text as its speech-off fallback; our `on` overtitles
                 // the voiceover too).
                 if self.cfg.audio.subtitles.on()
-                    && let Some(idx) = mc2_narration_etext(lvl, seg)
+                    && let Some(idx) = if secret {
+                        Some(284 + usize::from(secret_again))
+                    } else {
+                        mc2_narration_etext(lvl, seg)
+                    }
                     && let Some(text) = sess.level.etext.get(idx).filter(|s| !s.is_empty())
                 {
                     self.subtitle = Some((text.clone(), SUBTITLE_TICKS));
