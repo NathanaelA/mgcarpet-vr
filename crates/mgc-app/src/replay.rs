@@ -1838,7 +1838,15 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/fixtures");
         let gate = |lvl: &str, file: &str| {
             let p = root.join(lvl).join(file);
-            p.exists()
+            // A checkout without git-lfs (CI) holds pointer stubs, not
+            // evidence: skip like a missing fixture, as the conformance
+            // suite does (mgc-conform/tests/suite.rs).
+            let hydrated =
+                std::fs::read(&p).is_ok_and(|b| !b.starts_with(b"version https://git-lfs"));
+            if p.exists() && !hydrated {
+                eprintln!("skip: {} is an un-hydrated git-lfs pointer", p.display());
+            }
+            hydrated
                 .then(|| mgc_formats::mgcr::mc2_take_replayed(&p))
                 .transpose()
                 .expect("the fixture opens")
