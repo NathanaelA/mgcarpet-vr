@@ -1712,7 +1712,14 @@ impl Gen {
         }
         let (reach, pitched) = match spell {
             0 | 13 | 15 | 17 | 18 | 19 | 22 | 23 => (0x4000, true),
-            20 => (if self.is_hidden_worlds() { 10240 } else { 0x4000 }, true),
+            20 => (
+                if self.is_hidden_worlds() {
+                    10240
+                } else {
+                    0x4000
+                },
+                true,
+            ),
             3 | 7 | 11 => (10240, true),
             6 | 8 | 9 | 16 => (4096, false),
             _ => return,
@@ -2307,8 +2314,7 @@ impl Gen {
             // carpet above its walk slot and retail's `danger` reads
             // 99 (the earlier arm, one step down), the port's re-arm
             // 100. `MGC_NO_MC1_DANGER_ACQUIRE_CASES` re-arms on 9.
-            if slot == PLAYER_TARGET
-                && (self.ent[i].model65 != 9 || no_mc1_danger_acquire_cases())
+            if slot == PLAYER_TARGET && (self.ent[i].model65 != 9 || no_mc1_danger_acquire_cases())
             {
                 self.player_danger = 100;
             }
@@ -4166,10 +4172,7 @@ impl Gen {
                     built = false;
                 }
             }
-            if built
-                || !mc1
-                || crate::engine::features::no_mc1_castle_ball_dry_pool_retry()
-            {
+            if built || !mc1 || crate::engine::features::no_mc1_castle_ball_dry_pool_retry() {
                 self.ent[i].flags |= 0x400;
             }
         }
@@ -4835,11 +4838,7 @@ impl Gen {
                     // changes the owner every later segment and the
                     // endpoint blast inherit. See
                     // [`no_mc1_beam_self_seize`].
-                    let owner = if live_owner {
-                        self.ent[i].id24
-                    } else {
-                        owner0
-                    };
+                    let owner = if live_owner { self.ent[i].id24 } else { owner0 };
                     let e = &mut self.ent[s];
                     e.class64 = 9;
                     e.model65 = 9;
@@ -4917,11 +4916,7 @@ impl Gen {
         // `mov 0x18(%ebx),%ax` pair, this time into the blast. So the
         // blast's `+24`, and `sub_526C0_52A00(a1, …)`'s accuracy
         // scoring, both see the POST-chain owner.
-        let owner = if live_owner {
-            self.ent[i].id24
-        } else {
-            owner0
-        };
+        let owner = if live_owner { self.ent[i].id24 } else { owner0 };
         // `v19[15] = *(a1+30)` / `v19[16] = *(a1+32)` (0x6C627/0x6C62B
         // and 0x6C635/0x6C63F) are live reads too — a seized beam's
         // blast therefore carries the ctor's 0/0, not the flight
@@ -5582,8 +5577,7 @@ impl Gen {
         // `sub_37710_37AD0` is `top_index + 1` = the stack's LENGTH;
         // the port's own `Vec` already holds that, so there is no
         // second `+ 1` (see `undead_ring_size_is_the_free_length`).
-        let mut n = self.free.len() as i32
-            + i32::from(!undead_ring_size_is_the_free_length());
+        let mut n = self.free.len() as i32 + i32::from(!undead_ring_size_is_the_free_length());
         if n & 0x8000 != 0 {
             n = 0;
         }
@@ -7278,9 +7272,7 @@ impl Gen {
             // rewrites it), and that record is the class-3 carpet, so
             // the seat test passes and its wizext reads player 0.
             Some(0)
-        } else if own != 0
-            && (own as usize) < self.ent.len()
-            && self.ent[own as usize].class64 == 3
+        } else if own != 0 && (own as usize) < self.ent.len() && self.ent[own as usize].class64 == 3
         {
             // A registered wizard seat answers with its player slot;
             // any other class-3 occupant reads the shared default
@@ -8625,7 +8617,9 @@ impl Gen {
         // spheres; the conformance import carries it.
         if mc2 && self.ent[i].flags & (1 << 26) != 0 {
             self.ent[i].flags &= !(1 << 26);
-            if self.ent[i].model65 == 39 && !crate::engine::features::no_mc2_m27_v34_sphere_transparent() {
+            if self.ent[i].model65 == 39
+                && !crate::engine::features::no_mc2_m27_v34_sphere_transparent()
+            {
                 self.m27_v34_transparent(i);
             }
             return false;
@@ -9129,7 +9123,10 @@ impl Gen {
             if settle == 0 && !kicked {
                 // Call-free unless the claim intake sounded: see
                 // [`crate::engine::features::no_mc2_m27_v34_sphere_transparent`].
-                if !is_fool && !claimed && !crate::engine::features::no_mc2_m27_v34_sphere_transparent() {
+                if !is_fool
+                    && !claimed
+                    && !crate::engine::features::no_mc2_m27_v34_sphere_transparent()
+                {
                     self.m27_v34_transparent(i);
                 }
                 self.ball_decay_tail(i);
@@ -10074,7 +10071,9 @@ mod ring_seizure_tests {
     #[test]
     fn a_creature_seized_by_its_own_shot_fires_from_the_origin() {
         let mut g = flat_gen(rings_at(0, 1), VerbSet::MC1);
-        let c = g.spawn_creature(0, 20000, 20000, 100).expect("shooter slot");
+        let c = g
+            .spawn_creature(0, 20000, 20000, 100)
+            .expect("shooter slot");
         g.ent[c].id24 = OWNER;
         g.ent[c].f146 = 321;
         g.ent[c].f84 = 200;

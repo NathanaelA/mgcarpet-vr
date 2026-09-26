@@ -1013,8 +1013,8 @@ impl std::ops::IndexMut<usize> for RivalHouses {
 /// 0x8c`, `cmp 0x88`, `jle` ⇒ `houses + stored > cap` ⇒ spill =
 /// stored − cap) and `sub_47400` (:56363, VA 0x4740B `movswl
 /// 0x18(%edx)` → `+0x7463` → its +160, then VA 0x47571 `mov
-/// 0x134(%edx),%eax; add; cmp 0x88(castle); jge` ⇒ `houses + stored
-/// >= cap` ⇒ every balloon homes). `+308` itself is written ONLY by
+/// 0x134(%edx),%eax; add; cmp 0x88(castle); jge` ⇒ `houses + stored >=
+/// cap` ⇒ every balloon homes). `+308` itself is written ONLY by
 /// the census `sub_48230` (:56863 zero per wizard, :56895 accumulate
 /// each (10,45)'s +140 through `sub_48340`'s +144 owner resolve),
 /// which runs at the tick top (:52327) before every entity tick.
@@ -2456,6 +2456,7 @@ pub(crate) fn no_mc2_m27_v34_corpse_transparent() -> bool {
 ///   precedes the aim. The 0xDA dword (W-64: the move core's pushed
 ///   row word, `sub_1ED30`'s `[ebp-4]`, the aim's `dx`) is NOT
 ///   modelled. Adjacency-scoped.
+///
 /// WITNESS mc2l22-new t=35,058: body 610 on the 0xD9 path, wyverns 603
 /// / 606 / 607 on their normal arm and 609 on the hit arm between the
 /// last publisher and the body — retail's branch 612 reads **0**: the
@@ -2580,8 +2581,8 @@ pub(crate) fn mc1_oob_castle_inert(arm: &str) -> bool {
 /// followed by `lea (,%edx,4); sub %edx` (×3) and `mov 0x4|0x5(%edx,
 /// %eax,2)` (×6 + w/h), and the loop test at file 0x41203 (VA
 /// 0x28A0B) is `movsbl 0x47(%ebp),%edx / mov 0x50(%esp),%al / cmp
-/// %edx,%eax / jle` — a SIGNED `i <= (char)row` continue. So a row
-/// >= 128 is NEGATIVE: the fill loop runs **zero times**, the delta
+/// %edx,%eax / jle` — a SIGNED `i <= (char)row` continue. So a row >=
+/// 128 is NEGATIVE: the fill loop runs **zero times**, the delta
 /// buffer stays `memset`-zero and the painter writes **no height at
 /// all**. The port read `+71` as `u8` and clamped it `.min(8)`, so a
 /// corrupted castle painted a full level-8 footprint every work tick.
@@ -2604,7 +2605,7 @@ pub(crate) fn mc1_build_row(f71: u8) -> usize {
     if mc1_no_castle_row_signed() {
         f71.min(8) as usize
     } else {
-        (f71 as i8).max(0).min(8) as usize
+        (f71 as i8).clamp(0, 8) as usize
     }
 }
 
@@ -2875,6 +2876,7 @@ fn mc1_no_row0_shim_32_39_40_48_89() -> bool {
 ///     (10,39) MANA BALL's grounded roll (EF:26271)
 ///   * file 0x5ADED (VA 0x365ED) — `sub_35FB0`, the (10,57) FOOL'S
 ///     sphere twin (same arm)
+///
 /// so after any grounded ball/sphere/boulder tick retail's
 /// `predictedAxis_EB398ar` holds TWO SMALL HEIGHT DELTAS — **(0,0) on
 /// flat ground** — and not the position the last mover committed. The
@@ -3160,6 +3162,7 @@ pub(crate) fn no_mc1_mana_census_wrap() -> bool {
 /// * mc2l18 slot 3 (owner 483), t=18,536..18,777 — eight spheres
 ///   totalling 9,870, falling to 1,057 as they are collected, and the
 ///   run ENDS on the tick the last one goes; 242 rows.
+///
 /// The `mana_max` lane in both is the census credit, nothing else:
 /// `sum(mana of every @0x94==slot record admitted by the class
 /// filter)` reproduces retail's step to the unit on every tick.
@@ -3817,9 +3820,7 @@ pub(crate) fn no_mc2_build_repaint_roster() -> bool {
 /// scan.
 pub(crate) fn no_mc2_rival_ladder_price_dying_castle() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var_os("MGC_NO_MC2_RIVAL_LADDER_PRICE_DYING_CASTLE").is_some()
-    })
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RIVAL_LADDER_PRICE_DYING_CASTLE").is_some())
 }
 
 /// `MGC_NO_MC2_M22_STALE_PROBE=1` restores the pre-dig worm-head
@@ -7824,8 +7825,11 @@ impl Gen {
     /// mailboxes carry it into the first live tick (round 155, see
     /// [`no_mc1_load_pass_area_mail`]).
     pub(crate) fn tick(&mut self, i: usize, ctx: Option<&crate::mc1::mobs::MobCtx>) {
-        let pad_fix =
-            |ctx: Option<&crate::mc1::mobs::MobCtx>| ctx.is_some_and(|c| (!c.strict || force_building_patches()) && c.patches.mc1_building_pad_saturate);
+        let pad_fix = |ctx: Option<&crate::mc1::mobs::MobCtx>| {
+            ctx.is_some_and(|c| {
+                (!c.strict || force_building_patches()) && c.patches.mc1_building_pad_saturate
+            })
+        };
         match self.ent[i].tick70 {
             9 => self.tick_hill(i, ctx),
             10 => self.tick_dish(i),
@@ -7844,7 +7848,9 @@ impl Gen {
             51 => {
                 // The crushed-site patch reads the runtime set; the load
                 // fixpoint (no ctx) and `strict_retail` run retail.
-                let crushed_site = ctx.is_some_and(|c| (!c.strict || force_building_patches()) && c.patches.mc1_crushed_site_collapse);
+                let crushed_site = ctx.is_some_and(|c| {
+                    (!c.strict || force_building_patches()) && c.patches.mc1_crushed_site_collapse
+                });
                 self.tick_building(i, crushed_site, pad_fix(ctx))
             }
             55 => self.tick_ridge_head(i, ctx),
@@ -8218,7 +8224,15 @@ impl Gen {
         let x0 = cx.wrapping_sub(half_w);
         let y0 = cy.wrapping_sub(half_h);
         if life != 0 {
-            self.flatten_build_row(e.f71 as usize, cx, cy, target, life, FlattenLaw::Building, pad_saturate);
+            self.flatten_build_row(
+                e.f71 as usize,
+                cx,
+                cy,
+                target,
+                life,
+                FlattenLaw::Building,
+                pad_saturate,
+            );
             if life % 5 == 0 || life == 1 {
                 self.paint_build_row(e.f71 as usize, cx, cy);
             }
@@ -8758,7 +8772,11 @@ impl Gen {
         } else {
             mc1_build_row(e.f71)
         };
-        let target = if datum_cap { target.min(self.castle_datum_cap(level)) } else { target };
+        let target = if datum_cap {
+            target.min(self.castle_datum_cap(level))
+        } else {
+            target
+        };
         // :30563 — the divisor is the POST-decrement counter itself.
         let divisor = (e.f26 as i32).max(1);
         // :30538-45 — the flatten is BUFFERED: one goal-delta per
@@ -9426,7 +9444,8 @@ impl Gen {
                     && e.model65 == 2
                     && wd(e.x, x) < ext(e.f80) + ext(self.ent[i].f80)
                     && wd(e.y, y) < ext(e.f82) + ext(self.ent[i].f82)
-                    && ((e.z as i32 + ext(e.f78)) - (z as i32 + ext(f78))).abs() < ext(e.f84) + ext(f84)
+                    && ((e.z as i32 + ext(e.f78)) - (z as i32 + ext(f78))).abs()
+                        < ext(e.f84) + ext(f84)
                 {
                     fits = false;
                     break;
@@ -9725,9 +9744,7 @@ impl Gen {
             }
             match (e.class64, e.model65) {
                 (3, 3) if e.id24 == own && !reg.contains(&(j as u16)) => orphans.push(j),
-                (10, 45) if !snapshot_tally && e.f144 == own => {
-                    house_tally += e.f140.max(0) as i64
-                }
+                (10, 45) if !snapshot_tally && e.f144 == own => house_tally += e.f140.max(0) as i64,
                 _ => {}
             }
         }
@@ -12843,7 +12860,11 @@ mod tests {
         g.tick_building_live(b, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[b].act_life, 600);
         assert_eq!(g.ent[b].f40, 630, "the survivor stamps +40 = src");
-        assert_eq!(g.ent[b].mail[0], (0, 0), "…and consumes BOTH halves of the letter");
+        assert_eq!(
+            g.ent[b].mail[0],
+            (0, 0),
+            "…and consumes BOTH halves of the letter"
+        );
         assert_ne!(g.ent[b].tick70, 53, "still live");
         // The quiet tick after it.
         g.tick_building_live(b, crate::patches::WorldPatches::RETAIL);
@@ -12854,7 +12875,10 @@ mod tests {
         assert!(g.ent[b].act_life < 0);
         assert_eq!(g.ent[b].tick70, 53);
         assert_eq!(g.ent[b].f38, 630, "the killer latch");
-        assert_eq!(g.ent[b].f40, 0, "+40 was zeroed before the subtract and never restamped");
+        assert_eq!(
+            g.ent[b].f40, 0,
+            "+40 was zeroed before the subtract and never restamped"
+        );
         assert_eq!(
             g.ent[b].mail[0],
             (700, 630),
@@ -12904,7 +12928,13 @@ mod tests {
     /// head). Law off, the house stands at 2000 with an empty box.
     #[test]
     fn the_load_pass_canyon_bills_the_state_51_dwelling() {
-        let mut g = Gen::new(flat_land(100), synthetic_assets(), 7, ChassisParams::MC1, VerbSet::MC1);
+        let mut g = Gen::new(
+            flat_land(100),
+            synthetic_assets(),
+            7,
+            ChassisParams::MC1,
+            VerbSet::MC1,
+        );
         let mut a = thing(0, 10, 31, 128, 116);
         a.swi_id = 1;
         a.child = 2; // table index 2 = thing slot 1 (MC1 table base 1)
@@ -13215,9 +13245,15 @@ mod tests {
         // Case 0: the upgrade commit mints the painter with the link.
         g.castle_tick(live, crate::patches::WorldPatches::RETAIL);
         let p = (1..g.ent.len())
-            .find(|&k| g.ent[k].class64 == 10 && g.ent[k].model65 == 42 && g.ent[k].flags & 0x400 == 0)
+            .find(|&k| {
+                g.ent[k].class64 == 10 && g.ent[k].model65 == 42 && g.ent[k].flags & 0x400 == 0
+            })
             .expect("the commit painter");
-        assert_eq!(g.ent[p].link42, Link42(live as u16), "+42 = the minting castle's slot");
+        assert_eq!(
+            g.ent[p].link42,
+            Link42(live as u16),
+            "+42 = the minting castle's slot"
+        );
         assert_eq!(g.ent[p].id24, g.ent[live].id24, "+24 = the castle's owner");
         for _ in 0..80 {
             if g.ent[p].flags & 0x400 != 0 {
@@ -13226,13 +13262,18 @@ mod tests {
             g.tick_castle_painter(p);
         }
         assert!(g.ent[p].flags & 0x400 != 0, "fixture: the painter finished");
-        assert_eq!(g.ent[live].f59, 5, "the finish hands THE LINKED castle to sub-state 5");
+        assert_eq!(
+            g.ent[live].f59, 5,
+            "the finish hands THE LINKED castle to sub-state 5"
+        );
         assert_eq!(g.ent[parked].f59, 1, "the lower twin is untouched");
         // Case 5: the leveler carries the link too, and its finish
         // writes the linked castle's sub-state and site z.
         g.castle_tick(live, crate::patches::WorldPatches::RETAIL);
         let l = (1..g.ent.len())
-            .find(|&k| g.ent[k].class64 == 10 && g.ent[k].model65 == 41 && g.ent[k].flags & 0x400 == 0)
+            .find(|&k| {
+                g.ent[k].class64 == 10 && g.ent[k].model65 == 41 && g.ent[k].flags & 0x400 == 0
+            })
             .expect("the leveler");
         assert_eq!(g.ent[l].link42, Link42(live as u16), "+42 on the leveler");
         g.ent[parked].site_z = 12345;
@@ -13243,18 +13284,34 @@ mod tests {
             g.tick_castle_leveler(l);
         }
         assert!(g.ent[l].flags & 0x400 != 0, "fixture: the leveler finished");
-        assert_eq!(g.ent[live].f59, 2, "the leveler's finish lands on the linked castle");
-        assert_eq!(g.ent[parked].site_z, 12345, "the twin's site z is not rewritten");
+        assert_eq!(
+            g.ent[live].f59, 2,
+            "the leveler's finish lands on the linked castle"
+        );
+        assert_eq!(
+            g.ent[parked].site_z, 12345,
+            "the twin's site z is not rewritten"
+        );
         // Case 3: the repaint painter is stamped the same way.
         g.ent[live].f59 = 3;
         g.castle_tick(live, crate::patches::WorldPatches::RETAIL);
         let r = (1..g.ent.len())
-            .find(|&k| g.ent[k].class64 == 10 && g.ent[k].model65 == 42 && g.ent[k].flags & 0x400 == 0)
+            .find(|&k| {
+                g.ent[k].class64 == 10 && g.ent[k].model65 == 42 && g.ent[k].flags & 0x400 == 0
+            })
             .expect("the repaint painter");
-        assert_eq!(g.ent[r].link42, Link42(live as u16), "+42 on the repaint painter");
+        assert_eq!(
+            g.ent[r].link42,
+            Link42(live as u16),
+            "+42 on the repaint painter"
+        );
         // An UNLINKED worker (a pre-field save) still resolves by site.
         g.ent[r].link42 = Link42(0);
-        assert_eq!(g.castle_of_worker(r), Some(parked), "0 = fall back to the scan");
+        assert_eq!(
+            g.castle_of_worker(r),
+            Some(parked),
+            "0 = fall back to the scan"
+        );
     }
 
     /// **A SHAKING CASTLE ABORTS ITS GROUND LEVELER OUTRIGHT.**
@@ -14338,7 +14395,10 @@ mod tests {
         let balls_after = (1..g.ent.len())
             .filter(|&j| g.ent[j].class64 == 10 && g.ent[j].model65 == 39)
             .count();
-        assert_eq!(balls_before, balls_after, "no tally spills a castle under its cap");
+        assert_eq!(
+            balls_before, balls_after,
+            "no tally spills a castle under its cap"
+        );
         assert_eq!(g.ent[c].f140, 5_000);
     }
 
@@ -14890,7 +14950,9 @@ mod tests {
         // Raised row-1 cells under every candidate: a smoothed (x,0)
         // averages above 100 (102 with one raised neighbour, 104 with
         // two), a skipped one stays at exactly 100.
-        for x in [14u8, 15, 16, 17, 21, 22, 23, 24, 25, 26, 29, 30, 31, 32, 223, 224, 225, 226] {
+        for x in [
+            14u8, 15, 16, 17, 21, 22, 23, 24, 25, 26, 29, 30, 31, 32, 223, 224, 225, 226,
+        ] {
             g.t.height[tile(x, 1)] = 118;
         }
         let mut probe = |x: u8| -> u8 {
@@ -14912,7 +14974,10 @@ mod tests {
                 assert_eq!(probe(x), 100, "shim byte {k} skips ({x},0)");
             }
             for &x in smooths {
-                assert!(probe(x) > 100, "({x},0) smooths: its shim pair is plain (pins {k})");
+                assert!(
+                    probe(x) > 100,
+                    "({x},0) smooths: its shim pair is plain (pins {k})"
+                );
             }
         }
     }
@@ -15030,10 +15095,18 @@ mod tests {
             g.mob_awake_pass(&ctx_at(0, 1500, 0));
         }
         assert_eq!(g.ent[c].f58, 0, "drained");
-        assert_eq!(g.ent[c].raw48, Raw48(1000), "the countdown never rewrites +48");
+        assert_eq!(
+            g.ent[c].raw48,
+            Raw48(1000),
+            "the countdown never rewrites +48"
+        );
         g.mob_awake_pass(&ctx_at(0, 1500, 0));
         assert_eq!(g.ent[c].f58, 16);
-        assert_eq!(g.ent[c].raw48, Raw48(500), "re-armed: |1500 − 1000|, sign folded");
+        assert_eq!(
+            g.ent[c].raw48,
+            Raw48(500),
+            "re-armed: |1500 − 1000|, sign folded"
+        );
 
         // The delta is a 16-bit wrapping subtract, as `sub_42410`'s
         // `cwtl` after the word `sub`: a creature at y = 65500 and a
@@ -15149,15 +15222,31 @@ mod tests {
     fn seven_m7_births_stamp_the_old_ordinal_and_leave_the_counter_at_seven() {
         let mut g = mob_gen();
         assert_eq!(g.spawn_count[7], 0, "fixture: a fresh counter");
-        let slots: Vec<usize> = (0..7).map(|k| g.spawn_creature(7, 0x4000 + k * 256, 0x4000, 0).unwrap()).collect();
+        let slots: Vec<usize> = (0..7)
+            .map(|k| g.spawn_creature(7, 0x4000 + k * 256, 0x4000, 0).unwrap())
+            .collect();
         assert_eq!(g.spawn_count[7], 7, "+1 per birth, stored after the read");
         for (k, &i) in slots.iter().enumerate() {
             let e = &g.ent[i];
-            assert_eq!(e.f63, k as u8, "+63 = the counter BEFORE the bump (slot {i})");
+            assert_eq!(
+                e.f63, k as u8,
+                "+63 = the counter BEFORE the bump (slot {i})"
+            );
             let odd = k & 1 != 0;
-            assert_eq!(e.max_life, if odd { 4000 } else { 2000 }, "life keys off the stamp's parity");
-            assert_eq!(e.act_life, e.max_life as i32, "RefillLife after the parity arm");
-            assert_eq!(e.type86, if odd { 85 } else { 199 }, "sprite keys off the same parity");
+            assert_eq!(
+                e.max_life,
+                if odd { 4000 } else { 2000 },
+                "life keys off the stamp's parity"
+            );
+            assert_eq!(
+                e.act_life, e.max_life as i32,
+                "RefillLife after the parity arm"
+            );
+            assert_eq!(
+                e.type86,
+                if odd { 85 } else { 199 },
+                "sprite keys off the same parity"
+            );
             assert_eq!(e.f71, if odd { 1 } else { 2 }, "+71 = 1 (odd) / 2 (even)");
             assert_eq!(e.f26, (i % 100) as i16, "+26 = slot % 100");
             assert_eq!(e.tick70, 43, "born in WANDER (base 42 + 1)");
@@ -16448,8 +16537,7 @@ mod tests {
         // tick (`Gen::ball_tick`'s ch4 intake). See
         // [`crate::mc2::tail::no_mc2_aura_stamp`].
         assert_eq!(
-            g.ent[member].mail[4].1 as usize,
-            aura,
+            g.ent[member].mail[4].1 as usize, aura,
             "the tick-top member takes the pull"
         );
         assert_eq!(
@@ -16466,8 +16554,7 @@ mod tests {
         g.rebuild_ball_chain();
         g.mc2_aura_tick(aura);
         assert_eq!(
-            g.ent[newborn].mail[4].1 as usize,
-            aura,
+            g.ent[newborn].mail[4].1 as usize, aura,
             "the next frame's chain carries it and the magnet takes it"
         );
     }
@@ -16524,13 +16611,11 @@ mod tests {
         // The stamp (`@0x76`/`@0x7A` = `mail[4]`) is the whole write
         // `sub_38D80` makes — see [`no_mc2_aura_stamp`].
         assert_eq!(
-            g.ent[live].mail[4].1 as usize,
-            aura,
+            g.ent[live].mail[4].1 as usize, aura,
             "the live sphere takes the pull"
         );
         assert_eq!(
-            g.ent[doomed].mail[4].1 as usize,
-            aura,
+            g.ent[doomed].mail[4].1 as usize, aura,
             "and so does the one already flagged — the loop never asks"
         );
         assert!(
@@ -17596,7 +17681,10 @@ mod tests {
             // castle ground-leveler (no sacrificable bit). The stack
             // still names the slot.
             g.free_entity(puff_a);
-            assert!(g.mc2_recycle.stack.contains(&(puff_a as u16)), "MC1 never purges on free");
+            assert!(
+                g.mc2_recycle.stack.contains(&(puff_a as u16)),
+                "MC1 never purges on free"
+            );
             // The freed slot is the free stack's top: it is re-popped
             // first and becomes the leveler. Then occupy every other
             // free slot by hand (`new_event` would run the seizure
@@ -17628,7 +17716,10 @@ mod tests {
         // first allocation — and the bare seizure wipes the (10,41)
         // now living there.
         let (cm, seized, leveler, _, stale) = run(false);
-        assert_eq!(seized, leveler, "retail's seizure lands on the re-minted slot");
+        assert_eq!(
+            seized, leveler,
+            "retail's seizure lands on the re-minted slot"
+        );
         assert_ne!(cm, (10, 41), "…and the live leveler is gone (record wiped)");
         assert_eq!(stale, 0);
         // Patched: the leveler's slot no longer carries 0x20400 and is
@@ -17688,13 +17779,19 @@ mod tests {
         let (state, life, h) = run(false);
         assert_eq!(state, 51, "retail never leaves construction");
         assert_eq!(life, -41);
-        assert!(!(8..=20).contains(&h), "floor cell pushed off its goal: {h}");
+        assert!(
+            !(8..=20).contains(&h),
+            "floor cell pushed off its goal: {h}"
+        );
         // Patched: collapse on the first tick after the stamp, with the
         // footprint left where the countdown had it.
         let (state, life, h) = run(true);
         assert_eq!(state, 53, "the crushed site collapses");
         assert_eq!(life, -1);
-        assert!((8..=20).contains(&h), "floor cell untouched by the crush: {h}");
+        assert!(
+            (8..=20).contains(&h),
+            "floor cell untouched by the crush: {h}"
+        );
     }
 
     /// A build table whose rows 1.. are one 3x3 footprint: floor code
@@ -17733,7 +17830,13 @@ mod tests {
     #[test]
     fn an_mc1_dwelling_pad_wraps_in_retail_and_saturates_patched() {
         let run = |patched: bool| {
-            let mut g = Gen::new(flat_land(240), pad48_assets(), 1, ChassisParams::MC1, VerbSet::MC1);
+            let mut g = Gen::new(
+                flat_land(240),
+                pad48_assets(),
+                1,
+                ChassisParams::MC1,
+                VerbSet::MC1,
+            );
             let b = g.new_event().unwrap();
             {
                 let e = &mut g.ent[b];
@@ -17755,8 +17858,16 @@ mod tests {
             assert_eq!(g.ent[b].tick70, 52, "the site finished");
             (g.t.height[tile(64, 64)], g.t.height[tile(63, 64)])
         };
-        assert_eq!(run(false), ((288 & 0xFF) as u8, 240), "retail: the pad-48 cell wraps");
-        assert_eq!(run(true), (255, 240), "patched: it tops out, the floor is untouched");
+        assert_eq!(
+            run(false),
+            ((288 & 0xFF) as u8, 240),
+            "retail: the pad-48 cell wraps"
+        );
+        assert_eq!(
+            run(true),
+            (255, 240),
+            "patched: it tops out, the floor is untouched"
+        );
     }
 
     /// **THE OVERFLOWING BUILDING PAD, MC1 CASTLE**
@@ -17775,7 +17886,13 @@ mod tests {
         // (outside ground, patched) -> (final height plane, the centre
         // cell's lowest value while the painter ran)
         let run = |outside: u8, patched: bool| {
-            let mut g = Gen::new(flat_land(outside), pad48_assets(), 1, ChassisParams::MC1, VerbSet::MC1);
+            let mut g = Gen::new(
+                flat_land(outside),
+                pad48_assets(),
+                1,
+                ChassisParams::MC1,
+                VerbSet::MC1,
+            );
             for y in 63..=65 {
                 for x in 63..=65 {
                     g.t.height[tile(x, y)] = 232;
@@ -17815,19 +17932,36 @@ mod tests {
         };
         // Heals: outside ground 173 (mc1l32-new's leveler target).
         let (retail, low) = run(173, false);
-        assert_eq!(retail[tile(64, 64)], 221, "retail: 280 wraps to 24, the leveler's -59 lands on 221");
-        assert!(low < 64, "retail: the centre dropped into a pit mid-paint ({low})");
+        assert_eq!(
+            retail[tile(64, 64)],
+            221,
+            "retail: 280 wraps to 24, the leveler's -59 lands on 221"
+        );
+        assert!(
+            low < 64,
+            "retail: the centre dropped into a pit mid-paint ({low})"
+        );
         let (patched, low) = run(173, true);
         assert!(low >= 232, "patched: the centre never wraps ({low})");
-        assert_eq!(patched, retail, "patched: the same final heights as retail's healed wrap");
+        assert_eq!(
+            patched, retail,
+            "patched: the same final heights as retail's healed wrap"
+        );
         // Persists: outside ground 232 — the leveler's target clamps to
         // 220 (file 0x40B40), so it lowers the rect by only 12.
         let (retail, _) = run(232, false);
-        assert_eq!(retail[tile(64, 64)], ((280 - 12) & 0xFF) as u8, "retail: the pit stays");
+        assert_eq!(
+            retail[tile(64, 64)],
+            ((280 - 12) & 0xFF) as u8,
+            "retail: the pit stays"
+        );
         let (patched, _) = run(232, true);
         assert_eq!(patched[tile(64, 64)], 255, "patched: the tower tops out");
         let yard = patched[tile(63, 64)];
-        assert!((207..232).contains(&yard), "patched: the courtyard sits lower (cap 207, edge-smoothed): {yard}");
+        assert!(
+            (207..232).contains(&yard),
+            "patched: the courtyard sits lower (cap 207, edge-smoothed): {yard}"
+        );
     }
 
     /// **THE ORPHANED TRANSFORM WAIT** (`mc1_castle_transform_watchdog`,
@@ -17900,8 +18034,16 @@ mod tests {
         // retail's leveler finishes at a slot below its castle's — and
         // the settled tick then reads the banked mail as usual.
         let (one, two, fired) = run(false, true);
-        assert_eq!(one, (4, 0), "the orphaned wait takes the finish exit and settles");
-        assert_eq!(two, (6, 0), "…and the settled tick reads the banked lethal mail");
+        assert_eq!(
+            one,
+            (4, 0),
+            "the orphaned wait takes the finish exit and settles"
+        );
+        assert_eq!(
+            two,
+            (6, 0),
+            "…and the settled tick reads the banked lethal mail"
+        );
         assert_eq!(fired, 1);
     }
 }

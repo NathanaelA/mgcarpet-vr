@@ -722,7 +722,11 @@ impl Gen {
     /// (ladder re-price, pin, level-0 purge) must run BETWEEN this and
     /// [`Self::mc2_castle_destroy_tail`]; see
     /// `features::no_mc2_castle_purge_before_eject`.
-    pub(crate) fn mc2_castle_destroy_head(&mut self, i: usize, patches: crate::patches::WorldPatches) {
+    pub(crate) fn mc2_castle_destroy_head(
+        &mut self,
+        i: usize,
+        patches: crate::patches::WorldPatches,
+    ) {
         self.mc2_castle_downgrade(i, patches);
         self.ent[i].tick70 = 4;
     }
@@ -1061,8 +1065,7 @@ impl Gen {
                 // the value has to travel with it. See
                 // [`Mc2LadderMail`] and
                 // `World::mc2_drain_ladder_sync`'s human arm.
-                let mine = self.mc2_ladder_sync.0.last().map(|&raw| raw & 0x7FFF)
-                    == Some(i as u16);
+                let mine = self.mc2_ladder_sync.0.last().map(|&raw| raw & 0x7FFF) == Some(i as u16);
                 let reg = self.castle_reg[team as usize];
                 if mine
                     && !crate::engine::world::no_mc2_ladder_price_register()
@@ -2070,6 +2073,7 @@ impl Gen {
     ///   * `(3,0|1)` wizard — NO home: `f46` is the DEATH-FALL VELOCITY
     ///     there (@0x2C; the `f2e` lane prints `—`), so the write is
     ///     dropped rather than re-aimed, exactly as before.
+    ///
     /// A non-class-3 parent keeps `f59`, the castle-column home the
     /// painter's own call site has always used.
     ///
@@ -2159,9 +2163,9 @@ impl Gen {
             && self.ent[i].flags & 0x400 == 0
         {
             let own = self.ent[i].id24;
-            let homed = self.ent[1..].iter().any(|c| {
-                c.class64 == 3 && c.model65 == 2 && c.id24 == own && c.flags & 0x400 == 0
-            });
+            let homed = self.ent[1..]
+                .iter()
+                .any(|c| c.class64 == 3 && c.model65 == 2 && c.id24 == own && c.flags & 0x400 == 0);
             if !homed {
                 self.mc2_balloon_to_sphere(i);
                 return;
@@ -2431,10 +2435,7 @@ impl Gen {
     /// read the deviation describes. Rows outside the table that the
     /// corpus has NOT witnessed stay at row 0 — guessing them would be
     /// the invented-clamp mistake in a new costume.
-    fn mc2_painter_ctor_extents(
-        tab: &[crate::engine::features::BuildDef],
-        row: i16,
-    ) -> (u16, u16) {
+    fn mc2_painter_ctor_extents(tab: &[crate::engine::features::BuildDef], row: i16) -> (u16, u16) {
         if row >= 0
             && let Some(d) = tab.get(row as usize)
         {
@@ -2679,8 +2680,10 @@ impl Gen {
                     if c[1] != 0xff && in_frame {
                         let t = tile(gx, gy);
                         delta[fy as usize * w + fx as usize] =
-                            crate::engine::features::building_pad_goal(c[1] as i32 + datum, pad_saturate)
-                                - self.t.height[t] as i32;
+                            crate::engine::features::building_pad_goal(
+                                c[1] as i32 + datum,
+                                pad_saturate,
+                            ) - self.t.height[t] as i32;
                     }
                     if do_paint && c[0] != 0xff {
                         if no_mc2_painter_paint_first() {
@@ -3734,8 +3737,16 @@ mod tests {
     #[test]
     fn the_painter_ctor_seeds_the_recorded_row_1200_residue() {
         let tab = [
-            BuildDef { offset: 0, w: 0, h: 0 },   // row 0 — the EMPTY row
-            BuildDef { offset: 0, w: 8, h: 8 },   // row 1 — a level-1 castle
+            BuildDef {
+                offset: 0,
+                w: 0,
+                h: 0,
+            }, // row 0 — the EMPTY row
+            BuildDef {
+                offset: 0,
+                w: 8,
+                h: 8,
+            }, // row 1 — a level-1 castle
         ];
         // POSITIVE CONTROL: in-range rows still come off the table.
         assert_eq!(Gen::mc2_painter_ctor_extents(&tab, 0), (0, 0));
@@ -3896,19 +3907,22 @@ mod tests {
             e.mail[0] = (100, 777); // lethal, killer = slot 777
         }
         g.link(bal, 100 << 8, 100 << 8, ground);
-        g.mc2_balloon_tick(bal, &crate::mc1::mobs::MobCtx {
-            px: 0,
-            py: 0,
-            pz: 0,
-            pyaw: 0,
-            pmana: 0,
-            pmana_max: 0,
-            pdead: false,
-            pdead_top: false,
-            strict: false,
-            patches: crate::patches::WorldPatches::RETAIL,
-            mc2_turn: 0,
-        });
+        g.mc2_balloon_tick(
+            bal,
+            &crate::mc1::mobs::MobCtx {
+                px: 0,
+                py: 0,
+                pz: 0,
+                pyaw: 0,
+                pmana: 0,
+                pmana_max: 0,
+                pdead: false,
+                pdead_top: false,
+                strict: false,
+                patches: crate::patches::WorldPatches::RETAIL,
+                mc2_turn: 0,
+            },
+        );
         assert!(g.ent[bal].act_life < 0, "the mail is lethal");
         assert_eq!(
             (g.ent[bal].f38, g.ent[bal].f36),
@@ -3977,19 +3991,22 @@ mod tests {
         }
         let z0 = ground + 1024; // 4224: mid v_12..v_10 band
         g.link(bal, 100 << 8, 100 << 8, z0);
-        g.mc2_balloon_tick(bal, &crate::mc1::mobs::MobCtx {
-            px: 0,
-            py: 0,
-            pz: 0,
-            pyaw: 0,
-            pmana: 0,
-            pmana_max: 0,
-            pdead: false,
-            pdead_top: false,
-            strict: false,
-            patches: crate::patches::WorldPatches::RETAIL,
-            mc2_turn: 0,
-        });
+        g.mc2_balloon_tick(
+            bal,
+            &crate::mc1::mobs::MobCtx {
+                px: 0,
+                py: 0,
+                pz: 0,
+                pyaw: 0,
+                pmana: 0,
+                pmana_max: 0,
+                pdead: false,
+                pdead_top: false,
+                strict: false,
+                patches: crate::patches::WorldPatches::RETAIL,
+                mc2_turn: 0,
+            },
+        );
         // 2-branch: z > ground → z += v_14(−16). MC1's alt_clamp
         // would take the 25% band step (−4 → 4220) here.
         assert_eq!(
@@ -4811,11 +4828,7 @@ mod tests {
         // The next tick's top sweeps it.
         w.tick(far, PlayerCommand::default());
         assert_eq!(w.g.ent[b].class64, 0, "freed at the next tick top");
-        assert_eq!(
-            w.g.free.len(),
-            free_before + 1,
-            "…and pushed exactly once"
-        );
+        assert_eq!(w.g.free.len(), free_before + 1, "…and pushed exactly once");
         // THE PATCHED ARM: the same collapse under `mc2_immediate_reap`
         // returns the slot inside its own tick.
         let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
@@ -4893,7 +4906,7 @@ mod tests {
             aggression: 128,
             perception: 128,
             reflexes: 128,
-            life: 254, // WizardMapSettings.Life_0x3612F for colour 1
+            life: 254,       // WizardMapSettings.Life_0x3612F for colour 1
             castle_level: 2, // → born at level 1, rung 1 = 20000
             start,
             start_level: [0; MC2_SPELLS],
@@ -4911,12 +4924,11 @@ mod tests {
         assert_eq!(w.g.ent[castle].f26, 1, "born at level 1 (castle_level - 1)");
         assert_eq!(
             w.g.ent[castle].max_life,
-            20000 * 254 >> 8,
+            (20000 * 254) >> 8,
             "the birth ladder scaled by the OWNER's Life, not the human's 256"
         );
         assert_eq!(
-            w.g.ent[castle].act_life as u32,
-            w.g.ent[castle].max_life,
+            w.g.ent[castle].act_life as u32, w.g.ent[castle].max_life,
             "`sub_60780`'s life = maxLife - debt, and there is no debt"
         );
         // POSITIVE CONTROL: the same spawn with `life = 0` takes
@@ -5328,12 +5340,19 @@ mod tests {
             g.mc2_balloon_tick(b, &retail);
         }
         assert_eq!(g.ent[b].class64, 3, "still a (3,3) record");
-        assert_eq!(g.ent[b].flags & 0x400, 0, "never reap-marked: no castle ran sub_5FF50");
+        assert_eq!(
+            g.ent[b].flags & 0x400,
+            0,
+            "never reap-marked: no castle ran sub_5FF50"
+        );
         assert_eq!(g.ent[b].act_life, -1200, "life untouched");
         // …and it cannot be hurt: sub_60EA0 returns on life < 0.
         g.ent[b].mail[0] = (5000, 424);
         g.mc2_balloon_tick(b, &retail);
-        assert_eq!(g.ent[b].act_life, -1200, "sub_60EA0's `if (life < 0) return`");
+        assert_eq!(
+            g.ent[b].act_life, -1200,
+            "sub_60EA0's `if (life < 0) return`"
+        );
         assert_eq!(g.ent[b].mail[0].1, 424, "the mail is not even consumed");
         // THE PATCHED ARM: sub_5FF50's own dead-member arm, run from
         // the balloon's dispatch because no castle is left to run it.
@@ -5366,7 +5385,11 @@ mod tests {
         }
         g.link(c, 69 << 8, 43 << 8, gz + 512);
         g.mc2_balloon_tick(c, &strict);
-        assert_eq!(g.ent[c].flags & 0x400, 0, "strict_retail overrides the patch");
+        assert_eq!(
+            g.ent[c].flags & 0x400,
+            0,
+            "strict_retail overrides the patch"
+        );
         // …and with a castle of the owner's still standing the patched
         // arm is a NO-OP: the fleet pass is alive and owns the reap,
         // so the sphere pop order stays retail's.

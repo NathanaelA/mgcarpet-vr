@@ -264,4 +264,3 @@ fn enhanced_accelerate_does_not_survive_death_or_respawn() {
         speed(&sim)
     );
 }
-

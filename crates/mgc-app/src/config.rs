@@ -397,8 +397,7 @@ pub const MAX_FOG_TILES: u32 = 90;
 /// The fog-distance menu stops: (tiles, tag). Top stop =
 /// [`MAX_FOG_TILES`]; the old 255 whole-torus stop is retired
 /// (player-ruled 2026-08-08: the fog must never reach the melt band).
-pub const FOG_STOPS: [(u32, &str); 4] =
-    [(20, "faithful"), (50, "mid"), (70, "high"), (90, "max")];
+pub const FOG_STOPS: [(u32, &str); 4] = [(20, "faithful"), (50, "mid"), (70, "high"), (90, "max")];
 
 impl Default for RenderPreference {
     fn default() -> Self {
@@ -1702,14 +1701,20 @@ mod tests {
     fn defaults_carry_the_documented_deviations() {
         // The documented default deviations, pinned.
         let c = Config::default();
-        assert_eq!(c.render.preference.fog_distance, 90, "fog default 90 (Visuals preset)");
+        assert_eq!(
+            c.render.preference.fog_distance, 90,
+            "fog default 90 (Visuals preset)"
+        );
         assert!(
             !c.render.enhancement.hud_transparency.transparent(),
             "hud opaque by default"
         );
         // The controls are the Enhanced preset (player ruling
         // 2026-09-25): mouse up climbs.
-        assert!(!c.controls.preferences.invert_y, "FPS polarity (Enhanced preset)");
+        assert!(
+            !c.controls.preferences.invert_y,
+            "FPS polarity (Enhanced preset)"
+        );
         assert!(!c.controls.preferences.fly_assistant.on());
         assert!(c.audio.subtitles.on());
         assert_eq!(c.sim.options.game_speed, GameSpeed::Normal);

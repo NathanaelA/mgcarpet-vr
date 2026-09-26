@@ -687,10 +687,7 @@ impl World {
             // class-5 ROSTER (no life<0, no 0xB4/0xE8/0xEA member) —
             // see `no_mc2_stagevar_react_roster`.
             if !crate::engine::features::no_mc2_stagevar_react_roster()
-                && !self
-                    .g
-                    .mc2_roster(self.g.ent[ent].model65)
-                    .contains(&h.ent)
+                && !self.g.mc2_roster(self.g.ent[ent].model65).contains(&h.ent)
             {
                 continue;
             }
@@ -1592,9 +1589,7 @@ impl World {
         // this surfaced as a bare `rand` row on a birth tick.
         // `MGC_NO_SV_SHADOW_GRAZE` restores the flattened tail.
         if target.is_none() && !Self::no_sv_shadow_graze() {
-            if self.g.ent[i].f63 & 0xF == 0
-                && self.g.ent[i].flags & super::mobs::F_BLOCKED == 0
-            {
+            if self.g.ent[i].f63 & 0xF == 0 && self.g.ent[i].flags & super::mobs::F_BLOCKED == 0 {
                 let r = self.g.mc2_rand(i);
                 self.g.ent[i].f34 =
                     (self.g.ent[i].f34 as u32).wrapping_add(r % 0x71 + 142) as u16 & 0x7FF;
@@ -2680,14 +2675,12 @@ mod tests {
     #[test]
     fn the_archer_birth_seed_is_cleared_by_both_phase_7_wrapper_seams() {
         let mut w = flat_world();
-        let held = w
-            .g
-            .mc2_spawn_archers(40 << 8, 40 << 8, 100)
-            .expect("held archer");
-        let ctrl = w
-            .g
-            .mc2_spawn_archers(41 << 8, 40 << 8, 100)
-            .expect("controlled archer");
+        let held =
+            w.g.mc2_spawn_archers(40 << 8, 40 << 8, 100)
+                .expect("held archer");
+        let ctrl =
+            w.g.mc2_spawn_archers(41 << 8, 40 << 8, 100)
+                .expect("controlled archer");
         // The rig must not sit on a slot whose `% 100` is 0, or the
         // clear below would be vacuous.
         assert_ne!(held % 100, 0, "rig slot {held} is discriminating");

@@ -3554,7 +3554,10 @@ impl Renderer {
     /// cull is live, else the whole map in all nine wrap copies (the
     /// vertex shader offsets by instance either way).
     fn draw_terrain_grid(&self, pass: &mut wgpu::RenderPass<'_>, full_ib: &wgpu::Buffer) {
-        match (&self.cull_index_buf, self.horizon_cull && self.cull_key.is_some()) {
+        match (
+            &self.cull_index_buf,
+            self.horizon_cull && self.cull_key.is_some(),
+        ) {
             (Some(cib), true) => {
                 pass.set_index_buffer(cib.slice(..), wgpu::IndexFormat::Uint32);
                 for (i, &(start, count)) in self.cull_ranges.iter().enumerate() {
@@ -6520,12 +6523,18 @@ mod tests {
         assert!(!retail_sprite_near_culled([10.0, 3.0, 9.7], &level));
         assert!(!retail_sprite_near_culled([10.0, 30.0, 5.0], &level));
         // Turned a quarter (yaw pi/2 looks down +x).
-        let side = CameraView { yaw: std::f32::consts::FRAC_PI_2, ..level };
+        let side = CameraView {
+            yaw: std::f32::consts::FRAC_PI_2,
+            ..level
+        };
         assert!(!retail_sprite_near_culled([11.0, 3.0, 10.0], &side));
         assert!(retail_sprite_near_culled([10.0, 3.0, 8.0], &side));
         // Steep look-down: what lies beneath is in front of the lens
         // and stays drawn; what is level with the camera is not.
-        let down = CameraView { pitch: -1.4, ..level };
+        let down = CameraView {
+            pitch: -1.4,
+            ..level
+        };
         assert!(!retail_sprite_near_culled([10.0, 1.0, 10.0], &down));
         assert!(!retail_sprite_near_culled([10.0, -40.0, 10.0], &down));
         assert!(retail_sprite_near_culled([10.0, 3.0, 9.0], &down));
@@ -7106,9 +7115,15 @@ mod tests {
         assert_eq!(melt_band(0.0), (95.0, 125.0));
         assert_eq!(melt_band(90.0), (95.0, 125.0));
         let (s20, e20) = melt_band(20.0);
-        assert!((s20 - 30.0).abs() < 1e-4 && (e20 - 36.6667).abs() < 1e-3, "{s20}..{e20}");
+        assert!(
+            (s20 - 30.0).abs() < 1e-4 && (e20 - 36.6667).abs() < 1e-3,
+            "{s20}..{e20}"
+        );
         let (s50, e50) = melt_band(50.0);
-        assert!((s50 - 75.0).abs() < 1e-4 && e50 > 91.0 && e50 < 92.0, "{s50}..{e50}");
+        assert!(
+            (s50 - 75.0).abs() < 1e-4 && e50 > 91.0 && e50 < 92.0,
+            "{s50}..{e50}"
+        );
         let mut prev = (0.0f32, 0.0f32);
         for d in 1..=90 {
             let (s, e) = melt_band(d as f32);
@@ -7138,7 +7153,10 @@ mod tests {
         let mut seen = vec![false; n * n];
         for tri in out.chunks(6) {
             let (x, z) = tile_of(tri[0]);
-            assert!(!seen[(z as usize) * n + x as usize], "tile ({x},{z}) emitted twice");
+            assert!(
+                !seen[(z as usize) * n + x as usize],
+                "tile ({x},{z}) emitted twice"
+            );
             seen[(z as usize) * n + x as usize] = true;
         }
         assert!(seen.iter().all(|&s| s));
@@ -7161,7 +7179,10 @@ mod tests {
         let ranges = horizon_cull_indices(n, (128, 128), 20.0, &mut out);
         let tiles = out.len() / 6;
         let disc = std::f32::consts::PI * 20.5 * 20.5;
-        assert!((tiles as f32) > disc * 0.9 && (tiles as f32) < disc * 1.15, "{tiles} tiles");
+        assert!(
+            (tiles as f32) > disc * 0.9 && (tiles as f32) < disc * 1.15,
+            "{tiles} tiles"
+        );
         for (i, &(_, count)) in ranges.iter().enumerate() {
             assert_eq!(count > 0, i == 4, "copy {i} count {count}");
         }
@@ -7169,7 +7190,10 @@ mod tests {
             let (x, z) = tile_of(tri[0]);
             let px = 128.5f32.clamp(x as f32, x as f32 + 1.0) - 128.5;
             let pz = 128.5f32.clamp(z as f32, z as f32 + 1.0) - 128.5;
-            assert!(px * px + pz * pz <= 20.0 * 20.0 + 1e-3, "tile ({x},{z}) outside the disc");
+            assert!(
+                px * px + pz * pz <= 20.0 * 20.0 + 1e-3,
+                "tile ({x},{z}) outside the disc"
+            );
         }
     }
 
@@ -7193,9 +7217,10 @@ mod tests {
         assert!(wrapped.contains(&(250, 128)));
         // And the same tile is not ALSO in the centre copy.
         let (s4, c4) = ranges[4];
-        assert!(out[s4 as usize..(s4 + c4) as usize]
-            .chunks(6)
-            .all(|t| tile_of(t[0]).0 < 236));
+        assert!(
+            out[s4 as usize..(s4 + c4) as usize]
+                .chunks(6)
+                .all(|t| tile_of(t[0]).0 < 236)
+        );
     }
-
 }

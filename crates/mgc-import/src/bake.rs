@@ -548,7 +548,8 @@ pub fn bake_all_staged(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, S
         parent.join(n)
     };
     let (staging, old) = (sibling(".baking"), sibling(".old"));
-    let io = |what: &str, p: &Path, e: std::io::Error| format!("cannot {what} {}: {e}", p.display());
+    let io =
+        |what: &str, p: &Path, e: std::io::Error| format!("cannot {what} {}: {e}", p.display());
 
     // Recover a swap interrupted between its two renames.
     if !abs.exists() && old.is_dir() {

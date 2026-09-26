@@ -99,14 +99,8 @@ fn settled(level: u32, settle: u32) -> Option<Planes> {
         header.map(|h| h.map_type),
         Some(mgc_formats::MapType::Night) | Some(mgc_formats::MapType::Cave)
     );
-    let mut w = World::new_for_game_env(
-        planes,
-        &pkg.things.things,
-        seed,
-        assets,
-        GameId::Mc2,
-        night,
-    );
+    let mut w =
+        World::new_for_game_env(planes, &pkg.things.things, seed, assets, GameId::Mc2, night);
     w.set_placeholders(true);
     w.set_mc2_night_shade(night);
     w.set_mc2_doom_level(header.is_some_and(|h| h.gfx_type & 2 != 0));

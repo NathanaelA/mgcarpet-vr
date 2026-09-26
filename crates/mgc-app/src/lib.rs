@@ -345,7 +345,10 @@ impl CampaignRun {
             None => None,
         };
         let mc1_ring = record.as_ref().and_then(|(_, r, _)| *r).unwrap_or([0; 24]);
-        let map_stats = record.as_ref().map(|(_, _, m)| m.clone()).unwrap_or_default();
+        let map_stats = record
+            .as_ref()
+            .map(|(_, _, m)| m.clone())
+            .unwrap_or_default();
         let record = record.map(|(b, _, _)| b);
         match id {
             CampaignId::Mc1 | CampaignId::Mc1Hw => {
@@ -922,7 +925,11 @@ fn set_spellbook_table() -> String {
          \x20 MC1 / HW (0..23):\n",
     );
     for i in 0..mgc_sim::mc1::spells::SPELL_COUNT {
-        let _ = writeln!(s, "    {i:2}  {}", mgc_sim::mc1::spells::SpellId(i as u8).name());
+        let _ = writeln!(
+            s,
+            "    {i:2}  {}",
+            mgc_sim::mc1::spells::SpellId(i as u8).name()
+        );
     }
     s.push_str("  MC2 (0..25):\n");
     for (i, n) in ui::MC2_SPELL_NAMES.iter().enumerate() {
@@ -1549,7 +1556,6 @@ fn load_level(
     } else {
         Vec::new()
     };
-
 
     Ok(LoadedLevel {
         view: LevelView {
@@ -2663,7 +2669,10 @@ impl App {
             // The chain hands back to `enter_main_menu`, which starts
             // it properly.
             None if app.screen == Screen::Launcher => {
-                app.launcher = Some(launcher_screen::Launcher::new(&get_baked_directory(), &app.cfg));
+                app.launcher = Some(launcher_screen::Launcher::new(
+                    &get_baked_directory(),
+                    &app.cfg,
+                ));
             }
             None if !app.boot_intro => app.frontend_music(),
             None => {}
@@ -3690,10 +3699,7 @@ impl App {
                         "off (triggers fire)"
                     }
                 );
-                (
-                    "gameplay.cheat.inert",
-                    format!("Inert mode {}", onoff(v)),
-                )
+                ("gameplay.cheat.inert", format!("Inert mode {}", onoff(v)))
             }
             // N = weightless (the last key of the cheat row).
             KeyCode::KeyN => {
@@ -5934,7 +5940,10 @@ impl App {
     /// Open the performance screen over the captured card; with no
     /// card or no baked PPERF, go straight on.
     fn enter_stats_screen(&mut self, then: StatsThen, event_loop: &ActiveEventLoop) {
-        let card = self.stats_card.take().filter(|_| self.cfg.render.preference.stats_screen);
+        let card = self
+            .stats_card
+            .take()
+            .filter(|_| self.cfg.render.preference.stats_screen);
         let screen = card.and_then(|c| {
             stats_screen::Mc1Stats::load(&get_baked_directory().join("assets/mc1-ui"), c)
                 .map_err(|e| eprintln!("note: performance screen unavailable: {e}"))
@@ -9602,9 +9611,9 @@ fn parse_args() -> Result<Args, String> {
             "--plausible-spellbook" => plausible_spellbook = Some(true),
             "--no-plausible-spellbook" => plausible_spellbook = Some(false),
             "--set-spellbook" => {
-                let spec = it
-                    .next()
-                    .ok_or_else(|| format!("--set-spellbook needs a value\n{}", set_spellbook_table()))?;
+                let spec = it.next().ok_or_else(|| {
+                    format!("--set-spellbook needs a value\n{}", set_spellbook_table())
+                })?;
                 set_spellbook = Some(parse_set_spellbook(&spec)?);
             }
             "--wheel-spells" => wheel_spells = Some(true),
@@ -10498,7 +10507,10 @@ fn mc1_campaign_carry(run: Option<&CampaignRun>) -> Vec<u8> {
     let Some(save) = run.and_then(|r| r.save.mc1()) else {
         return Vec::new();
     };
-    (0..24).filter(|&s| save.blob24[s] != 0).map(|s| s as u8).collect()
+    (0..24)
+        .filter(|&s| save.blob24[s] != 0)
+        .map(|s| s as u8)
+        .collect()
 }
 
 /// Install the campaign's cross-level carry into a fresh world.
@@ -10525,7 +10537,11 @@ fn apply_campaign_book(w: &mut mgc_sim::engine::world::World, run: &CampaignRun)
             // a fresh campaign: its hand fields carry no choice (a
             // slot saved before the first level may hold a zeroed
             // 0/0 = Fireball twice), so the level-start pair stands.
-            let (left, right) = if grants.is_empty() { (-1, -1) } else { (book.left, book.right) };
+            let (left, right) = if grants.is_empty() {
+                (-1, -1)
+            } else {
+                (book.left, book.right)
+            };
             w.mc2_install_selector_carry(&book.sel, &book.ring, left, right);
         }
         _ => {
@@ -11449,9 +11465,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
 
     // First-run / stale-epoch auto-bake: regenerate the baked tree
     // from the original game data before touching it.
-    if !launcher
-        && let Err(e) = bakecheck::ensure_baked(&level_path, cfg.gamedata.as_deref())
-    {
+    if !launcher && let Err(e) = bakecheck::ensure_baked(&level_path, cfg.gamedata.as_deref()) {
         eprintln!("error: {e}");
         return std::process::ExitCode::FAILURE;
     }

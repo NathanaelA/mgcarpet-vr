@@ -244,7 +244,11 @@ impl super::features::Gen {
                 return Some(Killer::Player);
             }
             let s = self.rival_ents.iter().position(|&e| e != 0 && e == t)?;
-            Some(if s == 0 { Killer::Player } else { Killer::Rival(s as u8) })
+            Some(if s == 0 {
+                Killer::Player
+            } else {
+                Killer::Rival(s as u8)
+            })
         };
         let mut t = tag;
         for _ in 0..8 {
@@ -254,7 +258,9 @@ impl super::features::Gen {
             if let Some(k) = wizard(t) {
                 return k;
             }
-            let Some(e) = self.ent.get(t as usize) else { break };
+            let Some(e) = self.ent.get(t as usize) else {
+                break;
+            };
             if e.id24 == t {
                 break;
             }
@@ -481,7 +487,10 @@ pub fn split10(parts: &[u32]) -> Vec<u32> {
     if d == 0 {
         return vec![0; parts.len()];
     }
-    let mut v: Vec<u32> = parts.iter().map(|&p| (1000 * p as u64 / d) as u32).collect();
+    let mut v: Vec<u32> = parts
+        .iter()
+        .map(|&p| (1000 * p as u64 / d) as u32)
+        .collect();
     let rem = |i: usize| 1000 * parts[i] as u64 % d;
     let short = 1000 - v.iter().sum::<u32>() as usize;
     let mut order: Vec<usize> = (0..parts.len()).collect();
@@ -491,7 +500,9 @@ pub fn split10(parts: &[u32]) -> Vec<u32> {
     }
     for i in 0..parts.len() {
         if parts[i] > 0 && v[i] == 0 {
-            let big = (0..v.len()).max_by_key(|&j| (v[j], std::cmp::Reverse(j))).unwrap();
+            let big = (0..v.len())
+                .max_by_key(|&j| (v[j], std::cmp::Reverse(j)))
+                .unwrap();
             v[big] -= 1;
             v[i] = 1;
         }
@@ -539,7 +550,11 @@ mod tests {
         assert_ne!(l.offer_dword(0), 0);
         assert_ne!(l.offer_dword(1), 0);
         assert_eq!(l.offer_dword(2), 0, "no jar of model 8..11");
-        assert_eq!(l.offer_byte(1), 0, "the per-model reading: model 1 was not offered");
+        assert_eq!(
+            l.offer_byte(1),
+            0,
+            "the per-model reading: model 1 was not offered"
+        );
         assert_eq!(l.offer_byte(5), 1);
     }
 
@@ -560,7 +575,12 @@ mod tests {
     fn split10_sums_to_exactly_one_hundred() {
         assert_eq!(split10(&[162, 68]), vec![704, 296]);
         assert_eq!(split10(&[1, 1, 1]), vec![334, 333, 333]);
-        for parts in [[7u32, 13, 29, 51], [1, 2998, 0, 1], [3, 3, 3, 0], [123, 456, 789, 1011]] {
+        for parts in [
+            [7u32, 13, 29, 51],
+            [1, 2998, 0, 1],
+            [3, 3, 3, 0],
+            [123, 456, 789, 1011],
+        ] {
             assert_eq!(split10(&parts).iter().sum::<u32>(), 1000, "{parts:?}");
         }
         // A near miss: the half-tenth tie would crown the big part
@@ -582,7 +602,10 @@ mod tests {
         };
         assert_eq!(s.mana_pct10(), 1000);
         assert_eq!(s.mana_split10(), [750, 250, 0]);
-        let s = LevelStats { mana_owned: 11_999, ..s };
+        let s = LevelStats {
+            mana_owned: 11_999,
+            ..s
+        };
         assert_eq!(s.mana_pct10(), 999);
     }
 
@@ -602,8 +625,10 @@ mod tests {
 
     #[test]
     fn ledger_round_trips_through_the_snapshot_codec() {
-        let mut l = StatsLedger::default();
-        l.census = 17;
+        let mut l = StatsLedger {
+            census: 17,
+            ..Default::default()
+        };
         l.mc1_offer(4);
         l.bill(Killer::Rival(3));
         l.bill(Killer::Environment);

@@ -591,189 +591,193 @@ impl Gen {
                 // not his seat until a pooled relink re-heads it.
                 let mut headed = false;
                 'cell: loop {
-                let mut resume = 0usize;
-                let mut seat_matched = false;
-                while j != 0 {
-                    if human_seat
-                        && seat_block != j
-                        && self.player_chain.next as usize == j
-                        && self.player_chain.cell == tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8)
-                    {
-                        resume = j;
-                        seat_matched = true;
-                        break;
-                    }
-                    seat_block = usize::MAX;
-                    let next = self.ent[j].next20 as usize;
-                    // ⭐⭐⭐ AN INVENTED GUARD: THE SHOVE LOOP HAS NO
-                    // REAP TEST. `sub_39B60`'s chain walk is
-                    // `for (i = mapEntityIndex[cell]; ...; i = next)
-                    //  { if (sub_39FA0(flood, Entities[i])) ... }` and
-                    // NOTHING else — `NETHERW.EXE` 0x5E40A-0x5E419 is
-                    // `push %ebx / mov 0x14(%ebp),%edx / push %edx /
-                    //  call 0x5e7a0 / test %al,%al / je LABEL_25`, with
-                    // no flag load in between; and `sub_39FA0` itself
-                    // (0x5E7A0-0x5E88A, a jump table over `class - 1`,
-                    // disassembled in full) tests ONLY
-                    // `testb $0x21,0xc(%edx)` — byte[0] bits 0 and 5,
-                    // the tossed and invisible latches. There is no
-                    // `testb $0x4,0xd(...)` anywhere in either, i.e. no
-                    // `flags & 0x400` reap term. A record reap-flagged
-                    // EARLIER IN THE SAME POOL WALK is still on the map
-                    // chain (`sub_57F20` unlinks it on the NEXT frame's
-                    // pre-walk), so retail shoves the fresh corpse and
-                    // the port did not.
-                    // WITNESS mc2l6-rsg t=26,325: creature slot 99 is
-                    // reap-flagged by its own tick (slot 99 < flood 496
-                    // in the ascending walk) and retail's flood then
-                    // pushes it (11684,9866) -> (11656,9984), snaps it
-                    // to the terrain at 119 — and on the SECOND visit
-                    // of the same 26x26 sweep the now-low `v5` = 82
-                    // takes the close band, stamping `byte[2] bit4`
-                    // (the grab) and drawing the 1-in-7 roll
-                    // (`rand 10536 -> 42759`). The port's slot 99 sat
-                    // still with no grab and no draw.
-                    if (self.ent[j].flags & 0x400 == 0 || flood_no_reap_gate_law()) && j != i {
-                        let d = dist2d(ex, ey, self.ent[j].x as i32, self.ent[j].y as i32);
-                        let v5 = self.ent[j].z as i32 - refz;
-                        if self.flood_shovable(i, j) && d < 3328 && v5 < 4096 {
-                            if d <= 32 || v5 <= 96 {
-                                self.flood_shove_hit(i, j);
-                            } else {
-                                let mut v6 = (((3328 - d) << 8) / 3328) << 7 >> 8;
-                                v6 = v6.clamp(4, 128).min(d);
-                                let (vx, vy, vz) = {
-                                    let e = &self.ent[j];
-                                    (e.x, e.y, e.z)
-                                };
-                                let yaw = Self::angle_between(vx, vy, ex, ey);
-                                let mut pos = (vx, vy, vz);
-                                Self::polar_step(&mut pos, yaw, 0, v6 as i16);
-                                // ⭐⭐⭐ THE VERTICAL LEG IS A THREE-WAY
-                                // SPLIT, AND THE PORT CARRIED ONE ARM.
-                                // Retail takes the terrain altitude at
-                                // the STEPPED point FIRST and only then
-                                // asks who the victim is (EF:29092-108;
-                                // `NETHERW.EXE` 0x5E4E7-0x5E58C):
-                                //   0x5e4e7 call 0x35440        ; getTerrainAlt(predicted)
-                                //   0x5e4ec movswl %ax,%ecx     ; v8 = ground
-                                //   0x5e4ef mov 0x3f(%ebx),%ah  ; victim class
-                                //   0x5e4f5 cmp $0x3,%ah   ; jne 0x5e53c
-                                //   0x5e4fa cmpb $0x0,0x40(%ebx) ; jne 0x5e53c
-                                //   <arm 1: WIZARD — pull, then clamp>
-                                //   0x5e53c mov 0xa0(%ebx),%eax  ; the victim's Type_160 row
-                                //   0x5e542 movswl 0xe(%eax),%eax ; word_160_0xe_14, SIGNED
-                                //   0x5e546 cmp $0xffffffc0,%eax  ; -64
-                                //   0x5e549 jl  0x5e585           ; -> LABEL_40, NO PULL
-                                //   <arm 3: pull, then clamp>
-                                //   0x5e581 cmp %ecx,%eax ; jge 0x5e58c
-                                //   0x5e585 mov %cx,0x1b39c       ; predicted.z = ground
-                                // So a victim that is NOT a class-3
-                                // model-0 wizard and whose behaviour row
-                                // sinks faster than -64 per tick is
-                                // PLANTED ON THE TERRAIN OUTRIGHT — the
-                                // smooth pull is for flyers (and the
-                                // wizard body), never for a walker. The
-                                // difference is not cosmetic: the pull
-                                // arm can only ever LOWER z toward the
-                                // clamp, so a walker dragged UPHILL kept
-                                // the pre-step altitude and hung above
-                                // the slope. 40 of the 157 shipped rows
-                                // are below -64 (every -128/-256/-512
-                                // walker).
-                                // ⚠ `word_160_0xe_14` DOES have a
-                                // ported home and always did — it is
-                                // `Mc2BehaviorRow::v_14`, the z step
-                                // `Gen::mc2_alt_core` uses on every
-                                // creature move. The module header and
-                                // docs/DEVIATIONS.md both claimed
-                                // otherwise; both corrected.
-                                let ground = self.ground_z(pos.0, pos.1);
-                                let wizard = {
-                                    let e = &self.ent[j];
-                                    e.class64 == 3 && e.model65 == 0
-                                };
-                                let deep_sink = BEHAVIOR[self.ent[j].row156 as usize].v_14 < -64;
-                                if !wizard && deep_sink && flood_ground_snap_law() {
-                                    pos.2 = ground as i16;
+                    let mut resume = 0usize;
+                    let mut seat_matched = false;
+                    while j != 0 {
+                        if human_seat
+                            && seat_block != j
+                            && self.player_chain.next as usize == j
+                            && self.player_chain.cell == tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8)
+                        {
+                            resume = j;
+                            seat_matched = true;
+                            break;
+                        }
+                        seat_block = usize::MAX;
+                        let next = self.ent[j].next20 as usize;
+                        // ⭐⭐⭐ AN INVENTED GUARD: THE SHOVE LOOP HAS NO
+                        // REAP TEST. `sub_39B60`'s chain walk is
+                        // `for (i = mapEntityIndex[cell]; ...; i = next)
+                        //  { if (sub_39FA0(flood, Entities[i])) ... }` and
+                        // NOTHING else — `NETHERW.EXE` 0x5E40A-0x5E419 is
+                        // `push %ebx / mov 0x14(%ebp),%edx / push %edx /
+                        //  call 0x5e7a0 / test %al,%al / je LABEL_25`, with
+                        // no flag load in between; and `sub_39FA0` itself
+                        // (0x5E7A0-0x5E88A, a jump table over `class - 1`,
+                        // disassembled in full) tests ONLY
+                        // `testb $0x21,0xc(%edx)` — byte[0] bits 0 and 5,
+                        // the tossed and invisible latches. There is no
+                        // `testb $0x4,0xd(...)` anywhere in either, i.e. no
+                        // `flags & 0x400` reap term. A record reap-flagged
+                        // EARLIER IN THE SAME POOL WALK is still on the map
+                        // chain (`sub_57F20` unlinks it on the NEXT frame's
+                        // pre-walk), so retail shoves the fresh corpse and
+                        // the port did not.
+                        // WITNESS mc2l6-rsg t=26,325: creature slot 99 is
+                        // reap-flagged by its own tick (slot 99 < flood 496
+                        // in the ascending walk) and retail's flood then
+                        // pushes it (11684,9866) -> (11656,9984), snaps it
+                        // to the terrain at 119 — and on the SECOND visit
+                        // of the same 26x26 sweep the now-low `v5` = 82
+                        // takes the close band, stamping `byte[2] bit4`
+                        // (the grab) and drawing the 1-in-7 roll
+                        // (`rand 10536 -> 42759`). The port's slot 99 sat
+                        // still with no grab and no draw.
+                        if (self.ent[j].flags & 0x400 == 0 || flood_no_reap_gate_law()) && j != i {
+                            let d = dist2d(ex, ey, self.ent[j].x as i32, self.ent[j].y as i32);
+                            let v5 = self.ent[j].z as i32 - refz;
+                            if self.flood_shovable(i, j) && d < 3328 && v5 < 4096 {
+                                if d <= 32 || v5 <= 96 {
+                                    self.flood_shove_hit(i, j);
                                 } else {
-                                    let pull = (48 * (((4096 - v5) << 8) >> 12)) >> 8;
-                                    pos.2 = (pos.2 as i32 - pull) as i16;
-                                    if (pos.2 as i32) < ground {
+                                    let mut v6 = (((3328 - d) << 8) / 3328) << 7 >> 8;
+                                    v6 = v6.clamp(4, 128).min(d);
+                                    let (vx, vy, vz) = {
+                                        let e = &self.ent[j];
+                                        (e.x, e.y, e.z)
+                                    };
+                                    let yaw = Self::angle_between(vx, vy, ex, ey);
+                                    let mut pos = (vx, vy, vz);
+                                    Self::polar_step(&mut pos, yaw, 0, v6 as i16);
+                                    // ⭐⭐⭐ THE VERTICAL LEG IS A THREE-WAY
+                                    // SPLIT, AND THE PORT CARRIED ONE ARM.
+                                    // Retail takes the terrain altitude at
+                                    // the STEPPED point FIRST and only then
+                                    // asks who the victim is (EF:29092-108;
+                                    // `NETHERW.EXE` 0x5E4E7-0x5E58C):
+                                    //   0x5e4e7 call 0x35440        ; getTerrainAlt(predicted)
+                                    //   0x5e4ec movswl %ax,%ecx     ; v8 = ground
+                                    //   0x5e4ef mov 0x3f(%ebx),%ah  ; victim class
+                                    //   0x5e4f5 cmp $0x3,%ah   ; jne 0x5e53c
+                                    //   0x5e4fa cmpb $0x0,0x40(%ebx) ; jne 0x5e53c
+                                    //   <arm 1: WIZARD — pull, then clamp>
+                                    //   0x5e53c mov 0xa0(%ebx),%eax  ; the victim's Type_160 row
+                                    //   0x5e542 movswl 0xe(%eax),%eax ; word_160_0xe_14, SIGNED
+                                    //   0x5e546 cmp $0xffffffc0,%eax  ; -64
+                                    //   0x5e549 jl  0x5e585           ; -> LABEL_40, NO PULL
+                                    //   <arm 3: pull, then clamp>
+                                    //   0x5e581 cmp %ecx,%eax ; jge 0x5e58c
+                                    //   0x5e585 mov %cx,0x1b39c       ; predicted.z = ground
+                                    // So a victim that is NOT a class-3
+                                    // model-0 wizard and whose behaviour row
+                                    // sinks faster than -64 per tick is
+                                    // PLANTED ON THE TERRAIN OUTRIGHT — the
+                                    // smooth pull is for flyers (and the
+                                    // wizard body), never for a walker. The
+                                    // difference is not cosmetic: the pull
+                                    // arm can only ever LOWER z toward the
+                                    // clamp, so a walker dragged UPHILL kept
+                                    // the pre-step altitude and hung above
+                                    // the slope. 40 of the 157 shipped rows
+                                    // are below -64 (every -128/-256/-512
+                                    // walker).
+                                    // ⚠ `word_160_0xe_14` DOES have a
+                                    // ported home and always did — it is
+                                    // `Mc2BehaviorRow::v_14`, the z step
+                                    // `Gen::mc2_alt_core` uses on every
+                                    // creature move. The module header and
+                                    // docs/DEVIATIONS.md both claimed
+                                    // otherwise; both corrected.
+                                    let ground = self.ground_z(pos.0, pos.1);
+                                    let wizard = {
+                                        let e = &self.ent[j];
+                                        e.class64 == 3 && e.model65 == 0
+                                    };
+                                    let deep_sink =
+                                        BEHAVIOR[self.ent[j].row156 as usize].v_14 < -64;
+                                    if !wizard && deep_sink && flood_ground_snap_law() {
                                         pos.2 = ground as i16;
+                                    } else {
+                                        let pull = (48 * (((4096 - v5) << 8) >> 12)) >> 8;
+                                        pos.2 = (pos.2 as i32 - pull) as i16;
+                                        if (pos.2 as i32) < ground {
+                                            pos.2 = ground as i16;
+                                        }
+                                    }
+                                    let before = tile(
+                                        (self.ent[j].x >> 8) as u8,
+                                        (self.ent[j].y >> 8) as u8,
+                                    );
+                                    self.move_relink(j, pos.0, pos.1, pos.2);
+                                    let after = tile((pos.0 >> 8) as u8, (pos.1 >> 8) as u8);
+                                    if before != after && flood_chain_rewalk_law() {
+                                        cur = after;
+                                        headed = false;
                                     }
                                 }
-                                let before = tile((self.ent[j].x >> 8) as u8, (self.ent[j].y >> 8) as u8);
-                                self.move_relink(j, pos.0, pos.1, pos.2);
-                                let after = tile((pos.0 >> 8) as u8, (pos.1 >> 8) as u8);
-                                if before != after && flood_chain_rewalk_law() {
-                                    cur = after;
-                                    headed = false;
+                            }
+                            // The action-74 grab release (LABEL_25) runs
+                            // for EVERY entity in the disc.
+                            if action74 && self.ent[j].flags & F_QUAKE_GRAB != 0 {
+                                self.ent[j].flags &= !(F_TOSSED | F_QUAKE_GRAB);
+                                if !no_quake_release_bit0() {
+                                    self.ent[j].flags &= !1;
                                 }
                             }
                         }
-                        // The action-74 grab release (LABEL_25) runs
-                        // for EVERY entity in the disc.
-                        if action74 && self.ent[j].flags & F_QUAKE_GRAB != 0 {
-                            self.ent[j].flags &= !(F_TOSSED | F_QUAKE_GRAB);
-                            if !no_quake_release_bit0() {
-                                self.ent[j].flags &= !1;
-                            }
+                        // ⭐⭐⭐ THE CURSOR IS RE-READ OFF THE MOVED VICTIM
+                        // (`NETHERW.EXE` 0x5e5e6, disassembled at
+                        // [`flood_chain_rewalk_law`]). A shove that crosses
+                        // a tile edge re-heads the victim in the DESTINATION
+                        // cell, so retail's walk carries on down THAT chain.
+                        j = if flood_chain_rewalk_law() {
+                            self.ent[j].next20 as usize
+                        } else {
+                            next
+                        };
+                        // Retail has no bound here; ours only exists so a
+                        // pathological cycle cannot hang the harness. It
+                        // has never fired.
+                        steps += 1;
+                        if steps > 1_000_000 {
+                            break;
                         }
                     }
-                    // ⭐⭐⭐ THE CURSOR IS RE-READ OFF THE MOVED VICTIM
-                    // (`NETHERW.EXE` 0x5e5e6, disassembled at
-                    // [`flood_chain_rewalk_law`]). A shove that crosses
-                    // a tile edge re-heads the victim in the DESTINATION
-                    // cell, so retail's walk carries on down THAT chain.
-                    j = if flood_chain_rewalk_law() {
-                        self.ent[j].next20 as usize
-                    } else {
-                        next
-                    };
-                    // Retail has no bound here; ours only exists so a
-                    // pathological cycle cannot hang the harness. It
-                    // has never fired.
-                    steps += 1;
-                    if steps > 1_000_000 {
+                    if !human_seat {
                         break;
                     }
-                }
-                if !human_seat {
-                    break;
-                }
-                // ── THE HUMAN'S VISIT ── at his seat (`resume`), or as
-                // the TAIL of the chain the cursor is on when his seat
-                // is that tail (`next == 0`) or is not a live seat.
-                let htile = tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8);
-                let seat_live = self.player_chain.cell == htile;
-                if resume != 0
-                    || (!seat_matched
-                        && !headed
-                        && cur == htile
-                        && (!seat_live || self.player_chain.next == 0))
-                {
-                    self.flood_shove_human(i, &mut hp, &mut hmoved);
-                    // `CopyEntityPosition_57CF0` (0x5e592) relinks
-                    // HIM: a new tile makes him its chain head, and the
-                    // cursor (0x5e5e6) carries on down THAT chain from
-                    // the head he displaced.
-                    self.player_relink(hp.0, hp.1);
-                    let ntile = tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8);
-                    if ntile != htile && flood_chain_rewalk_law() {
-                        cur = ntile;
-                        headed = true;
-                        j = self.map_entity[ntile] as usize;
-                        seat_block = j;
+                    // ── THE HUMAN'S VISIT ── at his seat (`resume`), or as
+                    // the TAIL of the chain the cursor is on when his seat
+                    // is that tail (`next == 0`) or is not a live seat.
+                    let htile = tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8);
+                    let seat_live = self.player_chain.cell == htile;
+                    if resume != 0
+                        || (!seat_matched
+                            && !headed
+                            && cur == htile
+                            && (!seat_live || self.player_chain.next == 0))
+                    {
+                        self.flood_shove_human(i, &mut hp, &mut hmoved);
+                        // `CopyEntityPosition_57CF0` (0x5e592) relinks
+                        // HIM: a new tile makes him its chain head, and the
+                        // cursor (0x5e5e6) carries on down THAT chain from
+                        // the head he displaced.
+                        self.player_relink(hp.0, hp.1);
+                        let ntile = tile((hp.0 >> 8) as u8, (hp.1 >> 8) as u8);
+                        if ntile != htile && flood_chain_rewalk_law() {
+                            cur = ntile;
+                            headed = true;
+                            j = self.map_entity[ntile] as usize;
+                            seat_block = j;
+                            continue 'cell;
+                        }
+                    }
+                    if resume != 0 {
+                        seat_block = resume;
+                        j = resume;
                         continue 'cell;
                     }
-                }
-                if resume != 0 {
-                    seat_block = resume;
-                    j = resume;
-                    continue 'cell;
-                }
-                break;
+                    break;
                 }
             }
         }
@@ -880,7 +884,11 @@ impl Gen {
         let ground = self.ground_z(pos.0, pos.1);
         let pull = (48 * (((4096 - pv5) << 8) >> 12)) >> 8;
         let z = (pos.2 as i32 - pull) as i16;
-        pos.2 = if (z as i32) < ground { ground as i16 } else { z };
+        pos.2 = if (z as i32) < ground {
+            ground as i16
+        } else {
+            z
+        };
         self.mc2_pred_axis = crate::engine::features::Mc2PredAxis(pos);
         *hp = pos;
         *moved = true;
@@ -1414,8 +1422,7 @@ mod tests {
         }
         g.flood_shove_hit(q, v);
         assert_eq!(
-            g.ent[v].mail[0].0,
-            10001,
+            g.ent[v].mail[0].0, 10001,
             "20002 + (life + 1) = 20002 + (-10001); retail has no floor"
         );
         assert_eq!(g.ent[v].mail[0].1, 7, "and the source is re-stamped");
@@ -1569,15 +1576,28 @@ mod tests {
             let v5 = p.2 as i32 - 110;
             let v6 = ((((3328 - d) << 8) / 3328) << 7 >> 8).clamp(4, 128).min(d);
             let mut n = p;
-            Gen::polar_step(&mut n, Gen::angle_between(p.0, p.1, 28800, 12160), 0, v6 as i16);
+            Gen::polar_step(
+                &mut n,
+                Gen::angle_between(p.0, p.1, 28800, 12160),
+                0,
+                v6 as i16,
+            );
             let z = n.2 as i32 - ((48 * (((4096 - v5) << 8) >> 12)) >> 8);
             n.2 = z.max(g.ground_z(n.0, n.1)) as i16;
             n
         };
         let once = shove(&g, (px, py, pz));
-        assert_eq!((once.1 >> 8, py >> 8), (46, 45), "rig: shove 1 crosses into row 46");
+        assert_eq!(
+            (once.1 >> 8, py >> 8),
+            (46, 45),
+            "rig: shove 1 crosses into row 46"
+        );
         let twice = shove(&g, once);
-        assert_eq!(twice.1 >> 8, 46, "rig: shove 2 stays in row 46 (no third visit)");
+        assert_eq!(
+            twice.1 >> 8,
+            46,
+            "rig: shove 2 stays in row 46 (no third visit)"
+        );
         g.flood_shove(q, &ctx);
         let f = g.player_flood_pull;
         assert!(f.armed);
@@ -1588,7 +1608,10 @@ mod tests {
         );
         assert_ne!(got, once, "POSITIVE CONTROL: not the single pre-law shove");
         assert_eq!(got, twice, "two shoves, the second from the moved pose");
-        assert_eq!(g.player_chain.cell, tile((twice.0 >> 8) as u8, (twice.1 >> 8) as u8));
+        assert_eq!(
+            g.player_chain.cell,
+            tile((twice.0 >> 8) as u8, (twice.1 >> 8) as u8)
+        );
     }
 
     /// ⭐⭐ `sub_3A200`'s CLASS-3 MODEL-0 ARM IS TWO PITCH STORES, NOT
@@ -1652,10 +1675,21 @@ mod tests {
         let w = victim(&mut g, 3, 0);
         let c = victim(&mut g, 5, 1);
         g.flood_shove(q, &flood_ctx(0x8000, 0x8000, 5000));
-        assert_ne!(g.ent[w].flags & F_TOSSED, 0, "rig: the wizard took sub_3A200");
-        assert_ne!(g.ent[c].flags & F_TOSSED, 0, "rig: the creature took sub_3A200");
+        assert_ne!(
+            g.ent[w].flags & F_TOSSED,
+            0,
+            "rig: the wizard took sub_3A200"
+        );
+        assert_ne!(
+            g.ent[c].flags & F_TOSSED,
+            0,
+            "rig: the creature took sub_3A200"
+        );
         assert_eq!(g.ent[w].f32, 512, "the wizard's record pitch is stamped");
-        assert_eq!(g.ent[c].f32, 1234, "POSITIVE CONTROL: a creature keeps its pitch");
+        assert_eq!(
+            g.ent[c].f32, 1234,
+            "POSITIVE CONTROL: a creature keeps its pitch"
+        );
     }
 
     /// ⭐⭐⭐ THE SHOVE FILTER MUST READ **BOTH** PORT HOMES OF RETAIL

@@ -2073,7 +2073,11 @@ impl Gen {
         // dart's non-wizard fork (`sub_662E0` EF:63531-36) passes NO
         // struck record and mints nothing, yet still counts the shot.
         if id == PLAYER_TARGET && act != 1 {
-            let struck = if (fc, fm) == (10, 26) && spawned.is_none() { 0 } else { victim };
+            let struck = if (fc, fm) == (10, 26) && spawned.is_none() {
+                0
+            } else {
+                victim
+            };
             self.mc2_shot_stats(self.ent[i].model65, struck, lock);
         }
         if let Some(s) = spawned {
@@ -5182,7 +5186,10 @@ mod debuff_knock_tests {
             g.mc2_proj_impact(ball, 0, &ctx(), None);
 
             assert_eq!(g.free.len(), free_before, "(10,{fm}): nothing allocated");
-            assert_eq!(g.exhausted, exhausted_before, "(10,{fm}): a depth refusal, not a dry pop");
+            assert_eq!(
+                g.exhausted, exhausted_before,
+                "(10,{fm}): a depth refusal, not a dry pop"
+            );
             assert_eq!(
                 g.ent[ball].flags & 0x400,
                 0,
@@ -5379,14 +5386,21 @@ mod debuff_knock_tests {
                 e.x = 40 * 256;
                 e.y = 40 * 256;
                 e.z = 400;
-                assert!(g.mc2_mine_swallow(b, mine as u16), "the fireball is swallowed");
+                assert!(
+                    g.mc2_mine_swallow(b, mine as u16),
+                    "the fireball is swallowed"
+                );
             }
             g.mc2_mine_tick(mine, &ctx());
             g.ent[mine].flags & (1 << 23)
         };
         assert_eq!(run(PLAYER_TARGET, false), 0, "an uncharged mine is opaque");
         assert_ne!(run(PLAYER_TARGET, true), 0, "the charged mine is ghosted");
-        assert_eq!(run(RIVAL, true), 0, "a rival's charged mine takes no ghost bit");
+        assert_eq!(
+            run(RIVAL, true),
+            0,
+            "a rival's charged mine takes no ghost bit"
+        );
     }
 
     /// ⭐⭐⭐ THE ACTION-12 BEACON BOUNTY — THE RETAIL CONSUMER OF THE
@@ -5613,7 +5627,11 @@ mod debuff_knock_tests {
 
         let b = fire(&mut g, 0, 0, (10, 0), ball as u16);
         g.mc2_proj_impact(b, ball as u16, &ctx(), None);
-        assert_eq!(tally(&g), (1, 1), "an aimed fireball on its target is a hit");
+        assert_eq!(
+            tally(&g),
+            (1, 1),
+            "an aimed fireball on its target is a hit"
+        );
 
         let b = fire(&mut g, 0, 0, (10, 0), 0);
         g.mc2_proj_impact(b, ball as u16, &ctx(), None);
@@ -5631,7 +5649,11 @@ mod debuff_knock_tests {
 
         let b = fire(&mut g, 7, 13, (10, 26), ball as u16);
         g.mc2_proj_impact(b, ball as u16, &ctx(), None);
-        assert_eq!(tally(&g), (4, 1), "the dart's non-wizard fork: a shot, no struck record");
+        assert_eq!(
+            tally(&g),
+            (4, 1),
+            "the dart's non-wizard fork: a shot, no struck record"
+        );
 
         let b = fire(&mut g, 0, 0, (10, 0), ball as u16);
         g.ent[b].id24 = 557;
@@ -5641,7 +5663,11 @@ mod debuff_knock_tests {
         let b = fire(&mut g, 0, 0, (10, 0), ball as u16);
         while g.new_event().is_some() {}
         g.mc2_proj_impact(b, ball as u16, &ctx(), None);
-        assert_eq!(tally(&g), (4, 1), "a dry pool mints nothing and counts nothing");
+        assert_eq!(
+            tally(&g),
+            (4, 1),
+            "a dry pool mints nothing and counts nothing"
+        );
     }
 }
 
@@ -5944,6 +5970,9 @@ mod step_commit_tests {
             "the contacting fireball re-heads its entry tile's chain \
              (walk {walk:?}, flyer {fly}, b {b}, a {a})"
         );
-        assert_eq!(g.ent[fly].next20 as usize, b, "head insert: the old head follows");
+        assert_eq!(
+            g.ent[fly].next20 as usize, b,
+            "head insert: the old head follows"
+        );
     }
 }

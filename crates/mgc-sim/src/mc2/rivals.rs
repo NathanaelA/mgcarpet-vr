@@ -1513,8 +1513,8 @@ fn rival_human_chain_top_off() -> bool {
 /// pool-target arm one line below obeys it. The `PLAYER_TARGET` arm
 /// did not.
 ///
-/// Shipped `NETHERW.EXE`, `sub_14C60` = file 0x39460 (linear 0x14C60
-/// + 0x24800) is SEVEN instructions and there is no life test, no
+/// Shipped `NETHERW.EXE`, `sub_14C60` = file 0x39460 (linear 0x14C60 +
+/// 0x24800) is SEVEN instructions and there is no life test, no
 /// reap test and no human-vs-pool branch in any of them:
 ///
 /// ```text
@@ -1528,8 +1528,8 @@ fn rival_human_chain_top_off() -> bool {
 ///   3947d: 0f 94 c0                 sete %al
 /// ```
 ///
-/// and `sub_14C40` (file 0x39440) is `(class_0x3F << 7) + model_0x40
-/// + id_0x1A` — three bytes the human's carpet record keeps unchanged
+/// and `sub_14C40` (file 0x39440) is `(class_0x3F << 7) + model_0x40 +
+/// id_0x1A` — three bytes the human's carpet record keeps unchanged
 /// through death, fall and corpse (only a FREE clears `class_0x3F`,
 /// and the human is never freed). The AttackWizard handler
 /// `sub_13890` (file 0x38090) opens on exactly this gate and on
@@ -3929,8 +3929,9 @@ impl World {
                     self.mc2_rivals[ri].mana =
                         (self.mc2_rivals[ri].mana as i64 - amt as i64).max(0) as i32;
                 }
-                self.mc2_rivals[ri].mana =
-                    self.mc2_rivals[ri].mana.min(self.mc2_rivals[ri].mana_max as i32);
+                self.mc2_rivals[ri].mana = self.mc2_rivals[ri]
+                    .mana
+                    .min(self.mc2_rivals[ri].mana_max as i32);
                 if steal_src == PLAYER_TARGET {
                     self.g.mc2_cast_xp.0.push((steal_src, 13, 1));
                 }
@@ -5018,8 +5019,7 @@ impl World {
             return;
         }
         let cost = self.g.ent[m].max_life;
-        let admitted =
-            self.mc2_rival_afford(ri, m) && self.mc2_rivals[ri].mana >= cost as i32;
+        let admitted = self.mc2_rival_afford(ri, m) && self.mc2_rivals[ri].mana >= cost as i32;
         if !admitted {
             self.g.ent[m].f26 = 1; // :56466 — the release
             return;
@@ -8237,20 +8237,13 @@ impl World {
     ///
     /// See [`no_mc2_rival_home_cast_chain`] for the EXE bytes and for
     /// the two near-identical siblings that do NOT chain.
-    pub(crate) fn mc2_rival_walk_cast_chained(
-        &mut self,
-        ri: usize,
-        i: usize,
-        s: usize,
-    ) -> bool {
+    pub(crate) fn mc2_rival_walk_cast_chained(&mut self, ri: usize, i: usize, s: usize) -> bool {
         if no_mc2_rival_home_cast_chain() {
             return self.mc2_rival_walk_cast(ri, i, s);
         }
         let mut tier = self.mc2_rivals[ri].book.levels[s] as i16;
         while tier >= 0 {
-            if self.mc2_rival_tier_probe(ri, tier, s) == s as i32
-                && self.mc2_rival_cast(ri, i, s)
-            {
+            if self.mc2_rival_tier_probe(ri, tier, s) == s as i32 && self.mc2_rival_cast(ri, i, s) {
                 return true;
             }
             tier -= 1;
@@ -9698,7 +9691,10 @@ impl World {
     /// `Life_0x3612F` read sits inside the NEW-ENTITY arm), so the
     /// seed is only ever observable at t=0.
     #[doc(hidden)]
-    pub fn debug_mc2_rival_life_seed(&self, slot: u8) -> Option<(u16, u32, i32, u16, u16, u16, u16)> {
+    pub fn debug_mc2_rival_life_seed(
+        &self,
+        slot: u8,
+    ) -> Option<(u16, u32, i32, u16, u16, u16, u16)> {
         let r = self.mc2_rivals.iter().find(|r| r.slot == slot)?;
         let e = &self.g.ent[r.ent as usize];
         Some((
@@ -10845,7 +10841,9 @@ mod grave_tests {
     #[test]
     fn the_wizard_grave_stamps_both_homes_of_its_admit_mask() {
         let mut g = flat_mc2_gen();
-        let s = g.mc2_spawn_grave(40 << 8, 40 << 8, 100).expect("grave slot");
+        let s = g
+            .mc2_spawn_grave(40 << 8, 40 << 8, 100)
+            .expect("grave slot");
         assert_eq!(g.ent[s].f56, 2, "byte_0x38_56 = 2, the MC2 class-10 home");
         // POSITIVE CONTROL — the rest of `sub_501D0`.
         assert_eq!(g.ent[s].f28, 2, "…and the MC1 home the ctor already had");

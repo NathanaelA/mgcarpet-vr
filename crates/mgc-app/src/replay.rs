@@ -1844,13 +1844,19 @@ mod tests {
                 .expect("the fixture opens")
         };
         // A campaign REPLAY births its (14,5) XP scrolls at 0x0D.
-        if let Some(g) = gate("mc2l3", "the-campaign-replay-gate-is-set-on-this-capture.mgcr") {
+        if let Some(g) = gate(
+            "mc2l3",
+            "the-campaign-replay-gate-is-set-on-this-capture.mgcr",
+        ) {
             assert!(g, "mc2l3's scrolls are born at 0x0D — the gate is SET");
         }
         // A FIRST-RUN capture births them at 0x0C. Both exemplars are
         // needed: a hardcoded `false` passes this one and fails the
         // one above, which is exactly how the old bug hid.
-        if let Some(g) = gate("mc2l30", "the-campaign-replay-gate-is-clear-on-this-capture.mgcr") {
+        if let Some(g) = gate(
+            "mc2l30",
+            "the-campaign-replay-gate-is-clear-on-this-capture.mgcr",
+        ) {
             assert!(!g, "mc2l30 is a first run — the gate is clear");
         }
     }
@@ -2043,4 +2049,3 @@ mod tests {
         );
     }
 }
-

@@ -398,9 +398,17 @@ pub const VISUALS_PRESET: PresetGroup = PresetGroup {
         pref.horizon_cull = true;
         pref.light_sources = true;
         pref.fog_distance = if enhanced { 90 } else { 20 };
-        pref.rival_tags = if enhanced { RivalTags::On } else { RivalTags::Auto };
+        pref.rival_tags = if enhanced {
+            RivalTags::On
+        } else {
+            RivalTags::Auto
+        };
         enh.smooth_motion = true;
-        enh.fire = if enhanced { FireEffects::Enhanced } else { FireEffects::Classic };
+        enh.fire = if enhanced {
+            FireEffects::Enhanced
+        } else {
+            FireEffects::Classic
+        };
         enh.lightning = if enhanced {
             LightningEffects::Enhanced
         } else {
@@ -2464,8 +2472,7 @@ pub fn registry() -> Vec<Spec> {
                    the castle pass would have done.",
             ctl: Ctl::Toggle {
                 set: |c, v| {
-                    c.gameplay.patches.mc2_orphan_balloon_reap =
-                        crate::config::PatchArm::from_on(v)
+                    c.gameplay.patches.mc2_orphan_balloon_reap = crate::config::PatchArm::from_on(v)
                 },
                 descs: [
                     "A castle-less dead balloon haunts the level forever, as retail.",
@@ -2990,7 +2997,9 @@ mod tests {
             if deviates && spec.class.fidelity() == Fidelity::Enhanced {
                 assert!(
                     spec.cfg_path == "sim.parameters.entity_pool_size"
-                        || PRESET_GROUPS.iter().any(|g| g.members.contains(&spec.cfg_path)),
+                        || PRESET_GROUPS
+                            .iter()
+                            .any(|g| g.members.contains(&spec.cfg_path)),
                     "{}: a stock enhancement outside the presets",
                     spec.cfg_path
                 );
@@ -3066,12 +3075,17 @@ mod tests {
             let (mut e, mut k) = (Config::default(), Config::default());
             (g.apply)(&mut e, Preset::Enhanced);
             (g.apply)(&mut k, Preset::Classic);
-            let (e, k) = (serde_json::to_value(&e).unwrap(), serde_json::to_value(&k).unwrap());
+            let (e, k) = (
+                serde_json::to_value(&e).unwrap(),
+                serde_json::to_value(&k).unwrap(),
+            );
             for m in g.members {
                 assert!(!json_at(&e, m).is_null(), "{m}: not a config path");
             }
             assert!(
-                g.members.iter().any(|m| !same_value(json_at(&e, m), json_at(&k, m))),
+                g.members
+                    .iter()
+                    .any(|m| !same_value(json_at(&e, m), json_at(&k, m))),
                 "{}: the presets differ somewhere",
                 g.cfg_path
             );
@@ -3081,7 +3095,12 @@ mod tests {
     #[test]
     fn the_defaults_are_the_enhanced_presets() {
         for g in PRESET_GROUPS {
-            assert_eq!(g.current(&Config::default()), Some(Preset::Enhanced), "{}", g.cfg_path);
+            assert_eq!(
+                g.current(&Config::default()),
+                Some(Preset::Enhanced),
+                "{}",
+                g.cfg_path
+            );
         }
     }
 

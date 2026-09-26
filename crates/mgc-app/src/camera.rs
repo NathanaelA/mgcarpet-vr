@@ -383,8 +383,9 @@ mod tests {
             // 4:3 — the reference aspect, where `flight_fov_y` is the
             // identity, so the rendered fov is the one framed for.
             let (w, h) = (1280.0, 960.0);
-            let (sx, sy) = mgc_render::world_to_screen(&cam, w, h, subject[0], subject[1], subject[2])
-                .expect("the subject is in front of the camera");
+            let (sx, sy) =
+                mgc_render::world_to_screen(&cam, w, h, subject[0], subject[1], subject[2])
+                    .expect("the subject is in front of the camera");
             assert!(
                 (sx - w / 2.0).abs() < 0.5,
                 "yaw {yaw}: subject off-centre horizontally at {sx}"
@@ -453,7 +454,11 @@ mod tests {
             "eye at {} through a 3.6 ceiling",
             eye[1]
         );
-        assert!(eye[1] >= BOOM_CLEARANCE - 1e-4, "eye at {} under the floor", eye[1]);
+        assert!(
+            eye[1] >= BOOM_CLEARANCE - 1e-4,
+            "eye at {} under the floor",
+            eye[1]
+        );
     }
 
     /// A cave too tight for the clearance: the floor wins, the sim's
@@ -462,7 +467,11 @@ mod tests {
     fn a_pinched_cave_gives_the_floor_the_last_word() {
         let subject = [128.0, 2.2, 128.0];
         let eye = boom_eye(subject, 0.0, 0.0, FOV, &flat(2.0), &|_, _| Some(2.4));
-        assert!((eye[1] - 2.5).abs() < 1e-4, "eye at {}, want floor+0.5", eye[1]);
+        assert!(
+            (eye[1] - 2.5).abs() < 1e-4,
+            "eye at {}, want floor+0.5",
+            eye[1]
+        );
     }
 
     /// The torus seam: a boom that runs off the east edge comes back
@@ -471,13 +480,24 @@ mod tests {
     fn the_boom_wraps_at_the_seam() {
         let subject = [255.0, 20.0, 128.0];
         // Looking west (yaw -π/2 ⇒ fwd.x = -1) puts the eye at +x.
-        let eye = boom_eye(subject, -std::f32::consts::FRAC_PI_2, 0.0, FOV, &flat(0.0), &open);
+        let eye = boom_eye(
+            subject,
+            -std::f32::consts::FRAC_PI_2,
+            0.0,
+            FOV,
+            &flat(0.0),
+            &open,
+        );
         assert!(
             (0.0..MAP_TILES as f32).contains(&eye[0]),
             "eye x {} off the torus",
             eye[0]
         );
-        assert!(eye[0] < BOOM_REACH, "eye x {} did not wrap past the seam", eye[0]);
+        assert!(
+            eye[0] < BOOM_REACH,
+            "eye x {} did not wrap past the seam",
+            eye[0]
+        );
     }
     fn screen_of(view: &ChaseView, subject: [f32; 3]) -> (f32, f32) {
         let cam = mgc_render::CameraView {
@@ -505,8 +525,14 @@ mod tests {
         for frame in 0..40 {
             let view = cam.update(subject, turned, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
             let (sx, sy) = screen_of(&view, subject);
-            assert!((sx - 640.0).abs() < 0.5, "frame {frame}: off-centre at {sx}");
-            assert!((sy - 640.0).abs() < 0.5, "frame {frame}: subject at {sy}, want 640");
+            assert!(
+                (sx - 640.0).abs() < 0.5,
+                "frame {frame}: off-centre at {sx}"
+            );
+            assert!(
+                (sy - 640.0).abs() < 0.5,
+                "frame {frame}: subject at {sy}, want 640"
+            );
         }
     }
 
@@ -520,11 +546,18 @@ mod tests {
         let turned = 1.0;
         cam.update(subject, turned, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
         let early = cam.yaw;
-        assert!(early > 0.0 && early < 0.2, "one frame in, the axis moved {early} of 1.0");
+        assert!(
+            early > 0.0 && early < 0.2,
+            "one frame in, the axis moved {early} of 1.0"
+        );
         for _ in 0..180 {
             cam.update(subject, turned, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
         }
-        assert!((cam.yaw - turned).abs() < 0.02, "three seconds later it sits at {}", cam.yaw);
+        assert!(
+            (cam.yaw - turned).abs() < 0.02,
+            "three seconds later it sits at {}",
+            cam.yaw
+        );
     }
 
     /// The eye is further back and higher than the rigid boom put it:
@@ -535,9 +568,18 @@ mod tests {
         let subject = [128.0, 20.0, 128.0];
         let mut cam = ChaseCam::default();
         let view = cam.update(subject, 0.0, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
-        assert!(view.eye[2] > subject[2] + 3.5, "eye z {} — not far enough back", view.eye[2]);
+        assert!(
+            view.eye[2] > subject[2] + 3.5,
+            "eye z {} — not far enough back",
+            view.eye[2]
+        );
         let rigid = boom_eye(subject, 0.0, 0.0, FOV, &flat(0.0), &open);
-        assert!(view.eye[1] > rigid[1] + 0.3, "eye y {} vs rigid {}", view.eye[1], rigid[1]);
+        assert!(
+            view.eye[1] > rigid[1] + 0.3,
+            "eye y {} vs rigid {}",
+            view.eye[1],
+            rigid[1]
+        );
         assert!(view.pitch < 0.0, "the camera looks down ({})", view.pitch);
     }
 
@@ -546,7 +588,15 @@ mod tests {
     #[test]
     fn a_teleport_snaps_the_chase_eye() {
         let mut cam = ChaseCam::default();
-        cam.update([128.0, 20.0, 128.0], 0.0, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
+        cam.update(
+            [128.0, 20.0, 128.0],
+            0.0,
+            0.0,
+            FOV,
+            1.0 / 60.0,
+            &flat(0.0),
+            &open,
+        );
         let far = [40.0, 20.0, 200.0];
         let view = cam.update(far, 0.0, 0.0, FOV, 1.0 / 60.0, &flat(0.0), &open);
         let d = ((view.eye[0] - far[0]).powi(2) + (view.eye[2] - far[2]).powi(2)).sqrt();
@@ -598,5 +648,4 @@ mod tests {
         assert!((mid.x - 0.5).abs() < 1e-3, "x {}", mid.x);
         assert!(mid.yaw.abs() > 3.0, "yaw {}", mid.yaw);
     }
-
 }

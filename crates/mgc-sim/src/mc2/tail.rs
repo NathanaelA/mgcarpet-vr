@@ -1169,11 +1169,8 @@ impl Gen {
             // [`crate::engine::features::mc2_ball_slope_pred_axis`].
             if crate::engine::features::mc2_ball_slope_pred_axis() {
                 let kz = self.mc2_pred_axis.0.2;
-                self.mc2_pred_axis = crate::engine::features::Mc2PredAxis((
-                    sx as i16 as u16,
-                    sy as i16 as u16,
-                    kz,
-                ));
+                self.mc2_pred_axis =
+                    crate::engine::features::Mc2PredAxis((sx as i16 as u16, sy as i16 as u16, kz));
             }
             let vx = ((vx as i32 + sx) * 250 / 256) as i16;
             let vy = ((vy as i32 + sy) * 250 / 256) as i16;
@@ -3869,7 +3866,11 @@ mod tests {
         g.mc2_pinned = crate::engine::features::Mc2Pinned(pinned as u16);
 
         let (px, py) = (hx + 200, hy + 200);
-        assert_eq!(((px >> 8) as u8, (py >> 8) as u8), (40, 40), "rig: his tile");
+        assert_eq!(
+            ((px >> 8) as u8, (py >> 8) as u8),
+            (40, 40),
+            "rig: his tile"
+        );
         // His seat, as the carpet's own walk slot seeds it — then
         // pushed BEHIND the victim, which is the whole point.
         g.player_relink(px, py);
@@ -3902,7 +3903,8 @@ mod tests {
             "the inner lift snaps the victim onto the eye"
         );
         assert_eq!(
-            g.map_entity[tile(41, 40) as usize] as usize, victim,
+            g.map_entity[tile(41, 40) as usize] as usize,
+            victim,
             "…and `CopyEntityPosition_57CF0` makes it the head of (41,40)"
         );
         // (2) The walk left the old chain there: the successor behind
@@ -4289,7 +4291,11 @@ mod tests {
             n = g.ent[n].f54 as usize;
         }
         assert!(carrier != 0 && visual != 0, "the orb laid out its lattice");
-        assert_ne!(g.ent[carrier].flags & 8, 0, "rig: the carrier keeps byte[0] bit 3");
+        assert_ne!(
+            g.ent[carrier].flags & 8,
+            0,
+            "rig: the carrier keeps byte[0] bit 3"
+        );
         assert_eq!(g.ent[visual].flags & 8, 0, "rig: the visual has it cleared");
 
         // Park both on the writer's own tile with real extents (the

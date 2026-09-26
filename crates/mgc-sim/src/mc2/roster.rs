@@ -3317,8 +3317,8 @@ impl Gen {
                             // arm folds the life test into
                             // `mc2_target`, so its `None` keeps the
                             // old exit.
-                            let stay = aim_law
-                                && !(ctx.patches.mc2_wyvern_alliance_brain && !ctx.strict);
+                            let stay =
+                                aim_law && !(ctx.patches.mc2_wyvern_alliance_brain && !ctx.strict);
                             if !stay {
                                 self.ent[i].tick70 = M16_BASE + 1;
                             }

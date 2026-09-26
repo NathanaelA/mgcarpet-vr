@@ -673,7 +673,11 @@ mod tests {
             // `building_pad_reconstruct_rebuilds_the_hut_terrace`).
             g.t.height[tile(55, 55)]
         };
-        assert_eq!(build(false), (280 & 0xFF) as u8, "retail: the goal byte-wraps into a pit");
+        assert_eq!(
+            build(false),
+            (280 & 0xFF) as u8,
+            "retail: the goal byte-wraps into a pit"
+        );
         assert_eq!(build(true), 255, "patched: the pad tops out at the ceiling");
 
         // (b) the castle painter (10,42): level-1 row is pad 40; a
@@ -685,7 +689,10 @@ mod tests {
             for _ in 0..4096 {
                 let mut running = false;
                 for j in 1..g.ent.len() {
-                    if g.ent[j].class64 == 10 && g.ent[j].model65 == 42 && g.ent[j].flags & 0x400 == 0 {
+                    if g.ent[j].class64 == 10
+                        && g.ent[j].model65 == 42
+                        && g.ent[j].flags & 0x400 == 0
+                    {
                         g.mc2_castle_painter_tick_with(j, sat);
                         running = true;
                     }
@@ -696,7 +703,11 @@ mod tests {
             }
             g.t.height[tile(99, 99)]
         };
-        assert_eq!(paint(false), (270 & 0xFF) as u8, "retail: the painter's goal byte-wraps");
+        assert_eq!(
+            paint(false),
+            (270 & 0xFF) as u8,
+            "retail: the painter's goal byte-wraps"
+        );
         assert_eq!(paint(true), 255, "patched: the painter saturates too");
 
         // (c) a goal inside the byte is untouched by the patch.

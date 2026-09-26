@@ -1042,7 +1042,10 @@ fn mc2_speed_direction_follows_current_velocity() {
     // with `MGC_NO_MC2_SPEED_SIGN_CMD=1`.
     w.accel_brake_immediate(-1.0);
     w.tick(still, PlayerCommand::default());
-    assert!(w.accel_override().is_none(), "the standstill boost is braked");
+    assert!(
+        w.accel_override().is_none(),
+        "the standstill boost is braked"
+    );
     let coasting = PlayerPose {
         speed: -112,
         ..pose_at(&w, cx, cy)
@@ -2123,7 +2126,6 @@ fn mc2_whirlwind_duration_law_8x_tier_life() {
         );
     }
 }
-
 
 #[test]
 fn mc2_speed_window_survives_the_casters_death_fall() {

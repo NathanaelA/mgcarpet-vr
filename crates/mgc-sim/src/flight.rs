@@ -975,7 +975,11 @@ pub fn mc2_move_with<'p>(
     // yaw as a RATE and the published absolute aim pitch.
     // A kernel steers by its own law, so the stick leaves roll alone:
     // the filter just relaxes it (the whirlwind crank's residual spin).
-    let sx = if propel.is_some() { 0 } else { inp.stick_x as i32 };
+    let sx = if propel.is_some() {
+        0
+    } else {
+        inp.stick_x as i32
+    };
     let dr = ((2 * sx - st.roll_f as i32) / 4) as i16;
     let dp = if propel.is_some() {
         0 // the kernel owns pitch
@@ -1062,7 +1066,10 @@ pub fn mc2_move_with<'p>(
     let mut cand = if let Some(k) = propel {
         let row = ext.row;
         let climb = |st: &mut Mc1State, s: i16| {
-            let ramp = Mc2Ext { row, ..Mc2Ext::default() };
+            let ramp = Mc2Ext {
+                row,
+                ..Mc2Ext::default()
+            };
             mc2_climb_ramp(st, &ramp, ground, s);
             let mut p = (st.x, st.y, st.z);
             Gen::polar_step(&mut p, st.yaw, st.eff_pitch, s);

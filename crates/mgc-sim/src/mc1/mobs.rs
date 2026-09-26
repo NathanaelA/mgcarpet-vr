@@ -3354,8 +3354,13 @@ impl Gen {
                             let (x, y, z) = self.mc1_muzzle(i, (x, y, z));
                             if let Some(p) = self.spawn_fireball(x, y, z) {
                                 self.ent[p].row156 = (6 - k).max(0) as u8;
-                                let (owner, sf66, sf67, tgt, lift) = self
-                                    .mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
+                                let (owner, sf66, sf67, tgt, lift) = self.mc1_arm_live(
+                                    p,
+                                    i,
+                                    (owner, sf66, sf67, tgt, lift),
+                                    true,
+                                    1,
+                                );
                                 self.arm_projectile(
                                     p, owner, sf66, sf67, tgt, tx, ty, tz, 400, 0, lift,
                                 );
@@ -3372,8 +3377,13 @@ impl Gen {
                             let (x, y, z) = self.mc1_muzzle(i, (x, y, z));
                             if let Some(p) = self.spawn_zigzag(x, y, z) {
                                 self.ent[p].row156 = (6 - k).max(0) as u8;
-                                let (owner, sf66, sf67, tgt, lift) = self
-                                    .mc1_arm_live(p, i, (owner, sf66, sf67, tgt, lift), true, 1);
+                                let (owner, sf66, sf67, tgt, lift) = self.mc1_arm_live(
+                                    p,
+                                    i,
+                                    (owner, sf66, sf67, tgt, lift),
+                                    true,
+                                    1,
+                                );
                                 self.arm_projectile(
                                     p, owner, sf66, sf67, tgt, tx, ty, tz, 800, 23, lift,
                                 );
@@ -3684,9 +3694,7 @@ impl Gen {
         let own = self.ent[i].id24;
         let mut s = self.ent[i].f54 as usize;
         while s != 0 {
-            if chain_revalidate
-                && (self.ent[s].class64 != 5 || self.ent[s].id24 != own)
-            {
+            if chain_revalidate && (self.ent[s].class64 != 5 || self.ent[s].id24 != own) {
                 break;
             }
             self.ent[s].tick70 = base + 5;
@@ -4443,8 +4451,7 @@ impl Gen {
                 // enumeration on [`no_mc1_wake_dy48`].
                 if !no_mc1_wake_dy48() {
                     let dy = ctx.py.wrapping_sub(e.y) as i16 as i32;
-                    self.ent[i].raw48 =
-                        Raw48(Self::isqrt(dy.wrapping_mul(dy) as u32) as u16);
+                    self.ent[i].raw48 = Raw48(Self::isqrt(dy.wrapping_mul(dy) as u32) as u16);
                 }
                 self.ent[i].f58 = 16;
                 self.ent[i].f59 = 0;

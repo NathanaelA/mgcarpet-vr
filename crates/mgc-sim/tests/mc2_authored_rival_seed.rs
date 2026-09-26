@@ -305,7 +305,11 @@ fn check_book(level: &str, bank: &str, want: &[BookSeat]) {
         // pins, or the assertion below is vacuous.
         for s in 0..26usize {
             assert_eq!(
-                cfg.starting_spell_levels.get(s).copied().unwrap_or(0).min(2),
+                cfg.starting_spell_levels
+                    .get(s)
+                    .copied()
+                    .unwrap_or(0)
+                    .min(2),
                 lvl,
                 "{level} p{slot}: baked byte_0x360FBx[{s}] != the pinned authored level",
             );
@@ -339,8 +343,16 @@ fn check_book(level: &str, bank: &str, want: &[BookSeat]) {
             })
             .map(|s| s as i64)
             .collect();
-        assert_eq!(granted.first().copied(), Some(left), "{level} p{slot}: left");
-        assert_eq!(granted.get(1).copied(), Some(right), "{level} p{slot}: right");
+        assert_eq!(
+            granted.first().copied(),
+            Some(left),
+            "{level} p{slot}: left"
+        );
+        assert_eq!(
+            granted.get(1).copied(),
+            Some(right),
+            "{level} p{slot}: right"
+        );
         assert_eq!(lane(&w, slot, "hand_left"), vec![left], "{level} p{slot}");
         assert_eq!(lane(&w, slot, "hand_right"), vec![right], "{level} p{slot}");
         // 3. The weave direction starts at the memset 0.

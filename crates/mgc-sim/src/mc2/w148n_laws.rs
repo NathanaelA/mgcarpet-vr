@@ -77,7 +77,7 @@ fn castle_lock_pin_value_has_no_floor() {
     // THE DEFECT, exactly: @0x30 == 0 on the marker-1 record.
     assert_eq!(castle_lock_pin_value(0), -1);
     assert_eq!(
-        (0u16).max(1) as i16 - 1,
+        std::hint::black_box(0u16).max(1) as i16 - 1,
         0,
         "positive control: the pre-dig `.max(1)` expression really did \
          return 0 for the same input, so this test can fail"

@@ -316,7 +316,11 @@ fn baked_terrain_matches_remc2_fixture() {
 fn staged_bake_leaves_the_live_tree_alone_until_complete() {
     let root = std::env::temp_dir().join(format!("mgc-staged-bake-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    let (live, staging, old) = (root.join("baked"), root.join("baked.baking"), root.join("baked.old"));
+    let (live, staging, old) = (
+        root.join("baked"),
+        root.join("baked.baking"),
+        root.join("baked.old"),
+    );
     let empty = root.join("no-gamedata");
     std::fs::create_dir_all(&empty).unwrap();
 
@@ -326,8 +330,14 @@ fn staged_bake_leaves_the_live_tree_alone_until_complete() {
     std::fs::write(staging.join("half-written"), b"partial").unwrap();
     let s = mgc_import::bake::bake_all_staged(&empty, &live).unwrap();
     assert!(s.manifest.is_empty());
-    assert_eq!(std::fs::read(live.join("mc1/level-000.mgcl")).unwrap(), b"old");
-    assert!(!staging.exists(), "the cancelled run's staging tree is swept");
+    assert_eq!(
+        std::fs::read(live.join("mc1/level-000.mgcl")).unwrap(),
+        b"old"
+    );
+    assert!(
+        !staging.exists(),
+        "the cancelled run's staging tree is swept"
+    );
 
     std::fs::rename(&live, &old).unwrap();
     mgc_import::bake::bake_all_staged(&empty, &live).unwrap();

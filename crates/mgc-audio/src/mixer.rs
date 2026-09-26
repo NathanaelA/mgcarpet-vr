@@ -679,7 +679,9 @@ impl FaithfulMixer {
             .take(MC2_CHANNELS)
             .enumerate()
             .filter(|(_, c)| {
-                !c.looped && c.key.is_some_and(|(_, id)| !MC2_PRIORITY_CHIMES.contains(&id))
+                !c.looped
+                    && c.key
+                        .is_some_and(|(_, id)| !MC2_PRIORITY_CHIMES.contains(&id))
             })
             .min_by_key(|(_, c)| c.vol)
             .map(|(i, _)| i)
@@ -1083,7 +1085,14 @@ mod tests {
         // owner 5 the quietest (farthest).
         for owner in 1..=10u16 {
             let x = if owner == 5 { 9000 } else { 100 };
-            m.request(3, Source::World { pos: (x, 0, 0), owner }, &l);
+            m.request(
+                3,
+                Source::World {
+                    pos: (x, 0, 0),
+                    owner,
+                },
+                &l,
+            );
             m.tick(&s, &tx, m_live(&m));
         }
         let _ = rx.try_iter().count();
@@ -1094,7 +1103,14 @@ mod tests {
         m.tick(&s, &tx, m_live(&m));
         assert!(!rx.try_iter().any(|c| matches!(c, Cmd::Play { .. })));
         // A world-sourced 61 drops too.
-        m.request(61, Source::World { pos: (100, 0, 0), owner: 11 }, &l);
+        m.request(
+            61,
+            Source::World {
+                pos: (100, 0, 0),
+                owner: 11,
+            },
+            &l,
+        );
         m.tick(&s, &tx, m_live(&m));
         assert!(!rx.try_iter().any(|c| matches!(c, Cmd::Play { .. })));
         // The player's level-up chime takes the quiet channel.

@@ -84,15 +84,67 @@ const SND_CLICK: u8 = 14;
 /// number (main 0-24, secrets 30-34, multiplayer 50-59), as the
 /// executable carries them (trailing spaces trimmed at the draw).
 const MC2_LEVEL_NAMES: [&str; 61] = [
-    "1. Jahwl", "2. Kopahk", "3. Myrnan Gor", "4. Arachnium", "5. T'Klom", "6. Phyrydia",
-    "7. Perilium", "8. Ul Buthnen", "9. Evirith Gor", "10. Cymmeria ", "11. Tropolos ",
-    "12. Jaleen ", "13. Galiphur ", "14. Tunuk ", "15. Zyggogg ", "16. Darklava ",
-    "17. C'lannesh ", "18. Gleph ", "19. Baraghan ", "20. Ammyridia ", "21. Cresidan ",
-    "22. Hodor ", "23. Jathnar ", "24. Malak ", "25. Uluth ", "26. ", "27. ", "28. ", "29. ",
-    "30. ", "Karakir ", "Ymbul", "Pav Durivium", "Beleem", "Ommosyth", "36. ", "37. ", "38. ",
-    "39. ", "40. ", "41. ", "42. ", "43. ", "44. ", "45. ", "46. ", "47. ", "48. ", "49. ",
-    "50. ", "Thrull", "Keevur", "Braak", "Trapox", "Hibren Zhor", "Jinople", "Dethrem",
-    "Canquin", "Zephulum", "Verune", "0",
+    "1. Jahwl",
+    "2. Kopahk",
+    "3. Myrnan Gor",
+    "4. Arachnium",
+    "5. T'Klom",
+    "6. Phyrydia",
+    "7. Perilium",
+    "8. Ul Buthnen",
+    "9. Evirith Gor",
+    "10. Cymmeria ",
+    "11. Tropolos ",
+    "12. Jaleen ",
+    "13. Galiphur ",
+    "14. Tunuk ",
+    "15. Zyggogg ",
+    "16. Darklava ",
+    "17. C'lannesh ",
+    "18. Gleph ",
+    "19. Baraghan ",
+    "20. Ammyridia ",
+    "21. Cresidan ",
+    "22. Hodor ",
+    "23. Jathnar ",
+    "24. Malak ",
+    "25. Uluth ",
+    "26. ",
+    "27. ",
+    "28. ",
+    "29. ",
+    "30. ",
+    "Karakir ",
+    "Ymbul",
+    "Pav Durivium",
+    "Beleem",
+    "Ommosyth",
+    "36. ",
+    "37. ",
+    "38. ",
+    "39. ",
+    "40. ",
+    "41. ",
+    "42. ",
+    "43. ",
+    "44. ",
+    "45. ",
+    "46. ",
+    "47. ",
+    "48. ",
+    "49. ",
+    "50. ",
+    "Thrull",
+    "Keevur",
+    "Braak",
+    "Trapox",
+    "Hibren Zhor",
+    "Jinople",
+    "Dethrem",
+    "Canquin",
+    "Zephulum",
+    "Verune",
+    "0",
 ];
 
 /// One drawable/clickable portal, resolved from the campaign record.
@@ -1487,7 +1539,9 @@ impl WorldMap {
         // only for a row without the tail.
         use RowKind::{Main, Packed, Sub};
         let mut rows: Vec<(String, String, RowKind)> = Vec::with_capacity(12);
-        let spells = ext.as_ref().map_or(bare(v[0]), |e| np(e.spells_found_fixed, e.spells_fixed_pct10()));
+        let spells = ext.as_ref().map_or(bare(v[0]), |e| {
+            np(e.spells_found_fixed, e.spells_fixed_pct10())
+        });
         rows.push((label(386, "Spells found"), spells, Main));
         let accuracy = match &ext {
             Some(e) if e.offensive_shots > 0 => format!(
@@ -1500,7 +1554,9 @@ impl WorldMap {
             None => bare(v[1]),
         };
         rows.push((label(385, "Accuracy"), accuracy, Main));
-        let kills = ext.as_ref().map_or(bare(v[2]), |e| np(e.deaths_total(), e.cleared_pct10()));
+        let kills = ext
+            .as_ref()
+            .map_or(bare(v[2]), |e| np(e.deaths_total(), e.cleared_pct10()));
         rows.push((label(384, "Creatures Killed"), kills, Main));
         if let Some(e) = &ext {
             let k = e.kill_split10();
@@ -1545,8 +1601,18 @@ impl WorldMap {
             .copied()
             .flatten()
             .map_or((8.0, 10.0), |(_, _, w, h)| (w, h));
-        let (tw, th) = self.rects.get(275).copied().flatten().map_or((16.0, 16.0), |r| (r.2, r.3));
-        let (sw, sh) = self.rects.get(274).copied().flatten().map_or((16.0, 16.0), |r| (r.2, r.3));
+        let (tw, th) = self
+            .rects
+            .get(275)
+            .copied()
+            .flatten()
+            .map_or((16.0, 16.0), |r| (r.2, r.3));
+        let (sw, sh) = self
+            .rects
+            .get(274)
+            .copied()
+            .flatten()
+            .map_or((16.0, 16.0), |r| (r.2, r.3));
         let lh = ch + 1.0;
         // Width: retail's rule, widened to fit every line with a
         // margin, and never narrower than a comfortable minimum.
@@ -1567,7 +1633,9 @@ impl WorldMap {
                 self.text_width(&time.0) + self.text_width(&time.1) + 4.0 * cw,
             ])
             .fold(0.0f32, f32::max);
-        let mut fw = (2.0 * cw * max_len).max(widest + 2.0 * sw + 6.0 * cw).max(240.0);
+        let mut fw = (2.0 * cw * max_len)
+            .max(widest + 2.0 * sw + 6.0 * cw)
+            .max(240.0);
         if fw % tw != 0.0 {
             fw = ((fw / tw).floor() + 1.0) * tw;
         }
@@ -1635,7 +1703,13 @@ impl WorldMap {
             quads.extend(self.text_quads(val, right - self.text_width(val), y, white, scale));
         }
         quads.extend(self.text_quads(&time.0, left, time_y, white, scale));
-        quads.extend(self.text_quads(&time.1, right - self.text_width(&time.1), time_y, white, scale));
+        quads.extend(self.text_quads(
+            &time.1,
+            right - self.text_width(&time.1),
+            time_y,
+            white,
+            scale,
+        ));
     }
 
     /// This frame's quads: background crop, ambient dressing, trail
@@ -2057,15 +2131,27 @@ mod tests {
         let size = (1280.0, 960.0); // 2× scale
         wm.scroll = (400.0, 800.0); // portal 0 (420, 820) under (50, 50)
         let pending = save_with(0);
-        assert!(!wm.right_click(&pending, size, (50.0, 50.0)), "the pending portal");
+        assert!(
+            !wm.right_click(&pending, size, (50.0, 50.0)),
+            "the pending portal"
+        );
         assert!(!wm.stats_open());
         let save = save_with(3);
-        assert!(wm.right_click(&save, size, (50.0, 50.0)), "portal 0 is completed");
+        assert!(
+            wm.right_click(&save, size, (50.0, 50.0)),
+            "portal 0 is completed"
+        );
         assert_eq!(wm.stats, Some(0), "its own table");
         assert!(wm.travel.is_none(), "a right click never flies");
-        assert!(wm.right_click(&save, size, (600.0, 100.0)), "any button takes it down");
+        assert!(
+            wm.right_click(&save, size, (600.0, 100.0)),
+            "any button takes it down"
+        );
         assert!(!wm.stats_open());
-        assert!(!wm.right_click(&save, size, (600.0, 100.0)), "the sea hits nothing");
+        assert!(
+            !wm.right_click(&save, size, (600.0, 100.0)),
+            "the sea hits nothing"
+        );
     }
 
     #[test]

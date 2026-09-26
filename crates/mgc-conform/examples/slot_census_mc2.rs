@@ -90,7 +90,7 @@ fn main() {
             )
         })
         .collect();
-    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.sort_by_key(|b| std::cmp::Reverse(b.0));
     for (n, (c, m, s), t0, t1) in out {
         let k = (c, m, s);
         let mut fs: Vec<_> = fields[&k].iter().collect();

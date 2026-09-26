@@ -80,7 +80,12 @@ const CARD_GAP: f32 = 35.0;
 
 fn card_rect(i: usize) -> Rect {
     let left = (VW - 3.0 * CARD_W - 2.0 * CARD_GAP) / 2.0;
-    (left + i as f32 * (CARD_W + CARD_GAP), CARD_Y, CARD_W, ART_H + CAPTION_H)
+    (
+        left + i as f32 * (CARD_W + CARD_GAP),
+        CARD_Y,
+        CARD_W,
+        ART_H + CAPTION_H,
+    )
 }
 
 const OPT_Y: [f32; 3] = [428.0, 480.0, 532.0];
@@ -91,7 +96,11 @@ const VALUE_X: f32 = 395.0;
 const VALUE_W: f32 = 270.0;
 
 fn arrow_rect(row: usize, right: bool) -> Rect {
-    let x = if right { VALUE_X + VALUE_W + 5.0 } else { VALUE_X - 5.0 - ARROW_W };
+    let x = if right {
+        VALUE_X + VALUE_W + 5.0
+    } else {
+        VALUE_X - 5.0 - ARROW_W
+    };
     (x, OPT_Y[row], ARROW_W, OPT_H)
 }
 
@@ -104,14 +113,24 @@ const BUTTON_W: f32 = 200.0;
 const BUTTON_H: f32 = 58.0;
 
 fn button_rect(start: bool) -> Rect {
-    (if start { 510.0 } else { 250.0 }, BUTTON_Y, BUTTON_W, BUTTON_H)
+    (
+        if start { 510.0 } else { 250.0 },
+        BUTTON_Y,
+        BUTTON_W,
+        BUTTON_H,
+    )
 }
 
 /// The no-games notice: a centred panel with one OK button.
 const NOTICE: Rect = (110.0, 100.0, 740.0, 540.0);
 
 fn notice_ok_rect() -> Rect {
-    (VW / 2.0 - BUTTON_W / 2.0, NOTICE.1 + NOTICE.3 - BUTTON_H - 28.0, BUTTON_W, BUTTON_H)
+    (
+        VW / 2.0 - BUTTON_W / 2.0,
+        NOTICE.1 + NOTICE.3 - BUTTON_H - 28.0,
+        BUTTON_W,
+        BUTTON_H,
+    )
 }
 
 /// What an option row sets.
@@ -133,7 +152,11 @@ enum Mode {
 impl Mode {
     fn of(cfg: &Config) -> Mode {
         let p = &cfg.render.preference;
-        if p.fullscreen { Mode::Fullscreen } else { Mode::Window(p.window_size) }
+        if p.fullscreen {
+            Mode::Fullscreen
+        } else {
+            Mode::Window(p.window_size)
+        }
     }
 
     fn label(self) -> String {
@@ -180,9 +203,14 @@ enum Focus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Hit {
     Card(usize),
-    Arrow { row: usize, right: bool },
+    Arrow {
+        row: usize,
+        right: bool,
+    },
     Value(usize),
-    Button { start: bool },
+    Button {
+        start: bool,
+    },
     /// The no-games notice's OK.
     NoticeOk,
 }
@@ -300,7 +328,11 @@ impl Launcher {
             ),
             gap(),
         ];
-        if let Some(m) = self.message.as_deref().filter(|m| m.starts_with("Preparing")) {
+        if let Some(m) = self
+            .message
+            .as_deref()
+            .filter(|m| m.starts_with("Preparing"))
+        {
             out.push(para(m));
             out.push(gap());
         }
@@ -346,7 +378,10 @@ impl Launcher {
         if self.bake.as_ref().is_some_and(|(h, _)| h.is_finished()) {
             let (handle, t0) = self.bake.take().expect("checked above");
             match handle.join() {
-                Ok(Ok(())) => println!("launcher: game data ready ({:.0} s)", t0.elapsed().as_secs_f32()),
+                Ok(Ok(())) => println!(
+                    "launcher: game data ready ({:.0} s)",
+                    t0.elapsed().as_secs_f32()
+                ),
                 Ok(Err(e)) => {
                     eprintln!("error: bake: {e}");
                     self.message = Some(format!("Preparing the game data failed: {e}"));
@@ -399,7 +434,10 @@ impl Launcher {
         };
         // Hand-tuned since the launcher opened can only be the
         // launcher's own "Custom"; otherwise it is on the list.
-        let at = list.iter().position(|&c| c == cur).unwrap_or(list.len() - 1);
+        let at = list
+            .iter()
+            .position(|&c| c == cur)
+            .unwrap_or(list.len() - 1);
         (list, at)
     }
 
@@ -439,7 +477,11 @@ impl Launcher {
                 let list = self.modes(cfg);
                 let n = list.len();
                 let at = list.iter().position(|&m| m == Mode::of(cfg)).unwrap_or(0);
-                let next = if right { (at + 1) % n } else { (at + n - 1) % n };
+                let next = if right {
+                    (at + 1) % n
+                } else {
+                    (at + n - 1) % n
+                };
                 let p = &mut cfg.render.preference;
                 match list[next] {
                     Mode::Fullscreen => p.fullscreen = true,
@@ -448,12 +490,19 @@ impl Launcher {
                         p.window_size = w;
                     }
                 }
-                self.changed.extend(["render.preference.fullscreen", "render.preference.window_size"]);
+                self.changed.extend([
+                    "render.preference.fullscreen",
+                    "render.preference.window_size",
+                ]);
             }
             RowKind::Preset(g) => {
                 let (list, at) = self.choices(row, g, cfg);
                 let n = list.len();
-                let next = if right { (at + 1) % n } else { (at + n - 1) % n };
+                let next = if right {
+                    (at + 1) % n
+                } else {
+                    (at + n - 1) % n
+                };
                 match list[next] {
                     Choice::Preset(p) => (g.apply)(cfg, p),
                     Choice::Custom => {
@@ -609,24 +658,66 @@ impl Launcher {
 
     fn compose(&self, c: &mut Canvas, key: &ViewKey) {
         c.background();
-        c.text(&self.font, "Magic Carpet", VW / 2.0, 82.0, 60.0, GOLD, Align::Center);
-        c.text(&self.font, "Choose your world", VW / 2.0, 118.0, 20.0, MUTED, Align::Center);
+        c.text(
+            &self.font,
+            "Magic Carpet",
+            VW / 2.0,
+            82.0,
+            60.0,
+            GOLD,
+            Align::Center,
+        );
+        c.text(
+            &self.font,
+            "Choose your world",
+            VW / 2.0,
+            118.0,
+            20.0,
+            MUTED,
+            Align::Center,
+        );
 
         for i in 0..3 {
             self.compose_card(c, key, i);
         }
-        c.text(&self.font, &key.status, VW / 2.0, 406.0, 17.0, MUTED, Align::Center);
+        c.text(
+            &self.font,
+            &key.status,
+            VW / 2.0,
+            406.0,
+            17.0,
+            MUTED,
+            Align::Center,
+        );
 
         for (row, (label, _)) in OPTIONS.iter().enumerate() {
             let focused = key.focus == Focus::Option(row);
             let (_, y, _, hh) = value_rect(row);
             let base = y + hh / 2.0 + 7.0;
-            c.text(&self.font, label, OPT_LABEL_RIGHT, base, 21.0, if focused { GOLD } else { TEXT }, Align::Right);
+            c.text(
+                &self.font,
+                label,
+                OPT_LABEL_RIGHT,
+                base,
+                21.0,
+                if focused { GOLD } else { TEXT },
+                Align::Right,
+            );
             // Bare arrows on the background; the whole rect clicks.
             for right in [false, true] {
                 let r = arrow_rect(row, right);
                 let hot = key.hover == Some(Hit::Arrow { row, right });
-                c.arrow(r, right, if hot { HOVER } else if focused { GOLD } else { TEXT });
+                c.arrow(
+                    r,
+                    right,
+                    if hot {
+                        HOVER
+                    } else if focused {
+                        GOLD
+                    } else {
+                        TEXT
+                    },
+                );
             }
             let r = value_rect(row);
             c.fill(r, PANEL);
@@ -638,7 +729,15 @@ impl Launcher {
                 EDGE
             };
             c.stroke(r, if focused { 2.0 } else { 1.5 }, edge);
-            c.text(&self.font, &key.values[row], r.0 + r.2 / 2.0, base, 19.0, TEXT, Align::Center);
+            c.text(
+                &self.font,
+                &key.values[row],
+                r.0 + r.2 / 2.0,
+                base,
+                19.0,
+                TEXT,
+                Align::Center,
+            );
         }
 
         let can_start = key.selected.is_some();
@@ -661,7 +760,15 @@ impl Launcher {
             };
             c.stroke(r, if focused { 2.5 } else { 1.5 }, edge);
             let label = if start { "Start" } else { "Exit" };
-            c.text(&self.font, label, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0 + 9.0, 26.0, ink, Align::Center);
+            c.text(
+                &self.font,
+                label,
+                r.0 + r.2 / 2.0,
+                r.1 + r.3 / 2.0 + 9.0,
+                26.0,
+                ink,
+                Align::Center,
+            );
         }
         c.text(
             &self.font,
@@ -702,15 +809,39 @@ impl Launcher {
         c.dim(170);
         c.fill(NOTICE, [30, 26, 46, 252]);
         c.stroke(NOTICE, 2.0, GOLD);
-        c.text(&self.font, "No games found", VW / 2.0, NOTICE.1 + 58.0, 32.0, GOLD, Align::Center);
+        c.text(
+            &self.font,
+            "No games found",
+            VW / 2.0,
+            NOTICE.1 + 58.0,
+            32.0,
+            GOLD,
+            Align::Center,
+        );
         for (line, base, size, path) in self.notice_lines(text) {
-            c.text(&self.font, &line, VW / 2.0, base, size, if path { GOLD } else { TEXT }, Align::Center);
+            c.text(
+                &self.font,
+                &line,
+                VW / 2.0,
+                base,
+                size,
+                if path { GOLD } else { TEXT },
+                Align::Center,
+            );
         }
         let r = notice_ok_rect();
         c.fill(r, [112, 80, 28, 245]);
         let hot = key.hover == Some(Hit::NoticeOk);
         c.stroke(r, 2.5, if hot { HOVER } else { GOLD });
-        c.text(&self.font, "OK", r.0 + r.2 / 2.0, r.1 + r.3 / 2.0 + 9.0, 26.0, GOLD, Align::Center);
+        c.text(
+            &self.font,
+            "OK",
+            r.0 + r.2 / 2.0,
+            r.1 + r.3 / 2.0 + 9.0,
+            26.0,
+            GOLD,
+            Align::Center,
+        );
     }
 
     fn compose_card(&self, c: &mut Canvas, key: &ViewKey, i: usize) {
@@ -724,13 +855,31 @@ impl Launcher {
             (Some(a), true) => c.image(art, a),
             _ => {
                 c.fill(art, [20, 18, 30, 255]);
-                c.text(&self.font, "Not available", x + w / 2.0, y + ART_H / 2.0 + 7.0, 20.0, MUTED, Align::Center);
+                c.text(
+                    &self.font,
+                    "Not available",
+                    x + w / 2.0,
+                    y + ART_H / 2.0 + 7.0,
+                    20.0,
+                    MUTED,
+                    Align::Center,
+                );
             }
         }
         if !ready {
             let inset = 18.0;
-            c.line((x + inset, y + inset), (x + w - inset, y + ART_H - inset), 5.0, CROSS);
-            c.line((x + w - inset, y + inset), (x + inset, y + ART_H - inset), 5.0, CROSS);
+            c.line(
+                (x + inset, y + inset),
+                (x + w - inset, y + ART_H - inset),
+                5.0,
+                CROSS,
+            );
+            c.line(
+                (x + w - inset, y + inset),
+                (x + inset, y + ART_H - inset),
+                5.0,
+                CROSS,
+            );
         }
         let name_ink = if !ready {
             MUTED
@@ -741,12 +890,36 @@ impl Launcher {
         };
         match GAMES[i].1.split_once(": ") {
             Some((title, sub)) => {
-                c.text(&self.font, title, x + w / 2.0, y + ART_H + 24.0, 22.0, name_ink, Align::Center);
-                c.text(&self.font, sub, x + w / 2.0, y + ART_H + 45.0, 16.0, name_ink, Align::Center);
+                c.text(
+                    &self.font,
+                    title,
+                    x + w / 2.0,
+                    y + ART_H + 24.0,
+                    22.0,
+                    name_ink,
+                    Align::Center,
+                );
+                c.text(
+                    &self.font,
+                    sub,
+                    x + w / 2.0,
+                    y + ART_H + 45.0,
+                    16.0,
+                    name_ink,
+                    Align::Center,
+                );
             }
             None => {
                 let base = y + ART_H + CAPTION_H / 2.0 + 8.0;
-                c.text(&self.font, GAMES[i].1, x + w / 2.0, base, 22.0, name_ink, Align::Center);
+                c.text(
+                    &self.font,
+                    GAMES[i].1,
+                    x + w / 2.0,
+                    base,
+                    22.0,
+                    name_ink,
+                    Align::Center,
+                );
             }
         }
         let (edge, t) = if selected && key.focus == Focus::Cards {
@@ -830,7 +1003,11 @@ fn wrap(font: &FontRef, s: &str, size: f32, max: f32, hard: bool) -> Vec<String>
         }
     } else {
         for word in s.split_whitespace() {
-            let next = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+            let next = if cur.is_empty() {
+                word.to_string()
+            } else {
+                format!("{cur} {word}")
+            };
             if !cur.is_empty() && text_width(font, &next, size) > max {
                 lines.push(std::mem::replace(&mut cur, word.to_string()));
             } else {
@@ -885,7 +1062,11 @@ fn load_art(baked_root: &Path, game: CampaignId) -> Result<Art, String> {
             [pal[e], pal[e + 1], pal[e + 2]].map(|c| (c & 0x3F) << 2 | (c & 0x3F) >> 4)
         })
         .collect();
-    Ok(Art { w: cur.width(), h: cur.height(), rgb })
+    Ok(Art {
+        w: cur.width(),
+        h: cur.height(),
+        rgb,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -907,7 +1088,14 @@ struct Canvas {
 impl Canvas {
     fn new(w: usize, h: usize) -> Self {
         let (s, ox, oy) = fit(w as f32, h as f32);
-        Canvas { w, h, s, ox, oy, buf: vec![0; w * h * 4] }
+        Canvas {
+            w,
+            h,
+            s,
+            ox,
+            oy,
+            buf: vec![0; w * h * 4],
+        }
     }
 
     fn px(&self, vx: f32, vy: f32) -> (f32, f32) {
@@ -945,7 +1133,9 @@ impl Canvas {
         let (top, bottom) = ([26, 18, 46], [6, 6, 14]);
         for y in 0..self.h {
             let t = y as f32 / self.h.max(1) as f32;
-            let c: [u8; 3] = std::array::from_fn(|k| (top[k] as f32 + (bottom[k] as f32 - top[k] as f32) * t) as u8);
+            let c: [u8; 3] = std::array::from_fn(|k| {
+                (top[k] as f32 + (bottom[k] as f32 - top[k] as f32) * t) as u8
+            });
             for x in 0..self.w {
                 let o = (y * self.w + x) * 4;
                 self.buf[o..o + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
@@ -1001,8 +1191,16 @@ impl Canvas {
     fn arrow(&mut self, r: Rect, right: bool, c: Rgba) {
         let (cx, cy) = (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
         let (hw, hh) = (7.0, 11.0);
-        let (tip, back) = if right { (cx + hw, cx - hw) } else { (cx - hw, cx + hw) };
-        let tri = [self.px(tip, cy), self.px(back, cy - hh), self.px(back, cy + hh)];
+        let (tip, back) = if right {
+            (cx + hw, cx - hw)
+        } else {
+            (cx - hw, cx + hw)
+        };
+        let tri = [
+            self.px(tip, cy),
+            self.px(back, cy - hh),
+            self.px(back, cy + hh),
+        ];
         // Signed distance to the edge a→b, positive on the side the
         // triangle's third vertex lies on (so the winding is moot).
         let inside = |a: (f32, f32), b: (f32, f32), o: (f32, f32), p: (f32, f32)| {
@@ -1052,7 +1250,16 @@ impl Canvas {
     }
 
     /// Text on a baseline at virtual (x, base), `size` virtual px tall.
-    fn text(&mut self, font: &FontRef, s: &str, x: f32, base: f32, size: f32, c: Rgba, align: Align) {
+    fn text(
+        &mut self,
+        font: &FontRef,
+        s: &str,
+        x: f32,
+        base: f32,
+        size: f32,
+        c: Rgba,
+        align: Align,
+    ) {
         let scaled = font.as_scaled(PxScale::from(size * self.s));
         let mut width = 0.0;
         let mut prev = None;
@@ -1079,7 +1286,12 @@ impl Canvas {
             if let Some(g) = font.outline_glyph(glyph) {
                 let b = g.px_bounds();
                 g.draw(|gx, gy, cov| {
-                    self.blend(b.min.x as i64 + gx as i64, b.min.y as i64 + gy as i64, c, cov);
+                    self.blend(
+                        b.min.x as i64 + gx as i64,
+                        b.min.y as i64 + gy as i64,
+                        c,
+                        cov,
+                    );
                 });
             }
             pen += scaled.h_advance(id);
@@ -1096,13 +1308,21 @@ mod tests {
     fn the_layout_fits_the_canvas_and_nothing_overlaps() {
         let mut rects: Vec<Rect> = (0..3).map(card_rect).collect();
         for row in 0..3 {
-            rects.extend([arrow_rect(row, false), value_rect(row), arrow_rect(row, true)]);
+            rects.extend([
+                arrow_rect(row, false),
+                value_rect(row),
+                arrow_rect(row, true),
+            ]);
         }
         rects.extend([button_rect(false), button_rect(true)]);
         for (i, a) in rects.iter().enumerate() {
-            assert!(a.0 >= 0.0 && a.1 >= 0.0 && a.0 + a.2 <= VW && a.1 + a.3 <= VH, "{a:?}");
+            assert!(
+                a.0 >= 0.0 && a.1 >= 0.0 && a.0 + a.2 <= VW && a.1 + a.3 <= VH,
+                "{a:?}"
+            );
             for b in &rects[i + 1..] {
-                let apart = a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1;
+                let apart =
+                    a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1;
                 assert!(apart, "{a:?} overlaps {b:?}");
             }
         }
@@ -1115,8 +1335,16 @@ mod tests {
             let r = arrow_rect(0, right);
             c.arrow(r, right, [255, 255, 255, 255]);
             let (x, y) = ((r.0 + r.2 / 2.0) as usize, (r.1 + r.3 / 2.0) as usize);
-            assert_eq!(c.buf[(y * 960 + x) * 4], 255, "right={right}: centre painted");
-            assert_eq!(c.buf[(r.1 as usize * 960 + r.0 as usize) * 4], 0, "corner left bare");
+            assert_eq!(
+                c.buf[(y * 960 + x) * 4],
+                255,
+                "right={right}: centre painted"
+            );
+            assert_eq!(
+                c.buf[(r.1 as usize * 960 + r.0 as usize) * 4],
+                0,
+                "corner left bare"
+            );
         }
     }
 
@@ -1126,8 +1354,17 @@ mod tests {
             let (s, ox, oy) = fit(size.0, size.1);
             let at = |r: Rect| (ox + (r.0 + r.2 / 2.0) * s, oy + (r.1 + r.3 / 2.0) * s);
             assert_eq!(hit(size, at(card_rect(2))), Some(Hit::Card(2)));
-            assert_eq!(hit(size, at(arrow_rect(1, true))), Some(Hit::Arrow { row: 1, right: true }));
-            assert_eq!(hit(size, at(button_rect(true))), Some(Hit::Button { start: true }));
+            assert_eq!(
+                hit(size, at(arrow_rect(1, true))),
+                Some(Hit::Arrow {
+                    row: 1,
+                    right: true
+                })
+            );
+            assert_eq!(
+                hit(size, at(button_rect(true))),
+                Some(Hit::Button { start: true })
+            );
             assert_eq!(hit(size, (ox + 2.0, oy + 2.0)), None);
         }
     }
@@ -1136,8 +1373,10 @@ mod tests {
     fn an_unbaked_tree_leaves_every_game_unavailable_and_unstartable() {
         let root = std::env::temp_dir().join(format!("mgc-launcher-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let mut cfg = Config::default();
-        cfg.gamedata = Some(root.join("no-such-gamedata"));
+        let mut cfg = Config {
+            gamedata: Some(root.join("no-such-gamedata")),
+            ..Default::default()
+        };
         let mut l = Launcher::new(&root, &cfg);
         assert_eq!(l.status.games, [false; 3]);
         assert!(l.status.tree.is_some());
@@ -1153,37 +1392,66 @@ mod tests {
         assert!(!l.notice, "Esc closes the notice");
         assert_eq!(l.take_action(), None, "…and does not quit");
         l.notice = true;
-        l.click((960.0, 720.0), (button_rect(false).0 + 5.0, button_rect(false).1 + 5.0), &mut cfg);
+        l.click(
+            (960.0, 720.0),
+            (button_rect(false).0 + 5.0, button_rect(false).1 + 5.0),
+            &mut cfg,
+        );
         assert_eq!(l.take_action(), None, "Exit is behind the notice");
         assert!(l.notice);
         let ok = notice_ok_rect();
-        l.click((960.0, 720.0), (ok.0 + ok.2 / 2.0, ok.1 + ok.3 / 2.0), &mut cfg);
+        l.click(
+            (960.0, 720.0),
+            (ok.0 + ok.2 / 2.0, ok.1 + ok.3 / 2.0),
+            &mut cfg,
+        );
         assert!(!l.notice, "OK closes it");
         // The longest body (a failed bake, a deep working directory)
         // still clears the OK button.
-        l.message = Some(format!("Preparing the game data failed: {}", "x ".repeat(60)));
+        l.message = Some(format!(
+            "Preparing the game data failed: {}",
+            "x ".repeat(60)
+        ));
         let mut text = l.notice_text();
-        text.iter_mut().filter(|(p, _)| *p).for_each(|(_, t)| *t = "/very/deep/".repeat(12));
+        text.iter_mut()
+            .filter(|(p, _)| *p)
+            .for_each(|(_, t)| *t = "/very/deep/".repeat(12));
         let lines = l.notice_lines(&text);
         let last = lines.last().expect("a body").1;
-        assert!(last + 12.0 < ok.1, "text bottom {last} runs into OK at {}", ok.1);
-        l.click((960.0, 720.0), (card_rect(0).0 + 10.0, card_rect(0).1 + 10.0), &mut cfg);
-        l.key(&winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter), &mut cfg);
+        assert!(
+            last + 12.0 < ok.1,
+            "text bottom {last} runs into OK at {}",
+            ok.1
+        );
+        l.click(
+            (960.0, 720.0),
+            (card_rect(0).0 + 10.0, card_rect(0).1 + 10.0),
+            &mut cfg,
+        );
+        l.key(
+            &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter),
+            &mut cfg,
+        );
         assert_eq!(l.take_action(), None, "nothing to start");
         l.escape();
         assert_eq!(l.take_action(), Some(Action::Exit));
         let (img, quads) = l.frame((320.0, 240.0), (0.0, 0.0), &cfg);
         assert_eq!(img.map(|b| b.len()), Some(320 * 240 * 4));
         assert_eq!(quads.len(), 1);
-        assert!(l.frame((320.0, 240.0), (0.0, 0.0), &cfg).0.is_none(), "unchanged: no re-compose");
+        assert!(
+            l.frame((320.0, 240.0), (0.0, 0.0), &cfg).0.is_none(),
+            "unchanged: no re-compose"
+        );
     }
 
     /// Row 0 is Display: fullscreen, then the window sizes that fit.
     #[test]
     fn the_display_row_offers_the_sizes_that_fit() {
         let root = std::env::temp_dir().join(format!("mgc-launcher-d-{}", std::process::id()));
-        let mut cfg = Config::default();
-        cfg.gamedata = Some(root.join("no-such-gamedata"));
+        let mut cfg = Config {
+            gamedata: Some(root.join("no-such-gamedata")),
+            ..Default::default()
+        };
         let mut l = Launcher::new(&root, &cfg);
         l.set_monitor(Some((1920, 1080)));
         assert_eq!(l.value(0, &cfg), "Fullscreen");
@@ -1191,7 +1459,11 @@ mod tests {
         assert_eq!(l.value(0, &cfg), "Window 1280 × 960");
         assert!(!cfg.render.preference.fullscreen);
         l.step_option(0, true, &mut cfg);
-        assert_eq!(l.value(0, &cfg), "Fullscreen", "1600 × 1200 does not fit 1080 rows");
+        assert_eq!(
+            l.value(0, &cfg),
+            "Fullscreen",
+            "1600 × 1200 does not fit 1080 rows"
+        );
         l.set_monitor(Some((2560, 1440)));
         l.step_option(0, false, &mut cfg);
         assert_eq!(l.value(0, &cfg), "Window 1600 × 1200");
@@ -1205,15 +1477,24 @@ mod tests {
     #[test]
     fn the_controls_row_sets_presets_and_restores_custom() {
         let root = std::env::temp_dir().join(format!("mgc-launcher-p-{}", std::process::id()));
-        let mut cfg = Config::default();
-        cfg.gamedata = Some(root.join("no-such-gamedata"));
+        let mut cfg = Config {
+            gamedata: Some(root.join("no-such-gamedata")),
+            ..Default::default()
+        };
         let mut l = Launcher::new(&root, &cfg);
         assert_eq!(l.value(1, &cfg), "Enhanced");
         l.step_option(1, true, &mut cfg);
         assert_eq!(l.value(1, &cfg), "Classic");
-        assert_eq!(cfg.controls.models.thrust, crate::config::ThrustModel::Classic);
+        assert_eq!(
+            cfg.controls.models.thrust,
+            crate::config::ThrustModel::Classic
+        );
         l.step_option(1, true, &mut cfg);
-        assert_eq!(l.value(1, &cfg), "Enhanced", "no Custom to step to: it was not tuned");
+        assert_eq!(
+            l.value(1, &cfg),
+            "Enhanced",
+            "no Custom to step to: it was not tuned"
+        );
         assert_eq!(l.take_changed(), vec!["controls.preset", "controls.preset"]);
 
         cfg.controls.preferences.mouse_sensitivity_x = 0.8;
@@ -1226,4 +1507,3 @@ mod tests {
         assert!((cfg.controls.preferences.mouse_sensitivity_x - 0.8).abs() < 1e-6);
     }
 }
-

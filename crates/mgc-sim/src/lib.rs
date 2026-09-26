@@ -944,9 +944,7 @@ impl Simulation {
                 refs: KernelRefs::of(&pre_walk),
             });
             let mut drive = world::FlightDrive {
-                propel: kernel
-                    .as_mut()
-                    .map(|k| k as &mut dyn flight::CarpetPropel),
+                propel: kernel.as_mut().map(|k| k as &mut dyn flight::CarpetPropel),
                 s: &mut self.carpet,
                 inp: mc1_input(input),
                 over,
@@ -958,7 +956,6 @@ impl Simulation {
                 }),
             };
             w.tick_flight(&mut drive, pcmd);
-            drop(drive);
             kernel_refs = kernel.map(|k| k.refs);
             walked_prev = Some(prev);
         }
@@ -1251,7 +1248,9 @@ impl Simulation {
         };
         let inp = mc1_input(input);
         let prev = self.carpet;
-        flight::mc1_move(&mut self.carpet, &inp, None, None, &ground, &|_, p| (true, p));
+        flight::mc1_move(&mut self.carpet, &inp, None, None, &ground, &|_, p| {
+            (true, p)
+        });
         if self.altitude_model == AltitudeModel::ExtendedLift {
             let g = (self.ground_height(self.carpet.x as f32 / 256.0, self.carpet.y as f32 / 256.0)
                 * 256.0) as i16;
@@ -1620,7 +1619,11 @@ impl flight::CarpetPropel for EnhancedKernel<'_> {
         let (sy, cy) = f.yaw.sin_cos();
         let fwd = [sy, -cy];
         let right = [cy, sy];
-        let thrust = if self.over.is_some() { 0.0 } else { input.thrust };
+        let thrust = if self.over.is_some() {
+            0.0
+        } else {
+            input.thrust
+        };
         f.vx += (fwd[0] * thrust + right[0] * input.strafe) * ACCEL * TICK_DT;
         f.vz += (fwd[1] * thrust + right[1] * input.strafe) * ACCEL * TICK_DT;
         f.vx *= DRAG_PER_TICK;
@@ -1654,14 +1657,20 @@ impl flight::CarpetPropel for EnhancedKernel<'_> {
         // the step, as retail's does.
         let fwd_sp = f.vx * fwd[0] + f.vz * fwd[1];
         let s = (fwd_sp * TICK_DT * 256.0).round().clamp(-32768.0, 32767.0) as i16;
-        let s_step = (fwd_sp * web * TICK_DT * 256.0).round().clamp(-32768.0, 32767.0) as i16;
+        let s_step = (fwd_sp * web * TICK_DT * 256.0)
+            .round()
+            .clamp(-32768.0, 32767.0) as i16;
         st.act_speed = s;
         st.tgt_speed = s;
         st.strafe = 0;
 
         // Vertical: the game's retail climb law on the enhanced speed
         // (the faithful altitude model only).
-        let z = if self.pitch_climbs { climb(st, s_step) } else { st.z };
+        let z = if self.pitch_climbs {
+            climb(st, s_step)
+        } else {
+            st.z
+        };
         f.roll = enhanced_bank(*self.turn_rate, fwd_sp);
         let q = |t: f32| ((t * 256.0).floor() as i64).rem_euclid(65536) as u16;
         let cand = (q(f.x), q(f.z), z);

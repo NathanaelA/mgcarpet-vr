@@ -1511,10 +1511,7 @@ impl World {
                 ("duel_count", duel.1 as i64),
                 ("duel_hold", duel.2 as i64),
                 ("win_streak", self.win_streak as i64),
-                (
-                    "castle_scan",
-                    self.player_castle().map_or(0, |c| c as i64),
-                ),
+                ("castle_scan", self.player_castle().map_or(0, |c| c as i64)),
                 ("knock_dir", self.g.player_knock.0 as i64),
                 ("knock_mag", self.g.player_knock.1 as i64),
                 ("danger", self.g.player_danger as i64),
@@ -1714,13 +1711,34 @@ impl World {
     /// it (a severed chain's stale tail links are not comparable).
     pub fn chains_shadow_mc1(&self) -> Vec<(&'static str, &[u16], bool)> {
         let mut out: Vec<(&'static str, &[u16], bool)> = vec![
-            ("wiz", &self.g.wiz_chain.list, self.g.wiz_chain.cut == usize::MAX),
-            ("ball", &self.g.ball_chain.list, self.g.ball_chain.cut == usize::MAX),
-            ("bldg", &self.g.bldg_chain.list, self.g.bldg_chain.cut == usize::MAX),
-            ("proj", &self.g.proj_chain.list, self.g.proj_chain.cut == usize::MAX),
+            (
+                "wiz",
+                &self.g.wiz_chain.list,
+                self.g.wiz_chain.cut == usize::MAX,
+            ),
+            (
+                "ball",
+                &self.g.ball_chain.list,
+                self.g.ball_chain.cut == usize::MAX,
+            ),
+            (
+                "bldg",
+                &self.g.bldg_chain.list,
+                self.g.bldg_chain.cut == usize::MAX,
+            ),
+            (
+                "proj",
+                &self.g.proj_chain.list,
+                self.g.proj_chain.cut == usize::MAX,
+            ),
         ];
         for (m, l) in self.g.mob_chains.list.iter().enumerate() {
-            let intact = self.g.mob_chains.cut.get(m).is_none_or(|&c| c == usize::MAX);
+            let intact = self
+                .g
+                .mob_chains
+                .cut
+                .get(m)
+                .is_none_or(|&c| c == usize::MAX);
             out.push(("mob", l, intact));
         }
         out
@@ -3618,7 +3636,11 @@ impl World {
             if p.play_index == 0 {
                 continue;
             }
-            let owner = if i == local { PLAYER_TARGET } else { tr(p.play_index) };
+            let owner = if i == local {
+                PLAYER_TARGET
+            } else {
+                tr(p.play_index)
+            };
             if let Some(team) = self.g.owner_team(owner) {
                 self.g.castle_reg[team as usize] = p.castle_ent.max(0) as u16;
             }
@@ -4582,10 +4604,7 @@ fn mc2_applied_mana_delta(
         // recorded pre-tick counter is exactly the free-run bug one
         // call path over (see
         // [`crate::engine::world::mc2_full_stop_kills_speed_off`]).
-        if full_stop
-            && spell == 3
-            && !crate::engine::world::mc2_full_stop_kills_speed_off()
-        {
+        if full_stop && spell == 3 && !crate::engine::world::mc2_full_stop_kills_speed_off() {
             continue;
         }
         // HEAL (5) NEVER REACHES `sub_68DE0` AT ALL: `sub_6A300`
@@ -5531,9 +5550,7 @@ pub(crate) fn import_ent_mc2(
     // the port's timer on the `f2a` lane.
     let ramp2c = m27
         || (r.class3f == 5 && matches!(r.model40, 21 | 22 | 23))
-        || (r.class3f == 5
-            && r.model40 == 0
-            && !crate::mc2::mobs::no_mc2_m0_2c_home())
+        || (r.class3f == 5 && r.model40 == 0 && !crate::mc2::mobs::no_mc2_m0_2c_home())
         || (r.class3f == 14 && r.model40 == 2)
         || (r.class3f == 2 && matches!(r.model40, 7 | 8));
     let mut e = Ent {
@@ -6678,7 +6695,11 @@ fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
         // retail mints with it; class 12's `+42` is the owner, homed
         // in `f144` above.
         link42: crate::engine::features::Link42(
-            if r.class64 == 10 && matches!(r.model65, 41 | 42) { r.f42 } else { 0 },
+            if r.class64 == 10 && matches!(r.model65, 41 | 42) {
+                r.f42
+            } else {
+                0
+            },
         ),
         // MC2-only lane (the two summit controllers' wide @0x10).
         summit10: crate::engine::features::Summit10(0),
@@ -7180,7 +7201,10 @@ mod tests {
             };
             let e = import_ent_mc2(&r, 79, 79, &|v| v);
             assert_eq!(e.class64, 15);
-            assert_eq!(e.f36, hint as u16, "the hand hint @0x4A -> f36 (hint={hint})");
+            assert_eq!(
+                e.f36, hint as u16,
+                "the hand hint @0x4A -> f36 (hint={hint})"
+            );
         }
     }
 

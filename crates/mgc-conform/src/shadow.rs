@@ -765,6 +765,7 @@ impl Shadow {
     /// - **CLASS/MODEL AGREEMENT**, read off the port's own table: a
     ///   slot holding a different entity on the two sides is a
     ///   missing/extra story the graded diff owns.
+    ///
     /// THE TILE-CHAIN HEAD TABLE (`mapEntityIndex_15B4E0`), compared cell
     /// by cell. Retail's table is not recorded, but it is exactly
     /// derivable from the record: every linked entity (`flags & 4`) whose

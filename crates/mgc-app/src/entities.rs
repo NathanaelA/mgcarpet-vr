@@ -590,7 +590,11 @@ fn mc2_map_dots(
     let (v92, v91, v90) = match env {
         Mc2MapEnv::Day => (mc2_clrd(palette, clrd, 0), 0xE8, 0x1C),
         Mc2MapEnv::Night => (mc2_clrd(palette, clrd, 4095), 0xE8, 0x84),
-        Mc2MapEnv::Cave => (mc2_clrd(palette, clrd, 4095), 0x1C, mc2_clrd(palette, clrd, 240)),
+        Mc2MapEnv::Cave => (
+            mc2_clrd(palette, clrd, 4095),
+            0x1C,
+            mc2_clrd(palette, clrd, 240),
+        ),
     };
     // Blink phases `colorIndex_121[k] = (Turn / k) & 1`
     // (EventsFunctions.cpp:37563-66).
@@ -2299,8 +2303,7 @@ pub fn player_start(_game: GameId, things: &[Thing]) -> Option<(f32, f32)> {
     things
         .iter()
         .filter(is_start)
-        .filter(|t| t.dis_id == 0)
-        .last()
+        .rfind(|t| t.dis_id == 0)
         .or_else(|| things.iter().find(is_start))
         .map(|t| (t.x as f32 + 0.5, t.y as f32 + 0.5))
 }

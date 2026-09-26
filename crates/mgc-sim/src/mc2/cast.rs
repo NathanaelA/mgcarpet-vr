@@ -4458,7 +4458,7 @@ impl World {
             && m < self.g.ent.len()
             && self.g.ent[m].class64 == 15
             && (self.g.ent[m].model65 == 2 || !no_mc2_marker_index_pin()))
-            .then_some(m)
+        .then_some(m)
     }
 
     /// [`Self::mc2_owner_castle_token`] with retail's OWN guard and
@@ -5489,8 +5489,8 @@ impl World {
             // `sub_6DCA0` BAND arm with no `@0x2A` write (and whose
             // caller `sub_6B3E0` has none either). Full citation on
             // [`no_steal_2a_absence`].
-            let absent_2a = matches!(arm.subtype, 1 | 17 | 24)
-                || (arm.subtype == 8 && !no_steal_2a_absence());
+            let absent_2a =
+                matches!(arm.subtype, 1 | 17 | 24) || (arm.subtype == 8 && !no_steal_2a_absence());
             if !absent_2a || no_launch_2a_absence() {
                 e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
             }

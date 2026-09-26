@@ -1371,9 +1371,17 @@ fn mc2_cave_enhanced_lift_reaches_the_retail_cave_ceiling() {
         let over = (f.y - g) * 256.0;
         eprintln!("{thrust:?}: chamber ({x},{zw}), held {over:.1} over ground");
         let (ex, ez) = ((f.x * 256.0) as u16, (f.z * 256.0) as u16);
-        let roof = sim.world.as_ref().unwrap().player_cave_ceiling(ex, ez).unwrap() as f32;
+        let roof = sim
+            .world
+            .as_ref()
+            .unwrap()
+            .player_cave_ceiling(ex, ez)
+            .unwrap() as f32;
         let want = 3072f32.min(roof - g * 256.0);
-        assert!(want > 2048.0, "the chamber is tall enough to tell 3072 from 1024");
+        assert!(
+            want > 2048.0,
+            "the chamber is tall enough to tell 3072 from 1024"
+        );
         assert!(
             (over - want).abs() <= 2.0,
             "{thrust:?}: the cave lift must reach min(ground+3072, roof) = {want}, held {over:.1}"
@@ -1409,7 +1417,8 @@ fn mc2_cave_wall_cancels_speed_under_both_controls() {
         'scan: for zw in 12..240usize {
             for x in 8..240usize {
                 let run = (0..4).all(|d| (0..3).all(|dx| open(x + dx - 1, zw + d)));
-                let wall = (0..7).all(|dx| sealed(x + dx - 3, zw - 1) && sealed(x + dx - 3, zw - 2));
+                let wall =
+                    (0..7).all(|dx| sealed(x + dx - 3, zw - 1) && sealed(x + dx - 3, zw - 2));
                 if run && wall {
                     spot = Some((x, zw));
                     break 'scan;
@@ -1447,7 +1456,10 @@ fn mc2_cave_wall_cancels_speed_under_both_controls() {
                 break;
             }
         }
-        eprintln!("{thrust:?}: wall at ({x},{}), boost cancelled at {hit:?}", zw - 1);
+        eprintln!(
+            "{thrust:?}: wall at ({x},{}), boost cancelled at {hit:?}",
+            zw - 1
+        );
         assert!(hit.is_some(), "{thrust:?}: the cave wall must cancel Speed");
     }
 }

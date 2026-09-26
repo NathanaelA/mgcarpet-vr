@@ -121,7 +121,13 @@ impl StatsCard {
         "Time Taken",
     ];
 
-    pub fn new(stats: LevelStats, ticks: u64, level: usize, hidden: bool, etext: &[String]) -> Self {
+    pub fn new(
+        stats: LevelStats,
+        ticks: u64,
+        level: usize,
+        hidden: bool,
+        etext: &[String],
+    ) -> Self {
         let labels = std::array::from_fn(|i| {
             etext
                 .get(Self::LABEL_IDS[i])
@@ -172,13 +178,22 @@ impl StatsCard {
             (Err(("by rivals", true)), np(s.deaths_rivals(), k[1])),
             (Err(("by nature", true)), np(s.deaths_environment(), k[2])),
             (Err(("still alive", true)), np(s.alive, k[3])),
-            (Ok(1), format!("{hits} hits, {misses} misses ({} %)", fmt10(s.offensive_accuracy_pct10()))),
+            (
+                Ok(1),
+                format!(
+                    "{hits} hits, {misses} misses ({} %)",
+                    fmt10(s.offensive_accuracy_pct10())
+                ),
+            ),
             (Ok(2), np(s.spells_found_fixed, s.spells_fixed_pct10())),
             (Ok(3), np(mana[0] + mana[1], s.mana_pct10())),
             (Err(("in castle", true)), np(mana[0], m[0])),
             (Err(("in dwellings", true)), np(mana[1], m[1])),
             (Err((&unclaimed, false)), np(mana[2], m[2])),
-            (Ok(4), format!("{}h {:02}m {:02}s", secs / 3600, secs / 60 % 60, secs % 60)),
+            (
+                Ok(4),
+                format!("{}h {:02}m {:02}s", secs / 3600, secs / 60 % 60, secs % 60),
+            ),
         ];
         let mut out = Vec::with_capacity(rows.len());
         let mut y = 0;
@@ -196,7 +211,12 @@ impl StatsCard {
                 Ok(k) => (self.labels[k].clone(), false),
                 Err((l, bullet)) => (l.to_string(), bullet),
             };
-            out.push(Line { label, value, sub, y });
+            out.push(Line {
+                label,
+                value,
+                sub,
+                y,
+            });
         }
         out
     }
@@ -218,8 +238,12 @@ pub struct Mc1Stats {
 impl Mc1Stats {
     pub fn load(dir: &Path, card: StatsCard) -> Result<Self, String> {
         let read = |name: &str| -> Result<Vec<u8>, String> {
-            std::fs::read(dir.join(name))
-                .map_err(|e| format!("{}: {e} (rebake — the stats screen is new)", dir.join(name).display()))
+            std::fs::read(dir.join(name)).map_err(|e| {
+                format!(
+                    "{}: {e} (rebake — the stats screen is new)",
+                    dir.join(name).display()
+                )
+            })
         };
         let bg = read("pperf-bg.bin")?;
         let pal_v = read("pperf-pal.bin")?;

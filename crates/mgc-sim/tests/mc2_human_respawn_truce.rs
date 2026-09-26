@@ -67,9 +67,9 @@
 use mgc_formats::LevelPackage;
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::World;
-use mgc_sim::{FlightInput, Simulation};
 use mgc_sim::ids::GameId;
 use mgc_sim::mc2::rivals::Mc2RivalConfig;
+use mgc_sim::{FlightInput, Simulation};
 use std::path::Path;
 
 /// `HATE_NEUTRAL` (0x601F) — the ledger's resting value.

@@ -905,6 +905,7 @@ pub(crate) fn no_mc1_markerless_human_seat() -> bool {
 ///    their dead-wait, off bucket 0, and take NOTHING — the port
 ///    stamped both (754 free-run rows on this take alone; the
 ///    round-153 census's 35,724 rows / 11 takes).
+///
 /// The human respawn path (`World::player_respawn`'s amnesty) had the
 /// same flat loop with an `!eliminated` guard — a dead rival is not
 /// eliminated and still took the truce there.
@@ -1569,7 +1570,9 @@ impl World {
         let (x, y) = match self.start_markers[slot as usize] {
             Some((mx, my)) => ((mx << 8).wrapping_add(128), (my << 8).wrapping_add(128)),
             None if no_mc1_markerless_origin_seat() => {
-                let Some((mx, my)) = self.start_markers[0] else { return };
+                let Some((mx, my)) = self.start_markers[0] else {
+                    return;
+                };
                 ((mx << 8).wrapping_add(128), (my << 8).wrapping_add(128))
             }
             None => (0, 0),
@@ -1598,7 +1601,10 @@ impl World {
         let order: Vec<usize> = if no_mc1_rival_book_order() {
             (0..SPELL_COUNT).collect()
         } else {
-            crate::mc1::spells::DISPLAY_ORDER.iter().map(|&s| s as usize).collect()
+            crate::mc1::spells::DISPLAY_ORDER
+                .iter()
+                .map(|&s| s as usize)
+                .collect()
         };
         for s in order {
             if cfg.book[s] {
@@ -2310,7 +2316,11 @@ impl World {
             // :55714 stores `sub_42150`'s return RAW (it can be 2048;
             // the mover masks) — see [`no_mc1_knock_dir_raw`].
             let raw = Gen::angle_between(ax, ay, vx, vy);
-            self.rivals[ri].knock_dir = if no_mc1_knock_dir_raw() { raw & 0x7FF } else { raw };
+            self.rivals[ri].knock_dir = if no_mc1_knock_dir_raw() {
+                raw & 0x7FF
+            } else {
+                raw
+            };
             self.rivals[ri].knock_mag = ((dmg.max(0) / 10) as i16).clamp(0, 80);
         }
         self.rivals[ri].regen_stall = 16;
@@ -4411,12 +4421,21 @@ impl World {
         } else {
             let o = own as usize;
             (o != 0 && o < self.g.ent.len() && self.g.ent[o].tick70 <= 1)
-                .then(|| self.rivals.iter().find(|r| r.ent == own).map(|r| r.owned[16]))
+                .then(|| {
+                    self.rivals
+                        .iter()
+                        .find(|r| r.ent == own)
+                        .map(|r| r.owned[16])
+                })
                 .flatten()
         };
         let m = tok.unwrap_or(0) as usize;
         if m != 0 && m < self.g.ent.len() {
-            let cap = if lvl <= 7 { Gen::CASTLE_CAP[lvl as usize] } else { 0 };
+            let cap = if lvl <= 7 {
+                Gen::CASTLE_CAP[lvl as usize]
+            } else {
+                0
+            };
             let div = self.g.ent[m].f50 as i32;
             self.g.ent[m].f136 = cap;
             if div != 0 {
@@ -5176,9 +5195,7 @@ impl World {
                 // every tick until the think-tick cascade re-picks
                 // (Idle's cruise leg, :18756). See
                 // [`home_keeps_state`].
-                if !home_keeps_state()
-                    && self.g.ent[i].act_life >= self.g.ent[i].max_life as i32
-                {
+                if !home_keeps_state() && self.g.ent[i].act_life >= self.g.ent[i].max_life as i32 {
                     self.rivals[ri].state = AiState::Fresh;
                 }
             }
@@ -5579,7 +5596,9 @@ impl World {
             self.rival_castle(r.ent)
                 .filter(|&c| self.g.ent[c].flags & 2 != 0)
         };
-        if s == 16 && let Some(c) = bound {
+        if s == 16
+            && let Some(c) = bound
+        {
             let space = self.g.castle_upgrade_space_ok(c);
             let cone = ((255 - r.acc as u32) / 4 + 20) * 2048 / 360;
             let e = &self.g.ent[r.ent as usize];
@@ -6146,7 +6165,10 @@ impl World {
         let (mut body, floor) = if committed {
             (pos, floor)
         } else {
-            (cur, (self.g.ground_z(cur.0, cur.1) as i16).saturating_add(v12))
+            (
+                cur,
+                (self.g.ground_z(cur.0, cur.1) as i16).saturating_add(v12),
+            )
         };
         body.2 = body.2.saturating_add(vz);
         {
@@ -7026,7 +7048,11 @@ mod tests {
             allowed: [false; SPELL_COUNT],
         });
         w.set_wizards(&cfgs, 2);
-        let r = w.rivals.iter().find(|r| r.slot == 1).expect("rival 1 seated");
+        let r = w
+            .rivals
+            .iter()
+            .find(|r| r.slot == 1)
+            .expect("rival 1 seated");
         let e = &w.g.ent[r.ent as usize];
         let ground = w.g.ground_z(0, 0) as i16;
         assert_eq!(
@@ -7034,7 +7060,11 @@ mod tests {
             (0, 0),
             "the zeroed str_9177[1] seats the rival at the origin, not at the human's (120,120)"
         );
-        assert_eq!(e.z, ground.wrapping_add(256), "ground + 0x100, sub_44D30 :54838-42");
+        assert_eq!(
+            e.z,
+            ground.wrapping_add(256),
+            "ground + 0x100, sub_44D30 :54838-42"
+        );
     }
 
     /// THE HUMAN TWIN of the test above (round 161, w161d) — ⭐⭐⭐ A
@@ -7384,7 +7414,10 @@ mod tests {
             (e.x, e.y, e.z)
         };
         let muzzle_z = raw.2.wrapping_add(w.g.ent[i].f78 as i16);
-        assert_ne!(muzzle_z, raw.2, "the muzzle lift is non-zero (non-vacuous z)");
+        assert_ne!(
+            muzzle_z, raw.2,
+            "the muzzle lift is non-zero (non-vacuous z)"
+        );
         let (yaw, pitch) = (300u16, 1990u16);
         // (a) the fireball: pitched 0x4000 off the RAW record, `+36` untouched.
         w.rival_emit(ri, i, 0, raw.0, raw.1, muzzle_z, yaw, pitch);
@@ -7399,7 +7432,11 @@ mod tests {
             want,
             "rival fireball: `+150/+152/+154` = record raw axis stepped 0x4000 along the aim"
         );
-        assert_eq!((e.f30, e.f32), (yaw, pitch), "the aim pair lands in +30/+32");
+        assert_eq!(
+            (e.f30, e.f32),
+            (yaw, pitch),
+            "the aim pair lands in +30/+32"
+        );
         assert_eq!(e.f36, 0, "no token machine writes the bolt's +36");
         // (b) the volcano lob: flat 4096 + the ground under the dest,
         // and the machine's own `+68/+69 = 10/9` (VA 0x56B90/0x56B94).
@@ -7416,7 +7453,11 @@ mod tests {
             (flat.0, flat.1, gz),
             "rival volcano: flat 4096 projection, z = the ground under it"
         );
-        assert_eq!((e.f68, e.f69), (10, 9), "volcano `+68/+69` = (10,9) at the mint");
+        assert_eq!(
+            (e.f68, e.f69),
+            (10, 9),
+            "volcano `+68/+69` = (10,9) at the mint"
+        );
     }
 
     /// ⭐⭐⭐ **THE RIVAL'S CHARGE MOVE IS THE WHOLE EMIT FAMILY'S,
@@ -8001,7 +8042,10 @@ mod tests {
                 e.f36 = 7;
             }
             w.g.proj_tick(b, &ctx);
-            assert_eq!(w.g.ent[b].id24, w.rivals[0].ent, "premise: deflected at pitch {pitch}");
+            assert_eq!(
+                w.g.ent[b].id24, w.rivals[0].ent,
+                "premise: deflected at pitch {pitch}"
+            );
             assert_eq!(w.g.ent[b].f32, want, "live pitch at {pitch}");
             assert_eq!(w.g.ent[b].f36, want, "target pitch at {pitch}");
         }
@@ -8032,7 +8076,10 @@ mod tests {
             let e = &w.g.ent[bolt];
             assert_eq!(e.id24, PLAYER_TARGET, "premise: the human arm deflected");
             assert_eq!(e.f32, 1948, "the live pitch is reversed");
-            assert_eq!(e.f36, 1948, "+36 mirrors it on the human arm too (0x52D2E is one store)");
+            assert_eq!(
+                e.f36, 1948,
+                "+36 mirrors it on the human arm too (0x52D2E is one store)"
+            );
         }
     }
 
@@ -8500,12 +8547,17 @@ mod tests {
             "the orphan joins no book"
         );
         w.tick(away(), PlayerCommand::default());
-        assert_eq!(w.rivals[ri].owned[0], 0, "and the rival still lacks Fireball");
+        assert_eq!(
+            w.rivals[ri].owned[0], 0,
+            "and the rival still lacks Fireball"
+        );
         // The human's own-spell hide must not be what hides it.
         w.player.owned[0] = 0;
         let drawn = |w: &World| {
             w.live_poses().iter().any(|p| p.class == 12 && p.model == 0)
-                || w.live_things().iter().any(|t| t.class == 12 && t.model == 0)
+                || w.live_things()
+                    .iter()
+                    .any(|t| t.class == 12 && t.model == 0)
         };
         assert!(!drawn(&w), "the native encoding draws no hovering jar");
         // Positive control: in retail's phase-0 encoding it IS drawn.
@@ -9292,12 +9344,22 @@ mod tests {
         let i = w.rivals[ri].ent as usize;
         let reg = w.wiz_castle_reg(w.rivals[ri].slot) as usize;
         assert!(reg != 0, "non-vacuity: the starting castle binds wizext+50");
-        assert_eq!(w.g.ent[reg].flags & 2, 0, "…and it has never committed a level-up");
-        assert!(w.g.ent_overlap(i, reg), "…and the rival sits inside its box");
+        assert_eq!(
+            w.g.ent[reg].flags & 2,
+            0,
+            "…and it has never committed a level-up"
+        );
+        assert!(
+            w.g.ent_overlap(i, reg),
+            "…and the rival sits inside its box"
+        );
         w.rivals[ri].mana = 0;
         w.rival_alive_tick(ri, i);
         let at_castle = ((w.rivals[ri].mana_max / 200) as i32).max(1000);
-        assert_eq!(w.rivals[ri].mana_delta, at_castle, "the at-castle rate, not the afield 100");
+        assert_eq!(
+            w.rivals[ri].mana_delta, at_castle,
+            "the at-castle rate, not the afield 100"
+        );
     }
 
     /// `sub_13A70` (Home, :18204-27; CARPET.EXE 0x13A70-0x13B94,
@@ -9313,11 +9375,17 @@ mod tests {
         let mut w = rebound_world();
         let ri = 0;
         let i = w.rivals[ri].ent as usize;
-        assert!(w.rival_castle(w.rivals[ri].ent).is_some(), "non-vacuity: a castle to aim at");
+        assert!(
+            w.rival_castle(w.rivals[ri].ent).is_some(),
+            "non-vacuity: a castle to aim at"
+        );
         w.rivals[ri].state = AiState::Home;
         w.g.ent[i].act_life = w.g.ent[i].max_life as i32;
         w.rival_state_tick(ri, i, false);
-        assert!(matches!(w.rivals[ri].state, AiState::Home), "Home writes no brain byte");
+        assert!(
+            matches!(w.rivals[ri].state, AiState::Home),
+            "Home writes no brain byte"
+        );
     }
 
     /// ⭐⭐⭐ THE DEATH SCATTER DOES NOT BLANK `+676`
@@ -9699,10 +9767,16 @@ mod tests {
         w.rivals[ri].poverty = false;
         let pick = w.rival_attack_pick(ri, true);
         if law {
-            assert!(w.rivals[ri].poverty, "−400 < 20000/4 (`jle` at 0x1604F): the latch sets");
+            assert!(
+                w.rivals[ri].poverty,
+                "−400 < 20000/4 (`jle` at 0x1604F): the latch sets"
+            );
             assert_eq!(pick, None, "a latched picker holds");
         } else {
-            assert!(!w.rivals[ri].poverty, "the u32 arm reads ~4.29e9: never poor");
+            assert!(
+                !w.rivals[ri].poverty,
+                "the u32 arm reads ~4.29e9: never poor"
+            );
         }
         // A STANDING latch on the fatal tick (both pickers' release leg).
         for vs_wizard in [true, false] {
@@ -9710,7 +9784,10 @@ mod tests {
             w.rivals[ri].poverty = true;
             let pick = w.rival_attack_pick(ri, vs_wizard);
             if law {
-                assert!(w.rivals[ri].poverty, "−400 is below the release line: the latch holds");
+                assert!(
+                    w.rivals[ri].poverty,
+                    "−400 is below the release line: the latch holds"
+                );
                 assert_eq!(pick, None);
             } else {
                 assert!(!w.rivals[ri].poverty, "the u32 arm released the latch");
@@ -9721,7 +9798,10 @@ mod tests {
         w.rivals[ri].mana = 11_000;
         w.rivals[ri].poverty = true;
         let _ = w.rival_attack_pick(ri, true);
-        assert!(!w.rivals[ri].poverty, "reaching q + 6000 releases in both arms");
+        assert!(
+            !w.rivals[ri].poverty,
+            "reaching q + 6000 releases in both arms"
+        );
         w.rivals[ri].mana = 4_999;
         let _ = w.rival_attack_pick(ri, true);
         assert!(w.rivals[ri].poverty, "under max/4 latches in both arms");
@@ -9772,7 +9852,10 @@ mod tests {
         // Ordinary purses: the bully leg is unchanged.
         w.rivals[ri].mana = 5_000;
         w.rivals[ri].state = AiState::Cruise;
-        assert!(w.rival_pick_wizard_target(ri, i), "1760 < 5000 bullies in both arms");
+        assert!(
+            w.rival_pick_wizard_target(ri, i),
+            "1760 < 5000 bullies in both arms"
+        );
     }
 
     #[test]
@@ -9939,8 +10022,7 @@ mod tests {
         //     empty — nothing elevated anywhere.
         for r in &w.rivals {
             assert_eq!(
-                r.hate,
-                [HATE_NEUTRAL; 8],
+                r.hate, [HATE_NEUTRAL; 8],
                 "slot {}: level-start seating walks an empty roster",
                 r.slot
             );
@@ -9960,8 +10042,7 @@ mod tests {
         // truce loop against THAT roster.
         w.tick(away(), PlayerCommand::default());
         assert_eq!(
-            w.g.ent[w.rivals[0].ent as usize].tick70,
-            1,
+            w.g.ent[w.rivals[0].ent as usize].tick70, 1,
             "fixture: rival 1 respawned this tick"
         );
         // Slot 3 walks ABOVE slot 1, so its own alive tick has already
@@ -10001,10 +10082,12 @@ mod tests {
         // onto the corpse is gone by the next boundary.
         w.rivals[0].knock_mag = 40;
         w.tick(away(), PlayerCommand::default());
-        assert_eq!(w.rivals[0].knock_mag, 0, "wiped again on the next dead tick");
         assert_eq!(
-            w.g.ent[w.rivals[0].ent as usize].tick70,
-            3,
+            w.rivals[0].knock_mag, 0,
+            "wiped again on the next dead tick"
+        );
+        assert_eq!(
+            w.g.ent[w.rivals[0].ent as usize].tick70, 3,
             "fixture: still in the dead-wait (the countdown is parked)"
         );
     }
@@ -10026,7 +10109,10 @@ mod tests {
         w.g.ent[i].f38 = PLAYER_TARGET;
         w.g.kills = 5;
         w.rival_death_impact(ri, i);
-        assert_eq!(w.kill_tally[0][slot], 1, "the killer's per-victim +30 tally");
+        assert_eq!(
+            w.kill_tally[0][slot], 1,
+            "the killer's per-victim +30 tally"
+        );
         assert_eq!(w.g.kills, 5, "+359 is the creature handoff's alone");
     }
 
@@ -10051,10 +10137,9 @@ mod tests {
         let r = w.rivals[ri].ent as usize;
         let (rx, ry) = (w.g.ent[r].x, w.g.ent[r].y);
         let g = w.g.ground_z(rx.wrapping_add(2 << 8), ry) as i16;
-        let k = w
-            .g
-            .spawn_creature(6, rx.wrapping_add(2 << 8), ry, g)
-            .expect("a kraken head");
+        let k =
+            w.g.spawn_creature(6, rx.wrapping_add(2 << 8), ry, g)
+                .expect("a kraken head");
         assert!(k > r, "fixture: the kraken walks AFTER the rival's slot");
         // CHASE (base 36 + 2) on the rival, counter mid-cycle (5 → 6,
         // an ON tick), awake.
@@ -10065,14 +10150,28 @@ mod tests {
         w.rivals[ri].knock_mag = 0;
         w.rivals[ri].knock_dir = 0;
         w.tick(away(), PlayerCommand::default());
-        assert_eq!(w.g.ent[k].f26, 6, "fixture: the counter stepped into an ON tick");
+        assert_eq!(
+            w.g.ent[k].f26, 6,
+            "fixture: the counter stepped into an ON tick"
+        );
         let (kx, ky) = (w.g.ent[k].x, w.g.ent[k].y);
         let (rx, ry) = (w.g.ent[r].x, w.g.ent[r].y);
         let want = Gen::angle_between(kx, ky, rx, ry).wrapping_add(0x400) & 0x7FF;
         assert_eq!(w.rivals[ri].knock_mag, 80, "+22 = 80 on the tethered rival");
-        assert_eq!(w.rivals[ri].knock_dir, want, "+24 = kraken→rival bearing + 0x400");
-        assert_eq!(w.g.player_knock, (0, 0), "the human's register is not the target's");
-        assert_eq!(w.g.mc1_buffet_post.0, (0, 0), "the post is drained at the kraken's slot");
+        assert_eq!(
+            w.rivals[ri].knock_dir, want,
+            "+24 = kraken→rival bearing + 0x400"
+        );
+        assert_eq!(
+            w.g.player_knock,
+            (0, 0),
+            "the human's register is not the target's"
+        );
+        assert_eq!(
+            w.g.mc1_buffet_post.0,
+            (0, 0),
+            "the post is drained at the kraken's slot"
+        );
     }
 
     #[test]

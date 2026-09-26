@@ -334,7 +334,11 @@ pub fn pointer_apply(
             let back = cursor.0 < l.widget_x + l.widget_w * 0.5;
             let mut next = cur;
             for _ in 1..n {
-                next = if back { (next + n - 1) % n } else { (next + 1) % n };
+                next = if back {
+                    (next + n - 1) % n
+                } else {
+                    (next + 1) % n
+                };
                 set(cfg, next);
                 if matches!((spec.read)(cfg), Val::Choice { cur: got, .. } if got == next) {
                     break;

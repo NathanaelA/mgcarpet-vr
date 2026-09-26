@@ -1525,7 +1525,10 @@ fn an_mc2_dead_rival_wipes_its_knock_every_tick_of_the_wait() {
             break;
         }
     }
-    assert!(landed, "the corpse reaches the floor and enters the dead-wait");
+    assert!(
+        landed,
+        "the corpse reaches the floor and enters the dead-wait"
+    );
     // Seat a fresh impulse on the corpse — retail's own witness is a
     // rival killed low enough that the fall could not spend it
     // (mc2l12 wiz 4: 20 at t=1595, the fall's 16 at t=1596, and 0 at

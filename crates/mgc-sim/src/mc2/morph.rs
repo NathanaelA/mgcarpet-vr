@@ -724,12 +724,8 @@ impl Gen {
             // The legacy arms `MGC_NO_SUMMON_LEASE_FIELD` restores, in
             // the import's order: a lease-kind record whose `f26` holds
             // @0x2E keeps no @0x10.
-            (5, _)
-                if lease_kind
-                    && act % 8 == 7
-                    && !crate::mc2::mobs::no_summon_lease_split() =>
-            {
-                return false
+            (5, _) if lease_kind && act % 8 == 7 && !crate::mc2::mobs::no_summon_lease_split() => {
+                return false;
             }
             (5, 0 | 19 | 27) if !matches!(sv2, 16 | 17) => self.ent[i].f26 = v as i16,
             (5, 10) => self.ent[i].f26 = v as i16,
@@ -951,8 +947,8 @@ mod tests {
     /// Flat 100-height CAVE world (a ceiling plane makes
     /// [`Gen::is_cave`] true, which the (10,89) ctor gates on).
     fn flat_cave_gen() -> Gen {
-        use crate::engine::features::{FeatureAssets, Planes};
         use crate::chassis::ChassisParams;
+        use crate::engine::features::{FeatureAssets, Planes};
         use crate::verbs::VerbSet;
         let planes = Planes {
             height: vec![100; 0x10000],
@@ -1019,7 +1015,11 @@ mod tests {
         );
         // …and the gates it feeds answer the same as they did at the
         // i16 ceiling: no pulse, no despawn, no latch release.
-        assert_eq!(g.ent[i].flags & 0x400, 0, "a latched summit does not despawn");
+        assert_eq!(
+            g.ent[i].flags & 0x400,
+            0,
+            "a latched summit does not despawn"
+        );
         assert_eq!(g.erupting, i as u16, "it keeps the vortex register");
         assert_eq!(
             g.ent[i].f26,
@@ -1079,7 +1079,10 @@ mod tests {
             g.mc2_summit18_tick(v, &test_ctx(patched, strict));
             assert_eq!(g.erupting, v as u16, "the start registers the new vortex");
             let want = if patched && !strict { 3 } else { 250 };
-            assert_eq!(g.ent[castle].f26, want, "castle level, patched={patched} strict={strict}");
+            assert_eq!(
+                g.ent[castle].f26, want,
+                "castle level, patched={patched} strict={strict}"
+            );
 
             // POSITIVE CONTROL: the real previous vortex is kicked.
             let mut g = flat_cave_gen();
@@ -1109,9 +1112,16 @@ mod tests {
             let v = fresh_vortex(&mut g);
             g.plume = sphere as u16;
             g.mc2_summit18_tick(v, &test_ctx(patched, strict));
-            assert_ne!(g.plume, sphere as u16, "the register moved on to the new column");
+            assert_ne!(
+                g.plume, sphere as u16,
+                "the register moved on to the new column"
+            );
             let killed = g.ent[sphere].flags & 0x400 != 0;
-            assert_eq!(killed, !patched || strict, "sphere, patched={patched} strict={strict}");
+            assert_eq!(
+                killed,
+                !patched || strict,
+                "sphere, patched={patched} strict={strict}"
+            );
 
             // POSITIVE CONTROL: the real previous column dies.
             let mut g = flat_cave_gen();
@@ -1141,10 +1151,17 @@ mod tests {
             g.free_entity(stale);
             g.plume = stale as u16;
             g.mc2_summit18_tick(v, &test_ctx(patched, strict));
-            assert_eq!(g.plume, stale as u16, "the new column was minted into the stale slot");
+            assert_eq!(
+                g.plume, stale as u16,
+                "the new column was minted into the stale slot"
+            );
             assert_eq!((g.ent[stale].class64, g.ent[stale].model65), (10, 19));
             let killed = g.ent[stale].flags & 0x400 != 0;
-            assert_eq!(killed, !patched || strict, "new column, patched={patched} strict={strict}");
+            assert_eq!(
+                killed,
+                !patched || strict,
+                "new column, patched={patched} strict={strict}"
+            );
         }
     }
 
@@ -1161,7 +1178,10 @@ mod tests {
             let v = fresh_vortex(&mut g);
             g.erupting = v as u16;
             let bolts = |g: &Gen| {
-                g.ent.iter().filter(|e| e.class64 == 9 && e.model65 == 0).count()
+                g.ent
+                    .iter()
+                    .filter(|e| e.class64 == 9 && e.model65 == 0)
+                    .count()
             };
             let before = bolts(&g);
             g.mc2_summit18_tick(v, &test_ctx(patched, strict));
@@ -1286,7 +1306,10 @@ mod tests {
 
         let p = (40u16 << 8, 40u16 << 8, 100i16);
         let born: Vec<(&str, usize)> = vec![
-            ("(10,9) dome", g.mc2_spawn_dome(p.0, p.1, p.2).expect("dome")),
+            (
+                "(10,9) dome",
+                g.mc2_spawn_dome(p.0, p.1, p.2).expect("dome"),
+            ),
             (
                 "(10,18) summit vortex",
                 g.mc2_spawn_summit18(p.0, p.1, p.2).expect("summit18"),
@@ -1404,7 +1427,11 @@ mod tests {
         for (s, row) in mail.iter().enumerate() {
             assert_eq!(
                 *row,
-                (crate::mc1::mobs::PLAYER_TARGET, s as u16, xpos1_for(s) / 512),
+                (
+                    crate::mc1::mobs::PLAYER_TARGET,
+                    s as u16,
+                    xpos1_for(s) / 512
+                ),
                 "spell {s}"
             );
         }

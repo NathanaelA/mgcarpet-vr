@@ -245,7 +245,11 @@ pub fn gamedata(config_gamedata: Option<&Path>) -> Option<PathBuf> {
 /// an interrupted bake leaves the old tree intact). The launcher's
 /// background bake; the caller re-reads [`status`] afterwards.
 pub fn bake(gamedata: &Path, baked_root: &Path) -> Result<(), String> {
-    println!("baking game data: {} -> {}", gamedata.display(), baked_root.display());
+    println!(
+        "baking game data: {} -> {}",
+        gamedata.display(),
+        baked_root.display()
+    );
     let summary = mgc_import::bake::bake_all_staged(gamedata, baked_root)?;
     if summary.manifest.is_empty() {
         return Err(format!("no game data found under {}", gamedata.display()));

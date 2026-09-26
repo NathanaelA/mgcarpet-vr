@@ -1783,8 +1783,8 @@ impl Gen {
                 let reached = self.ent[i].f146 != 0;
                 self.m22_tail_follow(i);
                 let call = self.m22_relay(i, ctx);
-                let own = crate::engine::features::MC2_RETAIL_REC_PTR_0
-                    .wrapping_add(168 * i as u32);
+                let own =
+                    crate::engine::features::MC2_RETAIL_REC_PTR_0.wrapping_add(168 * i as u32);
                 self.m22_seg_residue.0 = match call {
                     Some(v) => Some((i as u16, v)),
                     None if reached => Some((i as u16, Some(own))),

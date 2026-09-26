@@ -2072,7 +2072,10 @@ mod level_name_tests {
             return;
         };
         let mc1 = exe_level_names(&src.read("CARPET.EXE").unwrap()).expect("CARPET.EXE names");
-        assert_eq!((mc1[0].as_str(), mc1[49].as_str()), ("Al Jahan", "Volcania"));
+        assert_eq!(
+            (mc1[0].as_str(), mc1[49].as_str()),
+            ("Al Jahan", "Volcania")
+        );
         let hw = exe_level_names(&src.read("HIDDEN.EXE").unwrap()).expect("HIDDEN.EXE names");
         assert_eq!((hw[0].as_str(), hw[8].as_str()), ("Goyaan", "Rama'Q"));
         assert_eq!(hw[25..], mc1[25..], "HW reuses MC1's names from 26 on");

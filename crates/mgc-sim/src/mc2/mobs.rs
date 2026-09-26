@@ -3995,8 +3995,9 @@ impl Gen {
                 // THE POOL — see `features::no_mc2_build_repaint_roster`.
                 // The walk order below is the pool order with every
                 // non-member skipped; the human keeps its slot seat.
-                let roster: Option<Vec<u16>> = (!crate::engine::features::no_mc2_build_repaint_roster())
-                    .then(|| self.wiz_chain.list[..self.wiz_chain.visible_len()].to_vec());
+                let roster: Option<Vec<u16>> =
+                    (!crate::engine::features::no_mc2_build_repaint_roster())
+                        .then(|| self.wiz_chain.list[..self.wiz_chain.visible_len()].to_vec());
                 let intact = self.wiz_chain.visible_len() == self.wiz_chain.list.len();
                 for w in 1..n {
                     if let Some(r) = &roster {
@@ -4006,10 +4007,7 @@ impl Gen {
                         }
                         // A blanked head hides every member past the cut,
                         // the pooled carpet included.
-                        if is_human_seat
-                            && !intact
-                            && r.last().is_none_or(|&l| (l as usize) < w)
-                        {
+                        if is_human_seat && !intact && r.last().is_none_or(|&l| (l as usize) < w) {
                             continue;
                         }
                     }
@@ -4089,8 +4087,7 @@ impl Gen {
                         // makes of such a row — see the frame law in
                         // that tick. Same class as the round-99 human
                         // arm (`MGC_NO_MC2_PAINTER_ROW_VERBATIM`).
-                        let (dest, row, own) =
-                            ((e.dest_x, e.dest_y, e.site_z), e.f26, e.id24);
+                        let (dest, row, own) = ((e.dest_x, e.dest_y, e.site_z), e.f26, e.id24);
                         if self
                             .mc2_spawn_wizard_painter(dest, row, own, w as u16)
                             .is_some()
@@ -4222,7 +4219,10 @@ impl Gen {
                     tly.wrapping_add(dy as u8),
                 );
                 if pad != 0xff {
-                    let target = crate::engine::features::building_pad_goal(pad as i32 + base as i32, pad_saturate);
+                    let target = crate::engine::features::building_pad_goal(
+                        pad as i32 + base as i32,
+                        pad_saturate,
+                    );
                     let cur = self.t.height[t] as i32;
                     self.t.height[t] = (cur + (target - cur) / life as i32) as u8;
                     if self.t.angle[t] & 7 == 0 {
@@ -6574,10 +6574,10 @@ impl Gen {
 
 #[cfg(test)]
 mod tests {
+    use super::{ARCHER_BASE, VILLAGER_BASE};
     use crate::engine::features::Gen;
     use crate::mc1::mobs::MobCtx;
     use crate::mc1::mobs::PLAYER_TARGET;
-    use super::{ARCHER_BASE, VILLAGER_BASE};
 
     fn w3v_flat_gen() -> Gen {
         use crate::chassis::ChassisParams;
@@ -6656,7 +6656,10 @@ mod tests {
             mc2_turn: 0,
         };
         g.mc2_awake_pass(&ctx);
-        assert_eq!(g.ent[parent].f58, 7, "the model-0 body stamps 8, then steps to 7");
+        assert_eq!(
+            g.ent[parent].f58, 7,
+            "the model-0 body stamps 8, then steps to 7"
+        );
         assert_eq!(
             g.ent[child].f58, 7,
             "the model-25 branch takes the stamp FIRST and decrements LAST"
@@ -6842,8 +6845,8 @@ mod tests {
     /// `NETHERW.EXE` 0x47d9d `cmpb $0xa,0x3f(%esi)` / 0x47daf
     /// `cmpb $0x2d,0x40(%esi)`), the archer's shrine leg (0x446cf /
     /// 0x446d5) and the trader brain `sub_237B0` (EF:14828-30,
-    /// 0x4822d / 0x48233) all validate `word_0x96_150` on **class 10
-    /// + model 45 and NOTHING else**; not one of them reads the reap
+    /// 0x4822d / 0x48233) all validate `word_0x96_150` on **class 10 +
+    /// model 45 and NOTHING else**; not one of them reads the reap
     /// bit. The port added `flags & 0x400 == 0` to all three, and that
     /// term is false exactly when it matters — a dwelling is
     /// reap-flagged the tick it dies and keeps its class and model
@@ -7369,7 +7372,9 @@ mod tests {
                 g.ent[near].flags |= 0x400;
             }
             g.rebuild_bldg_chain();
-            let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+            let i = g
+                .mc2_spawn_m16(40 * 256, 40 * 256, 400)
+                .expect("a pool slot");
             g.ent[i].tick70 = 16 * 8 + 1; // idle
             g.ent[i].f58 = 0; // asleep: no wizard scan in the shared idle
             g.ent[i].f63 = 0; // the sweep cadence is open
@@ -7377,11 +7382,18 @@ mod tests {
             (g.ent[i].tick70, g.ent[i].f146, near as u16, far as u16)
         };
         let (act, lock, near, _) = build(false);
-        assert_eq!((act, lock), (16 * 8 + 2, near), "control: the nearest house is locked");
+        assert_eq!(
+            (act, lock),
+            (16 * 8 + 2, near),
+            "control: the nearest house is locked"
+        );
         let (act, lock, near, far) = build(true);
         assert_ne!(near, far);
         assert_eq!(act, 16 * 8 + 2, "the sweep engages");
-        assert_eq!(lock, near, "0x2449B walks dword_38527: no reap test, the stamped house stays nearest");
+        assert_eq!(
+            lock, near,
+            "0x2449B walks dword_38527: no reap test, the stamped house stays nearest"
+        );
     }
 
     /// Build a hive + one edible neighbour of the model its bucket
@@ -7563,7 +7575,9 @@ mod tests {
     #[test]
     fn a_charmed_wyvern_with_no_lock_coasts_in_130_until_it_dies() {
         let mut g = q22_gen();
-        let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+        let i = g
+            .mc2_spawn_m16(40 * 256, 40 * 256, 400)
+            .expect("a pool slot");
         // `sub_3A650` on a victim mid-attack: StageVar2 14, owner = the
         // caster, lock 0, action LEFT at 130 (EXE 0x5ef8f).
         g.ent[i].tick70 = 16 * 8 + 2;
@@ -7574,8 +7588,15 @@ mod tests {
         let ctx = q22_ctx();
         for want in [2i16, 1, 0, -1, -2] {
             g.mc2_creature_tick(i, &ctx);
-            assert_eq!(g.ent[i].tick70, 16 * 8 + 2, "0x48e0a `jbe`: no state write on a null");
-            assert_eq!(g.ent[i].site_z, 14, "sub_1E9C0 never runs in 130: no expiry");
+            assert_eq!(
+                g.ent[i].tick70,
+                16 * 8 + 2,
+                "0x48e0a `jbe`: no state write on a null"
+            );
+            assert_eq!(
+                g.ent[i].site_z, 14,
+                "sub_1E9C0 never runs in 130: no expiry"
+            );
             assert_eq!(
                 g.ent[i].lease(),
                 want,
@@ -7586,12 +7607,20 @@ mod tests {
         let mut patched = q22_ctx();
         patched.patches.mc2_wyvern_alliance_brain = true;
         g.mc2_creature_tick(i, &patched);
-        assert_eq!(g.ent[i].tick70, 16 * 8 + 1, "the patch takes the other nine callers' exit");
+        assert_eq!(
+            g.ent[i].tick70,
+            16 * 8 + 1,
+            "the patch takes the other nine callers' exit"
+        );
         // …and `strict` (conformance replay) keeps retail's arm.
         g.ent[i].tick70 = 16 * 8 + 2;
         patched.strict = true;
         g.mc2_creature_tick(i, &patched);
-        assert_eq!(g.ent[i].tick70, 16 * 8 + 2, "strict_retail overrides the patch");
+        assert_eq!(
+            g.ent[i].tick70,
+            16 * 8 + 2,
+            "strict_retail overrides the patch"
+        );
     }
 
     /// `sub_3A650` EF:29688 / EXE 0x5ef6e-0x5ef72: the charm duration
@@ -7600,13 +7629,22 @@ mod tests {
     #[test]
     fn the_charm_stamps_its_duration_into_both_words() {
         let mut g = q22_gen();
-        let i = g.mc2_spawn_m16(40 * 256, 40 * 256, 400).expect("a pool slot");
+        let i = g
+            .mc2_spawn_m16(40 * 256, 40 * 256, 400)
+            .expect("a pool slot");
         g.ent[i].tick70 = 16 * 8 + 1;
         g.mc2_alliance_convert(i as u16, PLAYER_TARGET, 16, 610);
         assert_eq!(g.ent[i].site_z, 14);
         assert_eq!(g.ent[i].lease(), 610, "word_0x2E_46");
-        assert_eq!(g.ent[i].f50, 610, "word_0x30_48 (port `f50`, the MC2 `f30` lane)");
-        assert_eq!(g.ent[i].tick70, 16 * 8 + 7, "an idle victim enters the controlled slot");
+        assert_eq!(
+            g.ent[i].f50, 610,
+            "word_0x30_48 (port `f50`, the MC2 `f30` lane)"
+        );
+        assert_eq!(
+            g.ent[i].tick70,
+            16 * 8 + 7,
+            "an idle victim enters the controlled slot"
+        );
     }
 
     /// ⭐⭐⭐ ROUND 146 — the `sub_1C310` species count their attack-state
@@ -7624,7 +7662,9 @@ mod tests {
     #[test]
     fn a_charmed_chaser_counts_its_clock_only_where_it_reaches_the_resolver() {
         let charmed = |g: &mut Gen, action: u8, lock: u16| -> usize {
-            let i = g.mc2_spawn_m20(40 * 256, 41 * 256, 400).expect("a pool slot");
+            let i = g
+                .mc2_spawn_m20(40 * 256, 41 * 256, 400)
+                .expect("a pool slot");
             g.ent[i].tick70 = action;
             g.ent[i].f146 = lock;
             g.ent[i].f71 = 0;
@@ -7644,13 +7684,21 @@ mod tests {
         let mut g = q22_gen();
         let i = charmed(&mut g, 20 * 8 + 2, PLAYER_TARGET);
         g.mc2_creature_tick(i, &ctx);
-        assert_eq!(g.ent[i].lease(), 609, "one count per tick in the attack state");
+        assert_eq!(
+            g.ent[i].lease(),
+            609,
+            "one count per tick in the attack state"
+        );
         // THE WITNESS — last, so the switched arm proves both controls:
         // 162 with no lock → 161, the clock untouched.
         let mut g = q22_gen();
         let i = charmed(&mut g, 20 * 8 + 2, 0);
         g.mc2_creature_tick(i, &ctx);
-        assert_eq!(g.ent[i].tick70, 20 * 8 + 1, "sub_25E40's bare pointer test bails");
+        assert_eq!(
+            g.ent[i].tick70,
+            20 * 8 + 1,
+            "sub_25E40's bare pointer test bails"
+        );
         assert_eq!(g.ent[i].lease(), 610, "no sub_1ED30 call, no count");
     }
 
@@ -7685,7 +7733,9 @@ mod tests {
 
         let goat = g.mc2_spawn_goat(40 << 8, 40 << 8, 100).expect("goat");
         let arch = g.mc2_spawn_archers(41 << 8, 40 << 8, 100).expect("archers");
-        let vill = g.mc2_spawn_villager(42 << 8, 40 << 8, 100).expect("villager");
+        let vill = g
+            .mc2_spawn_villager(42 << 8, 40 << 8, 100)
+            .expect("villager");
         for (i, model) in [(goat, 1u8), (arch, 4), (vill, 13)] {
             assert_eq!(g.ent[i].class64, 5);
             assert_eq!(g.ent[i].model65, model, "the ctor under test really ran");

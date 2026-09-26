@@ -448,8 +448,8 @@ impl Mc2RespawnWitness {
         // 27599). `MGC_NO_MC2_RESPAWN_CENTRE_POINT=1` restores the old
         // cursor-equality-only rule.
         let jumped = press.is_some() && press != self.prev_press;
-        let centre = !no_mc2_respawn_centre_point()
-            && matches!(press, Some((320, 200)) | Some((320, 240)));
+        let centre =
+            !no_mc2_respawn_centre_point() && matches!(press, Some((320, 200)) | Some((320, 240)));
         let recentred = jumped && (mouse == press || centre);
         let fire = space && (self.prev_space || recentred);
         self.prev_space = space;
@@ -837,7 +837,9 @@ fn mc2_ring_bind(pp: &RetailPlayerMc2, cp: &RetailPlayerMc2) -> Option<(u8, u8)>
     }
     // Retail can only store ONE cell per command, so the first moved
     // index IS the command (remc2's harness breaks on it too).
-    (0..26).find(|&s| pp.ring[s] != cp.ring[s]).map(|s| (s as u8, cp.ring[s]))
+    (0..26)
+        .find(|&s| pp.ring[s] != cp.ring[s])
+        .map(|s| (s as u8, cp.ring[s]))
 }
 
 /// `MGC_NO_MC2_PENDING_COMMIT=1` — the A/B arm for THE PANE COMMIT IS
@@ -876,7 +878,12 @@ pub fn no_mc2_flood_human_spin() -> bool {
 /// signed byte reaches (mc2l18 t=27,261: `-7 -> 512`, delta 0) or the
 /// wrong cursor. Returns the stick inverted off the captured delta
 /// when the pair carries that exact shape.
-pub fn mc2_flood_spin_stick(acc_n: i16, acc_n1: i16, pitch_delta: i16, move_speed: u8) -> Option<i16> {
+pub fn mc2_flood_spin_stick(
+    acc_n: i16,
+    acc_n1: i16,
+    pitch_delta: i16,
+    move_speed: u8,
+) -> Option<i16> {
     if no_mc2_flood_human_spin() {
         return None;
     }
@@ -1211,7 +1218,11 @@ pub fn recover_pair_mc2_kw(
     let recommit = (!mc2_pending_commit_off() && pp.hand_pending != 0 && cp.hand_pending == 0)
         .then(|| {
             let hand = pp.hand_pending - 1;
-            let s = if hand == 0 { cp.hand_left } else { cp.hand_right };
+            let s = if hand == 0 {
+                cp.hand_left
+            } else {
+                cp.hand_right
+            };
             (0..26i16)
                 .contains(&s)
                 .then(|| (s as u8, cp.sel[s as usize], hand))

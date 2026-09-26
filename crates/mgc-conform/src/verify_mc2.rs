@@ -723,8 +723,14 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                 .or_else(|| pmap.get(&slot))
                                 .map(|e| (e.class, e.model, e.x, e.y))
                         };
-                        let mut tg =
-                            crate::verify::classify_pair(roster.as_ref(), &take, pt, &pd, &ctx, &[]);
+                        let mut tg = crate::verify::classify_pair(
+                            roster.as_ref(),
+                            &take,
+                            pt,
+                            &pd,
+                            &ctx,
+                            &[],
+                        );
                         // SLOT-DESYNC pass (computed rule, roster.rs) —
                         // the MC2 face of the wave slot-order desync
                         // (open-leads 0b). BEFORE pose-phase; see

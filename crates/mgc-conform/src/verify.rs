@@ -750,11 +750,7 @@ pub(crate) fn classify_pair(
             field: Some(d.field),
             pos: p,
             // Both sides integral, or no value gate is possible.
-            vals: d
-                .want
-                .parse::<i64>()
-                .ok()
-                .zip(d.got.parse::<i64>().ok()),
+            vals: d.want.parse::<i64>().ok().zip(d.got.parse::<i64>().ok()),
             volcano_blind: d.slot.is_some_and(|sl| blind_kills.contains(&sl)),
         }));
     }

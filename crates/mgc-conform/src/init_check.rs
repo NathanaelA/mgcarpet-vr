@@ -183,7 +183,7 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
                         .join(",")
                 };
                 println!("  FREE retail top{n}: {}", cut(&st.free_stack));
-                println!("  FREE port   top{n}: {}", cut(&pf));
+                println!("  FREE port   top{n}: {}", cut(pf));
             }
             let occ = st
                 .ents

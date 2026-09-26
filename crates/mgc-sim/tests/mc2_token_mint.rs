@@ -169,4 +169,3 @@ fn a_fresh_ground_jar_has_no_pending_tier() {
         );
     }
 }
-
