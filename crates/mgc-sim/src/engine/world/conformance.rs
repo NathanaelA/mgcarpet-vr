@@ -1301,7 +1301,7 @@ impl World {
         self.prev_fire = (false, false);
         self.accel_veto = (false, false);
         self.rival_deaths.clear();
-        self.notification = None;
+        self.notifications.clear();
         self.kill_tally = [[0; 8]; 8];
         self.entities_dirty = true;
 
@@ -3984,7 +3984,7 @@ impl World {
         self.prev_fire = (false, false);
         self.accel_veto = (false, false);
         self.rival_deaths.clear();
-        self.notification = None;
+        self.notifications.clear();
         self.kill_tally = [[0; 8]; 8];
         self.entities_dirty = true;
 

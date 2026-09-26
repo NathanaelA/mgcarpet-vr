@@ -1253,13 +1253,17 @@ pub struct World {
     /// teleporter, switch, objective trigger or castle door. Hash-
     /// tagged only while on.
     pub(crate) inert: bool,
-    /// The top-of-screen notification line (retail's per-player
-    /// `CurrentNotificationText_0x01c_2BFA` + its ~200-tick life): the
-    /// shared, game-generic message surface — spell selection, spell
-    /// level-ups, and later deaths/rival events/objectives. Presentation
-    /// transient, HASH-EXCLUDED (the goldens never see it). See
-    /// [`World::set_notification`] / [`World::notification`].
-    notification: Option<Notification>,
+    /// The top-of-screen notification STACK, oldest first, at most
+    /// [`NOTIFY_MAX`] lines, each on its own timer. Retail MC1 keeps
+    /// one message slot PER WIZARD (`messages_13351_28[player]`) and
+    /// draws every live one on its own line (remc1 :26508-60) — one
+    /// meteor barrage killing five wizards shows five lines; MC2 keeps
+    /// a per-player buffer too. The port once kept a single line (last
+    /// writer wins), which hid all but the last death of a mass kill
+    /// (player report 2026-09-26). Presentation transient,
+    /// HASH-EXCLUDED (the goldens never see it) and not saved. See [`World::set_notification`] /
+    /// [`World::notifications`].
+    notifications: Vec<Notification>,
     /// The level is WON — the true terminator, distinct from
     /// [`World::completed`] (retail: MC1's cmd-27 win-exit
     /// `13325 = 10` :48804; MC2's endGameSeq phase 0xC
@@ -1335,6 +1339,19 @@ struct Mc2EndSeq {
     yaw: u16,
 }
 
+/// The most notification lines shown at once — retail MC1's cap is the
+/// player count, 8. Past it, the oldest line gives way.
+pub const NOTIFY_MAX: usize = 8;
+
+/// What a replacing notification line is (see [`Notification::tag`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotifyTag {
+    /// The change-spell toast.
+    SpellSelect,
+    /// An app-side option echo.
+    Option,
+}
+
 /// A transient top-of-screen notification (retail `CurrentNotification
 /// Text`). `color` is the ink RGB — the original resolves DrawText's
 /// colour from a CLRD-0 RGB444 code (the plain toast is `0xF00` = pure
@@ -1352,6 +1369,10 @@ pub struct Notification {
     pub timer: u16,
     /// Ink colour, RGB (DrawText's resolved `color`).
     pub color: [u8; 3],
+    /// A REPLACING line (spell select, option echo) — a new line with
+    /// the same tag takes its place instead of stacking. `None` =
+    /// an event line (deaths, eliminations, level-ups), which stack.
+    pub tag: Option<NotifyTag>,
 }
 
 /// One live drawable entity, resolved for the app's billboard / map
@@ -4405,7 +4426,7 @@ impl World {
             mc2_duel: None,
             mc2_book: Default::default(),
             mc1_ring: [0; 24],
-            notification: None,
+            notifications: Vec::new(),
             won: false,
             mc2_endseq: None,
             mc2_end_pending: None,
@@ -13458,7 +13479,7 @@ impl World {
             invincible,
             ghost,
             inert,
-            notification: _,
+            notifications: _,
             won,
             mc2_endseq,
             mc2_end_pending: _,
@@ -22802,18 +22823,41 @@ impl World {
         std::mem::take(&mut self.pending_speed_zero)
     }
 
-    /// Raise the top-of-screen notification (retail `SetCurrentNotif
+    /// Raise a top-of-screen EVENT line (retail `SetCurrentNotif
     /// icationMessage`): `text` shown for `ticks` retail frames
     /// (retail's level-up path uses 200, the select toast 20), inked
-    /// `color` (RGB). The
-    /// shared message surface — spell selection/level-ups now, deaths/
-    /// rival events/objectives later. Replaces any current line (last
-    /// writer wins, like the single retail buffer).
+    /// `color` (RGB). Event lines stack (see [`World::notifications`]).
     pub(crate) fn set_notification(&mut self, text: impl Into<String>, ticks: u16, color: [u8; 3]) {
-        self.notification = Some(Notification {
-            text: text.into(),
+        self.push_notification(text.into(), ticks, color, None);
+    }
+
+    /// A REPLACING line: takes the place of any live line with the same
+    /// `tag` (a spell-select or option echo repeated fast must not
+    /// stack).
+    pub(crate) fn set_notification_tagged(
+        &mut self,
+        tag: NotifyTag,
+        text: impl Into<String>,
+        ticks: u16,
+        color: [u8; 3],
+    ) {
+        self.push_notification(text.into(), ticks, color, Some(tag));
+    }
+
+    /// The stack law: a live line with the same tag, or the same text,
+    /// is dropped first (the new one is its refresh, moved to the
+    /// newest place); past [`NOTIFY_MAX`] the oldest gives way.
+    fn push_notification(&mut self, text: String, ticks: u16, color: [u8; 3], tag: Option<NotifyTag>) {
+        self.notifications
+            .retain(|n| n.text != text && (tag.is_none() || n.tag != tag));
+        if self.notifications.len() >= NOTIFY_MAX {
+            self.notifications.remove(0);
+        }
+        self.notifications.push(Notification {
+            text,
             timer: ticks,
             color,
+            tag,
         });
     }
 
@@ -22823,14 +22867,20 @@ impl World {
     /// ~2.5s, white ink to stay apart from the red spell/event line.
     /// Hash-excluded like every notification.
     pub fn notify_option(&mut self, text: impl Into<String>) {
-        self.set_notification(text, 60, [255, 255, 255]);
+        self.set_notification_tagged(NotifyTag::Option, text, 60, [255, 255, 255]);
     }
 
-    /// The active notification (text, ink RGB) for the app to draw, or
-    /// None when the line is idle/expired.
+    /// The live notification lines (text, ink RGB), oldest first — the
+    /// app draws them top-down, one per line.
+    pub fn notifications(&self) -> impl Iterator<Item = (&str, [u8; 3])> {
+        self.notifications.iter().map(|n| (n.text.as_str(), n.color))
+    }
+
+    /// The newest live notification (text, ink RGB), or None when the
+    /// stack is empty.
     pub fn notification(&self) -> Option<(&str, [u8; 3])> {
-        self.notification
-            .as_ref()
+        self.notifications
+            .last()
             .map(|n| (n.text.as_str(), n.color))
     }
 
@@ -22844,12 +22894,10 @@ impl World {
     /// FAST no longer blinks it. Presentation transient — headless
     /// replays never call it, and the hash never sees it.
     pub fn age_notification(&mut self, frames: u16) {
-        if let Some(n) = &mut self.notification {
+        for n in &mut self.notifications {
             n.timer = n.timer.saturating_sub(frames);
-            if n.timer == 0 {
-                self.notification = None;
-            }
         }
+        self.notifications.retain(|n| n.timer != 0);
     }
 
     /// Drain this tick's sound requests plus the ambient-loop inputs
@@ -24564,22 +24612,6 @@ snap_enum!(
     2 => LifeState::Dead,
 );
 
-impl Snap for Notification {
-    fn put(&self, w: &mut Writer) {
-        let Notification { text, timer, color } = self;
-        w.put(text);
-        w.put(timer);
-        w.put(color);
-    }
-    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
-        Ok(Notification {
-            text: r.get()?,
-            timer: r.get()?,
-            color: r.get()?,
-        })
-    }
-}
-
 impl Snap for Mc2EndSeq {
     fn put(&self, w: &mut Writer) {
         let Mc2EndSeq {
@@ -24913,7 +24945,7 @@ impl World {
             invincible,
             ghost,
             inert,
-            notification,
+            notifications: _,
             won,
             mc2_endseq,
             mc2_end_pending,
@@ -24973,7 +25005,6 @@ impl World {
         w.put(pending_respawn);
         w.put(pending_restart);
         w.put(invincible);
-        w.put(notification);
         w.put(won);
         w.put(mc2_endseq);
         w.put(mc2_end_pending);
@@ -25048,7 +25079,8 @@ impl World {
         self.pending_respawn = r.get()?;
         self.pending_restart = r.get()?;
         self.invincible = r.get()?;
-        self.notification = r.get()?;
+        // Toasts are not saved (SNAPSHOT 28): a resume starts clear.
+        self.notifications.clear();
         self.won = r.get()?;
         self.mc2_endseq = r.get()?;
         self.mc2_end_pending = r.get()?;
@@ -53875,6 +53907,46 @@ mod tests {
             !probe(reach),
             "one unit outside it does not — the edge is f80 + pw, exclusive"
         );
+    }
+
+    /// THE TOAST STACK (player report 2026-09-26: one global death
+    /// kills five wizards, and the single-line toast showed only the
+    /// last). Event lines stack oldest-first on their own timers; a
+    /// tagged line replaces its predecessor; an identical live line is
+    /// refreshed, not duplicated; past NOTIFY_MAX the oldest gives way.
+    #[test]
+    fn toasts_stack_per_event_and_replace_per_tag() {
+        let mut w = mc2_flat_world();
+        let red = [0xFF, 0, 0];
+        for n in ["Ash", "Bex", "Cor", "Dun", "Eri"] {
+            w.set_notification(format!("{n} has died."), 100, red);
+        }
+        let lines = |w: &World| w.notifications().map(|(t, _)| t.to_string()).collect::<Vec<_>>();
+        assert_eq!(lines(&w).len(), 5, "a mass kill shows every death");
+        assert_eq!(lines(&w)[0], "Ash has died.", "oldest on top");
+        // Spell selects replace each other, and sit among the events.
+        w.set_notification_tagged(NotifyTag::SpellSelect, "Fireball", 20, red);
+        w.set_notification_tagged(NotifyTag::SpellSelect, "Heal", 20, red);
+        assert_eq!(lines(&w).len(), 6);
+        assert_eq!(lines(&w).last().unwrap(), "Heal");
+        // An identical live line refreshes (moves to newest), no copy.
+        w.set_notification("Ash has died.", 100, red);
+        assert_eq!(lines(&w).len(), 6);
+        assert_eq!(lines(&w).last().unwrap(), "Ash has died.");
+        // Per-line timers: the 20-frame select expires alone.
+        w.age_notification(20);
+        assert!(!lines(&w).contains(&"Heal".to_string()));
+        assert_eq!(lines(&w).len(), 5);
+        // The cap: the oldest gives way.
+        for i in 0..10 {
+            w.set_notification(format!("event {i}"), 100, red);
+        }
+        let l = lines(&w);
+        assert_eq!(l.len(), NOTIFY_MAX);
+        assert_eq!(l.last().unwrap(), "event 9");
+        assert_eq!(l[0], "event 2");
+        w.age_notification(100);
+        assert_eq!(w.notifications().count(), 0);
     }
 
     /// THE HIDDEN-REALM NARRATION (player report 2026-09-26: mc2:04's

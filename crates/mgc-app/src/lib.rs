@@ -7641,7 +7641,11 @@ impl App {
             // The white masks are tinted the ink colour (DrawText's
             // `color`, red for plain toasts).
             if !self.book_open() && assets.has_font() {
-                if let Some((msg, color)) = w.notification() {
+                // The toast STACK, oldest on top, one line each in its
+                // own ink (retail MC1 draws every wizard's live slot
+                // on its own line, remc1 :26508-60).
+                let mut toast_lines = 0usize;
+                {
                     let (ax, ay) = assets.hud_notification_anchor();
                     // Uniform HUD scale (`ui::HudFrame`): the
                     // toast rides under the LEFT-anchored panel
@@ -7649,13 +7653,18 @@ impl App {
                     // runs at 2× because FONT1 is 320-native.
                     let hud_s = ui::HudFrame::new(size.0, size.1).s;
                     let font_s = 2.0 * hud_s;
-                    let tint = [
-                        color[0] as f32 / 255.0,
-                        color[1] as f32 / 255.0,
-                        color[2] as f32 / 255.0,
-                        1.0,
-                    ];
-                    quads.extend(assets.text_quads(msg, ax * hud_s, ay * hud_s, tint, font_s));
+                    let lh = assets.font_line_height() * font_s;
+                    for (msg, color) in w.notifications() {
+                        let tint = [
+                            color[0] as f32 / 255.0,
+                            color[1] as f32 / 255.0,
+                            color[2] as f32 / 255.0,
+                            1.0,
+                        ];
+                        let y = ay * hud_s + toast_lines as f32 * lh;
+                        quads.extend(assets.text_quads(msg, ax * hud_s, y, tint, font_s));
+                        toast_lines += 1;
+                    }
                 }
                 // The MC1/HW WIN message (:26480-26505):
                 // while the win flag holds, the two-line
@@ -7678,9 +7687,8 @@ impl App {
                     // fallback when the bank is absent). One
                     // string — the font's own line height
                     // spaces the two lines (a manual offset
-                    // overlaps them). A live toast owns the
-                    // anchor row; the win block steps one line
-                    // below it.
+                    // overlaps them). Live toasts own the top
+                    // rows; the win block steps below them.
                     let line = |idx: usize, fallback: &str| -> String {
                         match sess.level.etext.get(idx) {
                             Some(s) if !s.is_empty() => s.clone(),
@@ -7689,7 +7697,7 @@ impl App {
                     };
                     let msg = format!(
                         "{}{}\n{}",
-                        if w.notification().is_some() { "\n" } else { "" },
+                        "\n".repeat(toast_lines),
                         line(60, "World restored."),
                         line(61, "Press the space bar to continue."),
                     );

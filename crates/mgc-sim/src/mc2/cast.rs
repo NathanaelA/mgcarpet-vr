@@ -2746,7 +2746,12 @@ impl World {
         // ("Possession" / "Mana Magnet" / "Thunderstorm"), so a level-N
         // pick reads as its distinct spell, not a generic label.
         let name = self.mc2_spell_name(s, t as usize);
-        self.set_notification(name, NOTIFY_TICKS_SELECT, NOTIFY_RED);
+        self.set_notification_tagged(
+            crate::engine::world::NotifyTag::SpellSelect,
+            name,
+            NOTIFY_TICKS_SELECT,
+            NOTIFY_RED,
+        );
     }
 
     /// Retail cmd 0x26 (SHIFT+click fast-bind, EF:37950-53): a raw

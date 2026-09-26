@@ -154,7 +154,11 @@ const MAGIC: u32 = 0x5343_474D;
 ///     level. Joins the World stream after `mc1_frame`.
 /// 27: the ledger gains the possession-free accuracy tally
 ///     (`offensive_shots` / `offensive_hits`) at its tail.
-pub const SNAPSHOT_VERSION: u32 = 27;
+/// 28: the notification line LEAVES the World stream (it became the
+///     toast stack, `World::notifications`) — toasts are presentation,
+///     and a resume starts with none on screen (player ruling
+///     2026-09-26).
+pub const SNAPSHOT_VERSION: u32 = 28;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
