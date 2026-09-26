@@ -16,8 +16,9 @@
 //! with a newer bake epoch) and the original data can be found, the
 //! launcher bakes in the background and the cards light up when it
 //! finishes. Pointing the game at data it cannot find is the future
-//! loader dialog's job; until then the status line says where to put
-//! it.
+//! loader dialog's job; until then, when NO game is ready and nothing
+//! is baking, a modal notice says so and where the installs go — a
+//! first run without data must not look like a broken program.
 //!
 //! The screen composes on the CPU at the window's own resolution (the
 //! text stays crisp at any size), from a 960×720 layout scaled to fit
@@ -106,6 +107,13 @@ fn button_rect(start: bool) -> Rect {
     (if start { 510.0 } else { 250.0 }, BUTTON_Y, BUTTON_W, BUTTON_H)
 }
 
+/// The no-games notice: a centred panel with one OK button.
+const NOTICE: Rect = (110.0, 100.0, 740.0, 540.0);
+
+fn notice_ok_rect() -> Rect {
+    (VW / 2.0 - BUTTON_W / 2.0, NOTICE.1 + NOTICE.3 - BUTTON_H - 28.0, BUTTON_W, BUTTON_H)
+}
+
 /// What an option row sets.
 enum RowKind {
     /// Fullscreen or a window size (`render.preference.fullscreen` /
@@ -175,6 +183,8 @@ enum Hit {
     Arrow { row: usize, right: bool },
     Value(usize),
     Button { start: bool },
+    /// The no-games notice's OK.
+    NoticeOk,
 }
 
 /// A card's baked title art, RGB.
@@ -194,6 +204,7 @@ struct ViewKey {
     values: [String; 3],
     games: [bool; 3],
     status: String,
+    notice: Option<Vec<(bool, String)>>,
 }
 
 pub struct Launcher {
@@ -219,6 +230,8 @@ pub struct Launcher {
     changed: Vec<&'static str>,
     pending: Option<Action>,
     last: Option<ViewKey>,
+    /// The no-games notice is up (modal until dismissed).
+    notice: bool,
 }
 
 impl Launcher {
@@ -246,6 +259,7 @@ impl Launcher {
             changed: Vec::new(),
             pending: None,
             last: None,
+            notice: false,
         };
         if let Some(reason) = l.status.tree.clone() {
             match bakecheck::gamedata(gamedata) {
@@ -265,7 +279,49 @@ impl Launcher {
             }
         }
         l.refresh();
+        l.notice = l.nothing_ready();
         l
+    }
+
+    /// No game can start and no bake will change that.
+    fn nothing_ready(&self) -> bool {
+        self.bake.is_none() && !self.status.games.iter().any(|&g| g)
+    }
+
+    /// The notice's text, one paragraph per entry, `(is_path, text)`;
+    /// an empty text is a gap.
+    fn notice_text(&self) -> Vec<(bool, String)> {
+        let para = |t: &str| (false, t.to_string());
+        let gap = || (false, String::new());
+        let mut out = vec![
+            para(
+                "mgcarpet plays the original Magic Carpet games from your own \
+                 copies, and it did not find any usable game data on this computer.",
+            ),
+            gap(),
+        ];
+        if let Some(m) = self.message.as_deref().filter(|m| m.starts_with("Preparing")) {
+            out.push(para(m));
+            out.push(gap());
+        }
+        let dir = std::env::current_dir()
+            .map(|d| d.join("gamedata").display().to_string())
+            .unwrap_or_else(|_| "gamedata".into());
+        out.push(para(
+            "Copy your GOG installs of Magic Carpet Plus and/or Magic Carpet 2, \
+             unchanged, into:",
+        ));
+        out.push((true, dir));
+        out.push(gap());
+        out.push(para(
+            "gamedata/README.md explains the layout. The game prepares the \
+             data by itself the next time it starts.",
+        ));
+        out
+    }
+
+    fn dismiss_notice(&mut self) {
+        self.notice = false;
     }
 
     /// Re-read the art of every ready game and keep the selection on
@@ -299,6 +355,7 @@ impl Launcher {
             }
             self.status = bakecheck::status(&self.baked_root);
             self.refresh();
+            self.notice = self.nothing_ready();
         }
     }
 
@@ -415,8 +472,12 @@ impl Launcher {
         std::mem::take(&mut self.changed)
     }
 
-    /// Esc leaves.
+    /// Esc leaves (or closes the notice).
     pub fn escape(&mut self) {
+        if self.notice {
+            self.dismiss_notice();
+            return;
+        }
         self.pending = Some(Action::Exit);
     }
 
@@ -426,6 +487,12 @@ impl Launcher {
     pub fn key(&mut self, key: &winit::keyboard::Key, cfg: &mut Config) {
         use winit::keyboard::{Key, NamedKey};
         let Key::Named(k) = key else { return };
+        if self.notice {
+            if matches!(k, NamedKey::Enter | NamedKey::Escape | NamedKey::Space) {
+                self.dismiss_notice();
+            }
+            return;
+        }
         let rows = |f: Focus| match f {
             Focus::Cards => 0,
             Focus::Option(r) => r + 1,
@@ -458,6 +525,12 @@ impl Launcher {
 
     /// A left click at a window position.
     pub fn click(&mut self, size: (f32, f32), cursor: (f32, f32), cfg: &mut Config) {
+        if self.notice {
+            if notice_hit(size, cursor) {
+                self.dismiss_notice();
+            }
+            return;
+        }
         match hit(size, cursor) {
             Some(Hit::Card(i)) if self.status.games[i] => {
                 self.selected = Some(i);
@@ -505,7 +578,11 @@ impl Launcher {
         cfg: &Config,
     ) -> (Option<Vec<u8>>, Vec<UiQuad>) {
         let (w, h) = (size.0.max(1.0) as u32, size.1.max(1.0) as u32);
-        self.hover = hit(size, cursor);
+        self.hover = if self.notice {
+            notice_hit(size, cursor).then_some(Hit::NoticeOk)
+        } else {
+            hit(size, cursor)
+        };
         let key = ViewKey {
             size: (w, h),
             selected: self.selected,
@@ -514,6 +591,7 @@ impl Launcher {
             values: std::array::from_fn(|row| self.value(row, cfg)),
             games: self.status.games,
             status: self.status_line(),
+            notice: self.notice.then(|| self.notice_text()),
         };
         let quad = UiQuad {
             rect: [0.0, 0.0, w as f32, h as f32],
@@ -594,6 +672,45 @@ impl Launcher {
             MUTED,
             Align::Right,
         );
+        if let Some(text) = &key.notice {
+            self.compose_notice(c, key, text);
+        }
+    }
+
+    /// The notice body laid out: (line, baseline, size, is_path).
+    fn notice_lines(&self, text: &[(bool, String)]) -> Vec<(String, f32, f32, bool)> {
+        let lead = 25.0;
+        let mut base = NOTICE.1 + 105.0;
+        let mut out = Vec::new();
+        for (path, para) in text {
+            if para.is_empty() {
+                base += lead / 2.0;
+                continue;
+            }
+            // A path is set smaller and broken by character, not word.
+            let size = if *path { 15.0 } else { 18.0 };
+            for line in wrap(&self.font, para, size, NOTICE.2 - 70.0, *path) {
+                out.push((line, base, size, *path));
+                base += lead;
+            }
+        }
+        out
+    }
+
+    /// The no-games notice over a dimmed launcher.
+    fn compose_notice(&self, c: &mut Canvas, key: &ViewKey, text: &[(bool, String)]) {
+        c.dim(170);
+        c.fill(NOTICE, [30, 26, 46, 252]);
+        c.stroke(NOTICE, 2.0, GOLD);
+        c.text(&self.font, "No games found", VW / 2.0, NOTICE.1 + 58.0, 32.0, GOLD, Align::Center);
+        for (line, base, size, path) in self.notice_lines(text) {
+            c.text(&self.font, &line, VW / 2.0, base, size, if path { GOLD } else { TEXT }, Align::Center);
+        }
+        let r = notice_ok_rect();
+        c.fill(r, [112, 80, 28, 245]);
+        let hot = key.hover == Some(Hit::NoticeOk);
+        c.stroke(r, 2.5, if hot { HOVER } else { GOLD });
+        c.text(&self.font, "OK", r.0 + r.2 / 2.0, r.1 + r.3 / 2.0 + 9.0, 26.0, GOLD, Align::Center);
     }
 
     fn compose_card(&self, c: &mut Canvas, key: &ViewKey, i: usize) {
@@ -671,6 +788,60 @@ fn hit(size: (f32, f32), cursor: (f32, f32)) -> Option<Hit> {
         }
     }
     None
+}
+
+/// Is the pointer on the notice's OK?
+fn notice_hit(size: (f32, f32), cursor: (f32, f32)) -> bool {
+    let (s, ox, oy) = fit(size.0, size.1);
+    let (vx, vy) = ((cursor.0 - ox) / s, (cursor.1 - oy) / s);
+    let r = notice_ok_rect();
+    vx >= r.0 && vx < r.0 + r.2 && vy >= r.1 && vy < r.1 + r.3
+}
+
+/// A string's advance width in virtual units at `size`.
+fn text_width(font: &FontRef, s: &str, size: f32) -> f32 {
+    let scaled = font.as_scaled(PxScale::from(size));
+    let mut width = 0.0;
+    let mut prev = None;
+    for ch in s.chars() {
+        let id = scaled.glyph_id(ch);
+        if let Some(p) = prev {
+            width += scaled.kern(p, id);
+        }
+        width += scaled.h_advance(id);
+        prev = Some(id);
+    }
+    width
+}
+
+/// Greedy word wrap to `max` virtual units. `hard` (a path) breaks
+/// anywhere, by character, since it has no spaces worth keeping.
+fn wrap(font: &FontRef, s: &str, size: f32, max: f32, hard: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    if hard {
+        for ch in s.chars() {
+            cur.push(ch);
+            if text_width(font, &cur, size) > max {
+                cur.pop();
+                lines.push(std::mem::take(&mut cur));
+                cur.push(ch);
+            }
+        }
+    } else {
+        for word in s.split_whitespace() {
+            let next = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+            if !cur.is_empty() && text_width(font, &next, size) > max {
+                lines.push(std::mem::replace(&mut cur, word.to_string()));
+            } else {
+                cur = next;
+            }
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
 }
 
 /// The virtual canvas's scale and offset in a window.
@@ -758,6 +929,15 @@ impl Canvas {
             self.buf[o + k] = (d + (c[k] as f32 - d) * a).round() as u8;
         }
         self.buf[o + 3] = 255;
+    }
+
+    /// Darken the whole window (behind a modal panel).
+    fn dim(&mut self, alpha: u8) {
+        for px in self.buf.chunks_exact_mut(4) {
+            for k in 0..3 {
+                px[k] = (px[k] as u32 * (255 - alpha as u32) / 255) as u8;
+            }
+        }
     }
 
     /// The whole window: a dusk gradient behind the layout.
@@ -964,6 +1144,29 @@ mod tests {
         assert!(l.bake.is_none(), "no data found, nothing to bake");
         assert!(l.status_line().starts_with("No game data found"));
         assert_eq!(l.selected, None);
+        // The notice is up and modal: Esc and clicks elsewhere do not
+        // reach the launcher; OK (or Enter/Esc) dismisses it.
+        assert!(l.notice, "no games: the notice opens");
+        let (img, _) = l.frame((960.0, 720.0), (0.0, 0.0), &cfg);
+        assert!(img.is_some());
+        l.escape();
+        assert!(!l.notice, "Esc closes the notice");
+        assert_eq!(l.take_action(), None, "…and does not quit");
+        l.notice = true;
+        l.click((960.0, 720.0), (button_rect(false).0 + 5.0, button_rect(false).1 + 5.0), &mut cfg);
+        assert_eq!(l.take_action(), None, "Exit is behind the notice");
+        assert!(l.notice);
+        let ok = notice_ok_rect();
+        l.click((960.0, 720.0), (ok.0 + ok.2 / 2.0, ok.1 + ok.3 / 2.0), &mut cfg);
+        assert!(!l.notice, "OK closes it");
+        // The longest body (a failed bake, a deep working directory)
+        // still clears the OK button.
+        l.message = Some(format!("Preparing the game data failed: {}", "x ".repeat(60)));
+        let mut text = l.notice_text();
+        text.iter_mut().filter(|(p, _)| *p).for_each(|(_, t)| *t = "/very/deep/".repeat(12));
+        let lines = l.notice_lines(&text);
+        let last = lines.last().expect("a body").1;
+        assert!(last + 12.0 < ok.1, "text bottom {last} runs into OK at {}", ok.1);
         l.click((960.0, 720.0), (card_rect(0).0 + 10.0, card_rect(0).1 + 10.0), &mut cfg);
         l.key(&winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter), &mut cfg);
         assert_eq!(l.take_action(), None, "nothing to start");
