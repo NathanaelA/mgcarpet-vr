@@ -1393,6 +1393,10 @@ pub struct LivePose {
     pub owner_type_index: Option<u16>,
     /// Animation frame (entity offset 88) for the 2..=16 draw types.
     pub frame: u8,
+    /// The action index (`actionIndex_0x45_69`, our `tick70`) — MC2's
+    /// minimap reads it (a charred tree, (2,0) action 2, plots nothing:
+    /// `DrawMinimapEntities_B_61A00` GameUI.cpp:1151-58).
+    pub action: u8,
     /// Position, tile units (torus [0, 256)).
     pub x: f32,
     pub z: f32,
@@ -4694,6 +4698,7 @@ impl World {
                 type_index: e.type86,
                 owner_type_index: self.ball_owner_type_index(e),
                 frame: e.frame88,
+                action: e.tick70,
                 x: e.x as f32 / 256.0,
                 z: e.y as f32 / 256.0,
                 alt: e.z as f32 / 256.0,

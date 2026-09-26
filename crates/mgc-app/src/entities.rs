@@ -545,14 +545,19 @@ const MC2_TEAM_NIGHT: [(u8, u8); 8] = [
 ];
 
 /// A 12-bit `0xRGB` minimap colour code (`MapColourIndexs.h`)
-/// resolved through the level palette. Retail routes these through
-/// `CLRD-0.DAT` — which is exactly a PRECOMPUTED nearest-palette-
-/// index table for the 4096 codes (loaded Basic.cpp:330, indexed
-/// GameUI.cpp:1166 etc.) — so the live quantization here is the same
-/// mapping without a bake. (RGB nibble order: the enum's own names
-/// align with the shared marker conventions — SPELLS 0xF00 red,
-/// CIVILIANS 0x00F blue, CREATURE 0xFFF white.)
-fn mc2_clrd(palette: &[[u8; 4]; 256], code: u16) -> u8 {
+/// resolved to a palette index. Retail reads the map type's own table
+/// (`CLRD-0` / `CLRN-0` / `CLRC-0.DAT`, swapped in beside the palette,
+/// EventsFunctions.cpp:31866-99; indexed GameUI.cpp:1166 etc.) — the
+/// baked `clrd.bin`. ⚠ It is NOT the palette's nearest colour: that
+/// guess (the fallback below, for an unbaked bundle) differs on ~36%
+/// of codes in every map type — e.g. night/cave UNPOSSESSED pink
+/// (239,146,146) came out mauve, cave SPELLS (255,36,36) as (219,12,0).
+/// (RGB nibble order: SPELLS 0xF00 red, CIVILIANS 0x00F blue,
+/// CREATURE 0xFFF white.)
+fn mc2_clrd(palette: &[[u8; 4]; 256], clrd: Option<&[u8]>, code: u16) -> u8 {
+    if let Some(t) = clrd {
+        return t[(code & 0xFFF) as usize];
+    }
     let n = |v: u16| {
         let v = (v & 0xF) as u8;
         (v << 4) | v
@@ -574,6 +579,7 @@ fn mc2_clrd(palette: &[[u8; 4]; 256], code: u16) -> u8 {
 fn mc2_map_dots(
     poses: &[LivePose],
     palette: &[[u8; 4]; 256],
+    clrd: Option<&[u8]>,
     env: Mc2MapEnv,
     turn: u32,
     icon_swapped: &std::collections::HashSet<u16>,
@@ -582,9 +588,9 @@ fn mc2_map_dots(
     // Map-type colours (GameUI.cpp:1043-63): v92 = the unit fill,
     // v91/v90 = building/marker fallbacks.
     let (v92, v91, v90) = match env {
-        Mc2MapEnv::Day => (mc2_clrd(palette, 0), 0xE8, 0x1C),
-        Mc2MapEnv::Night => (mc2_clrd(palette, 4095), 0xE8, 0x84),
-        Mc2MapEnv::Cave => (mc2_clrd(palette, 4095), 0x1C, mc2_clrd(palette, 240)),
+        Mc2MapEnv::Day => (mc2_clrd(palette, clrd, 0), 0xE8, 0x1C),
+        Mc2MapEnv::Night => (mc2_clrd(palette, clrd, 4095), 0xE8, 0x84),
+        Mc2MapEnv::Cave => (mc2_clrd(palette, clrd, 4095), 0x1C, mc2_clrd(palette, clrd, 240)),
     };
     // Blink phases `colorIndex_121[k] = (Turn / k) & 1`
     // (EventsFunctions.cpp:37563-66).
@@ -596,7 +602,7 @@ fn mc2_map_dots(
     let by_owner = |t: Option<u8>| {
         team(t)
             .map(|(bright, _)| bright)
-            .unwrap_or_else(|| mc2_clrd(palette, 0xF0F))
+            .unwrap_or_else(|| mc2_clrd(palette, clrd, 0xF0F))
     };
     // LABEL_173 (:1303-16): linked wizard → the blink pair, else v91.
     let linked_blink = |t: Option<u8>| {
@@ -618,25 +624,31 @@ fn mc2_map_dots(
         }
         let mut size = 1u8;
         let color = match (p.class, p.model) {
-            // Scenery: tree v90 (:1147-62); marker stone blinks the
-            // MARKER_STONE code (:1163-70); dolmen blinks the
-            // UNPOSSESSED_BUILDING code against v90 (:1171-79).
+            // Scenery: tree v90 (:1147-62) — but a CHARRED tree
+            // (action 2, the stump) plots nothing (`v31 = 0`); marker
+            // stone blinks the MARKER_STONE code (:1163-70); dolmen
+            // blinks the UNPOSSESSED_BUILDING code against v90
+            // (:1171-79); model 3 is never drawn (LABEL_123), and EVERY
+            // model above 3 is a v90 dot (LABEL_78 → LABEL_121) — the
+            // cave flora (2,6) among them, MC2's go-this-way markers.
+            (2, 0) if p.action == 2 => continue,
             (2, 0) => v90,
             (2, 1) => {
                 if blink3 {
-                    mc2_clrd(palette, 0x88)
+                    mc2_clrd(palette, clrd, 0x88)
                 } else {
                     continue;
                 }
             }
             (2, 2) => {
                 if blink2 {
-                    mc2_clrd(palette, 0x888)
+                    mc2_clrd(palette, clrd, 0x888)
                 } else {
                     v90
                 }
             }
-            (2, _) => continue,
+            (2, 3) => continue,
+            (2, _) => v90,
             // Castle: retail = the +58 MSPRD flag stamp (:1188-95);
             // 2x2 team dot until the stamp bank bakes. Wizard bodies
             // (own = the player arrow; enemies need Beyond Sight) and
@@ -650,7 +662,7 @@ fn mc2_map_dots(
             // civilians (12..=14) → CIVILIANS; every other wild
             // creature → the map-type fill.
             (5, _) if p.team.is_some() => team(p.team).unwrap().1,
-            (5, 12..=14) => mc2_clrd(palette, 15),
+            (5, 12..=14) => mc2_clrd(palette, clrd, 15),
             (5, _) => v92,
             (9, _) => by_owner(p.team),
             // Class 10 (:1256-1332): 0x12 and 0x56/0x57 skip; the
@@ -691,17 +703,17 @@ fn mc2_map_dots(
             // Every other switch is undrawn (:1341-84).
             (11, 0x0C | 0x1F) => {
                 size = 2;
-                mc2_clrd(palette, 4095)
+                mc2_clrd(palette, clrd, 4095)
             }
             (11, _) => continue,
             // Spells + class-15 (:1396-1402).
-            (12 | 15, _) => mc2_clrd(palette, 3840),
+            (12 | 15, _) => mc2_clrd(palette, clrd, 3840),
             // The class-14 model 5 blinker (:1403-09).
             (14, 5) => {
                 if blink3 {
-                    mc2_clrd(palette, 3840)
+                    mc2_clrd(palette, clrd, 3840)
                 } else {
-                    mc2_clrd(palette, 4095)
+                    mc2_clrd(palette, clrd, 4095)
                 }
             }
             _ => continue,
@@ -764,13 +776,14 @@ pub fn map_dots_from_poses(
     game: GameId,
     poses: &[LivePose],
     palette: &[[u8; 4]; 256],
+    clrd: Option<&[u8]>,
     owned_buildings: bool,
     env: Mc2MapEnv,
     turn: u32,
     icon_swapped: &std::collections::HashSet<u16>,
 ) -> Vec<mgc_render::MapDot> {
     if game == GameId::Mc2 {
-        return mc2_map_dots(poses, palette, env, turn, icon_swapped);
+        return mc2_map_dots(poses, palette, clrd, env, turn, icon_swapped);
     }
     let blink = (turn >> 3) & 1 == 0;
     // MC2's linked-building flash phase (`colorIndex_121[3]`, the
@@ -2675,6 +2688,7 @@ mod tests {
             type_index,
             owner_type_index: None,
             frame: 0,
+            action: 0,
             x: 10.0,
             z: 10.0,
             alt: 1.0,
@@ -2804,6 +2818,7 @@ mod tests {
                 GameId::Mc1,
                 &[p],
                 &pal,
+                None,
                 owned_buildings,
                 Mc2MapEnv::Day,
                 if blink { 0 } else { 8 },
@@ -2869,6 +2884,7 @@ mod tests {
                 GameId::Mc1,
                 &[p],
                 &pal,
+                None,
                 true,
                 Mc2MapEnv::Day,
                 turn,
@@ -2886,6 +2902,68 @@ mod tests {
         // but sits on the dark half of the building phase.
         assert_eq!(at_turn(claimed, 8)[0].color, TEAM0_ODD);
         assert_eq!(at_turn(claimed, 3)[0].size, 1);
+    }
+
+    /// MC2's scenery arm (GameUI.cpp:1147-87): EVERY class-2 model
+    /// above 3 plots a v90 dot — the cave flora (2,6), MC2's
+    /// go-this-way markers, were missing from the port's map (player
+    /// report 2026-09-26: retail's cave map is dotted green with them,
+    /// the port's bare). Model 3 never plots; a charred tree (2,0) in
+    /// action 2 plots nothing; a live tree plots v90.
+    #[test]
+    fn mc2_scenery_dots_follow_the_retail_class2_arm() {
+        let pal = [[0u8; 4]; 256];
+        let mut clrc = vec![0u8; 4096];
+        clrc[240] = 171; // CLRC-0.DAT's green (cave v90)
+        let dots = |p: LivePose| {
+            map_dots_from_poses(
+                GameId::Mc2,
+                &[p],
+                &pal,
+                Some(&clrc),
+                false,
+                Mc2MapEnv::Cave,
+                0,
+                &Default::default(),
+            )
+        };
+        for m in [4u8, 5, 6, 7, 8] {
+            let d = dots(pose(2, m, false, 0));
+            assert_eq!(d.len(), 1, "(2,{m}) plots a dot");
+            assert_eq!(d[0].color, 171, "(2,{m}) in the cave v90 green");
+        }
+        assert!(dots(pose(2, 3, false, 0)).is_empty(), "(2,3) never plots");
+        assert_eq!(dots(pose(2, 0, false, 0))[0].color, 171, "a live tree");
+        let mut stump = pose(2, 0, false, 0);
+        stump.action = 2;
+        assert!(dots(stump).is_empty(), "a charred tree plots nothing");
+    }
+
+    /// The colour codes resolve through the MAP TYPE'S OWN retail table
+    /// (CLR{D,N,C}-0.DAT), not the palette's nearest colour — the two
+    /// disagree on ~36% of codes (night/cave UNPOSSESSED pink, cave
+    /// SPELLS red, …).
+    #[test]
+    fn mc2_map_colours_come_from_the_retail_table() {
+        let mut pal = [[0u8; 4]; 256];
+        pal[4] = [255, 0, 255, 255]; // the nearest to 0xF0F
+        let mut clr = vec![0u8; 4096];
+        clr[0xF0F] = 215; // what the table actually says
+        let dot = |t: Option<&[u8]>| {
+            map_dots_from_poses(
+                GameId::Mc2,
+                &[pose(10, 45, false, 0)],
+                &pal,
+                t,
+                false,
+                Mc2MapEnv::Night,
+                0,
+                &Default::default(),
+            )[0]
+            .color
+        };
+        assert_eq!(dot(Some(&clr)), 215, "the table wins");
+        assert_eq!(dot(None), 4, "nearest-colour only as the unbaked fallback");
     }
 
     /// The MC2 minimap law (DrawMinimapEntities_B_61A00, remc2
@@ -2906,6 +2984,7 @@ mod tests {
                 GameId::Mc2,
                 &[p],
                 &pal,
+                None,
                 false,
                 Mc2MapEnv::Night,
                 turn,
@@ -2959,7 +3038,7 @@ mod tests {
         let mut swapped = std::collections::HashSet::new();
         swapped.insert(42u16);
         let dots = |game, p: LivePose| {
-            map_dots_from_poses(game, &[p], &pal, false, Mc2MapEnv::Day, 0, &swapped)
+            map_dots_from_poses(game, &[p], &pal, None, false, Mc2MapEnv::Day, 0, &swapped)
         };
         // MC1 jar (class 12) with an icon: no dot; without: the dot.
         assert!(dots(GameId::Mc1, pose(12, 3, false, 42)).is_empty());

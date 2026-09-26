@@ -143,7 +143,10 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    20-px face, glyph id = char − 31). Both optional to the app.
 /// 25: `assets/mc1-ui` gains `level-names.json` — the 50 world names
 ///    of CARPET.EXE and HIDDEN.EXE (the performance screen's title).
-pub const BAKE_EPOCH: u32 = 25;
+/// 26: every MC2 variant bundle gains `clrd.bin` — the map type's
+///    minimap colour table (CLR{D,N,C}-0.DAT); the map dots read it
+///    instead of a nearest-palette guess.
+pub const BAKE_EPOCH: u32 = 26;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

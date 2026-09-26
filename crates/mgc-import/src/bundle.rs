@@ -135,6 +135,13 @@ struct VariantSpec {
     /// view while the paralyze web (`mobilizeCounter`) is live
     /// (EventsFunctions.cpp:21668-710).
     web: Option<&'static str>,
+    /// MC2 only: the minimap colour table (`DATA/CLR{D,N,C}-0.DAT`,
+    /// 4096 bytes — a palette index per 12-bit `0xRGB` code), one per
+    /// map type; night-fog shares night's (remc2 EventsFunctions.cpp
+    /// :31866-99 loads it beside the palette). NOT a nearest-colour
+    /// derivative of the palette: ~36% of codes resolve differently,
+    /// so the real table is load-bearing (map dot colours).
+    clrd: Option<&'static str>,
 }
 
 const MC1_VARIANTS: [VariantSpec; 2] = [
@@ -155,6 +162,7 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKY.DAT"),
         web: None,
+        clrd: None,
     },
     VariantSpec {
         variant: "mc1-arctic",
@@ -173,6 +181,7 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKY1-0.DAT"),
         web: None,
+        clrd: None,
     },
 ];
 
@@ -199,6 +208,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKYD0-0.DAT"),
         web: Some("DATA/HWEBD0-0"),
+        clrd: Some("DATA/CLRD-0.DAT"),
     },
     VariantSpec {
         variant: "mc2-night",
@@ -217,6 +227,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKYN0-0.DAT"),
         web: Some("DATA/HWEBN0-0"),
+        clrd: Some("DATA/CLRN-0.DAT"),
     },
     VariantSpec {
         variant: "mc2-night-fog",
@@ -235,6 +246,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKYN0-0.DAT"),
         web: Some("DATA/HWEBN0-0"),
+        clrd: Some("DATA/CLRN-0.DAT"),
     },
     VariantSpec {
         variant: "mc2-cave",
@@ -253,6 +265,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         etext: Some("DATA/ETEXT.DAT"),
         sky: None,
         web: Some("DATA/HWEBC0-0"),
+        clrd: Some("DATA/CLRC-0.DAT"),
     },
 ];
 
@@ -1868,6 +1881,13 @@ fn bake_variant(
         let spells = source(sp, &mut sources)?;
         expect(sp, &spells, 26 * 80)?;
         emit("spells.bin", &spells)?;
+    }
+
+    // Minimap colour table, MC2 flavor (CLR{D,N,C}-0.DAT verbatim).
+    if let Some(c) = spec.clrd {
+        let clrd = source(c, &mut sources)?;
+        expect(c, &clrd, 4096)?;
+        emit("clrd.bin", &clrd)?;
     }
 
     // UI sprites (HSPR) + the book screen palette (MC1 only — MC2 has

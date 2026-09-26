@@ -33,6 +33,9 @@
 //!   verbatim, 4-byte records)
 //! - `spells.bin` — MC2's spell table (SPELLS.DAT verbatim, 26 rows
 //!   x 80 bytes)
+//! - `clrd.bin` — MC2's minimap colour table for the variant's map
+//!   type (CLR{D,N,C}-0.DAT verbatim: a palette index per 12-bit
+//!   `0xRGB` code, 4096 bytes)
 //! - `etext.json` — the game's sentence bank (ETEXT.DAT), a JSON
 //!   string array indexed by the engine's sentence id
 //! - `sky.bin` — the 256x256 8bpp parallax sky bitmap (absent on
@@ -314,6 +317,10 @@ pub struct Bundle {
     /// remc2 Spells.h — {i8, u8 enabled, 3 x 26-byte subspell tiers});
     /// the par1-authored class-10 overrides and class-15 cast costs.
     pub spells: Option<Vec<u8>>,
+    /// MC2's minimap colour table (CLR{D,N,C}-0.DAT verbatim, 4096
+    /// bytes: code `0xRGB` → palette index). Retail's own quantization,
+    /// NOT the palette's nearest colour.
+    pub clrd: Option<Vec<u8>>,
     /// The game's sentence bank (ETEXT.DAT decoded to strings, index
     /// = the engine's sentence id; empty slots preserved so indices
     /// stay aligned). MC2: 471 entries — 23..=47 the map-screen level
@@ -539,6 +546,7 @@ impl Bundle {
             build_dat: read_opt("build.dat.bin"),
             bldgprm: read_opt("bldgprm.bin"),
             spells: read_opt("spells.bin"),
+            clrd: read_opt("clrd.bin").filter(|t| t.len() == 4096),
             etext,
             sky,
         })

@@ -696,6 +696,9 @@ struct LoadedLevel {
     world_init: Option<WorldInit>,
     /// Bundle palette, kept for runtime map-dot rebuilds.
     palette_rgba: [[u8; 4]; 256],
+    /// MC2's minimap colour table for this map type (`clrd.bin`);
+    /// `None` off MC2 or on an unbaked bundle.
+    mc2_clrd: Option<Vec<u8>>,
     /// The MC2 map-marker environment (team-colour table + map-type
     /// colours) from the level header; Day for MC1/HW.
     mc2_env: entities::Mc2MapEnv,
@@ -1410,6 +1413,7 @@ fn load_level(
                         game_id,
                         &poses,
                         &bundle.palette,
+                        bundle.clrd.as_deref(),
                         false,
                         mc2_env,
                         0,
@@ -1574,6 +1578,7 @@ fn load_level(
         world,
         world_init,
         palette_rgba: bundle.palette,
+        mc2_clrd: bundle.clrd.clone(),
         mc2_env,
         map_icons: entities::MapIcons {
             // Castle = UI sprite 58+team, balloon = 66+team, all
@@ -3239,6 +3244,7 @@ impl App {
                             sess.level.game,
                             &poses,
                             &sess.level.palette_rgba,
+                            sess.level.mc2_clrd.as_deref(),
                             self.cfg.render.enhancement.map_owned_buildings,
                             sess.level.mc2_env,
                             sess.sim.tick as u32,
@@ -4871,6 +4877,7 @@ impl App {
                 level.game,
                 &poses,
                 &level.palette_rgba,
+                level.mc2_clrd.as_deref(),
                 self.cfg.render.enhancement.map_owned_buildings,
                 level.mc2_env,
                 // MC1 derives its ~4 Hz claimed-ball blink from the
@@ -10895,6 +10902,7 @@ fn run_screenshot(
             type_index: 0,
             owner_type_index: None,
             frame: 0,
+            action: 0,
             x,
             z,
             alt,
