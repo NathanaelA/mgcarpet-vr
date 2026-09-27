@@ -75,6 +75,10 @@ pub struct Channels {
     /// (and on v2 takes recorded without terrain).
     #[serde(default)]
     pub terrain: Option<TerrainDecl>,
+    /// The take carries an `init` record between the header and the
+    /// first tick ([`InitRecord`], [`Recording::init`]).
+    #[serde(default)]
+    pub init: bool,
 }
 
 /// The header's terrain-channel declaration: which guest planes the
@@ -153,6 +157,54 @@ pub struct TickRecord {
     /// them BEFORE grading this row's hash, and must REFUSE a key it
     /// does not implement — the take's course depends on it.
     pub set: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The u16 terrain-painting LCG (MC1 `pseudoRand_12C1E0`, MC2
+    /// `rand2_17B4E0`), read with the terrain planes inside the capture
+    /// window. Retail takes recorded from 2026-09-27 on.
+    pub terrain_rand: Option<u16>,
+}
+
+/// THE INIT RECORD (docs/RECORDING.md "The init record"): the world as
+/// level initialisation left it, BEFORE frame 1 — taken by the recorder
+/// inside the tick-patched exe's init park, between the header and the
+/// first tick. The tick channels ride in [`InitRecord::tick`] (its `t`
+/// is meaningless, 0); `terrain` is the FULL plane image in the header's
+/// plane order, deliberately outside the base/delta chain.
+#[derive(Debug, Clone, Default)]
+pub struct InitRecord {
+    /// The stub counter the park held at (0 on a fresh process).
+    pub counter: u64,
+    pub tick: TickRecord,
+    pub terrain: Option<Vec<u8>>,
+    /// MC2 `building_F2CD0x` (4802 B), the V03 save's last SMAP part.
+    pub building_f2cd0: Option<Vec<u8>>,
+}
+
+impl InitRecord {
+    /// Is this line an init record? (The recorder writes `type` first.)
+    fn is_init_line(line: &str) -> bool {
+        line.starts_with("{\"type\":\"init\"")
+    }
+
+    fn from_line(line: &str, line_no: u64) -> Result<InitRecord, String> {
+        #[derive(Deserialize)]
+        struct RawInit<'a> {
+            #[serde(default)]
+            counter: Option<u64>,
+            #[serde(borrow, default)]
+            terrain_b64: Option<std::borrow::Cow<'a, str>>,
+            #[serde(borrow, default)]
+            building_f2cd0_b64: Option<std::borrow::Cow<'a, str>>,
+        }
+        let err = |e: serde_json::Error| format!("line {line_no}: init record: {e}");
+        let ri: RawInit = serde_json::from_str(line).map_err(err)?;
+        let row: RawRow = serde_json::from_str(line).map_err(err)?;
+        Ok(InitRecord {
+            counter: ri.counter.unwrap_or(0),
+            tick: TickRecord::from_row(row, 0)?,
+            terrain: b64_str("terrain_b64", ri.terrain_b64)?,
+            building_f2cd0: b64_str("building_f2cd0_b64", ri.building_f2cd0_b64)?,
+        })
+    }
 }
 
 /// The static-frame input registers (same ±1-tick attribution caveat as
@@ -229,6 +281,8 @@ struct RawRow<'a> {
     hash: Option<serde_json::Value>,
     #[serde(default)]
     set: Option<serde_json::Value>,
+    #[serde(default)]
+    terrain_rand: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -285,6 +339,11 @@ impl TickRecord {
             .as_ref()
             .and_then(|t| t.as_u64())
             .ok_or("tick record without a numeric \"t\"")?;
+        Self::from_row(row, t)
+    }
+
+    /// The channels of a parsed row (tick or init record) at tick `t`.
+    fn from_row(row: RawRow<'_>, t: u64) -> Result<TickRecord, String> {
         let (state, ext) = match row.state {
             None => (None, None),
             Some(st) => {
@@ -335,6 +394,11 @@ impl TickRecord {
                 .and_then(|h| h.as_str())
                 .and_then(|h| u64::from_str_radix(h, 16).ok()),
             set: row.set.as_ref().and_then(|s| s.as_object()).cloned(),
+            terrain_rand: row
+                .terrain_rand
+                .as_ref()
+                .and_then(|v| v.as_u64())
+                .and_then(|v| u16::try_from(v).ok()),
         })
     }
 
@@ -400,6 +464,10 @@ impl TickRecord {
                 .and_then(|h| h.as_str())
                 .and_then(|h| u64::from_str_radix(h, 16).ok()),
             set: v.get("set").and_then(|s| s.as_object()).cloned(),
+            terrain_rand: v
+                .get("terrain_rand")
+                .and_then(|v| v.as_u64())
+                .and_then(|v| u16::try_from(v).ok()),
         })
     }
 }
@@ -412,6 +480,9 @@ pub struct Recording {
     /// typed [`Header`] leaves untyped, for a writer that derives a new
     /// recording from this one (`mgc-conform slice`).
     pub header_json: serde_json::Value,
+    /// The take's [`InitRecord`], read by [`Recording::open`] so no tick
+    /// reader ever sees it. `None` on takes without one.
+    pub init: Option<InitRecord>,
     reader: Box<dyn BufRead>,
     /// The current line, reused across rows. A tick line is ~0.5 MB of
     /// JSON, so `BufRead::lines()`'s fresh `String` per row was a
@@ -478,14 +549,27 @@ impl Recording {
         }
         let header_json: serde_json::Value =
             serde_json::from_str(&first).map_err(|e| format!("header parse: {e}"))?;
-        Ok(Recording {
+        let mut rec = Recording {
             header,
             header_json,
+            init: None,
             reader,
             line: String::new(),
             pending: false,
             line_no: 1,
-        })
+        };
+        // The init record, when present, sits between the header and the
+        // first tick: take it here, and hand any other line back to the
+        // tick readers untouched.
+        if let Some(r) = rec.next_line() {
+            r?;
+            if InitRecord::is_init_line(&rec.line) {
+                rec.init = Some(InitRecord::from_line(&rec.line, rec.line_no)?);
+            } else {
+                rec.pending = true;
+            }
+        }
+        Ok(rec)
     }
 
     /// Read the next non-empty line into the reusable buffer. `None`
@@ -3942,6 +4026,61 @@ mod tests {
         assert!(block.base.is_none());
         let dec = decode_terrain_delta(&block.delta.unwrap(), 1, 256).unwrap();
         assert_eq!(dec[0], vec![(9, 42)]);
+    }
+
+    /// The init record (a recorder line between the header and t=0) is
+    /// taken by `open` — typed, with its full plane image — and every
+    /// tick reader starts at t=0 exactly as on a take without one.
+    #[test]
+    fn init_record_is_taken_by_open() {
+        use base64::Engine as _;
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let dir = std::env::temp_dir();
+        let header = r#"{"type":"header","format":2,"game":"mc2","level":0,"source":"retail","tick_hz":24,"channels":{"input":"none","obs":false,"state":true,"hash":false,"terrain":{"planes":["type"],"dims":[4,1]},"init":true}}"#;
+        let init = format!(
+            r#"{{"type":"init","counter":0,"state":{{"struct_b64":"{}"}},"terrain_rand":44470,"terrain_b64":"{}","building_f2cd0_b64":"{}"}}"#,
+            b64(&[1, 2, 3]),
+            b64(&[9, 8, 7, 6]),
+            b64(&[5; 4])
+        );
+        let tick = |t: u64| {
+            format!(
+                r#"{{"t":{t},"state":{{"struct_b64":"{}"}},"terrain_rand":7}}"#,
+                b64(&[t as u8])
+            )
+        };
+        for with_init in [true, false] {
+            let path = dir.join(format!("mgcr-init-record-test-{with_init}.jsonl"));
+            let mut lines = vec![header.to_string()];
+            if with_init {
+                lines.push(init.clone());
+            }
+            lines.extend((0..3).map(tick));
+            std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+            let mut rec = Recording::open(&path).unwrap();
+            assert!(rec.header.channels.init);
+            match (&rec.init, with_init) {
+                (Some(i), true) => {
+                    assert_eq!(i.counter, 0);
+                    assert_eq!(i.tick.state.as_deref(), Some(&[1u8, 2, 3][..]));
+                    assert_eq!(i.tick.terrain_rand, Some(44470));
+                    assert_eq!(i.terrain.as_deref(), Some(&[9u8, 8, 7, 6][..]));
+                    assert_eq!(i.building_f2cd0.as_deref(), Some(&[5u8; 4][..]));
+                }
+                (None, false) => {}
+                other => panic!("init record: {:?}", other.0.is_some()),
+            }
+            let ticks: Vec<u64> = std::iter::from_fn(|| rec.next_tick())
+                .map(|r| r.unwrap().t)
+                .collect();
+            assert_eq!(ticks, [0, 1, 2]);
+            let mut rec = Recording::open(&path).unwrap();
+            assert!(rec.skip_to(1, None).unwrap());
+            let t1 = rec.next_tick().unwrap().unwrap();
+            assert_eq!((t1.t, t1.terrain_rand), (1, Some(7)));
+            let _ = std::fs::remove_file(&path);
+        }
     }
 
     /// The writer's output must reopen through the reader — container

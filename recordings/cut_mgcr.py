@@ -84,6 +84,11 @@ def apply_terrain(line):
 na = nb = 0
 last_a = first_b_line = None
 for line in dec.stdout:
+    if line.startswith(b'{"type":"init"'):
+        # The init record (pre-frame-1 world) belongs to the take's START:
+        # it stays with part A, between its header and t=0, untouched.
+        enc_a.stdin.write(line)
+        continue
     m = T_RE.match(line)
     assert m, line[:60]
     t = int(m.group(1))

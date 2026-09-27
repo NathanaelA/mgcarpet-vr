@@ -296,6 +296,18 @@ class Layout:
     # Struct offset of the MapType byte (0=Day 1=Night 2=Cave), used only
     # for the log line; 0 = the game has no cave concept.
     terrain_cave_byte_off: int = 0
+    # The per-cell ENTITY INDEX (`mapEntityIndex`, i16[256*256]: the pool
+    # slot heading each tile's chain, 0 = none), offset from the same
+    # `terrain_guest` block base. Fully derivable from the pool, but it is
+    # what retail actually walks and what the remc2 V03 save carries, so
+    # it is captured as ground truth (recorder only, see
+    # `pin_entity_index`): the terrain channel carries it as two byte
+    # planes, `entity_index_lo` / `entity_index_hi`. None = not mapped.
+    terrain_index_off: Optional[int] = None
+    # The u16 terrain-painting LCG that sits right after the index in both
+    # engines (MC1 `pseudoRand_12C1E0`, MC2 `rand2_17B4E0`): the retile /
+    # blend passes draw it, and the port otherwise has to RECOVER it.
+    terrain_rand_off: Optional[int] = None
 
 
 MC1_ENT = EntFields()
@@ -393,6 +405,9 @@ EXE_MB_MAGIC = b"MGCTTIK1"  # 8 bytes the stub writes once, on first tick
 EXE_MB_TICK = 0x08  # u32 monotonic sub-step counter
 EXE_MB_INWIN = 0x0C  # u32 1 while parked in the quiescent spin
 EXE_MB_PERIOD = 0x18  # u32 configured spin period (PIT counts)
+EXE_MB_PARK_ARM = 0x1C  # u32 nonzero = park at the next level start
+EXE_MB_PARK = 0x20  # u32 the init-park handshake (PARK_* below)
+EXE_MB_PARK_MAGIC = 0x24  # b"MGCP" once the process has parked once
 
 # MC2 / NETHERW_REC.EXE mailbox. MC2 needs no pacer (it frame-limits itself),
 # so its stub is SIGNAL-ONLY: same tick(+8)/in_window(+0xC) layout, a distinct
@@ -412,6 +427,27 @@ EXE_MB2_MAGIC = b"MGCTTIK2"  # 8 bytes the MC2 stub writes once, on first frame
 # page while the magic scan found the mailbox at delta −0xB0E98 — so
 # `find_mailbox` had been taking its scan fallback on every MC2 take.
 EXE_MB2_FRAME = EXE_MB2_BASE + MC2_DATA_DELTA
+EXE_MB2_PARK_ARM = 0x10  # u32 nonzero = park before the next level's frame 1
+EXE_MB2_PARK = 0x14  # u32 the init-park handshake (PARK_* below)
+EXE_MB2_PARK_MAGIC = 0x18  # b"MGCP" once the process has parked once
+
+# THE INIT PARK (tools/mc_exe_tickpatch.py, 2026-09-27; both arms). On the
+# frame-driver call that starts a level (the first level of a fresh process,
+# or one the host armed) the stub holds the world as level initialisation
+# left it -- before frame 1 -- with PARK = 1 and the "MGCP" word written,
+# until the host writes PARK_RELEASE (or the stub's own timeout passes). It
+# then leaves PARK_RELEASED or PARK_TIMEOUT behind. The counter and in_window
+# do not move while parked (on MC1 the tick stub has not even run, so its
+# magic is not there yet); see `capture_init` for the snapshot taken there
+# (the `init` record).
+PARK_IDLE, PARK_PARKED, PARK_RELEASE, PARK_RELEASED, PARK_TIMEOUT = 0, 1, 2, 3, 4
+PARK_MAGIC = b"MGCP"
+PARK_NAMES = {PARK_IDLE: "idle", PARK_PARKED: "parked", PARK_RELEASE: "releasing",
+              PARK_RELEASED: "host", PARK_TIMEOUT: "timeout"}
+
+# MC2's building_F2CD0x (4802 B, the building-shape table the V03 save's
+# SMAP part carries after the planes). Level-independent, built at boot.
+MC2_BUILDING_F2CD0 = (0xF2CD0 + MC2_DATA_DELTA, 4802)
 
 # The shared plane order (both engines keep them contiguous, in this
 # order, off the build's `terrain_guest` base — the same order retail's
@@ -455,6 +491,8 @@ LAYOUT_MC1 = Layout(
     ),
     static_needle=MC1_STATIC_NEEDLE,
     terrain_planes=MC_TERRAIN_PLANES,
+    terrain_index_off=0x40000,  # mapEntityIndex_10C1E0 (after the angle plane)
+    terrain_rand_off=0x60000,  # pseudoRand_12C1E0
 )
 
 # MC1HW shares every offset; only the level data (needle) differs — it
@@ -546,6 +584,8 @@ LAYOUT_MC2 = Layout(
     # struct+0x2FED4 (0=Day 1=Night 2=Cave) and only labels the log line.
     terrain_cave_plane=("ceiling", 0x40000),
     terrain_cave_byte_off=0x2FED4,
+    terrain_index_off=0x50000,  # mapEntityIndex_15B4E0 (after the ceiling)
+    terrain_rand_off=0x70000,  # rand2_17B4E0
     # in_struct_mouse_off intentionally UNSET: the field-map's mouse guess
     # (@0x36DEC) read 0 through a whole mid-steer dump, so it is NOT the aim
     # source. The steering intent is captured instead from the persistent
@@ -768,6 +808,18 @@ class Located:
     # early (while the level was still generating) so pin_externals
     # needs no scan of its own on the go-live critical path.
     static_hits: Optional[list] = None
+    # True when the static frame was taken from an MC1 init park (no owner
+    # chain existed yet) -- `confirm_parked_frame` re-checks it post-spawn.
+    from_park: bool = False
+    # The entity-index plane (i16) and the terrain LCG (u16), pinned by
+    # `pin_entity_index` -- ONLY by the recorder's own main, so a caller
+    # of these helpers that does not ask (the retake rig) keeps its
+    # terrain channel exactly as before.
+    index_host: Optional[int] = None
+    rand_host: Optional[int] = None
+    # The LCG value read by the LAST `read_terrain` -- i.e. inside the same
+    # capture window as the planes; `build_record` stamps it.
+    rand_value: Optional[int] = None
 
 
 def validate_hits(
@@ -782,10 +834,114 @@ def validate_hits(
         if data is None:
             continue
         ok, why = _validate_struct(data, layout)
+        if not ok and why.startswith("no class-3") \
+                and _mc2_parked_at_init(mem, layout, struct_host):
+            # MC2 spawns its carpet INSIDE frame 1, so a world parked
+            # before frame 1 has no class 3 yet -- but a stub parked at
+            # exactly this struct's mailbox is a stronger witness than the
+            # census (the census's other checks all passed).
+            ok = True
         if ok:
             return Located(region=region, struct_host=struct_host), ""
         last = why
     return None, last
+
+
+def _mc2_parked_at_init(mem: GuestMem, layout: Layout, struct_host: int
+                        ) -> bool:
+    """True if the MC2 mailbox in the frame this struct anchors (the struct
+    is a static at VA 0xD41A0) holds the magic and an init park."""
+    if layout.family != "mc2":
+        return False
+    return read_park(mem, struct_host - MC2_STRUCT_VA + EXE_MB2_FRAME,
+                     mailbox_spec(layout)) == PARK_PARKED
+
+
+def read_park(mem: GuestMem, host: int, spec: tuple) -> Optional[int]:
+    """The PARK word at mailbox `host`, or None when the park magic is not
+    there (no park ever ran in this process, or not a mailbox at all)."""
+    _, _, _, _, park_off, pmagic_off = spec
+    v = mem.pread(host + park_off, pmagic_off + 4 - park_off)
+    if v is None or v[pmagic_off - park_off:] != PARK_MAGIC:
+        return None
+    return struct.unpack_from("<I", v, 0)[0]
+
+
+def _mc1_parked_frame(mem: GuestMem, layout: Layout, static_hits: list,
+                      needle_hits: list) -> Optional[Located]:
+    """MC1/HW at an init park, where the census cannot pass (GameLoop parks
+    BEFORE frame 1's join prologue spawns any carpet) and neither can the
+    owner-chain that normally ties the heap struct to the static frame.
+    Instead: a static-frame candidate whose mailbox holds a live park (two
+    landmarks at their fixed offsets: byte_99B58 and the park magic), the
+    build named by the layout (CARPET = A for mc1, HIDDEN = B for mc1hw --
+    the mailbox address is the same in both, so it cannot tell them apart),
+    and the ONE needle hit that looks like a freshly initialised struct
+    (wizard index and player count in range, slot 0 free, every class byte
+    small). Verified again against the owner chain once frame 1 has spawned
+    the carpets (`confirm_parked_frame`)."""
+    if layout.family != "mc1" or not static_hits or not needle_hits:
+        return None
+    spec = mailbox_spec(layout)
+    want = "A" if layout.name == "mc1" else "B"
+    build = next((v for v in layout.build_variants if v.name == want), None)
+    if build is None:
+        return None
+    bases = {h - build.static_needle_guest for h in static_hits}
+    parked = [sb for sb in bases
+              if read_park(mem, sb + EXE_MB_BASE, spec) == PARK_PARKED]
+    if len(parked) != 1:
+        return None
+    cands = []
+    for region, struct_host in needle_hits:
+        d = mem.pread(struct_host, layout.struct_size)
+        if d is None:
+            continue
+        cls = [d[layout.pool_off + s * layout.ent_stride + layout.ent.class_]
+               for s in range(layout.ent_count)]
+        if (_u16(d, layout.wizidx_off) <= 7
+                and 1 <= _u16(d, layout.localplayer_off + 2) <= 8
+                and cls[0] == 0 and max(cls) < 32):
+            cands.append((region, struct_host))
+    if len(cands) != 1:
+        return None
+    sb = parked[0]
+    pv = mem.pread(sb + build.struct_ptr_guest, 4)
+    loc = Located(region=cands[0][0], struct_host=cands[0][1],
+                  static_base=sb, build=build,
+                  struct_guest=struct.unpack("<I", pv)[0] if pv else None,
+                  from_park=True)
+    return loc
+
+
+def confirm_parked_frame(mem: GuestMem, loc: Located, layout: Layout) -> bool:
+    """Re-derive an MC1 frame taken at an init park the normal way (static
+    landmark + struct pointer + owner chain), now that frame 1 has spawned
+    the carpets. True if it agrees; else adopts the verified frame and
+    returns False (the caller must then distrust the init record)."""
+    if not loc.from_park:
+        return True
+    data = mem.pread(loc.struct_host, layout.struct_size)
+    found = None if data is None else find_static_base(
+        mem, layout, data, loc.static_hits)
+    if found is None:
+        print("! could not re-verify the parked MC1 frame against the owner "
+              "chain (no owner-linked entity yet?) — keeping it",
+              file=sys.stderr)
+        return True
+    sb, build, sg = found
+    if (sb, build.name, sg) == (loc.static_base, loc.build.name,
+                                loc.struct_guest):
+        print("parked MC1 frame re-verified against the owner chain.",
+              file=sys.stderr)
+        return True
+    print(f"!! the parked MC1 frame DISAGREES with the owner chain "
+          f"(static 0x{loc.static_base:x}/{loc.build.name} vs 0x{sb:x}/"
+          f"{build.name}) — adopting the verified frame and DROPPING the "
+          "init record", file=sys.stderr)
+    loc.static_base, loc.build, loc.struct_guest = sb, build, sg
+    loc.from_park = False
+    return False
 
 
 def locate_struct(
@@ -1012,6 +1168,15 @@ def wait_for_struct(
         # Scan it now, while the generator is still running.
         if hits and static_hits is None and layout.static_needle:
             static_hits = scan_static_needle(mem, layout)
+        # An MC1 init park holds the world BEFORE any carpet exists, so the
+        # census above can never pass while it lasts: locate by the park.
+        if static_hits:
+            ploc = _mc1_parked_frame(mem, layout, static_hits, hits)
+            if ploc is not None:
+                print("struct located at an MC1 init park (pre-spawn: "
+                      "census skipped, frame taken from the parked mailbox)",
+                      file=sys.stderr)
+                return done(ploc)
         now = time.time()
         if now - last_note > 3.0:
             print(f"waiting for gameplay to start… ({reason})",
@@ -1030,11 +1195,20 @@ def wait_for_struct(
         # whenever the census passed mid-scan.
         if hits:
             until = now + 10.0
+            next_park = 0.0
             while time.time() < until:
                 time.sleep(0.001)
                 loc, _ = validate_hits(mem, layout, hits)
                 if loc is not None:
                     return done(loc)
+                if static_hits and time.time() > next_park:
+                    next_park = time.time() + 0.05
+                    ploc = _mc1_parked_frame(mem, layout, static_hits, hits)
+                    if ploc is not None:
+                        print("struct located at an MC1 init park (pre-spawn: "
+                              "census skipped, frame taken from the parked "
+                              "mailbox)", file=sys.stderr)
+                        return done(ploc)
         else:
             time.sleep(0.25)
 
@@ -1453,7 +1627,7 @@ def build_header(args: argparse.Namespace, layout: Layout, loc: Located,
     # set (the cave ceiling appears only on MC2 cave levels).
     if loc.terrain_hosts is not None:
         channels["terrain"] = {
-            "planes": [name for name, _ in loc.terrain_hosts],
+            "planes": terrain_plane_names(loc),
             "dims": list(layout.terrain_dims),
         }
     hdr: dict = {
@@ -1514,6 +1688,8 @@ def build_record(tick: int, data: bytes, layout: Layout, mem: GuestMem,
     wall = read_wallclock(mem, loc, layout)
     if wall is not None:
         rec["wallclock"] = wall
+    if loc.rand_value is not None:  # read with the planes, inside the window
+        rec["terrain_rand"] = loc.rand_value
     ext, ext_raw = read_externals(mem, loc, layout, data)
     if ext is not None:
         rec["input"] = ext
@@ -1767,9 +1943,57 @@ def _implausible_plane(layout: Layout, name: str, data: bytes
     return None
 
 
+INDEX_PLANES = ("entity_index_lo", "entity_index_hi")
+
+
+def pin_entity_index(mem: GuestMem, loc: Located, layout: Layout) -> None:
+    """Pin the entity-index plane (and the terrain LCG after it) onto the
+    terrain block the planes were pinned from. Leaves both None -- and the
+    channel on its plain planes -- when the terrain block is not pinned or
+    the index fails validation. Every cell is a pool slot (0 = empty
+    tile), so a misaligned frame (height/type bytes read as i16) cannot
+    pass. Called only by the recorder's main: `loc.index_host` is what
+    turns the two index planes on in `read_terrain` / the header."""
+    if (layout.terrain_index_off is None or loc.terrain_hosts is None
+            or loc.static_base is None or loc.build is None):
+        return
+    n = _terrain_cells(layout)
+    base = loc.static_base + loc.build.terrain_guest
+    host = base + layout.terrain_index_off
+    a = mem.pread(host, 2 * n)
+    b = mem.pread(host, 2 * n)
+    if a is None or a != b:
+        print(f"terrain: entity index unreadable/unstable @host 0x{host:x} "
+              "— recording without it", file=sys.stderr)
+        return
+    vals = struct.unpack(f"<{n}h", a)
+    bad = sum(1 for v in vals if not 0 <= v < layout.ent_count)
+    if bad:
+        print(f"terrain: entity index failed validation ({bad} cells outside "
+              f"0..{layout.ent_count - 1}) — recording without it",
+              file=sys.stderr)
+        return
+    loc.index_host = host
+    if layout.terrain_rand_off is not None:
+        loc.rand_host = base + layout.terrain_rand_off
+    used = sum(1 for v in vals if v)
+    print(f"terrain: entity index pinned ({used} occupied tiles) — carried "
+          f"as planes {', '.join(INDEX_PLANES)}", file=sys.stderr)
+
+
+def terrain_plane_names(loc: Located) -> list:
+    """The terrain channel's declared planes, in blob order."""
+    names = [name for name, _ in loc.terrain_hosts or ()]
+    if loc.terrain_hosts is not None and loc.index_host is not None:
+        names += INDEX_PLANES
+    return names
+
+
 def read_terrain(mem: GuestMem, loc: Located, layout: Layout
                  ) -> Optional[list]:
-    """One read of every pinned plane, or None (also on a read fault)."""
+    """One read of every pinned plane, or None (also on a read fault). The
+    i16 entity index, when pinned, is split into its low and high byte
+    planes (the channel's cells are bytes)."""
     if loc.terrain_hosts is None:
         return None
     n = _terrain_cells(layout)
@@ -1779,6 +2003,14 @@ def read_terrain(mem: GuestMem, loc: Located, layout: Layout
         if p is None:
             return None
         planes.append(p)
+    if loc.index_host is not None:
+        ix = mem.pread(loc.index_host, 2 * n)
+        if ix is None:
+            return None
+        planes += [ix[0::2], ix[1::2]]
+    if loc.rand_host is not None:
+        v = mem.pread(loc.rand_host, 2)
+        loc.rand_value = None if v is None else struct.unpack("<H", v)[0]
     return planes
 
 
@@ -2007,6 +2239,156 @@ def find_mailbox(mem: GuestMem, loc: Located, layout: Layout) -> None:
             loc.mailbox_period = struct.unpack("<I", pv)[0]
 
 
+def mailbox_spec(layout: Layout) -> Optional[tuple]:
+    """(magic, frame offset off static_base, has_period, park_arm_off,
+    park_off, park_magic_off) for the layout's tick-patch mailbox, or
+    None."""
+    if layout.family == "mc2":
+        return (EXE_MB2_MAGIC, EXE_MB2_FRAME, False, EXE_MB2_PARK_ARM,
+                EXE_MB2_PARK, EXE_MB2_PARK_MAGIC)
+    if layout.family == "mc1":
+        return (EXE_MB_MAGIC, EXE_MB_BASE, True, EXE_MB_PARK_ARM,
+                EXE_MB_PARK, EXE_MB_PARK_MAGIC)
+    return None
+
+
+def release_park(mem: GuestMem, host: int, park_off: int,
+                 wait: float = 1.0) -> Optional[int]:
+    """Release an init park (write PARK_RELEASE) and wait for the stub to
+    acknowledge. Returns the final PARK value (PARK_RELEASED on success),
+    or None if the write faulted (a read-only GuestMem)."""
+    if not mem.pwrite(host + park_off, struct.pack("<I", PARK_RELEASE)):
+        return None
+    until = time.time() + wait
+    while True:
+        v = mem.pread(host + park_off, 4)
+        p = None if v is None else struct.unpack("<I", v)[0]
+        if p not in (PARK_PARKED, PARK_RELEASE) or time.time() > until:
+            return p
+        time.sleep(0.0005)
+
+
+def capture_init(mem: GuestMem, loc: Located, layout: Layout,
+                 want_state: bool, timeout: float = 10.0) -> Optional[dict]:
+    """THE INIT RECORD: the world as level initialisation left it, taken
+    inside the stub's init park and released by us, with no race.
+
+    Waits (up to `timeout`) for the stub to reach its first call of the
+    level: a fresh process writes the magic and parks in the same call.
+    Returns None -- and says why -- when the exe has no park (magic with
+    ARM and PARK both 0: patched before 2026-09-27 or --init-park 0), when
+    the park was already over (timed out, or a warm process whose park was
+    spent on an earlier level), or on a timeout. A park that ends WHILE we
+    read (the stub's own timeout) voids the snapshot: the world may have
+    moved under it.
+
+    Record shape (docs/RECORDING.md "The init record"): the tick record's
+    channels minus `t`, plus `type: "init"`, the stub `counter` it was
+    taken at, the full terrain image as `terrain_b64` (header plane order;
+    deliberately NOT a `terrain` channel, so no delta chain ever folds it),
+    and, for MC2, `building_f2cd0_b64`."""
+    spec = mailbox_spec(layout)
+    if spec is None or loc.static_base is None:
+        return None
+    magic, mb_base, _, arm_off, park_off, _ = spec
+    host = loc.static_base + mb_base
+    until = time.time() + timeout
+    while True:
+        park = read_park(mem, host, spec)
+        v = mem.pread(host, 16)
+        ctr = struct.unpack_from("<I", v, 8)[0] if v else 0
+        if park == PARK_PARKED:
+            break
+        why = None
+        if park is None and v is not None and v[:8] == magic:
+            why = ("this exe has no init park (patched before 2026-09-27, "
+                   "or --init-park 0)")
+        elif park == PARK_TIMEOUT:
+            why = ("the stub's park TIMED OUT before we got here (re-patch "
+                   "with a longer --init-park)")
+        elif park in (PARK_RELEASED, PARK_IDLE):
+            why = ("the park was already spent (a warm process: an earlier "
+                   "level used it)")
+        if why:
+            print(f"no init record: {why} — counter {ctr}.", file=sys.stderr)
+            return None
+        if time.time() > until:
+            print("no init record: the stub never parked (timed out waiting "
+                  "for its first call).", file=sys.stderr)
+            return None
+        time.sleep(0.0005)
+
+    # Parked: nothing moves until we release, so take our time.
+    if loc.terrain_hosts is None:
+        pin_terrain(mem, loc, layout)
+    if loc.index_host is None:
+        pin_entity_index(mem, loc, layout)
+    data = mem.pread(loc.struct_host, layout.struct_size)
+    again = mem.pread(loc.struct_host, layout.struct_size)
+    if data is None or data != again:
+        print("no init record: the parked struct is not stable (!)",
+              file=sys.stderr)
+        release_park(mem, host, park_off)
+        return None
+    terrain = read_terrain(mem, loc, layout)
+    rec = build_record(0, data, layout, mem, loc, want_state)
+    del rec["t"]
+    rec = {"type": "init", "counter": ctr, **rec}
+    if terrain is not None:
+        rec["terrain_b64"] = _b64(b"".join(terrain))
+    if layout.family == "mc2":
+        addr, size = MC2_BUILDING_F2CD0
+        blob = mem.pread(loc.static_base + addr, size)
+        if blob is not None:
+            rec["building_f2cd0_b64"] = _b64(blob)
+    # The snapshot counts only if the park held for all of it.
+    v = mem.pread(host + park_off, 4)
+    if v is None or struct.unpack("<I", v)[0] != PARK_PARKED:
+        print("no init record: the park ended while we were reading "
+              "(the stub's own timeout) — re-patch with a longer "
+              "--init-park.", file=sys.stderr)
+        return None
+    fin = release_park(mem, host, park_off)
+    if fin != PARK_RELEASED:
+        print(f"! init park release not acknowledged (PARK={fin}) — the "
+              "snapshot was taken inside the park and stands; the stub "
+              "will time out on its own.", file=sys.stderr)
+    print(f"init record captured at stub counter {ctr} (world parked before "
+          "frame 1); released.", file=sys.stderr)
+    return rec
+
+
+def finalize_init(mem: GuestMem, loc: Located, layout: Layout,
+                  init_rec: Optional[dict]) -> Optional[dict]:
+    """Post-go-live checks on a `capture_init` record, once every pin is
+    final (shared by the recorder and the retake rig): an MC1 frame taken
+    at the park must re-verify against the owner chain (else the record
+    is dropped), and a terrain plane pinned only AFTER the park would
+    leave `terrain_b64` short of the header's plane list (then the image
+    is dropped, the rest of the record kept)."""
+    if init_rec is None:
+        return None
+    if not confirm_parked_frame(mem, loc, layout):
+        return None
+    if "terrain_b64" in init_rec and (
+            len(init_rec["terrain_b64"]) * 3 // 4
+            < len(terrain_plane_names(loc)) * _terrain_cells(layout)):
+        print("! init record's terrain predates a late plane pin — "
+              "dropping its terrain_b64", file=sys.stderr)
+        del init_rec["terrain_b64"]
+    return init_rec
+
+
+def stamp_init_header(hdr: dict, init_rec: Optional[dict]) -> None:
+    """Declare the init record in a header (`channels.init`,
+    `capture.exe_patch.init_park`); a no-op without one."""
+    if init_rec is None:
+        return
+    hdr["channels"]["init"] = True
+    hdr["capture"].setdefault("exe_patch", {})["init_park"] = {
+        "counter": init_rec["counter"], "released": "host"}
+
+
 def read_mailbox(mem: GuestMem, loc: Located) -> Optional[tuple[int, int]]:
     """(tick_counter, in_window) from the mailbox, or None on a read fault."""
     v = mem.pread(loc.mailbox_host + EXE_MB_TICK, 8)  # tick @+8, inwin @+0xC
@@ -2047,16 +2429,13 @@ def wait_for_mailbox_tick(
     False when the layout has no mailbox or no static frame was pinned —
     the caller then falls back to the RNG probe. Sets `loc.live_counter`
     to the counter value seen at go-live."""
-    if layout.family == "mc2":
-        magic, mb_base, has_period = EXE_MB2_MAGIC, EXE_MB2_FRAME, False
-    elif layout.family == "mc1":
-        magic, mb_base, has_period = EXE_MB_MAGIC, EXE_MB_BASE, True
-    else:
+    spec = mailbox_spec(layout)
+    if spec is None or loc.static_base is None:
         return False
-    if loc.static_base is None:
-        return False
+    magic, mb_base, has_period, _, park_off, _ = spec
     host = loc.static_base + mb_base
     deadline = None if timeout <= 0 else time.time() + timeout
+    released = False
 
     def peek() -> Optional[tuple[bool, int, int]]:
         v = mem.pread(host, 16)  # magic @+0, counter @+8, in_window @+0xC
@@ -2107,6 +2486,17 @@ def wait_for_mailbox_tick(
         cur = peek()
         if cur is not None and cur[0] and cur[1] != parked:
             return go_live(cur[1], f"parked {parked}")
+        # An init park nobody is capturing (the caller did not take the
+        # init record, or does not know about it): release it rather than
+        # sit out the stub's timeout. Needs a writable GuestMem; a
+        # read-only one just waits the timeout out.
+        if not released and read_park(mem, host, spec) == PARK_PARKED:
+            released = True
+            fin = release_park(mem, host, park_off)
+            print("released an uncaptured init park"
+                  + ("" if fin == PARK_RELEASED else
+                     f" — not acknowledged (PARK={fin}); the stub's "
+                     "timeout will release it"), file=sys.stderr)
         # Belt and braces: the gameplay RNG is the signal the old probe
         # used. If it moves while the mailbox at the expected address has
         # not, the sim IS live and the assumption about the address (or
@@ -2211,6 +2601,7 @@ def poll_loop_windowed(
     launch_root: int,
     child: Optional[subprocess.Popen],
     hdr: dict,
+    init_rec: Optional[dict] = None,
 ) -> None:
     """Capture loop for a tick-patched exe. Every snapshot is window-clean
     by construction and the sub-step counter is authoritative, so this is
@@ -2274,6 +2665,8 @@ def poll_loop_windowed(
                   + (f", {late} window(s) missed since go-live"
                      if late else ""), file=sys.stderr)
             sink.write(hdr)
+            if init_rec is not None:  # between the header and t=0
+                sink.write(init_rec)
             sink.write(attach_terrain(
                 build_record(0, data, layout, mem, loc, not args.no_state),
                 differ, terrain))
@@ -2636,6 +3029,11 @@ def main() -> None:
     ap.add_argument("--mgc-import", help="path to the mgc-import binary")
     ap.add_argument("--levels-dat", help="override LEVELS.DAT path")
     ap.add_argument("--levels-tab", help="override LEVELS.TAB path")
+    ap.add_argument(
+        "--no-init", action="store_true",
+        help="do not take the INIT record (the world parked before frame 1 "
+             "by a tick-patched exe's init park — docs/RECORDING.md \"The "
+             "init record\"); the park is released untaken")
     ap.add_argument("--terrain-selftest", action="store_true",
                     help="run the terrain-channel emitter selftest "
                          "(synthetic, no DOSBox) and exit")
@@ -2681,7 +3079,14 @@ def main() -> None:
     print(f"attached to dosbox pid {pid}", file=sys.stderr)
 
     try:
-        mem = GuestMem(pid)
+        # Writable: the recorder releases the exe's init park (one u32
+        # write into the stub's own mailbox — never game memory).
+        try:
+            mem = GuestMem(pid, writable=True)
+        except OSError:
+            mem = GuestMem(pid)
+            print("! guest memory is read-only: the init park cannot be "
+                  "released and will time out on its own", file=sys.stderr)
     except OSError as exc:
         raise SystemExit(
             f"cannot open /proc/{pid}/mem ({exc}). Reading another "
@@ -2727,6 +3132,15 @@ def main() -> None:
     # Pin the terrain planes (the format-2 terrain channel). Needs the
     # frames above; a failed pin degrades to a format-1 recording.
     pin_terrain(mem, loc, layout)
+    pin_entity_index(mem, loc, layout)
+
+    # THE INIT RECORD: with an init-park exe the world is held before frame
+    # 1 right now (the park is what let the struct be located at all on
+    # MC2 / pre-spawn MC1); snapshot it and release. Must run with the
+    # guest RUNNING — the stub has to see the release word.
+    init_rec = None
+    if not args.no_init and not args.no_wait_live:
+        init_rec = capture_init(mem, loc, layout, not args.no_state)
 
     # Retail's world sim + wall clock don't advance until gameplay proper
     # begins (a 'get ready' pause or menu leaves the pool frozen). With a
@@ -2749,6 +3163,9 @@ def main() -> None:
     # silently degraded to format 1 exactly this way.)
     if loc.terrain_hosts is None:
         pin_terrain(mem, loc, layout)
+    if loc.index_host is None:
+        pin_entity_index(mem, loc, layout)
+    init_rec = finalize_init(mem, loc, layout, init_rec)
 
     # Detect a tick-patched exe (CARPET/HIDDEN_REC.EXE or NETHERW_REC.EXE): its
     # stub exposes a mailbox once the sim has ticked once, so probe AFTER
@@ -2763,6 +3180,7 @@ def main() -> None:
               file=sys.stderr)
 
     hdr = build_header(args, layout, loc, cmd)
+    stamp_init_header(hdr, init_rec)
     if args.once:
         if loc.mailbox_host is not None:
             cap = capture_windowed(mem, loc, layout, args.samples, args.retries)
@@ -2781,6 +3199,8 @@ def main() -> None:
             terrain)
         print_sanity(rec)
         sink.write(hdr)
+        if init_rec is not None:
+            sink.write(init_rec)
         sink.write(rec)
         sink.close()
         return
@@ -2790,7 +3210,7 @@ def main() -> None:
             # The windowed loop writes the header itself, at the first
             # capture, so it can stamp the stub counter behind t=0.
             poll_loop_windowed(mem, loc, layout, sink, args, launch_root,
-                               child, hdr)
+                               child, hdr, init_rec)
         else:
             sink.write(hdr)
             poll_loop(mem, loc, layout, sink, args, launch_root, child)
@@ -2828,6 +3248,8 @@ def pin_externals(mem: GuestMem, loc: Located, layout: Layout) -> None:
         return
     if not (layout.static_needle and layout.build_variants):
         return
+    if loc.static_base is not None:
+        return  # already taken from an init park (`_mc1_parked_frame`)
     data = mem.pread(loc.struct_host, layout.struct_size)
     if data is None:
         return

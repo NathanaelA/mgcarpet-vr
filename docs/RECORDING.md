@@ -38,8 +38,10 @@ by **input** and verify by **hash**.
 
 A `.mgcr` file is a zstd-compressed stream of UTF-8 JSON lines
 (inspect with `zstdcat`). Tools also accept the uncompressed `.jsonl`.
-Line 1 MUST be the header record; every following line is a tick
-record, in strictly increasing tick order.
+Line 1 MUST be the header record. Line 2 MAY be the **init record**
+(`"type":"init"`, declared by `channels.init`; see "The init record");
+every following line is a tick record, in strictly increasing tick
+order.
 
 Writers MUST serialize floats so they round-trip bit-exactly
 (serde_json's shortest-round-trip encoding does). 64-bit hashes are
@@ -65,6 +67,11 @@ planes: `planes` names them in the order they appear in every terrain
 blob; `dims` is `[width, height]`, shared by all of them. Absent =
 the recording carries no terrain channel.
 
+`channels.init` (optional, default false) declares an init record on
+line 2. Readers that do not use it MUST skip it; `mgc_formats::mgcr::
+Recording::open` takes it into `Recording::init` before any tick
+reader runs.
+
 `source:"retail"` adds: `"build":"A|B"` (CARPET.EXE / HIDDEN.EXE
 address half), plus free-form capture provenance (DOSBox version,
 cycles). The `capture` object also carries `tear_gate` (bool: emit-time
@@ -72,7 +79,9 @@ inter-tick gating ran) and, for a tick-patched exe,
 `window_gated: true` with `exe_patch: {mailbox_guest, spin_period_counts,
 first_counter, live_counter}` (see "Tick-patched capture") — where each
 `t` is the stub's authoritative sub-step counter, relative to
-`first_counter` (the raw counter behind t=0).
+`first_counter` (the raw counter behind t=0). A take with an init
+record adds `exe_patch.init_park: {counter, released}` (the stub
+counter the park held at — 0 on a fresh process — and `"host"`).
 
 `source:"port"` adds `"sim"`, the **sim-config closure** — everything
 that feeds the state hash, pinned so `--replay` can refuse (or
@@ -107,8 +116,14 @@ force-apply) a mismatched environment:
 ## Tick records
 
 ```json
-{"t":N, "input":…, "obs":…, "state":…, "hash":…, "terrain":…, "wallclock":…, "set":…}
+{"t":N, "input":…, "obs":…, "state":…, "hash":…, "terrain":…, "wallclock":…, "set":…, "terrain_rand":…}
 ```
+
+`terrain_rand` (retail, from 2026-09-27; optional) is the u16
+terrain-painting LCG — MC1 `pseudoRand_12C1E0`, MC2 `rand2_17B4E0`,
+the stream the retile/blend passes draw — read with the terrain planes
+inside the same capture window. It sits right after the entity index
+in both engines' terrain block (+0x60000 / +0x70000).
 
 **Phase convention:** the state-bearing channels (`obs`, `state`,
 `hash`) describe the world **at** tick N (t=0 = the initial state);
@@ -292,9 +307,69 @@ it on Day/Night levels, so off-cave it holds BSS residue, not
 terrain. Cell = `tile_y*256 + tile_x`; world z = `height[cell] × 32`
 (floor and ceiling alike).
 
+**The entity index (retail, from 2026-09-27).** The per-tile
+`mapEntityIndex` (i16 per cell: the pool slot heading that tile's
+entity chain, 0 = none; MC1 block +0x40000, MC2 +0x50000 after the
+ceiling) rides the channel as two BYTE planes appended after the
+terrain planes: `entity_index_lo` then `entity_index_hi` (value =
+`lo | hi << 8`). It is fully derivable from the pool — it is captured
+as ground truth for exactly that reason (the remc2 V03 save carries
+it, and a disagreement with the reconstruction is itself a finding).
+Consumers that grade terrain skip planes they do not model
+(`terrain-check` reports them as skipped). A moving entity changes a
+handful of cells per tick; measured on mc2l0, ≤334 delta bytes/tick.
+
 Size: empty deltas are 4 bytes per plane before compression;
 terraform windows tens of cells; volcano/doomsday storms hundreds —
 negligible next to `state`.
+
+## The init record
+
+```json
+{"type":"init","counter":0,"obs":…,"input":…,"state":…,"terrain_rand":…,
+ "terrain_b64":"…","building_f2cd0_b64":"…"}
+```
+
+The world **as level initialisation left it, before frame 1** — line 2
+of a take whose header declares `channels.init`. It is taken by the
+recorder inside the tick-patched exe's **init park** (see "The init
+park"), with the guest held until the recorder releases it, so it is
+race-free by construction. Fields:
+
+- the tick channels (`obs`, `input`, `state`, `terrain_rand`) exactly as
+  in a tick record, minus `t`;
+- `counter` — the stub counter the park held at (0 on a fresh launch);
+- `terrain_b64` — the FULL plane image, header plane order (the
+  terrain planes and the entity-index byte planes), concatenated like a
+  `base_b64`. Deliberately NOT a `terrain` channel: record 0 still
+  carries its own `base_b64`, and no base/delta chain ever folds the
+  init image;
+- `building_f2cd0_b64` (MC2) — `building_F2CD0x`, the 4802-byte
+  building-shape table the V03 save's SMAP part ends with
+  (level-independent; captured to verify, not assumed).
+
+What "before frame 1" means, per engine (decompile-verified 2026-09-27):
+
+- **MC2**: the park is in the frame-driver stub, before `call
+  DrawAndEventsInGame_47560` on the first frame. Between the end of
+  `LevelInitGame_56A30` (remc2's `RecordingLevelSave` point, the V03
+  save instant) and there, retail only makes idempotent overwrites
+  (`LoadSpr_47160`'s paths, `maptypeMusic_0x235` from MapType,
+  `paletteMod_51 = 0`, `dw_w_b_0_2BDE_11230.word[1] = 0`). No carpet
+  exists yet (it is spawned inside frame 1); Turn is 0.
+- **MC1/HW**: the park is on `GameLoop_34610`'s `call
+  DrawAndEventsInGame_34530_348F0`. Every wizard's command slot
+  (`+29715 + 10·p`) still holds the JOIN command (1) that
+  `sub_3DD50_3E090` leaves; frame 1's `sub_3C9D0_3CD10` then spawns
+  each wizard's carpet, spell tokens and (computer wizards) starting
+  castle, clears the slot, and bumps `+13341` — all BEFORE the first
+  tick call, and without drawing `rand_4` (NewEvent only reads it).
+  So the init record is pre-spawn, and record 0 (`first_counter: 1`,
+  the tick stub's first window) is post-spawn, pre-tick: the pair
+  grades the join prologue by itself. (Also written there, not world
+  state: `+581` 1→0 in the palette load; `u32_379` = the wall clock.)
+
+Old takes carry no init record; `record0_settle` keeps serving them.
 
 ### `hash` — the port verification channel (port only)
 
@@ -532,15 +607,54 @@ counter start moving; they differ only when the recorder missed windows
 at the start. The counter is process-lifetime (the stub initialises it
 once, on its first call), so for a fresh launch it dates record 0
 absolutely: the MC1 stub opens its window BEFORE the tick call, so
-`first_counter: 1` is the post-init, pre-tick world (t=0 = sub-step 0,
-and generally record 0 is the state after `first_counter − 1` ticks);
-the MC2 stub opens it AFTER the frame driver, so `first_counter: 1` is
-the state after frame 1. Recordings without these fields predate the
+`first_counter: 1` is the pre-tick world of frame 1 — ⚠ AFTER frame 1's
+join/spawn prologue, not post-init (see "The init record") — (t=0 =
+sub-step 0, and generally record 0 is the state after `first_counter − 1`
+ticks); the MC2 stub opens it AFTER the frame driver, so `first_counter:
+1` is the state after frame 1. The pre-frame-1 world of both is the init
+record. Recordings without these fields predate the
 mailbox go-live (2026-09-23) and start a latency-random 1..24 ticks in
 (the port reads that phase from record 0 — `record0_settle`). To avoid re-scanning a window it has already captured, the
 recorder reads only the 8-byte mailbox first and pulls the full struct
 only when `in_window==1` **and** the counter has advanced past the last
 emitted frame.
+
+### The init park (both arms, 2026-09-27)
+
+`--init-park N` (default 500 timer counts; `0` = no park code) adds a
+one-shot hold on the call that starts a level's frame 1, so the
+recorder can take the init record without a race:
+
+- **Where.** MC2: inside the signal stub, before its `call
+  DrawAndEventsInGame_47560`. MC1/HW: a small stub of its own on
+  `GameLoop_34610`'s sole `call DrawAndEventsInGame_34530_348F0`
+  (`pushad`, park, `popad`, tail-`jmp` to the untouched driver; the
+  call's rel32 is the only game byte changed, and it carries no LE
+  fixup). The MC1 tick stub is byte-identical with or without it.
+- **Mailbox words** (MC1 base `+0x1C/+0x20/+0x24`, MC2 `+0x10/+0x14/
+  +0x18`): `ARM`, `PARK`, and the park magic `MGCP`. A fresh process
+  (no `MGCP` yet) parks its first level unconditionally and writes
+  `MGCP`; afterwards a park happens only when the host writes `ARM =
+  1` (the stub clears it as it parks). `PARK = 1` while held; the
+  host writes `2` to release; the stub leaves `3` (released by the
+  host) or `4` (timed out). The tick counter and `in_window` do not
+  move during the park — on MC1 the tick stub has not even run, so its
+  `MGCTTIK1` magic appears only after it.
+- **Timeout.** N counts of the game's own timer (~4.2 s on MC1, 5 s on
+  MC2 at the default), so the exe run without a recorder only pauses at
+  level start. A read-only recorder cannot release; the timeout does.
+  `wait_for_mailbox_tick` releases any park it finds uncaptured, so a
+  caller that ignores the init record never sits the timeout out.
+- **Locating the struct while parked.** Neither engine has a carpet at
+  the park, so the recorder's class-3 census cannot pass. MC2 accepts a
+  needle hit whose own mailbox (struct − 0xD41A0 + the MC2 frame) shows
+  a live park. MC1 takes the static frame whose mailbox shows a live
+  park (the build from `--game`: CARPET = A, HIDDEN = B), the one
+  needle hit that looks freshly initialised, and re-verifies the frame
+  against the owner chain once frame 1 has spawned the carpets
+  (dropping the init record if they disagree).
+- Behaviour-neutral like the rest of the stub: a wait, no writes to
+  game memory.
 
 ### MC2 / NETHERW arm (signal-only)
 

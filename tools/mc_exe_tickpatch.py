@@ -130,12 +130,54 @@ MB_DEADLINE = MB_OBJ3 + 0x10  # u32 next release, in PIT counts
 MB_SPEED = MB_OBJ3 + 0x14  # u32 raw F3 gameSpeed latch (0/1/2) -- lets the
 #                            recorder tell a legit F3 speed-up from capture loss
 MB_PERIOD = MB_OBJ3 + 0x18  # u32 sub-step period in PIT counts (default 1)
+MB_PARK_ARM = MB_OBJ3 + 0x1C  # u32 nonzero = park at the next level start
+MB_PARK = MB_OBJ3 + 0x20  # u32 the init-park handshake (PARK_* below)
+MB_PARK_MAGIC = MB_OBJ3 + 0x24  # 'MGCP' once the process has parked once
+MB_END = MB_OBJ3 + 0x28  # one past the last mailbox word
 MB_GUEST = OBJ3_BASE + MB_OBJ3  # guest-LINK addr the recorder reads (0x132c40)
 
 MAGIC0 = 0x5443474D  # "MGCT"
 MAGIC1 = 0x314B4954  # "TIK1"
 
 GUARD_ITERS = 0x04000000  # spin bail-out (~1 s emulated); never hit if ISR live
+
+# --------------------------------------------------------------------------
+# THE INIT PARK (both arms, 2026-09-27).
+#
+# The windows above are all POST-something: MC2's opens after the frame
+# driver (so its first window is t=1, one frame into the level), MC1's opens
+# before the tick fn but after the frame driver's pre-tick calls, and both
+# are only `floor` counts wide on the first frame, which the recorder must
+# hit while it is still pinning frames. What the remc2 V03 save, `init-check
+# --settle 0` and a native-vs-retail init diff all want is the world as level
+# initialisation LEFT it -- before the first frame -- captured without a race.
+#
+# So on the FIRST call of a level the stub parks BEFORE calling the game. The
+# park hooks the FRAME DRIVER call in both games (MC2 inside the existing
+# signal stub; MC1 in a small stub of its own on GameLoop's `call
+# DrawAndEventsInGame_34530`, because frame 1's `sub_3C9D0` join prologue
+# spawns every wizard's carpet, spell tokens and starting castle BEFORE the
+# first tick call -- so MC1's tick-stub window 1 is post-spawn, not post-init):
+#   PMAGIC 'MGCP', written by the park itself the first time: absent = a fresh
+#         process, whose first level parks unconditionally (the park block
+#         does not rely on the tick stub's magic, which MC1 writes only later);
+#   ARM   may be set to 1 by the host to park again (a warm process, the next
+#         level); the stub clears it as it parks, so each arming parks ONCE;
+#   PARK  = 1 while parked (the world is post-init and untouched; the counter
+#         and in_window are unchanged, so a legacy reader sees nothing new);
+#         the host writes 2 to release; the stub leaves 3 (released by the
+#         host) or 4 (timed out) behind, so the host can tell whether its
+#         snapshot was taken inside the park.
+# The timeout is in the game's own timer counts (--init-park, 0 = no park
+# code at all), so an exe run without a recorder only pauses at level start.
+# It is behaviour-neutral like the rest of the stub: a wait, no writes to
+# game memory. The frozen-timer guard below only matters if the ISR is dead.
+# --------------------------------------------------------------------------
+PARK_IDLE, PARK_PARKED, PARK_RELEASE, PARK_RELEASED, PARK_TIMEOUT = 0, 1, 2, 3, 4
+PARK_MAGIC = 0x5043474D  # "MGCP"
+INIT_PARK_DEFAULT = 500  # counts: ~4.2 s on MC1's ~120 Hz, 5 s on MC2's 100 Hz
+INIT_PARK_MAX = 12000  # ~2 min
+PARK_GUARD_ITERS = 0xFFFFFFFF  # only if the timer ISR is dead
 RESYNC_COUNTS = 30  # >250 ms behind schedule -> resync instead of catch-up burst
 
 # --------------------------------------------------------------------------
@@ -196,6 +238,10 @@ MB2_MAGIC0 = MB2_OBJ3 + 0x00  # 'MGCT'
 MB2_MAGIC1 = MB2_OBJ3 + 0x04  # 'TIK2'
 MB2_TICK = MB2_OBJ3 + 0x08  # u32 monotonic per-FRAME counter (bumped once/frame)
 MB2_INWIN = MB2_OBJ3 + 0x0C  # u32 1 while parked in the settled inter-frame gap
+MB2_PARK_ARM = MB2_OBJ3 + 0x10  # u32 nonzero = park before the next level's frame 1
+MB2_PARK = MB2_OBJ3 + 0x14  # u32 the init-park handshake (PARK_* above)
+MB2_PARK_MAGIC = MB2_OBJ3 + 0x18  # 'MGCP' once the process has parked once
+MB2_END = MB2_OBJ3 + 0x1C  # one past the last mailbox word
 OBJ3_BASE_MC2 = 0xD0000  # obj3 LINK base
 MB2_GUEST = OBJ3_BASE_MC2 + MB2_OBJ3  # 0x1842c0 -- the guest-LINK addr
 
@@ -342,6 +388,40 @@ class Build:
     wallclock: int  # runtime flat addr of the ~120 Hz PIT counter (link space)
     structptr_off: int  # obj3-relative offset of the struct-ptr global (its
     #                     runtime disp32 lives in `mov esi,[..]` at hook_va+0xC)
+    frame_call_site: int = 0  # GameLoop's `call DrawAndEventsInGame` (init park)
+    frame_fn: int = 0  # DrawAndEventsInGame_34530_348F0
+
+
+# GameLoop_34610's call of the frame driver, the MC1 init park's hook. The
+# bytes before it are the `+13325` word clear (`mov word [ebx+eax+0x340D],0`;
+# remc1's :41766 `var_u8_13327 = 0` is a source-corruption of it) and a
+# `jmp +5` over the call; the call's rel32 is wildcarded -- the patch rewrites
+# it, and a signature must never pin the bytes its own patch rewrites.
+MC1_FRAMECALL_SIG = _re.compile(
+    rb"\x66\xc7\x84\x03\x0d\x34\x00\x00\x00\x00"  # mov word [ebx+eax+0x340D],0
+    rb"\xeb\x05"                                  # jmp +5 (over the call)
+    rb"\xe8(....)",                               # call DrawAndEventsInGame
+    _re.S,
+)
+
+
+def find_mc1_frame_call(le: LE, code: bytes) -> tuple[int, int]:
+    """(call site VA, frame driver VA) of GameLoop's `call DrawAndEvents`.
+    Refuses unless the signature is unique AND the driver has exactly that
+    one caller in the whole image (so the hook is THE frame-1 entry)."""
+    o1 = le.objs[0]
+    hits = list(MC1_FRAMECALL_SIG.finditer(code))
+    if len(hits) != 1:
+        raise SystemExit(f"MC1 frame-driver call signature: {len(hits)} hits "
+                         "(expected 1) -- not a pristine CARPET/HIDDEN.EXE?")
+    site = o1.vbase + hits[0].start() + 12
+    fn = (site + 5 + struct.unpack("<i", hits[0].group(1))[0]) & 0xFFFFFFFF
+    callers = [i for i in range(len(code) - 5) if code[i] == 0xE8
+               and o1.vbase + i + 5 + struct.unpack_from("<i", code, i + 1)[0] == fn]
+    if callers != [site - o1.vbase]:
+        raise SystemExit(f"frame driver {fn:#x} has {len(callers)} callers "
+                         "(expected exactly the GameLoop one)")
+    return site, fn
 
 
 def find_build(le: LE) -> Build:
@@ -422,13 +502,15 @@ def find_build(le: LE) -> Build:
     if obj3.vbase != OBJ3_BASE:
         raise ValueError(f"obj3 vbase {obj3.vbase:#x} != {OBJ3_BASE:#x}")
     committed = (obj3.vsize + 0xFFF) & ~0xFFF
-    if not (obj3.vsize <= MB_OBJ3 and MB_OBJ3 + 0x20 <= committed):
+    if not (obj3.vsize <= MB_OBJ3 and MB_END <= committed):
         raise ValueError(
             f"mailbox obj3-off {MB_OBJ3:#x} not in obj3 tail "
             f"[vsize {obj3.vsize:#x}, committed {committed:#x})")
 
     name = "CARPET" if wallclock == 0xAC5D4 else ("HIDDEN" if wallclock == 0xAC5C4 else "?")
-    return Build(name, hook_va, tuple(call_sites), cave_va, wallclock, structptr_pre)
+    frame_call_site, frame_fn = find_mc1_frame_call(le, code)
+    return Build(name, hook_va, tuple(call_sites), cave_va, wallclock, structptr_pre,
+                 frame_call_site, frame_fn)
 
 
 # --------------------------------------------------------------------------
@@ -526,6 +608,9 @@ class Asm:
     def dec_ecx(self):
         self.raw(b"\x49")
 
+    def cmp_m_imm8(self, a, imm):  # cmp dword [edx+a], imm8
+        self.raw(b"\x83\xba" + struct.pack("<I", a) + struct.pack("<b", imm))
+
     def assemble(self) -> bytes:
         # pass 1: label offsets
         pos, labels = 0, {}
@@ -558,6 +643,47 @@ class Asm:
                     out += struct.pack("<i", disp)
                 pos = nextpos
         return bytes(out)
+
+
+def emit_init_park(a: "Asm", arm_off: int, park_off: int, pmagic_off: int,
+                   timer_off: int, timeout: int) -> None:
+    """THE INIT PARK (see PARK_* above): on a fresh process (no PMAGIC) or
+    when armed, disarm, raise PARK and spin until the host writes
+    PARK_RELEASE or `timeout` timer counts pass; leave PARK_RELEASED /
+    PARK_TIMEOUT behind. EDX = obj3 base (in and out), EAX is clobbered, ECX
+    is saved around the guard. Emits nothing for timeout 0."""
+    if not timeout:
+        return
+    a.mov_eax_m(pmagic_off)
+    a.cmp_eax_imm(PARK_MAGIC)
+    a.br8(0x74, "park_warm")  # je park_warm  (this process has parked before)
+    a.mov_m_imm(pmagic_off, PARK_MAGIC)  # fresh process: park its first level
+    a.br8(0xEB, "park_go")
+    a.label("park_warm")
+    a.cmp_m_imm8(arm_off, 0)
+    a.br8(0x74, "park_skip")  # je park_skip  (not armed)
+    a.label("park_go")
+    a.mov_m_imm(arm_off, 0)  # one park per arming
+    a.mov_m_imm(park_off, PARK_PARKED)
+    a.mov_eax_m(timer_off)
+    a.add_eax_imm(timeout)  # eax = release deadline (timer counts)
+    a.push_ecx()
+    a.mov_ecx_imm(PARK_GUARD_ITERS)
+    a.label("park_spin")
+    a.cmp_m_imm8(park_off, PARK_RELEASE)
+    a.br8(0x74, "park_host")  # je park_host  (the host has its snapshot)
+    a.cmp_eax_m(timer_off)  # deadline vs now
+    a.br8(0x7E, "park_timeout")  # jle park_timeout
+    a.dec_ecx()
+    a.br8(0x75, "park_spin")  # jnz park_spin
+    a.label("park_timeout")  # (the dead-ISR guard lands here too)
+    a.mov_m_imm(park_off, PARK_TIMEOUT)
+    a.br8(0xEB, "park_done")
+    a.label("park_host")
+    a.mov_m_imm(park_off, PARK_RELEASED)
+    a.label("park_done")
+    a.pop_ecx()
+    a.label("park_skip")
 
 
 def build_passthrough(b: Build) -> bytes:
@@ -705,12 +831,41 @@ def build_stub(b: Build, period: int, floor: int = FLOOR_DEFAULT) -> bytes:
     return body + b"\xe8" + struct.pack("<i", rel) + b"\xc3"  # call hook ; ret
 
 
+def build_frame_stub_mc1(b: Build, va: int, init_park: int) -> bytes:
+    """MC1's init park, wrapped around GameLoop's call of the frame driver:
+    `pushad`, derive obj3 (exactly as the pacing stub does, off the tick
+    fn's own fixed-up struct-ptr disp), park if this is a fresh process or
+    the host armed it, `popad`, then TAIL-JUMP to the untouched driver --
+    which returns straight to GameLoop. Every register and flag the caller
+    had is handed to the driver unchanged (pushad/popad; the park's compares
+    happen before popad, and the driver is a void() that reads no flags).
+    Frame 1 has not run when this parks: no carpet, no spell tokens, the
+    command slots still hold the join command -- the world as
+    `sub_407A0_40AE0` left it plus GameLoop's two overwrites (+13325 = 0,
+    already 0 after init; AE408 var_u8_23, not recorded)."""
+    a = Asm(va)
+    a.raw(b"\x60")  # pushad
+    a.call_next()
+    a.pop_edx()
+    a.sub_edx_imm(va + 1 + 5)  # edx = obj1 load delta (link of pop = va+6)
+    a.mov_eax_m(b.hook_va + 0xC)  # eax = obj3_base + structptr_off
+    a.sub_eax_imm(b.structptr_off)
+    a.mov_edx_eax()  # edx = obj3_base
+    emit_init_park(a, MB_PARK_ARM, MB_PARK, MB_PARK_MAGIC,
+                   b.structptr_off - WALLCLOCK_FROM_STRUCTPTR, init_park)
+    a.raw(b"\x61")  # popad
+    body = a.assemble()
+    rel = b.frame_fn - (va + len(body) + 5)
+    return body + b"\xe9" + struct.pack("<i", rel)  # jmp frame_fn
+
+
 # --------------------------------------------------------------------------
 # Patch / verify
 # --------------------------------------------------------------------------
 def patch(le: LE, b: Build, period: int, wire: bool = True, passthrough: bool = False,
           extend: bool = True, floor: int = FLOOR_DEFAULT,
-          volcano: bool = False, timer_init: bool = True) -> bytes:
+          volcano: bool = False, timer_init: bool = True,
+          init_park: int = INIT_PARK_DEFAULT) -> bytes:
     o1 = le.objs[0]
     stub = build_passthrough(b) if passthrough else build_stub(b, period, floor)
     cave_off = va_to_file(le, b.cave_va)
@@ -739,6 +894,19 @@ def patch(le: LE, b: Build, period: int, wire: bool = True, passthrough: bool = 
         if va_to_file(le, vol_end) > obj_file_off(le, o1) + o1.npages * 0x1000:
             raise ValueError("timer-init stub overflows the cave")
 
+    # The init park's frame-driver stub, 16-aligned after whatever precedes
+    # it. Only wired together with the pacer (never under --inert /
+    # --passthrough: those are diagnostics of the pacing stub alone).
+    park_va = None
+    if init_park and wire and not passthrough:
+        park_va = (vol_end + 15) & ~15
+        park_blob = build_frame_stub_mc1(b, park_va, init_park)
+        poff = va_to_file(le, park_va)
+        le.data[poff : poff + len(park_blob)] = park_blob
+        vol_end = park_va + len(park_blob)
+        if va_to_file(le, vol_end) > obj_file_off(le, o1) + o1.npages * 0x1000:
+            raise ValueError("init-park stub overflows the cave")
+
     # Both the code cave (obj1 tail) and the mailbox (obj3 tail) sit PAST their
     # object's declared vsize, so at runtime those tails fall outside the
     # segment limit: jumping into obj1's tail faults, and WRITES into obj3's
@@ -757,7 +925,7 @@ def patch(le: LE, b: Build, period: int, wire: bool = True, passthrough: bool = 
 
         o3 = le.objs[2]
         new3 = (o3.vsize + 0xFFF) & ~0xFFF
-        if o3.vbase + MB_OBJ3 + 0x20 > o3.vbase + new3:
+        if MB_END > new3:
             raise ValueError("mailbox past obj3's page-aligned vsize")
         struct.pack_into("<I", le.data, le.lx + objtab + 2 * 24, new3)
         o3.vsize = new3
@@ -773,6 +941,12 @@ def patch(le: LE, b: Build, period: int, wire: bool = True, passthrough: bool = 
             raise ValueError(f"call site {cs:#x} is not an E8 call")
         rel = b.cave_va - (cs + 5)
         le.data[off + 1 : off + 5] = struct.pack("<i", rel)
+    if park_va is not None:
+        off = va_to_file(le, b.frame_call_site)
+        if le.data[off] != 0xE8:
+            raise ValueError(f"frame call site {b.frame_call_site:#x} is not an E8 call")
+        assert_no_fixup(le, b.frame_call_site + 1, 4, "MC1 frame-driver call rel32")
+        le.data[off + 1 : off + 5] = struct.pack("<i", park_va - (b.frame_call_site + 5))
     return stub
 
 
@@ -1304,6 +1478,8 @@ def verify(path: str, period: int, inert: bool = False, passthrough: bool = Fals
         print("  \u26a0 SIMULATION IS PATCHED -- recordings from this binary "
               "witness the PATCHED arm, never retail.")
 
+    print(f"  {read_mc1_frame_park(le, code)}")
+
     # The `-custom` timer install. Report it either way: its ABSENCE is the
     # thing that cost a session to diagnose (a `-custom` launch pacing against
     # a clock nothing starts runs at under 1 fps), so say so out loud.
@@ -1332,6 +1508,30 @@ def verify(path: str, period: int, inert: bool = False, passthrough: bool = Fals
         print("  --- stub disassembly ---")
         for ln in out.strip().splitlines():
             print("   ", ln)
+
+
+def read_mc1_frame_park(le: LE, code: bytes) -> str:
+    """Describe the MC1 init park off the patched image: GameLoop's frame
+    call either targets a `pushad ; call $+5 ; pop edx` stub that ends in a
+    tail `jmp` (decode its timeout and the jmp target), or is pristine."""
+    o1 = le.objs[0]
+    hits = list(MC1_FRAMECALL_SIG.finditer(code))
+    if len(hits) != 1:
+        return f"⚠ init park: frame-call signature {len(hits)} hits (!)"
+    site = o1.vbase + hits[0].start() + 12
+    tgt = (site + 5 + struct.unpack("<i", hits[0].group(1))[0]) & 0xFFFFFFFF
+    s = tgt - o1.vbase
+    if code[s : s + 7] != b"\x60\xe8\x00\x00\x00\x00\x5a":
+        return _park_note(None, 120.0)
+    e = code.find(b"\x61\xe9", s)  # popad ; jmp rel32
+    if e < 0 or e - s > 400:
+        raise SystemExit("VERIFY FAIL: init-park stub has no `popad ; jmp`")
+    fn = o1.vbase + e + 6 + struct.unpack_from("<i", code, e + 2)[0]
+    t = read_init_park(code[s:e], MB_PARK_ARM, MB_PARK)
+    if t is None:
+        raise SystemExit("VERIFY FAIL: init-park stub body unrecognised")
+    return (f"{_park_note(t, 120.0)}; GameLoop call @ {site:#x} -> park stub @ "
+            f"{tgt:#x} -> tail-jmp frame driver @ {fn:#x}")
 
 
 # --------------------------------------------------------------------------
@@ -1407,7 +1607,7 @@ def find_build_mc2(le: LE) -> BuildMC2:
     # Mailbox in obj3's committed BSS tail (page-align lifts the DS limit over
     # it). MB2_OBJ3 sits at obj3.vsize, so page-aligning vsize covers it.
     committed = (obj3.vsize + 0xFFF) & ~0xFFF
-    if not (obj3.vsize <= MB2_OBJ3 and MB2_OBJ3 + 0x10 <= committed):
+    if not (obj3.vsize <= MB2_OBJ3 and MB2_END <= committed):
         raise ValueError(
             f"mailbox obj3-off {MB2_OBJ3:#x} not in obj3 tail "
             f"[vsize {obj3.vsize:#x}, page {committed:#x})"
@@ -1416,10 +1616,19 @@ def find_build_mc2(le: LE) -> BuildMC2:
                     obj3ref_off, period_va, period_now)
 
 
-def build_stub_mc2(b: BuildMC2, floor: int = FLOOR_DEFAULT) -> bytes:
+def build_stub_mc2(b: BuildMC2, floor: int = FLOOR_DEFAULT,
+                   init_park: int = INIT_PARK_DEFAULT) -> bytes:
     """Signal-only wrapper. On each frame:
       1. derive obj3's real runtime base (read the game's own fixed-up
          GameTimerTurn disp, minus its obj3 offset -- delta-safe like MC1);
+      1b. once per arming (the first frame of a fresh process, or whenever
+         the host re-arms), THE INIT PARK: hold the world as
+         LevelInitGame left it until the host releases it (see PARK_*).
+         Nothing in the game runs between LevelInitGame's tail and this
+         call except idempotent overwrites (LoadSpr's paths, the music
+         index from MapType, InGameLoop's paletteMod_51 = 0 and
+         dw_w_b_0_2BDE_11230.word[1] = 0), so this IS remc2's
+         RecordingLevelSave instant for the save's purposes;
       2. clear in_window (the frame driver is about to mutate the world);
       3. call the ORIGINAL frame driver (Turn++, entity pass, draw);
       4. bump a monotonic per-frame counter and raise in_window;
@@ -1453,6 +1662,10 @@ def build_stub_mc2(b: BuildMC2, floor: int = FLOOR_DEFAULT) -> bytes:
     a.mov_m_imm(MB2_INWIN, 0)
     a.mov_m_imm(MB2_MAGIC0, MAGIC0)  # magic LAST -> mailbox is atomic-ish
     a.label("after_init")
+
+    # --- the init park: before frame 1 touches anything ---
+    emit_init_park(a, MB2_PARK_ARM, MB2_PARK, MB2_PARK_MAGIC, b.obj3ref_off,
+                   init_park)
 
     # --- close the window: the frame is about to mutate the world ---
     a.mov_m_imm(MB2_INWIN, 0)
@@ -1496,7 +1709,8 @@ def build_stub_mc2(b: BuildMC2, floor: int = FLOOR_DEFAULT) -> bytes:
 
 def patch_mc2(le: LE, b: BuildMC2, wire: bool = True, extend: bool = True,
               pace: Optional[int] = None, floor: int = FLOOR_DEFAULT,
-              volcano: bool = False, headless: bool = True) -> bytes:
+              volcano: bool = False, headless: bool = True,
+              init_park: int = INIT_PARK_DEFAULT) -> bytes:
     o1 = le.objs[0]
 
     # Optional: widen the native frame period so a heavy frame's compute can't
@@ -1514,7 +1728,7 @@ def patch_mc2(le: LE, b: BuildMC2, wire: bool = True, extend: bool = True,
             raise ValueError(f"period byte @ {b.period_va:#x} is not an `add esi,imm8`")
         le.data[poff] = pace
 
-    stub = build_stub_mc2(b, floor)
+    stub = build_stub_mc2(b, floor, init_park)
     cave_off = va_to_file(le, b.cave_va)
     if cave_off + len(stub) > obj_file_off(le, o1) + o1.npages * 0x1000:
         raise ValueError("stub overflows the cave")
@@ -1552,7 +1766,7 @@ def patch_mc2(le: LE, b: BuildMC2, wire: bool = True, extend: bool = True,
 
         o3 = le.objs[2]
         new3 = (o3.vsize + 0xFFF) & ~0xFFF
-        if MB2_OBJ3 + 0x10 > new3:
+        if MB2_END > new3:
             raise ValueError("mailbox past obj3's page-aligned vsize")
         struct.pack_into("<I", le.data, le.lx + objtab + 2 * 24, new3)
         o3.vsize = new3
@@ -1770,6 +1984,26 @@ def has_mc2_headless(le: LE) -> bool:
     return read_mc2_headless(le) is not None
 
 
+def read_init_park(stub: bytes, arm_off: int, park_off: int) -> Optional[int]:
+    """The init park's timeout (timer counts) decoded from a stub's bytes, or
+    None when the stub carries no park (patched with --init-park 0, or
+    before 2026-09-27). Matches the exact prologue `emit_init_park` writes."""
+    m = _re.search(
+        b"\\x83\\xba" + _re.escape(struct.pack("<I", arm_off)) + b"\\x00\\x74."
+        + b"\\xc7\\x82" + _re.escape(struct.pack("<II", arm_off, 0))
+        + b"\\xc7\\x82" + _re.escape(struct.pack("<II", park_off, PARK_PARKED))
+        + b"\\x8b\\x82....\\x05(....)",
+        stub, _re.S)
+    return struct.unpack("<I", m.group(1))[0] if m else None
+
+
+def _park_note(timeout: Optional[int], hz: float) -> str:
+    if timeout is None:
+        return "init park ABSENT (the first window is the first capture)"
+    return (f"init park: first level of a process holds until the host releases "
+            f"it, or {timeout} counts (~{timeout / hz:.1f} s)")
+
+
 def verify_mc2(path: str, inert: bool = False) -> None:
     import shutil
 
@@ -1816,6 +2050,7 @@ def verify_mc2(path: str, inert: bool = False) -> None:
     stub_len = p + 1 - rel
     fl = (f"floor {floor_val} counts (>={(floor_val - 1) * 10:.0f} ms window)"
           if floor_val else "floor OFF")
+    park = _park_note(read_init_park(code[rel : rel + stub_len], MB2_PARK_ARM, MB2_PARK), 100.0)
     aligned = "page-aligned" if o1.vsize % 0x1000 == 0 else f"NOT page-aligned ({o1.vsize:#x})"
 
     redirected = 0
@@ -1848,6 +2083,7 @@ def verify_mc2(path: str, inert: bool = False) -> None:
     print(f"  1 call site -> stub @ {cave_va:#x}; stub -> frame driver @ {frame_fn:#x}; "
           f"{stub_len} bytes; mailbox guest {MB2_GUEST:#x} (MGCTTIK2); obj1.vsize "
           f"{aligned}; entry untouched; {fl}{per}")
+    print(f"  {park}")
     if has_volcano_guard_mc2(le):
         print(f"  {verify_volcano_mc2(le)}")
         print("  \u26a0 SIMULATION IS PATCHED -- recordings from this binary "
@@ -1981,6 +2217,20 @@ def main(argv=None):
              "level there is no way back out -- LoadLevelNumber is never "
              "cleared, so quitting relaunches it forever. Kill DOSBox.)",
     )
+    ap.add_argument(
+        "--init-park",
+        type=int,
+        default=INIT_PARK_DEFAULT,
+        metavar="N",
+        help=f"BOTH arms: THE INIT PARK -- on the first call of a level (the "
+             f"first level of a fresh process, or whenever the recorder re-arms "
+             f"it) hold the world exactly as level initialisation left it, "
+             f"before frame 1, until the recorder releases it, or N timer counts "
+             f"pass (default {INIT_PARK_DEFAULT}: ~4 s on MC1, 5 s on MC2; 0 = "
+             f"no park code at all). This is the snapshot the recorder writes as "
+             f"the `init` record. Sim-neutral: a wait, no writes to game memory. "
+             f"Max {INIT_PARK_MAX}.",
+    )
     ap.add_argument("--verify-only", metavar="PATCHED", help="just re-verify an already-patched exe")
     ap.add_argument(
         "--inert",
@@ -2014,6 +2264,9 @@ def main(argv=None):
             "Use 2 (the smallest value that guarantees a full count) or 0 to "
             "disable the floor."
         )
+
+    if not (0 <= args.init_park <= INIT_PARK_MAX):
+        raise SystemExit(f"--init-park must be in 0..{INIT_PARK_MAX} (0 = off)")
 
     if args.verify_only:
         vdata = open(args.verify_only, "rb").read()
@@ -2059,7 +2312,7 @@ def main(argv=None):
               f"timer=obj3+{b2.obj3ref_off:#x}{mode}{pace_note}")
         stub = patch_mc2(le, b2, wire=not args.inert, extend=not args.no_extend,
                          pace=args.pace, floor=args.floor, volcano=args.volcano_guard,
-                         headless=not args.no_headless_level)
+                         headless=not args.no_headless_level, init_park=args.init_park)
         out = _out_path()
         with open(out, "wb") as f:
             f.write(le.data)
@@ -2068,7 +2321,8 @@ def main(argv=None):
         floor_tag = f", floor={args.floor}" if args.floor else ", floor=OFF"
         vg = ", VOLCANO-GUARD (simulation patched, NOT retail)" if args.volcano_guard else ""
         hl = ", NO headless -level" if args.no_headless_level else ", headless -level"
-        print(f"wrote {out}  (stub {len(stub)} B{pace_tag}{floor_tag}{hl}{tag}{vg})")
+        pk = f", init-park={args.init_park}" if args.init_park else ", init-park=OFF"
+        print(f"wrote {out}  (stub {len(stub)} B{pace_tag}{floor_tag}{pk}{hl}{tag}{vg})")
         verify_mc2(out, inert=args.inert)
         return 0
 
@@ -2087,7 +2341,7 @@ def main(argv=None):
           f"wallclock={b_.wallclock:#x}{mode}")
     stub = patch(le, b_, args.period, wire=not args.inert, passthrough=args.passthrough,
                  extend=not args.no_extend, floor=args.floor, volcano=args.volcano_guard,
-                 timer_init=not args.no_timer_init)
+                 timer_init=not args.no_timer_init, init_park=args.init_park)
 
     out = _out_path()
     with open(out, "wb") as f:
@@ -2096,8 +2350,9 @@ def main(argv=None):
     floor_tag = f", floor={args.floor}" if args.floor else ", floor=OFF"
     vol_tag = ", VOLCANO-GUARD (simulation patched, NOT retail)" if args.volcano_guard else ""
     tmr_tag = ", NO -custom timer init" if args.no_timer_init else ", -custom timer init"
+    pk = f", init-park={args.init_park}" if args.init_park else ", init-park=OFF"
     print(f"wrote {out}  (stub {len(stub)} B, period={args.period}"
-          f"{floor_tag}{tmr_tag}{tag}{vol_tag})")
+          f"{floor_tag}{pk}{tmr_tag}{tag}{vol_tag})")
     verify(out, args.period, inert=args.inert, passthrough=args.passthrough)
     return 0
 

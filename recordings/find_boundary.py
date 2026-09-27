@@ -18,7 +18,7 @@ proc = subprocess.Popen(["zstdcat", PATH], stdout=subprocess.PIPE, bufsize=1 << 
 prev = None
 n = 0
 for line in proc.stdout:
-    if line.startswith(b'{"type":"header"'):
+    if line.startswith((b'{"type":"header"', b'{"type":"init"')):
         continue
     i = line.find(MARK)
     if i < 0:
