@@ -27,8 +27,11 @@
 //!
 //! 3. **Skip is per movie, not per chain.** The abort flag is cleared
 //!    at the top of every `PlayInfoFmv`, so skipping MC2's INTRO still
-//!    plays INTRO2 (MenusAndIntros.cpp:775-786). Several movies are not
-//!    skippable at all — the outro, and MC2's cutscenes.
+//!    plays INTRO2 (MenusAndIntros.cpp:775-786). The remc2 listing plays
+//!    the outro and MC2's cutscenes with `PlayInfoFmv(0, ..)`
+//!    (unskippable), but the port makes EVERY movie skippable by any
+//!    key (⚖ player ruling 2026-09-27 — they recall retail skipping
+//!    them all, and not everyone wants to sit through them).
 //!
 //! 4. **The movies are NOT silent, though the container is.** There is
 //!    no audio stream in the file, but that is not the same as having
@@ -97,7 +100,8 @@ pub struct Cue {
     /// Bundle movie name (the lowercased source stem).
     pub name: &'static str,
     /// Whether a keypress abandons it — `PlayInfoFmv`'s first
-    /// argument. The intro chain is skippable; the endings are not.
+    /// argument. Every shipped cue is skippable (player ruling
+    /// 2026-09-27); the flag stays for the mechanism's own test.
     pub skippable: bool,
     /// Seconds to hold the last frame afterwards, or 0. Retail holds
     /// the logo for 8 s and the title for 6 s (`sub_4B480_4B7C0`),
@@ -114,7 +118,10 @@ impl Cue {
         }
     }
 
-    /// An unskippable cue — retail's `PlayInfoFmv(0, ...)`.
+    /// An unskippable cue — retail's `PlayInfoFmv(0, ...)`. No caller
+    /// ships one any more (every movie skips, player ruling
+    /// 2026-09-27).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const fn unskippable(name: &'static str) -> Cue {
         Cue {
             name,
@@ -1585,8 +1592,8 @@ mod tests {
         );
     }
 
-    /// An unskippable cue ignores the keypress — the endings and MC2's
-    /// cutscenes are `PlayInfoFmv(0, ..)`.
+    /// An unskippable cue ignores the keypress. No shipped cue is one
+    /// any more (player ruling 2026-09-27), but the mechanism stays.
     #[test]
     fn unskippable_ignores_input() {
         if set().is_none() {

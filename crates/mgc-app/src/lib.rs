@@ -5853,9 +5853,10 @@ impl App {
         if std::mem::replace(&mut self.cutscenes_played[slot], true) {
             return None;
         }
-        // Retail plays the cutscenes unskippable
-        // (`PlayInfoFmv(0, ..)`, MenusAndIntros.cpp:4142).
-        Some(movie::Cue::unskippable(
+        // Skippable by any key, like the intro. ⚖ Player ruling
+        // 2026-09-27: every movie is skippable, whatever the listing's
+        // `PlayInfoFmv(0, ..)` (MenusAndIntros.cpp:4166) says.
+        Some(movie::Cue::new(
             ["cut1", "cut2", "cut3", "cut4", "cut5", "cut6"][slot],
         ))
     }
@@ -6019,9 +6020,9 @@ impl App {
         self.ui_atlas = UiAtlas::None;
         match then {
             StatsThen::Menu => self.enter_main_menu(),
-            // Unskippable in retail (`PlayInfoFmv(0, ..)`).
+            // Skippable, like every movie (player ruling 2026-09-27).
             StatsThen::Outro => self.play_movies(
-                &[movie::Cue::unskippable("outro")],
+                &[movie::Cue::new("outro")],
                 AfterMovie::Quit,
                 event_loop,
             ),
@@ -8010,7 +8011,7 @@ impl App {
                         println!("campaign complete!");
                         self.quit_fade = None;
                         // The last level's performance screen, then
-                        // the (unskippable) outro.
+                        // the outro.
                         self.enter_stats_screen(StatsThen::Outro, event_loop);
                     }
                     // Single-level mode: the performance screen (when
