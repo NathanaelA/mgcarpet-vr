@@ -98,6 +98,11 @@ struct WorldInit {
     /// `sub_605E0`'s level-0 rival spell-2 book purge (EF:61650).
     /// Set on levels 022 and 062 only.
     castle_purge_level: bool,
+    /// The MC2 campaign REPLAY gate (`setting_38545 & 4`): the level
+    /// was launched by a map click on a portal the save has already
+    /// completed ([`mc2_map_launch_replayed`]). Kept here so a
+    /// restart rebuilds the same gate.
+    mc2_replayed: bool,
     /// Draw stand-in art for unported models (deliberate: MC2 default
     /// until its roster closes; the ledger stays truthful either way).
     placeholders: bool,
@@ -124,6 +129,7 @@ impl WorldInit {
             w.set_mc2_night_shade(self.night_shade);
             w.set_mc2_doom_level(self.doom_level);
             w.set_mc2_castle_purge_level(self.castle_purge_level);
+            w.set_mc2_level_replayed(self.mc2_replayed);
             if !self.stages.is_empty() {
                 w.set_mc2_stages(&self.stages);
             }
@@ -315,6 +321,27 @@ fn campaign_record(
 /// One rule, applied both when a slot is opened and whenever the run
 /// returns to the map — a slot saved from the map must name the same
 /// level before and after a reload.
+/// The MC2 campaign REPLAY gate for a world-map launch
+/// (`setting_38545 & 4`, MenusAndIntros.cpp:3371-72 / :3395-96): the
+/// clicked MAIN portal is completed (`activated_18 == 1`, i.e. one of
+/// the first `levels_completed`, :1553-58) or the clicked SECRET portal
+/// is (`activated_12 == 1`). Under it the level's XP scrolls hide and
+/// soft-kill and no spell XP accrues.
+///
+/// Only the map raises it. The in-level secret dive (the parent's
+/// portal, action 11) CLEARS the bit (`&= 0xFB`, EF:60802) and the main
+/// loop loads the secret with no map pass (EF:31390-31425), so a
+/// completed secret re-entered that way is ungated in retail too.
+fn mc2_map_launch_replayed(save: &saves::Mc2Save, level: u32) -> bool {
+    if level < 25 {
+        level < save.levels_completed
+    } else {
+        save.secrets
+            .iter()
+            .any(|p| p.level as u32 == level && p.activated == 1)
+    }
+}
+
 fn mc2_pending_level(save: &saves::Mc2Save) -> u32 {
     save.secrets
         .iter()
@@ -1010,6 +1037,7 @@ fn load_level(
     campaign_carry: &[u8],
     pool_slots: Option<usize>,
     awake_range: Option<u32>,
+    mc2_replayed: bool,
 ) -> Result<LoadedLevel, String> {
     let file =
         std::fs::File::open(level_path).map_err(|e| format!("{}: {e}", level_path.display()))?;
@@ -1352,6 +1380,7 @@ fn load_level(
                     // `sub_605E0`'s level-0 rival arm (remc2 EF:61650).
                     castle_purge_level: is_mc2
                         && package.header.as_ref().is_some_and(|h| h.gfx_type & 4 != 0),
+                    mc2_replayed: is_mc2 && mc2_replayed,
                     chassis,
                 };
                 let w = init.build();
@@ -3875,9 +3904,15 @@ impl App {
             let Some(sess) = self.session.as_deref_mut() else {
                 return;
             };
-            let Some(init) = &sess.level.world_init else {
+            let Some(init) = &mut sess.level.world_init else {
                 return;
             };
+            // The gate is part of the level entry: a world resumed from
+            // a mid-level save carries it in its snapshot, not in the
+            // init it was rebuilt from.
+            if let Some(cur) = sess.sim.world.as_ref() {
+                init.mc2_replayed = cur.mc2_level_replayed();
+            }
             let mut w = init.build();
             self.pool_dropped_total = 0;
             self.misfits_reported = 0;
@@ -4144,6 +4179,7 @@ impl App {
             &mc1_campaign_carry(Some(&fresh)),
             self.launch.pool_slots,
             self.launch.awake_range,
+            false,
         )?;
 
         // The rejection keys, checked BEFORE the level is installed so
@@ -4244,14 +4280,19 @@ impl App {
     /// Load and install the campaign's next level in-place — the
     /// mid-run counterpart of `App::new` + `resumed`'s upload block.
     /// A load failure is fatal (a campaign with a hole is not
-    /// continuable): report and exit.
-    fn campaign_switch(&mut self, n: u32, event_loop: &ActiveEventLoop) {
+    /// continuable): report and exit. `replayed` is the MC2 campaign
+    /// REPLAY gate — only a world-map portal click raises it
+    /// ([`mc2_map_launch_replayed`]).
+    fn campaign_switch(&mut self, n: u32, replayed: bool, event_loop: &ActiveEventLoop) {
         let Some(run) = &mut self.campaign else {
             return;
         };
         run.current = n;
         let path = run.level_path(n);
-        println!("campaign: launching level {n}");
+        println!(
+            "campaign: launching level {n}{}",
+            if replayed { " (replay: no spell XP)" } else { "" }
+        );
         let carry = mc1_campaign_carry(Some(run));
         let level = match load_level(
             &path,
@@ -4261,6 +4302,7 @@ impl App {
             &carry,
             self.launch.pool_slots,
             self.launch.awake_range,
+            replayed,
         ) {
             Ok(l) => l,
             Err(e) => {
@@ -5305,7 +5347,7 @@ impl App {
                 println!("campaign complete!");
                 event_loop.exit();
             } else {
-                self.campaign_switch(n, event_loop);
+                self.campaign_switch(n, false, event_loop);
             }
             return;
         }
@@ -5401,7 +5443,7 @@ impl App {
         {
             eprintln!("note: world-map screen unavailable: {e} — launching directly");
             let n = self.campaign.as_ref().map_or(0, |c| c.current);
-            self.campaign_switch(n, event_loop);
+            self.campaign_switch(n, false, event_loop);
             return;
         }
         // The options menu (P) rides OVER the map screen — the
@@ -5536,7 +5578,12 @@ impl App {
         if let Some(n) = launch {
             // Release the map confinement (flight re-grabs on click).
             self.set_grab(false);
-            self.campaign_switch(n, event_loop);
+            let replayed = self
+                .campaign
+                .as_ref()
+                .and_then(|c| c.save.mc2())
+                .is_some_and(|s| mc2_map_launch_replayed(s, n));
+            self.campaign_switch(n, replayed, event_loop);
         }
     }
 
@@ -6145,7 +6192,7 @@ impl App {
                     // level directly.
                     eprintln!("note: main menu unavailable: {e} — launching directly");
                     let n = self.campaign.as_ref().map_or(0, |c| c.current);
-                    self.campaign_switch(n, event_loop);
+                    self.campaign_switch(n, false, event_loop);
                     return;
                 }
             }
@@ -6205,7 +6252,7 @@ impl App {
             match a {
                 Mc1Action::Continue => {
                     let n = self.campaign.as_ref().map_or(0, |c| c.current);
-                    self.campaign_switch(n, event_loop);
+                    self.campaign_switch(n, false, event_loop);
                 }
                 Mc1Action::NewGame => {
                     if let Some(run) = &mut self.campaign {
@@ -6216,7 +6263,7 @@ impl App {
                             s.blob24 = [0; 24];
                         }
                     }
-                    self.campaign_switch(0, event_loop);
+                    self.campaign_switch(0, false, event_loop);
                 }
                 Mc1Action::SaveTo { slot } => {
                     if let Some(run) = &mut self.campaign {
@@ -7941,7 +7988,7 @@ impl App {
                         } else {
                             // MC2's direct level chain (the
                             // demon-mouth secret dive).
-                            self.campaign_switch(n, event_loop);
+                            self.campaign_switch(n, false, event_loop);
                         }
                     }
                     Some(campaign::NextStep::MapScreen) => {
@@ -10107,6 +10154,7 @@ fn run_flock_probe(
             night_shade: init.night_shade,
             doom_level: init.doom_level,
             castle_purge_level: init.castle_purge_level,
+            mc2_replayed: init.mc2_replayed,
             placeholders: init.placeholders,
             chassis: init.chassis.clone(),
         };
@@ -11501,6 +11549,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             &mc1_campaign_carry(campaign_run.as_ref()),
             pool_slots,
             awake_range,
+            false,
         ) {
             Ok(l) => Some(l),
             Err(e) => {
@@ -11724,6 +11773,35 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
 /// the device's shared storage; `saves::saves_root` is its sibling).
 fn get_baked_directory() -> PathBuf {
     PathBuf::from("baked")
+}
+
+#[cfg(test)]
+mod replay_gate_tests {
+    use super::{mc2_map_launch_replayed, saves::Mc2Save};
+
+    /// The map raises the gate on a COMPLETED portal only: main
+    /// portals below `levels_completed`, secrets at `activated == 1`.
+    /// Both arms asserted, so a helper that always answers one way
+    /// cannot pass.
+    #[test]
+    fn map_launch_gates_completed_portals_only() {
+        let mut save = Mc2Save {
+            levels_completed: 8,
+            ..Default::default()
+        };
+        assert!(mc2_map_launch_replayed(&save, 0));
+        assert!(mc2_map_launch_replayed(&save, 7), "the last completed main level");
+        assert!(!mc2_map_launch_replayed(&save, 8), "the pending main level");
+
+        let secret = save.secrets[0].level as u32;
+        save.secrets[0].activated = 2;
+        assert!(
+            !mc2_map_launch_replayed(&save, secret),
+            "a revealed-uncompleted secret"
+        );
+        save.secrets[0].activated = 1;
+        assert!(mc2_map_launch_replayed(&save, secret), "a completed secret");
+    }
 }
 
 #[cfg(test)]

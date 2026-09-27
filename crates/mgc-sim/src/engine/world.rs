@@ -13668,6 +13668,12 @@ impl World {
         self.mc2_level_replayed = on;
     }
 
+    /// The campaign REPLAY gate, as [`Self::set_mc2_level_replayed`]
+    /// left it (or a restored snapshot carried it).
+    pub fn mc2_level_replayed(&self) -> bool {
+        self.mc2_level_replayed
+    }
+
     /// The frame a fresh MC2 level build assumes retail's level-start
     /// checkpoint autosave lands on. See
     /// [`Self::mc2_arm_checkpoint_autosave`] — it is the corpus
