@@ -5044,11 +5044,21 @@ impl World {
         // sprite pops in the instant the pyramid building dies and its
         // death animation keeps looping over the growing fountain
         // (player-reported 2026-08-03).
-        // NOT generalised beyond class 5 yet: several ported class-10
-        // effect ctors ((10,19)/(10,23)/(10,25)) faithfully set bit 0
-        // while the port draws their billboard as a stand-in for the
-        // retail particle child it does not implement — see the
-        // conformance ledger's open lead.
+        // NOT generalised beyond class 5 yet: the ported class-10
+        // effect ctors (10,19)/(10,23) faithfully set bit 0 while the
+        // port draws their billboard as a stand-in for the retail
+        // `AddEvent2_847D0` particle child it does not implement — see
+        // the conformance ledger's open lead.
+        //
+        // (10,25) is the exception, hidden below: `sub_4F6A0`
+        // (EF:36068) sets NO sprite and mints NO particle child, and
+        // neither its tick (`sub_33E20`) nor the type-3 AoE
+        // (`sub_10C80`) draws anything — retail shows nothing at all.
+        // The port drew sprite row 0 (an archer). mc2l9 t=13258: the
+        // four authored blasts round switch 22 are born `b0=0x05`,
+        // sprite 0 (player-reported "archers" circle near the
+        // village). The Steal Mana burst is the same ctor. MC2 only —
+        // MC1's (10,25) is the visible steal flash.
         //
         // The ENEMY MAGIC MINE is the other writer, ported here rather
         // than in the sim: the mine tick's draw-bit block (`sub_3A8B0`
@@ -5070,7 +5080,8 @@ impl World {
             && e.f52 != 0
             && e.f52 as usize != i
             && self.beyond_sight_tier() != Some(2);
-        let hidden = (e.class64 == 5 && e.flags & 1 != 0) || enemy_mine;
+        let blast25 = e.class64 == 10 && e.model65 == 25 && e.flags & 1 != 0;
+        let hidden = (e.class64 == 5 && e.flags & 1 != 0) || enemy_mine || blast25;
         // Class-5 heads + the wizard-family + destructible STRUCTURES
         // — dwellings (10,45), building anchors (10,52), castle stage
         // pieces (10,79).
@@ -27429,6 +27440,27 @@ mod tests {
     /// BOTH arms are asserted — the replayed arm reaps, the first-play arm
     /// does not — because asserting only the first would pass for a port
     /// that reap-flagged every scroll unconditionally.
+    /// The MC2 (10,25) area blast is invisible in retail: `sub_4F6A0`
+    /// sets byte[0] bit 0 and no sprite, and no particle rides it.
+    /// POSITIVE CONTROL: clearing bit 0 brings the pose back, so this
+    /// cannot pass for a port that never poses the model at all.
+    #[test]
+    fn the_mc2_blast25_draws_no_billboard() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(96, 96);
+        let s = w.g.mc2_spawn_blast25(x, y, 0).expect("blast spawns");
+        assert_ne!(w.g.ent[s].flags & 1, 0, "the ctor sets byte[0] bit 0");
+        assert!(
+            !w.live_poses().iter().any(|p| p.slot == s as u16),
+            "the (10,25) blast must not draw"
+        );
+        w.g.ent[s].flags &= !1;
+        assert!(
+            w.live_poses().iter().any(|p| p.slot == s as u16),
+            "positive control: with bit 0 clear the model is still posed"
+        );
+    }
+
     #[test]
     fn a_replayed_level_soft_kills_its_xp_scroll_on_the_first_dispatch() {
         for replayed in [false, true] {
