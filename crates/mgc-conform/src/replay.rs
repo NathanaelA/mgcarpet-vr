@@ -1413,6 +1413,12 @@ struct RStats {
     /// Boundaries excused by the roster, in order — the companion list
     /// to `reset clusters`, and never folded into it.
     roster_ticks: Vec<u64>,
+    /// MC2: the pairs retail's level-start checkpoint autosave landed
+    /// in and what the port's own save did there
+    /// (`World::mc2_replay_checkpoint_autosave`). A whole take that
+    /// saved carries one entry; a take whose session had already
+    /// saved, and every take that opens behind the save, carries none.
+    autosaves: Vec<(u64, mgc_sim::engine::world::conformance::Mc2AutosaveReport)>,
 }
 
 impl RStats {
@@ -1721,6 +1727,30 @@ impl RStats {
                 self.crank_repass
             );
         }
+        for (t, rep) in &self.autosaves {
+            let fired: Vec<String> = (0..16)
+                .filter(|i| rep.retail_fired >> i & 1 != 0)
+                .map(|i| i.to_string())
+                .collect();
+            let _ = writeln!(
+                out,
+                "   level-start autosave: landed in the pair into t={t} (the save's stamp) — \
+                 free stack rebuilt ({} deep), recycle disarmed, {} StageVar watch row(s) \
+                 severed{}",
+                rep.free,
+                rep.severed,
+                if fired.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; retail FIRED row(s) {} there and the port did not \
+                         (registered deviation: the severed death watch reads DOS memory — \
+                         its boundary is the roster's)",
+                        fired.join(",")
+                    )
+                }
+            );
+        }
         let _ = writeln!(
             out,
             "   input events: {} respawn(s), {} suicide(s), {} equip/rebind(s){}",
@@ -1878,8 +1908,15 @@ impl RStats {
         } else {
             format!(" roster={roster}")
         };
+        // Conditional like the rest: only a whole MC2 take whose
+        // session saved at level start carries the field, and it names
+        // the record the save's stamp first shows in.
+        let save = match self.autosaves.first() {
+            None => String::new(),
+            Some((t, _)) => format!(" save={t}"),
+        };
         format!(
-            "BRIEF {take} mode={mode} terrain={terrain}{stopped} end={end} segments={} gaps={gaps}{restarts}{roster} \
+            "BRIEF {take} mode={mode} terrain={terrain}{save}{stopped} end={end} segments={} gaps={gaps}{restarts}{roster} \
              devs={devs} graded={graded}{paused} clean={clean} horizon={} first={} sig={sig}{tags}{artifact}\n",
             self.segs.len(),
             first.map_or_else(|| "END".to_string(), |t| t.saturating_sub(1).to_string()),
@@ -3285,6 +3322,18 @@ fn run_mc2(
         // which is count-free and retail's own datum.
         // `MGC_NO_MC2_WW_CRANK_SIM_WITNESS` restores the pair-only
         // witness (and the trial's old `rec.whirl_crank` gate).
+        // ⭐ THE LEVEL-START CHECKPOINT AUTOSAVE — a whole take's third
+        // frame. The capture says which pair it landed in (the save's
+        // stamp, `mgcr::mc2_autosave_lands`); the world runs it at the
+        // tick top, where retail's frame does. Ahead of the trial
+        // clone, so the clone inherits it. Reported, never silent:
+        // the full report names the tick and `--brief` carries
+        // `save=<t>`.
+        if !args.pose_only
+            && let Some(rep) = world.mc2_replay_checkpoint_autosave(&pst, &st)
+        {
+            stats.autosaves.push((tick.t, rep));
+        }
         let sim_witness = !std::env::var_os("MGC_NO_MC2_WW_CRANK_SIM_WITNESS").is_some();
         if (rec.whirl_crank || (sim_witness && world.mc2_whirlwind_alive()))
             && !args.pose_only

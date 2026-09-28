@@ -1226,6 +1226,42 @@ against a saved baseline — the discipline the campaign already asks
 for after every landed law, previously hand-rolled with shell loops
 per take.
 
+**The level-start autosave (MC2 whole takes, 2026-09-28).** A take that
+opens at game turn 1 has retail's level-start checkpoint autosave inside
+it: `sub_57640` runs from the palette fade's third step, which is the
+first call of frame 3. Every retail driver (`replay`, `verify-deltas`,
+the fixture runner, the app's `--replay`) finds the pair it landed in by
+the save's stamp — `dword_0x36DF6` zero in the pair's first record and
+set in its second (`mgcr::mc2_autosave_lands`) — and calls
+`World::mc2_replay_checkpoint_autosave` before the tick:
+
+- the ALLOCATOR half is the port's own law
+  (`World::mc2_checkpoint_autosave`, the one a native level arms for
+  itself): `sub_49F90` re-ranks the free stack and the recycle stack is
+  disarmed;
+- the STAGEVAR half SEVERS every `&2`-clear watch row — `sub_55100`
+  turns its pointer into a slot offset for good, and `sub_1D8C0` grazes
+  on it from that frame on. It FIRES NOTHING. What `sub_12780`'s death
+  watch reads through a severed row is DOS memory — one instance of
+  memory corruption, the registered death-watch deviation
+  (docs/DEVIATIONS.md) — so the boundary where retail's fired row
+  releases its held records is a ROSTER rule (⚖ player-ruled
+  2026-09-28, never an overlay): `mc2l4-autosave-severed-death-watch`,
+  `mc2l21-…`, `mc2l14-…`, each scoped to its take, its tick, its model
+  and its slots. The re-anchor behind the excused boundary imports
+  retail's row.
+
+Nothing about it is silent: the full report prints a
+`level-start autosave:` line naming the rows retail fired, the brief
+line carries `save=<t>` — only on a take the save landed in, so an MC1
+row and the row of a take whose session had already saved stay
+byte-stable — and the four takes with such a row read `roster=1`.
+`MGC_NO_MC2_REPLAY_AUTOSAVE=1` leaves the save out;
+`MGC_NO_MC2_LOAD_FREE_REBUILD=1` leaves out its allocator half alone.
+A fixture cannot pin the pair 1 → 2 of those takes (the suite grades
+raw, the roster is not consulted), so the law's pin is the unit test
+`mc2_a_whole_takes_third_frame_runs_the_level_start_autosave`.
+
 `--pose-only` is the tier-2 chain: the FLIGHT state chains while the
 world context re-imports per pair — it isolates the mover +
 input-recovery chain from world fidelity. World-driven pose domains

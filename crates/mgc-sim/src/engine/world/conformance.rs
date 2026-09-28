@@ -55,6 +55,30 @@ pub struct ImportReport {
     pub stack_fallback: Option<(usize, usize)>,
 }
 
+/// What [`World::mc2_replay_checkpoint_autosave`] did — the driver
+/// prints it, so the save is reported and never silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mc2AutosaveReport {
+    /// Free-stack depth after the rebuild.
+    pub free: usize,
+    /// `&2`-clear watch rows (kinds 3/4/5/8/9) the save severed.
+    pub severed: u16,
+    /// Bit *i* = RETAIL's row *i* left the save's frame FIRED and the
+    /// port's did not. Reported only, never applied: the severed
+    /// death watch reads DOS memory, so the bit is the registered
+    /// deviation and its boundary is the roster's to excuse.
+    pub retail_fired: u16,
+}
+
+/// `MGC_NO_MC2_REPLAY_AUTOSAVE=1` — a retail driver leaves the
+/// level-start checkpoint autosave out again (the state before
+/// 2026-09-28: a whole take then forks at its first allocation after
+/// frame 3, or at the save's own frame through a StageVar row).
+fn no_mc2_replay_autosave() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_REPLAY_AUTOSAVE").is_some())
+}
+
 /// One entity's ungraded raw lanes — see [`World::raw_shadow_mc1`].
 ///
 /// EVERY per-entity field the port models and `EntObsMc1` does not
@@ -2809,6 +2833,85 @@ impl World {
         });
         self.player.mana_delta =
             mc2_applied_mana_delta(st, ply, human_slot, carpet, spell6_life, true);
+    }
+
+    /// ⭐⭐⭐ **THE LEVEL-START CHECKPOINT AUTOSAVE UNDER A RETAIL
+    /// DRIVER** (replay, verify-deltas, fixtures, the app's
+    /// `--replay`). Call it with the pair about to be stepped, BEFORE
+    /// the tick; it acts only on the pair the save landed in
+    /// ([`mgc_formats::mgcr::mc2_autosave_lands`]) and returns what it
+    /// did.
+    ///
+    /// A NATIVE level arms the same save itself
+    /// ([`World::mc2_arm_checkpoint_autosave`]); [`Self::retail_import_mc2`]
+    /// disarms it, which was right for as long as every recording
+    /// began behind the save (the originals open at game turn 2..11
+    /// and the 2026-09-28 survey found the stamp set in record 0 of
+    /// every one). A WHOLE take opens at game turn 1, so its third
+    /// frame carries the save and the port has to run it where retail
+    /// does: `PaletteChanges_47760` is the frame's FIRST call, so the
+    /// save sits at the top of the tick INTO the stamped record, ahead
+    /// of the tick-top reap — the seat [`World::tick`]'s own latch
+    /// uses.
+    ///
+    /// Two halves, one event:
+    ///
+    /// 1. **THE ALLOCATOR** — [`World::mc2_checkpoint_autosave`]:
+    ///    `sub_49F90` re-ranks the free stack (lowest slot on top) and
+    ///    the victim stack is disarmed. A port law. Witnesses, each
+    ///    ONE missing/extra pair at the first allocation behind the
+    ///    save: mc2l3 / mc2l3-new / mc2l5 t=7 `(10,86)`, mc2l7 t=15
+    ///    `(10,86)`, mc2l30 t=40 `(10,39)`, mc2l23 t=90 `(9,0)`.
+    ///
+    /// 2. **THE STAGEVAR SEVERANCE** — `sub_55100` serializes every
+    ///    `&2`-clear watch row's entity pointer to `slot × 0xA8` and
+    ///    cannot convert it back, so from this frame on the row
+    ///    resolves no watch: `sub_1D8C0`'s idle arm throws the union
+    ///    away on its pool-base guard and GRAZES. Deterministic, so a
+    ///    law of the replay — the binding [`Self::retail_import_mc2`]
+    ///    takes at every anchor behind the save. Witness: mc2l21 t=2,
+    ///    row 5 — the held goats graze (slots 92/108/124/142 `rand`).
+    ///
+    /// ⚖ **WHAT IT DOES NOT DO: FIRE THE ROW** (player-ruled
+    /// 2026-09-28). `sub_12780`'s death watch reads DOS low memory
+    /// through the severed union — one instance of memory corruption,
+    /// outside every capture — and on this corpus every severed
+    /// kind-8/9 row leaves the save's frame FIRED. The port's row
+    /// stays held (an unbound watch never fires), and the boundary
+    /// where that shows is a ROSTER rule, never an overlay:
+    /// `mc2-autosave-severed-death-watch` (mc2l4 / mc2l4-new / mc2l21
+    /// t=2) and `mc2l14-autosave-severed-death-watch` (t=5938, the
+    /// first (5,18) to bind to row 5). The re-anchor behind an
+    /// excused boundary imports retail's row, FIRED bit and all.
+    /// [`Mc2AutosaveReport::retail_fired`] names the rows.
+    ///
+    /// `MGC_NO_MC2_REPLAY_AUTOSAVE` restores the pre-law driver.
+    pub fn mc2_replay_checkpoint_autosave(
+        &mut self,
+        pre: &RetailMc2,
+        post: &RetailMc2,
+    ) -> Option<Mc2AutosaveReport> {
+        if no_mc2_replay_autosave() || !mgc_formats::mgcr::mc2_autosave_lands(pre, post) {
+            return None;
+        }
+        self.mc2_checkpoint_autosave();
+        let (mut severed, mut retail_fired) = (0u16, 0u16);
+        for (i, v) in self.mc2_stagevars.iter().enumerate() {
+            if !matches!(v.kind, 3 | 4 | 5 | 8 | 9) || v.flags & 0x02 != 0 {
+                continue;
+            }
+            severed += 1;
+            if v.flags & 0x04 == 0 && post.stagevars.get(i).is_some_and(|r| r[1] & 0x04 != 0) {
+                retail_fired |= 1 << i;
+            }
+        }
+        // The watch alone: no row is fired here (mask 0).
+        self.mc2_debug_sever_stagevar_watches(&post.stagevar_watch, 0);
+        Some(Mc2AutosaveReport {
+            free: self.g.free.len(),
+            severed,
+            retail_fired,
+        })
     }
 
     /// Apply a decoded MC2 retail closure onto this (already-built,
@@ -7897,6 +8000,7 @@ mod tests {
             recycle_stack: Vec::new(),
             level: 1,
             base160: 0,
+            save_stamp: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
             stagevar_watch: [0u16; 11],
@@ -8059,6 +8163,7 @@ mod tests {
             recycle_stack: Vec::new(),
             level: 1,
             base160,
+            save_stamp: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
             stagevar_watch: [0u16; 11],
@@ -8201,6 +8306,7 @@ mod tests {
             recycle_stack: Vec::new(),
             level: 24,
             base160: 0,
+            save_stamp: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
             stagevar_watch: [0u16; 11],
@@ -8299,6 +8405,7 @@ mod tests {
             recycle_stack: Vec::new(),
             level: 24,
             base160: 0,
+            save_stamp: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
             stagevar_watch: [0u16; 11],
@@ -8390,6 +8497,7 @@ mod tests {
             recycle_stack: Vec::new(),
             level: 1,
             base160: 0,
+            save_stamp: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
             stagevar_watch: [0u16; 11],
@@ -8744,6 +8852,7 @@ mod tests {
             recycle_stack: victims.clone(),
             level: 1,
             base160: 0,
+            save_stamp: 0,
             objectives: [[0u8; 11]; 8],
             stagevars: [[0u8; 8]; 11],
             stagevar_watch: [0u16; 11],
@@ -8828,6 +8937,7 @@ mod tests {
             recycle_stack: Vec::new(),
             level: 3,
             base160: 0,
+            save_stamp: 0,
             objectives: [[0; 11]; 8],
             stagevars: [[0; 8]; 11],
             stagevar_watch: [0; 11],
@@ -9000,5 +9110,175 @@ mod tests {
             mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116], [0, 0, 1], false),
             0
         );
+    }
+    /// THE LEVEL-START CHECKPOINT AUTOSAVE UNDER A RETAIL DRIVER
+    /// ([`World::mc2_replay_checkpoint_autosave`]) — both halves, and
+    /// the two pairs it must leave alone.
+    ///
+    /// The shape is mc2l30's: three transients freed in frame 2 sit on
+    /// the free stack in the order the reap pushed them (…, 58, 59, 60
+    /// — 60 on top), retail's save re-ranks the stack at the top of
+    /// frame 3 (lowest slot on top) and the `(10,39)` of t=40 takes
+    /// 58. The
+    /// StageVar rows are mc2l4's row 2 (kind 9, `&2` clear, bound to
+    /// slot 174, FIRED in retail by the save's frame) and mc2l21's row
+    /// 5 (kind 5, severed, not fired). The save severs both and fires
+    /// NEITHER: retail's FIRED bit is the registered death-watch
+    /// deviation and is only reported.
+    ///
+    /// Non-vacuous: `MGC_NO_MC2_REPLAY_AUTOSAVE=1` leaves the stack
+    /// and the rows as imported and the law's asserts fail.
+    #[test]
+    fn mc2_a_whole_takes_third_frame_runs_the_level_start_autosave() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|_| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                e.extend_from_slice(&[4, 4]);
+                e
+            })
+            .collect();
+        let mut dat = Vec::new();
+        for _ in 0..4 {
+            dat.push(4u8);
+            dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+            dat.push(0);
+        }
+        let fa = crate::engine::features::FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        let mut w = World::new_for_game(planes, &[], 1, fa, crate::ids::GameId::Mc2);
+        let pool = w.g.ent.len();
+        let mut ents = vec![RetailEntMc2::default(); pool];
+        ents[1] = RetailEntMc2 {
+            class3f: 3,
+            model40: 0,
+            max_life: 10_000,
+            life: 10_000,
+            ..Default::default()
+        };
+        // The free stack as frame 2's ascending reap left it: the
+        // level build's ranking (descending, the lowest slot on top)
+        // with 58, 59 and 60 taken out of it and pushed back in slot
+        // order — 60 is the next allocation.
+        let mut free: Vec<u16> = (2..pool as u16)
+            .rev()
+            .filter(|s| !(58..=60).contains(s))
+            .collect();
+        free.extend([58u16, 59, 60]);
+        let ranked: Vec<u16> = (2..pool as u16).rev().collect();
+        let pre = RetailMc2 {
+            things: vec![],
+            stage_binds: [(0, 0, None); 8],
+            rand: 1,
+            vortex: 0,
+            fire_col: 0,
+            local_player: 0,
+            player_count: 1,
+            spawn_ord: [0; 29],
+            players: vec![mgc_formats::mgcr::RetailPlayerMc2 {
+                play_index: 1,
+                hand_left: -1,
+                hand_right: -1,
+                ..Default::default()
+            }],
+            ents,
+            free_stack: free.clone(),
+            recycle_stack: Vec::new(),
+            level: 4,
+            base160: 0,
+            save_stamp: 0,
+            objectives: [[0u8; 11]; 8],
+            stagevars: [[0u8; 8]; 11],
+            stagevar_watch: [0u16; 11],
+            doom_beam: 0,
+        };
+        let mut post = pre.clone();
+        post.save_stamp = 0x002A_93AC;
+        // Retail's row 2 leaves the save's frame FIRED, row 5 does
+        // not; both unions are bare slot offsets, which decode to no
+        // watch.
+        post.stagevars[2] = [9, 0x05, 3, 33, 0x30, 0x72, 0, 0];
+        post.stagevars[5] = [5, 0x01, 0, 67, 0x78, 0x60, 0, 0];
+
+        let seed = |w: &mut World| {
+            w.retail_import_mc2(&pre).expect("import");
+            assert!(w.g.free == free, "the import takes retail's stack verbatim");
+            w.mc2_stagevars = vec![crate::mc2::stagevars::Mc2StageVar::default(); 11];
+            w.mc2_stagevars[2] = crate::mc2::stagevars::Mc2StageVar {
+                kind: 9,
+                flags: 0x01,
+                chain: 3,
+                watch_ent: 174,
+                ..Default::default()
+            };
+            w.mc2_stagevars[5] = crate::mc2::stagevars::Mc2StageVar {
+                kind: 5,
+                flags: 0x01,
+                watch_ent: 147,
+                ..Default::default()
+            };
+            // A watch-by-MODEL row (`&2` set) carries a subtype, never
+            // a pointer: the save cannot sever it.
+            w.mc2_stagevars[7] = crate::mc2::stagevars::Mc2StageVar {
+                kind: 4,
+                flags: 0x02,
+                watch_ent: 9,
+                ..Default::default()
+            };
+        };
+
+        // The pair the save landed in.
+        seed(&mut w);
+        let rep = w
+            .mc2_replay_checkpoint_autosave(&pre, &post)
+            .expect("stamp 0 -> set is the save's pair");
+        assert!(
+            w.g.free == ranked,
+            "sub_49F90 re-ranks the stack: 58 is handed out before 59 and 60 (top four: {:?})",
+            &w.g.free[w.g.free.len() - 4..]
+        );
+        assert_eq!(
+            (w.mc2_stagevars[2].watch_ent, w.mc2_stagevars[2].flags & 0x04),
+            (0, 0),
+            "row 2: severed, and NOT fired — retail's FIRED bit is the roster's"
+        );
+        assert_eq!(
+            (w.mc2_stagevars[5].watch_ent, w.mc2_stagevars[5].flags & 0x04),
+            (0, 0),
+            "row 5: severed, not fired"
+        );
+        assert_eq!(
+            (w.mc2_stagevars[7].watch_ent, w.mc2_stagevars[7].flags),
+            (9, 0x02),
+            "a watch-by-model row is not a pointer and is left alone"
+        );
+        assert_eq!((rep.severed, rep.retail_fired), (2, 1 << 2));
+        assert!(w.g.mc2_recycle.stack.is_empty(), "dword_0x11e6 = -1");
+
+        // A pair BEHIND the save (every original take, and a whole take
+        // from its record 2 on): nothing runs.
+        seed(&mut w);
+        assert!(w.mc2_replay_checkpoint_autosave(&post, &post).is_none());
+        assert!(w.g.free == free);
+        assert_eq!(w.mc2_stagevars[2].watch_ent, 174);
+
+        // A pair AHEAD of it (a whole take's 0 -> 1), and a session that
+        // had saved before the level began (the stamp set from record
+        // 0, never an edge): nothing runs either.
+        assert!(w.mc2_replay_checkpoint_autosave(&pre, &pre).is_none());
+        assert!(w.g.free == free);
     }
 }

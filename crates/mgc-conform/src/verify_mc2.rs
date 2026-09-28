@@ -1122,6 +1122,13 @@ pub(crate) fn exec_pair_mc2(
         .retail_import_mc2(pst)
         .map_err(|e| format!("import: {e}"))?;
     world.mc2_full_stop_import(pst, full_stop);
+    // The level-start checkpoint autosave, when this is the pair it
+    // landed in (a whole take's 1 → 2): the import above holds the
+    // pre-save stacks and StageVar rows, retail's frame opens on the
+    // save. See `World::mc2_replay_checkpoint_autosave` (which severs
+    // the watch rows and fires none: retail's FIRED bit is a roster
+    // row).
+    world.mc2_replay_checkpoint_autosave(pst, st);
     world.set_prev_fire(prev_cmd.fire_left, prev_cmd.fire_right);
     // The barrel roll's homing-lock break (`sub_55EB0`) — retail's
     // PLAYER FRAME fires it before `UpdateEntities_57730`, and the

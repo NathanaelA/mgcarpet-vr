@@ -2371,6 +2371,18 @@ pub struct RetailMc2 {
     /// `(ptr_a0 − base160)/34 + 59` (retail's own load fixup,
     /// Level.cpp:1255-57).
     pub base160: u32,
+    /// `dword_0x36DF6` AS RECORDED, with no recovery — the SAVE'S
+    /// STAMP. Retail's two save routines are its only writers
+    /// ([`mc2_base160`]'s doc has the three references), so it reads
+    /// zero until the process first saves the level and
+    /// `&str_D7BD6[59]` ever after. A WHOLE take (first record = game
+    /// turn 1) therefore shows the level-start checkpoint autosave
+    /// (`sub_57640`, the palette fade's third step, at the TOP of
+    /// frame 3) as the one pair whose stamp goes zero → set; a take
+    /// whose session had already saved carries the stamp from its
+    /// first record and shows no edge at all. See
+    /// [`mc2_autosave_lands`].
+    pub save_stamp: u32,
     /// LAW A — the authored THING table `entity_0x30311[1200]`
     /// (BasicTerrain.h: 20 B rows at 0x30311..0x360D1) IS in every
     /// capture; the only runtime write is the consumption zero
@@ -2758,6 +2770,7 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
         recycle_stack: mc2_stack(d, 0x11E6, 0x11EA, pool_base),
         level: u16_(d, m2::POOL + m2::ENT_COUNT * m2::ENT_STRIDE + 2),
         base160: mc2_base160(d, pool_base),
+        save_stamp: u32_(d, 0x36DF6),
         things: (0..1200)
             .map(|i| {
                 let b = 0x30311 + i * 20;
@@ -2980,6 +2993,32 @@ fn mc2_pool_base(d: &[u8]) -> Option<u32> {
 fn mc2_full_pool_victims() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_SAC_BIT").is_none())
+}
+
+/// ⭐ **DID RETAIL'S LEVEL-START CHECKPOINT AUTOSAVE RUN INSIDE THE
+/// PAIR `pre → post`?** Read off the capture, never declared: the
+/// save's stamp ([`RetailMc2::save_stamp`]) is zero in `pre` and set
+/// in `post`.
+///
+/// `sub_57640` has ONE caller, `PaletteChanges_47760`'s case 2 (remc2
+/// EventsFunctions.cpp, the statement after `sub_47650(0x300)`), and
+/// `PaletteChanges_47760` is the FIRST call of the frame
+/// (`DrawAndEventsInGame_47560`), ahead of `PlayerEvents_51BB0` and
+/// `UpdateEntities_57730`. The fade counts 0, 1, 2 from the level's
+/// first frame, so a fresh boot saves at the top of frame 3 and the
+/// record of game turn 3 is the first to carry the stamp — measured
+/// on all 36 saving whole takes of the MC2 corpus (2026-09-28: zero
+/// at records 0 and 1, `0x2A93AC` from record 2). The four takes whose
+/// session had latched `setting_38545 & 0x80` before the level began
+/// (mc2l30-new, mc2l31, mc2l32, mc2l33) carry the stamp from record 0
+/// and never save.
+///
+/// The latch itself lives in `x_D41A0_BYTEARRAY_4_struct`, which no
+/// recording holds; the stamp is its witness inside `D41A0_0`. It
+/// lives here, beside the decoder, because every retail driver needs
+/// it (the [`mc2_take_replayed`] lesson).
+pub fn mc2_autosave_lands(pre: &RetailMc2, post: &RetailMc2) -> bool {
+    pre.save_stamp == 0 && post.save_stamp != 0
 }
 
 /// The distance between the two statics `dword_0x36DF6` (the saved

@@ -890,6 +890,20 @@ impl ReplayDriver {
             mc2_park: rp.mc2_park,
             ..FlightInput::default()
         };
+        // The level-start checkpoint autosave of a WHOLE take (the pair
+        // the save's stamp appears in): the sim's tick into `st` opens
+        // on it, as retail's frame does. The conformance runner's law,
+        // `World::mc2_replay_checkpoint_autosave` — one home, every
+        // retail driver.
+        if let Some(w) = sim.world.as_mut()
+            && let Some(rep) = w.mc2_replay_checkpoint_autosave(&pst, &st)
+        {
+            eprintln!(
+                "replay: t={}: level-start autosave — free stack rebuilt ({} deep), \
+                 {} StageVar watch row(s) severed, retail fired mask {:#x} (not applied)",
+                tick.t, rep.free, rep.severed, rep.retail_fired
+            );
+        }
         let gradeable = recover::capture_clean_mc2(&pst, &st);
         self.pending = Some(gradeable);
         self.steps += 1;

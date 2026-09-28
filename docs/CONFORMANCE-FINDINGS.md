@@ -106,6 +106,155 @@ rejection streaks; the gate now counts only `dv±1` steps as tear
 suspects.) Every open entry below reproduced across all takes,
 including the 75%-torn pre-gate corpus.
 
+## ROUND 164 (2026-09-28, vm113) — **THE MC2 CORPUS RE-CERTIFIED AS WHOLE TAKES**: one law, three roster rules, 40 of 40 at END
+
+Opened on `d27ff10`, tree clean of Rust changes. The 40 MC2 whole takes (`re-recordings/`, each a retake of
+its original from the level's FIRST frame, three stages IDENTICAL — docs/RECORDING.md, "A retake starts at the
+level's first frame") are to replace the originals as the corpus. ⚖ Ruled the same day: they tick from 0 and
+carry no memory of the takes they were made from.
+
+### 164-1 THE BOARD ON ARRIVAL — 29 EQUAL, 10 ONE BREAK EACH, mc2l24's ROSTER OFF BY ITS SHIFT
+
+`replay --segmented --brief` on the round-163 binary, the shift taken off `end`/`graded`/`clean`
+(`tools/retake-rig/brief_board.py`):
+
+```
+29 takes                      = the round-163 row
+mc2l3  mc2l3-new  mc2l5   t=7     missing(10,86)   \
+mc2l7                     t=15    missing(10,86)    |  the next allocation takes another slot
+mc2l30                    t=40    missing(10,39)    |
+mc2l23                    t=90    missing(9,0)     /
+mc2l4  mc2l4-new          t=2     (5,4)slot210:sv1,sv2      \
+mc2l21                    t=2     (5,1)slot92:rand           |  a StageVar row
+mc2l14                    t=5938  (5,18)slot38:x,y,action,sv1,sv2  /
+mc2l24                    devs=9 for roster=9 (the rule's ticks sit 5 records later)
+```
+
+Ten takes, one break each, clean to the end behind it — and mc2l30-new, mc2l31, mc2l32, mc2l33 clean from
+record 0.
+
+### 164-2 THE LAW — A WHOLE TAKE'S THIRD FRAME IS RETAIL'S LEVEL-START AUTOSAVE
+
+**One event owns all ten.** `sub_57640` (one-shot, latched by `setting_38545 & 0x80`) has ONE caller,
+`PaletteChanges_47760` case 2, and `PaletteChanges_47760` is the FIRST call of the frame
+(`DrawAndEventsInGame_47560`, ahead of `PlayerEvents_51BB0` and `UpdateEntities_57730`). The fade counts
+0, 1, 2 from the level's first frame, so a fresh boot saves at the TOP of frame 3. `SaveLevel_55080` is
+`sub_55100(1)` … `sub_55100(2); sub_49F90(); dword_0x11e6 = -1`:
+
+- `sub_49F90` re-ranks the free stack (lowest slot on top) over what frame 2's ascending reap pushed LIFO;
+- `sub_55100` serializes every `&2`-clear StageVar watch pointer to `slot × 0xA8` and cannot convert it
+  back — the registered death-watch deviation (docs/DEVIATIONS.md).
+
+The port HAD the law — a native level arms it (`World::mc2_arm_checkpoint_autosave`, round 148) — and
+`retail_import_mc2` disarmed it, which was right for as long as every take opened behind the save.
+**The originals opened at game turn 2..11; the whole takes open at turn 1.** [`replay-is-blind-to-
+initialisation`, the last corner of it: the save was the one initialisation event INSIDE the level's run.]
+
+**Which pair it landed in is read off the capture**, never declared: the latch is in
+`x_D41A0_BYTEARRAY_4_struct`, which no recording holds, but the save STAMPS `dword_0x36DF6 =
+&str_D7BD6[59]` (its two save routines are the dword's only writers). Measured on all 40: zero in records
+0 and 1 and `0x2A93AC` from record 2 on 36 takes; set from record 0 on the four whose session had saved
+before the level began. `mgcr::mc2_autosave_lands(pre, post)`; `RetailMc2::save_stamp` is the raw dword
+(`base160` is the RECOVERED one and is never zero).
+
+**Landed:** `World::mc2_replay_checkpoint_autosave(pre, post)` — every retail driver calls it before the
+tick (`replay`, `verify-deltas` / the fixture runner, the app's `--replay`). Allocator half =
+`World::mc2_checkpoint_autosave`, the native law verbatim. StageVar half = the watch SEVERED (deterministic:
+`sub_1D8C0` grazes on a union at or below the pool base) and NOTHING FIRED. Reported: a
+`level-start autosave:` line in the full report, `save=<t>` on the brief line.
+
+⚖ **PLAYER-RULED 2026-09-28: THE FIRED ROW IS A ROSTER RULE.** What `sub_12780` reads through a severed
+row is DOS memory — *"really just one instance of memory corruption, so it should be easily isolated"* —
+and it isolates to ONE boundary a take. (The first landing of this round took the FIRED bit from the pair's
+second record, the `init-check` ruling carried over; it read 1 segment on all four takes and was withdrawn
+the same session.)
+
+| take | retail's row at the save | the boundary | rule |
+|---|---|---|---|
+| mc2l4, mc2l4-new | `stagevars[2]` kind 9, flags 0x01 → 0x05, union → 29232 = 174 × 168 | t=2: the 33 held (5,4) at slots 210..242 release to row 3; 68 rows | `mc2l4-autosave-severed-death-watch` |
+| mc2l21 | `[6]` kind 8, 0x01 → 0x05, → 336 = 2 × 168 | t=2: the 21 held (5,25) at slots 231..251 release to row 7; 43 rows | `mc2l21-autosave-severed-death-watch` |
+| mc2l14 | `[5]` kind 9, flags 0x00 → 0x04, → 6888 = 41 × 168, nobody held | t=5938: the first (5,18), slot 38, binds to a row retail fired 5,936 ticks earlier; 5 rows | `mc2l14-autosave-severed-death-watch` |
+
+Each rule is scoped to its take, its pair tick, class 5 + model, its slots and its fields; the four takes
+read `segments=2 roster=1 devs=0 horizon=END`. ⭐ mc2l21's OTHER severed row (`[5]`, kind 5, → 24696 =
+147 × 168, unfired) is the severance itself: the held goats graze from t=2 on, the port reproduces it, and
+the boundary's four `(5,1) rand` rows are gone rather than excused (47 rows → 43).
+
+⭐ **EVERY SEVERED KIND-8/9 ROW OF THE CORPUS FIRED IN THE SAVE'S OWN FRAME** (four of four, dosbox-staging
+0.82.2): the "archers march at load" side of the coin.
+
+**Kill switches, one at a time** (head slices, 13 records — a slice's stem is outside the take-scoped
+rules, so the rostered rows show raw):
+
+```
+                                   mc2l3-head       mc2l4-head              mc2l21-head
+law on                             1 seg / END      first=2 (5,4) sv1,sv2   first=2 (5,25) sv1,sv2   <- the rostered rows
+MGC_NO_MC2_REPLAY_AUTOSAVE=1       first=7          the same 68 rows        first=2 (5,1) rand, 47 rows
+MGC_NO_MC2_LOAD_FREE_REBUILD=1     first=7          as law on               as law on
+```
+
+⚠ mc2l4's boundary is the same 68 rows with the law off: its one severed row FIRES, and a fired row has no
+severance-only consequence. **The StageVar half's replay witness is mc2l21 alone** — on the full take the
+law's off arm reads `devs=1 first=2 sig=(5,1)slot92:rand` (the goats' rows are nobody's rule), the on arm
+`roster=1 devs=0`.
+
+**Pinned:** the unit test `mc2_a_whole_takes_third_frame_runs_the_level_start_autosave` — both halves (the
+stack re-ranked; rows severed and NOT fired, retail's fired mask reported) and the three pairs the law must
+leave alone: behind the save, ahead of it, a session that had saved already. NO FIXTURE: the suite grades
+raw and does not consult the roster, so the pair 1 → 2 of a take with a fired row cannot pass, and the
+allocator half is pair-invisible (the pair at the break imports retail's stack).
+
+### 164-3 THE TICKS — ONLY THE ROSTER FOLLOWS THE TAKE
+
+⚖ **PLAYER-RULED 2026-09-28: THE FIXTURES ARE NOT MOVED.** *"The fixtures are the real evidence, the
+recordings merely a source of more evidence if it's ever needed, but also a technically disposable one."*
+A fixture's `t` is the key between its manifest row and its file; it names no take. (A migration of 326
+fixture files and 25 manifests was made and REVERTED the same session — `git checkout`, every file checked
+back against the sha256 taken before it.)
+
+- **The roster is the one tick-keyed thing that follows a take**: a rule scopes a boundary of the take as it
+  stands. `mc2l24-hydra-v34-parity`: nine ticks + 5 (it was the only tick-keyed MC2 rule); the three new
+  rules above are written in the whole takes' numbering.
+- **Where the fixtures sit today** is a lookup (`tools/retake-rig/verify_fixture_shift.py`, read-only):
+  326 of 347 are in their whole take at `t + shift`, EQUAL on every record (struct image outside the
+  retake's kept-native and session-constant lanes, obs, input). The other 21 are every `source: mc2l0`
+  fixture — cut from an earlier mc2l0 (22,695 ticks; the take of that name today has 14,734), in no take of
+  the corpus, and guarding their laws all the same.
+- The suite: **347 ran, 347 pass**, the files byte-identical to HEAD's.
+- The round-163 MC2 baseline rows are kept as `tools/retake-rig/2026-09-28-mc2/brief-baseline.round163.txt`
+  (`conformance/brief-baseline.txt` is git-ignored: there is no other copy).
+
+⚠ **PROSE FOLLOWS THE FIXTURES.** Every MC2 tick in this ledger above this entry's date, in a fixture or
+roster note, or in a code comment is in the ORIGINAL take's numbering — add the take's shift
+(`2026-09-28-mc2/t_shift.txt`) to find it in the corpus.
+
+### 164-4 THE SWEEP — 40 OF 40 MC2 TAKES AT END, THE MC1 COLUMNS UNTOUCHED
+
+123 rows (MC2 from `re-recordings/`, MC1 / MC1HW from `recordings/`). The MC2 column was swept again on
+the final binary after the roster ruling; the MC1 columns were swept once, before it (the change between
+the two is inside an MC2-only function and three MC2-scoped rules).
+
+```
+MC2      36 of 40  = the round-163 row with the shift taken off   (devs=0, horizon=END; mc2l24 roster=9)
+          4 of 40  segments=2 roster=1 devs=0 horizon=END          (mc2l4, mc2l4-new, mc2l14, mc2l21)
+         36 carry save=2; mc2l30-new, mc2l31, mc2l32, mc2l33 carry none
+MC1/HW   82 of 83  byte-identical
+         mc1l26-froze   segments 685 -> 686, roster 684 -> 685, clean 31231 -> 31230 (devs=0, horizon=END)
+```
+
+⚠ **mc1l26-froze IS NOT THIS ROUND'S.** The unmodified `d27ff10` binary reads the same 686, so the row
+drifted between round 163's sweep and HEAD. Its baseline row is NOT re-pinned; 🏦 owed a bisect.
+
+### 164-5 OWED
+
+- **The swap** into `recordings/` is the player's (the originals are the only human-made evidence; keep
+  them). Until it happens a sweep of `recordings/mc2*` reads the OLD numbering against the new baseline
+  and the four tick-keyed rules miss (mc2l24 shows `devs=9`).
+- `retail_import_mc2` re-seats the watch of kinds 3/4/5 only; an anchor behind the save on an UNFIRED
+  severed kind-8/9 row would keep the loader's binding. No take has such a row.
+- mc2l18's t=5619 retake miss and the hydra's cause (`--release-phase` sweep) — the retake rig's, not the
+  port's.
+
 ## ROUND 163 (2026-09-23, vm113) — **THE FINAL MC1HW INTAKE**: eighteen takes, the volcano ruled out of the corpus, HW campaign coverage COMPLETE
 
 Opened on `92b1a77` with the tree clean of Rust changes (HEAD touched only `tools/`). The player staged the
