@@ -1145,7 +1145,16 @@ pub(crate) fn record0_settle(
     level: u32,
     args: &Args,
 ) -> Result<(u32, bool), String> {
+    // A whole take's record 0 is the level's first frame: on a level
+    // that seats only creatures in slots 1..8 (mc1l11/l16/l42/l43, …)
+    // nothing there carries a phase yet, and the take's header is the
+    // witness instead (turn 1 = nothing settled). The LCG search below
+    // still holds the count to retail's clock.
     let phase = retail_record0_phase(first, family)
+        .or_else(|| {
+            let turn = Recording::open(path).ok()?.lead_in_first_turn()?;
+            u32::try_from(turn.checked_sub(1)?).ok()
+        })
         .ok_or("record 0 carries no decodable state to read the phase from — pass --settle <n>")?;
     let state = first
         .state

@@ -683,10 +683,21 @@ pub(crate) fn load_roster(args: &Args) -> Result<Option<crate::roster::Roster>, 
 }
 
 /// The take name rules scope on: the recording's file stem.
+///
+/// A `.torn` before the extension is a filing mark, not part of the
+/// name: `mc1l48.torn.mgcr` is the take `mc1l48` (2026-09-29 — the
+/// original recordings that have no stable whole take were renamed so,
+/// as a reminder to retake them; they keep their own tick numbering,
+/// and the roster rules and baseline rows that name them stand).
 pub(crate) fn take_stem(path: &std::path::Path) -> String {
-    path.file_stem()
+    let stem = path
+        .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    match stem.strip_suffix(".torn") {
+        Some(take) if !take.is_empty() => take.to_owned(),
+        _ => stem,
+    }
 }
 
 /// Tag every row of a pair's diff against the roster. `ctx` resolves
@@ -2083,6 +2094,19 @@ mod tests {
             (pd.fields[0].want.as_str(), pd.fields[0].got.as_str()),
             ("26", "24")
         );
+    }
+
+    /// A torn take's file is still its take: the roster scopes on the
+    /// name without the `.torn` filing mark, and on nothing else.
+    #[test]
+    fn a_torn_takes_stem_is_its_takes_name() {
+        let stem = |p: &str| super::take_stem(std::path::Path::new(p));
+        assert_eq!(stem("recordings/mc1l48.torn.mgcr"), "mc1l48");
+        assert_eq!(stem("recordings/mc1l48-nodeath.torn.mgcr"), "mc1l48-nodeath");
+        assert_eq!(stem("recordings/mc1l48.mgcr"), "mc1l48");
+        assert_eq!(stem("recordings/mc1l32-new.mgcr"), "mc1l32-new");
+        assert_eq!(stem("recordings/mc1l48-torn.mgcr"), "mc1l48-torn");
+        assert_eq!(stem("recordings/.torn.mgcr"), ".torn");
     }
 
     /// The mid-walk phase pick, one cell per measured family: the

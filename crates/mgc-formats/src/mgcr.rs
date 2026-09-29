@@ -740,6 +740,19 @@ impl Recording {
         Some(Ok((t, line)))
     }
 
+    /// The game turn a WHOLE take's record 0 sits at (header
+    /// `capture.lead_in.first_turn`, written by the retake driver), else
+    /// `None`. A whole take opens at the level's first frame — turn 1 —
+    /// where no record has yet run and the continuity bytes hold no
+    /// settle phase to read.
+    pub fn lead_in_first_turn(&self) -> Option<u64> {
+        self.header_json
+            .get("capture")?
+            .get("lead_in")?
+            .get("first_turn")?
+            .as_u64()
+    }
+
     /// `"SLICE of <file> t=<from>..<to>"` when this recording was cut
     /// by `mgc-conform slice` (header `capture.slice`), else `None`.
     /// Every instrument that SEEDS from the first record prints it: a

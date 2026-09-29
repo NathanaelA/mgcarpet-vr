@@ -106,6 +106,118 @@ rejection streaks; the gate now counts only `dv±1` steps as tear
 suspects.) Every open entry below reproduced across all takes,
 including the 75%-torn pre-gate corpus.
 
+## ROUND 165 (2026-09-29, vm113) — **THE MC1 / HW CORPUS RE-CERTIFIED AS WHOLE TAKES**: no level-start law needed, 13 rules re-keyed, one port regression found and closed
+
+Opened on `0e623b9`, tree clean of Rust changes. The player had swapped the 75 certified stage-3 whole takes
+into `recordings/` and renamed the 7 takes with no stable whole take `<take>.torn.mgcr` (docs/RECORDING.md,
+"The swap"). The MC1 / HW twin of round 164. ⚠ Ticks in this entry are in the WHOLE takes' numbering unless a
+torn take is named (the torn takes keep the original numbering).
+
+### 165-1 THE BOARD ON ARRIVAL — 60 OF 82 EQUAL, EVERY MISS A ROSTER MISS, NO NEW BOUNDARY
+
+`replay --segmented --classify --brief` on the round-164 binary, the take's shift taken off
+`end` / `graded` / `clean` / `horizon` / `first`:
+
+```
+60 rows                        = the pre-swap row
+13 rows (devs > 0)             = the pre-swap row + `local=` / `inherited=`   (--classify prints them; the
+                                 baseline is swept without it — not a difference)
+mc1l43 mc1l34 mc1hwl3 mc1hwl4 mc1hwl5 mc1hwl14 mc1hwl20 mc1hwl24
+                               same segments, roster -> devs: the tick-keyed rules sit in the old numbering
+mc1l48 mc1l48-nodeath mc1l6 mc1l26-froze mc1l45-froze   (torn)
+                               same segments, roster -> devs: the rules name `mc1l48`, the file is `mc1l48.torn`
+mc1l26-froze                   686 segments for the baseline's 685 (round 164's open item, 165-4)
+```
+
+**The segment count of all 75 whole takes is the pre-swap count.** The lead-in (1..25 records in front of
+the original take's first record) holds no boundary on any take: MC1 / HW needed no level-start law. (MC2
+needed `mc2_replay_checkpoint_autosave`; MC1 has no level-start save.)
+
+### 165-2 THE ROSTER FOLLOWS THE TAKES
+
+- 13 tick-keyed rules `+ t_shift` of their take, textually, each note headed `TICKS RE-KEYED 2026-09-29 (+N)`:
+  mc1l43 ×4 (+16), mc1l34 ×2 (+3), mc1hwl3 (+10), mc1hwl4 (+17), mc1hwl5 (+6), mc1hwl14 ×2 (+1),
+  mc1hwl20 (+7), mc1hwl24 (+6).
+- `verify::take_stem` strips a `.torn` filing mark: `mc1l48.torn.mgcr` is the take `mc1l48`. The nine rules
+  that name a torn take and the seven baseline rows stand under the old names and the old ticks. Test
+  `a_torn_takes_stem_is_its_takes_name`. ⚠ A future whole take of one of the seven lands under the same
+  name with shifted ticks: its rules move then, as these 13 did.
+- Fixtures and manifests are untouched (player ruling of 2026-09-28).
+
+### 165-3 THE FIRST FRAMES, GRADED THREE WAYS
+
+| instrument | over | result |
+|---|---|---|
+| `verify-deltas --limit 64` (pair import, raw) | 75 whole takes, pairs 0..63 (every lead-in is inside) | 4,800 of 4,800 pairs conforming; rng 0 mismatched; pose channel 4,793 stepped, all bit-exact (7 pairs gated on 3 takes) |
+| `terrain-check` | 82 takes | 81 IDENTICAL; `mc1hwl12` (torn) DIFFERENT by 2 height cells, as in round 163 |
+| `init-check` (native init against record 0, census) | 75 whole takes, settle 0 | rand MATCH, every slot agrees on (class, model), seats, board, free stack and recycle stack MATCH on all 75; 12 IDENTICAL outright |
+
+- `terrain-check` / `init-check` could not read a settle phase on 12 whole takes (mc1l11, l16, l42, l42-new,
+  l43, l45, l46, mc1hwl17, hwl20, hwl21, hwl22, hwl24): slots 1..8 seat only creatures there, and at the
+  level's first frame nothing carries a phase. `record0_settle` now falls back on the header
+  (`capture.lead_in.first_turn - 1`, `Recording::lead_in_first_turn`); the LCG search still holds the count
+  to retail's clock. All 12 read IDENTICAL at settle 0.
+- What `init-check` still lists: rival `hand_left~` / `hand_right~` (the `-1` no-home marker, round 155)
+  on 62 takes and the HW static `(2,0) f80/f82/rand/type86` on 12 HW takes, both on record; and `(5,13) z`,
+  4 rows on mc1l13 and 4 on mc1hwl13 (retail 3520, port 3552), a census row that was NOT dug this round.
+  ⭐ This is the first time native init is held against retail's FIRST frame rather than a settled one, and
+  the populations agree everywhere.
+- ⚠ The entity-index planes (`entity_index_lo/hi`) are still UNGRADED in `terrain-check` (no port plane).
+
+### 165-4 mc1l26-froze 685 -> 686: A PORT REGRESSION, EXCUSED BY A WIDE RULE
+
+Round 164 had found the row at 686 segments / roster 685 on the unmodified `d27ff10` and left it. Bisected
+over the 13 commits that touch the simulation since round 163 (builds from `git archive` in a scratch
+directory, six builds): `79e9e7b` reads 685, **`ce78b92` ("Fix MC1 completed level termination while
+dying/dead", 2026-09-23) reads 686**. The new boundary is t=26449 (mc1l26-froze, original numbering):
+
+```
+record 26448   slot 581 (3,0)  life -470  +70 = 2 (falling)  z 3646, sinking 30 a tick   keys_down []
+record 26449   slot 581        life 10000 +70 = 0            at (50176, 1536), his castle keys_down [57]
+               24 class-12 tokens of the old book scattered on the ground at the death site (z 3638),
+               24 new ones minted
+```
+
+The landing, the first Space and the revive are ONE record. Retail's key scan sits after the walk and before
+the command processor, so it sees the corpse as THIS frame's walk left it: landed, `+70 == 3`, cmd 15
+accepted. `ce78b92` had moved the pooled carpet's respawn gate to the tick-ENTRY state ("the scan saw it
+falling"), which refuses the touchdown frame's Space: the port's wizard stayed dead for the frame, 24 tokens
+missing, the pose at the corpse.
+
+**Fix** (`world.rs`, the MC1 respawn and win-exit): both are judged on `scan_state` = the pooled carpet's
+state after this tick's walk and BEFORE the respawn (the un-pooled carpet lands in the post-walk match, so
+its scan state is the entry state, as before). What the player's fix of 2026-09-23 was for is kept: a dead
+wizard's Space revives and only a SECOND Space wins; Space is inert while falling (player-ruled deviation).
+Two edges moved: the touchdown frame's Space revives (retail, witnessed), and a wizard the walk KILLED this
+tick is falling when the scan looks, so his Space no longer takes the win-exit.
+Tests: `mc1_the_touchdown_frames_space_revives` (new; red on the entry-state gate) and
+`mc1_falling_space_is_inert` (its touchdown half had asserted the refusal and is re-derived from the take).
+No fixture: the PAIR harness pins the carpet to the post-respawn pose and scatters the book at the castle
+(75 field rows on every binary since `79e9e7b`), so pair 26448 is not fixture-grade; the free run is the
+witness. mc1l26-froze reads its round-163 row again, byte for byte.
+
+**Why it hid.** `mc1l26-froze-level-250-castle-oob` excused every row of pairs 25646..31914, and its own
+note says the 5,064 pairs between its two roots are bit-exact. The boundary read `roster 684 -> 685,
+devs=0`. The rule is now two: `mc1l26-froze-blast-ring-radius-250-oob` (`ticks: [25646]`) and the old id
+with `t_min` 30710. On the regressed binary the split roster reads `devs=1 horizon=26448
+sig=pose:pose.x,pose.y,pose.z,pose.tgt_speed`. ⭐ A `roster=` COUNT THAT MOVES IS A DEVIATION UNTIL THE
+BOUNDARY IS NAMED — the tripwire had fired in round 164 and was read as drift.
+
+### 165-5 THE GATE
+
+| | |
+|---|---|
+| `cargo test --release` | 1,466 passed, 0 failed, 4 ignored |
+| fixture suite | 59 manifests, 629 of 629 pass (MC1 / HW 282, MC2 347), files untouched |
+| corpus sweep, `replay --segmented --brief`, 122 takes | MC1 / HW 82 of 82 = the pre-swap row with the shift taken off (75 re-keyed, 7 torn byte-identical, mc1l26-froze back on 685); MC2 40 of 40 byte-identical |
+
+`conformance/brief-baseline.txt` re-pinned (75 rows re-keyed; git-ignored, the pre-swap copy is
+`tools/retake-rig/brief-baseline.pre-swap.txt`). MC1 / HW: 82 rows, 66 at END, 3,080,048 ticks graded.
+Not swept: `mc1l32-terrainless` (out of scope; its row is the old one).
+
+**Owed:** a playtest of Space on the touchdown frame and after a death past the win latch (the respawn fix
+of 2026-09-23 was already owed one); the retakes of the seven torn takes stay the player's call.
+
 ## ROUND 164 (2026-09-28, vm113) — **THE MC2 CORPUS RE-CERTIFIED AS WHOLE TAKES**: one law, three roster rules, 40 of 40 at END
 
 Opened on `d27ff10`, tree clean of Rust changes. The 40 MC2 whole takes (`re-recordings/`, each a retake of
