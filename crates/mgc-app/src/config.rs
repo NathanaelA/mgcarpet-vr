@@ -579,6 +579,15 @@ pub struct RenderEnhancement {
     /// shows duplicates (its zoom caps under half a world), so this
     /// covers only the map screens.
     pub map_extent_fog: bool,
+    /// Beyond Sight reveals TRIGGER AREAS on the map surfaces
+    /// (player-set 2026-09-30; neither original shows them at all,
+    /// and until now only the `render.debug.map_trigger_areas` overlay
+    /// did). While the spell is up — MC1's, or any MC2 tier — every
+    /// fly-into trigger area RIPPLES on the map and the radar like a
+    /// water surface, with a trace of tint: red over traps, cyan over
+    /// any other effect.
+    /// Nothing is drawn in the world view. Presentation only.
+    pub map_beyond_sight_areas: bool,
     /// Procedural fire (fireball flame/trail, meteor crater walls +
     /// smoke, shockwave) vs the retail sprites. Defaults to classic
     /// for now. Needs smooth_motion for the frame-rate flame; with
@@ -611,6 +620,7 @@ impl Default for RenderEnhancement {
             map_marker_icons: true,
             autocontrasting_markers: true,
             map_extent_fog: true,
+            map_beyond_sight_areas: true,
             fire: FireEffects::Enhanced,
             lightning: LightningEffects::Enhanced,
             mc2_fancy_exit: true,
@@ -1633,7 +1643,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 46;
+const DEFAULTS_VERSION: u64 = 47;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

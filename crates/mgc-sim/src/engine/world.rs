@@ -76,6 +76,7 @@ use mgc_formats::{Thing, ThingKind};
 pub mod autofire;
 pub mod cheats;
 pub mod conformance;
+pub mod sight;
 
 /// The player's life ceiling: the human wizard ctor's maxLife 10000
 /// (:44185; skill does NOT scale it — sub_44D30 :55026 resets to max

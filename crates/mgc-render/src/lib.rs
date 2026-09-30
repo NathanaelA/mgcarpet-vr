@@ -186,6 +186,69 @@ pub struct MapArea {
     pub color: [u8; 3],
 }
 
+/// A trigger area as BEYOND SIGHT reveals it on the map surfaces (the
+/// `map_beyond_sight_areas` deviation — neither original shows trigger
+/// areas at all). Unlike the debug [`MapArea`] circles these are never
+/// baked into the map texture: they feed a soft FIELD texture
+/// ([`sight_field_pixels`]) through which map.wgsl RIPPLES the map
+/// like a water surface, with a trace of tint — red over traps, cyan
+/// over everything else.
+/// Tile-unit center and half-extent; `weight` (0..=1) scales the
+/// area's density, so one area can swell in or settle out on its own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SightArea {
+    pub x: f32,
+    pub z: f32,
+    pub radius: f32,
+    pub trap: bool,
+    pub weight: f32,
+}
+
+/// How far past a trigger's edge its ripple still reaches, in tiles —
+/// the field fades from [`SIGHT_CORE`] of the half-extent out to the
+/// edge plus this, so the boundary is never a readable line.
+const SIGHT_FEATHER: f32 = 1.5;
+/// The fraction of the half-extent that holds full density.
+const SIGHT_CORE: f32 = 0.45;
+
+/// Rasterise the Beyond-Sight areas into the ripple field: one RGBA
+/// texel per tile, R = trap density, B = effector density (G/A
+/// unused), 0..255. Each area is a soft ROUNDED SQUARE — the volumes
+/// are axis-aligned boxes, but a squared-off blob would read as an
+/// outline — solid through its core and feathered well past the edge;
+/// overlapping areas keep the denser value per channel. Toroidal, like
+/// everything else on the map.
+pub fn sight_field_pixels(areas: &[SightArea]) -> Vec<u8> {
+    let n = MAP_TILES as i32;
+    let mut out = vec![0u8; (n * n * 4) as usize];
+    for a in areas {
+        let r = a.radius.max(0.5);
+        let reach = r + SIGHT_FEATHER;
+        let span = reach.ceil() as i32 + 1;
+        let (cx, cz) = (a.x.floor() as i32, a.z.floor() as i32);
+        let ch = if a.trap { 0 } else { 2 };
+        for dz in -span..=span {
+            for dx in -span..=span {
+                // Tile centre against the area's true centre.
+                let fx = (cx + dx) as f32 + 0.5 - a.x;
+                let fz = (cz + dz) as f32 + 0.5 - a.z;
+                // The L4 norm: halfway between a circle and the box.
+                let d = (fx.powi(4) + fz.powi(4)).sqrt().sqrt();
+                let t = ((d - r * SIGHT_CORE) / (reach - r * SIGHT_CORE)).clamp(0.0, 1.0);
+                let v = (1.0 - t * t * (3.0 - 2.0 * t)) * a.weight.clamp(0.0, 1.0);
+                if v <= 0.0 {
+                    continue;
+                }
+                let x = (cx + dx).rem_euclid(n);
+                let z = (cz + dz).rem_euclid(n);
+                let i = ((z * n + x) * 4) as usize + ch;
+                out[i] = out[i].max((v * 255.0) as u8);
+            }
+        }
+    }
+    out
+}
+
 /// An icon stamped onto the overhead map (the original's castle /
 /// balloon UI-sprite markers, remc1 sub_48710 :57224-37). Because both
 /// maps are yaw-rotated, stamps must stay SCREEN-UPRIGHT — a flag/
@@ -303,13 +366,23 @@ pub struct MapOverlay {
 /// pixel per entity, exactly like the original (the enhanced marker
 /// mode is a planned opt-in).
 pub fn map_pixels(level: &LevelView, overlay: &MapOverlay) -> Vec<u8> {
-    map_pixels_impl(level, overlay, true)
+    map_pixels_impl(level, overlay, true, false)
 }
 
 /// [`map_pixels`] with the dot layer optional: the marker-size
 /// deviation (`Renderer::set_marker_scale` != 1.0) draws the dots
 /// screen-space instead, so baking them too would double them up.
-fn map_pixels_impl(level: &LevelView, overlay: &MapOverlay, bake_dots: bool) -> Vec<u8> {
+///
+/// `mark_dots` (the GPU texture only) writes the baked dots with alpha
+/// 0: the map pass never outputs the texel alpha, so it is free to
+/// carry "this texel is a marker" — which is how the Beyond-Sight
+/// ripple stays UNDER the entity dots.
+fn map_pixels_impl(
+    level: &LevelView,
+    overlay: &MapOverlay,
+    bake_dots: bool,
+    mark_dots: bool,
+) -> Vec<u8> {
     let n = MAP_TILES;
     let mut out = vec![0u8; n * n * 4];
     for i in 0..n * n {
@@ -370,7 +443,7 @@ fn map_pixels_impl(level: &LevelView, overlay: &MapOverlay, bake_dots: bool) -> 
                 for dx in 0..dot.size as usize {
                     let i = ((z + dz) % n) * n + (x + dx) % n;
                     out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[dot.color as usize]);
-                    out[i * 4 + 3] = 255;
+                    out[i * 4 + 3] = if mark_dots { 0 } else { 255 };
                 }
             }
         }
@@ -1900,6 +1973,16 @@ pub struct Renderer {
     map_globals_buf: wgpu::Buffer,
     map_bind_group_layout: wgpu::BindGroupLayout,
     map_bind_group: Option<wgpu::BindGroup>,
+    /// The Beyond-Sight area field (`set_sight_areas`): R = trap
+    /// density, B = effector density per tile, sampled filtered and
+    /// wrapped by both map surfaces. Lives for the renderer's life;
+    /// all-zero until an area is set.
+    sight_tex: wgpu::Texture,
+    sight_sampler: wgpu::Sampler,
+    /// The areas the field currently holds (re-rasterised on change).
+    sight_areas: Vec<SightArea>,
+    /// The ripple's (strength 0..=1, animation clock in seconds).
+    sight_mist: (f32, f32),
     /// The in-flight round minimap (top-left corner): its own uniform +
     /// bind group over the SAME world map texture, drawn during normal
     /// flight (the book screen uses `map_bind_group`). None until a
@@ -2547,8 +2630,48 @@ impl Renderer {
                         },
                         count: None,
                     },
+                    // The Beyond-Sight area field + its filtering,
+                    // wrapping sampler.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
+        let sight_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("beyond-sight mist field"),
+            size: wgpu::Extent3d {
+                width: MAP_TILES as u32,
+                height: MAP_TILES as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let sight_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("beyond-sight mist field"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let map_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("map"),
             bind_group_layouts: &[&map_bind_group_layout],
@@ -2632,13 +2755,15 @@ impl Renderer {
         });
         let map_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("map globals"),
-            size: 48, // 3 vec4: rect, player(x,z,yaw,zoom), mode(round,aspect,_,_)
+            // 4 vec4: rect, player(x,z,yaw,zoom), mode(round,aspect,
+            // alpha,period), fx(mist strength, mist clock,_,_)
+            size: 64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let minimap_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("minimap globals"),
-            size: 48,
+            size: 64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -3362,6 +3487,10 @@ impl Renderer {
             overlay_fade: 0.0,
             map_bind_group_layout,
             map_bind_group: None,
+            sight_tex,
+            sight_sampler,
+            sight_areas: Vec::new(),
+            sight_mist: (0.0, 0.0),
             fill_pipeline,
             fill_bind_group,
             sky_pipeline,
@@ -3522,6 +3651,39 @@ impl Renderer {
     /// shows duplicates, so it is untouched).
     pub fn set_extent_fog(&mut self, on: bool) {
         self.extent_fog = on;
+    }
+
+    /// The trigger areas Beyond Sight reveals on the map surfaces
+    /// (`map_beyond_sight_areas`). Re-rasterises the area field only
+    /// when the set (or a weight in it) changed, so it is cheap to
+    /// call every frame.
+    pub fn set_sight_areas(&mut self, areas: &[SightArea]) {
+        if self.sight_areas == areas {
+            return;
+        }
+        self.sight_areas = areas.to_vec();
+        let n = MAP_TILES as u32;
+        self.queue.write_texture(
+            self.sight_tex.as_image_copy(),
+            &sight_field_pixels(areas),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(n * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: n,
+                height: n,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// The Beyond-Sight ripple's strength (0 = nothing drawn, 1 = the
+    /// spell fully up; the app eases it so the ripple swells and
+    /// settles with the spell) and its animation clock in seconds.
+    pub fn set_sight_mist(&mut self, strength: f32, clock: f32) {
+        self.sight_mist = (strength.clamp(0.0, 1.0), clock);
     }
 
     /// Toggle smooth (tile-interpolated) shading; off is the original's
@@ -4322,7 +4484,7 @@ impl Renderer {
 
         // Overhead map for the book screen, composed on the CPU through
         // the engine's map color path.
-        let map_rgba = map_pixels_impl(level, overlay, self.bake_dots());
+        let map_rgba = map_pixels_impl(level, overlay, self.bake_dots(), true);
         self.refresh_screen_dots(level, overlay);
         let map_extent = wgpu::Extent3d {
             width: n as u32,
@@ -4350,6 +4512,7 @@ impl Renderer {
             map_extent,
         );
         let map_view = map_tex.create_view(&Default::default());
+        let sight_view = self.sight_tex.create_view(&Default::default());
         self.map_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("map"),
             layout: &self.map_bind_group_layout,
@@ -4361,6 +4524,14 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&map_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&sight_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.sight_sampler),
                 },
             ],
         }));
@@ -4377,6 +4548,14 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&map_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&sight_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.sight_sampler),
                 },
             ],
         }));
@@ -4551,7 +4730,7 @@ impl Renderer {
         let n = MAP_TILES as u32;
         self.refresh_screen_dots(level, overlay);
         if let Some(map_tex) = &self.map_tex {
-            let map_rgba = map_pixels_impl(level, overlay, self.bake_dots());
+            let map_rgba = map_pixels_impl(level, overlay, self.bake_dots(), true);
             self.queue.write_texture(
                 map_tex.as_image_copy(),
                 &map_rgba,
@@ -5877,7 +6056,7 @@ impl Renderer {
             let (px0, py0, pw, ph) = map_pane;
             let cx_px = px0 + pw * 0.5;
             let cy_px = py0 + ph * 0.5;
-            let map_globals: [f32; 12] = [
+            let map_globals: [f32; 16] = [
                 cx_px / w as f32 * 2.0 - 1.0,   // pixel center → NDC x
                 1.0 - cy_px / hpx as f32 * 2.0, // pixel center → NDC y (flip)
                 pw / w as f32,                  // NDC half-width
@@ -5890,6 +6069,10 @@ impl Renderer {
                 pw / ph,          // sampler aspect = pane w/h
                 1.0,              // opaque (the map pane sits over the world)
                 MAP_TILES as f32, // world period for the toroidal wrap
+                self.sight_mist.0,
+                self.sight_mist.1,
+                0.0,
+                0.0,
             ];
             self.queue
                 .write_buffer(&self.map_globals_buf, 0, bytemuck::cast_slice(&map_globals));
@@ -5899,7 +6082,7 @@ impl Renderer {
             let (disc, cx, cy) = self.minimap_rect(w, hpx);
             let hw = disc / w as f32; // NDC half-width
             let hh = disc / hpx as f32; // NDC half-height
-            let minimap_globals: [f32; 12] = [
+            let minimap_globals: [f32; 16] = [
                 cx / w as f32 * 2.0 - 1.0,   // pixel center → NDC x
                 1.0 - cy / hpx as f32 * 2.0, // pixel center → NDC y (flip)
                 hw,
@@ -5912,6 +6095,10 @@ impl Renderer {
                 1.0,                // square disc → aspect 1
                 self.minimap_alpha, // HUD transparency
                 MAP_TILES as f32,   // world period for the toroidal wrap
+                self.sight_mist.0,
+                self.sight_mist.1,
+                0.0,
+                0.0,
             ];
             self.queue.write_buffer(
                 &self.minimap_globals_buf,
@@ -6467,6 +6654,69 @@ fn camera_matrix(cam: &CameraView, aspect: f32) -> [[f32; 4]; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Beyond-Sight area field: a trap fills the red channel, an
+    /// effector the blue; solid at the centre, gone a feather past the
+    /// edge, and soft in between — no readable outline.
+    #[test]
+    fn sight_field_is_a_soft_blob_per_channel() {
+        let px = sight_field_pixels(&[
+            SightArea {
+                x: 100.5,
+                z: 60.5,
+                radius: 8.0,
+                trap: true,
+                weight: 1.0,
+            },
+            SightArea {
+                x: 200.5,
+                z: 60.5,
+                radius: 8.0,
+                trap: false,
+                weight: 1.0,
+            },
+        ]);
+        let at = |x: usize, z: usize| {
+            let i = (z * MAP_TILES + x) * 4;
+            (px[i], px[i + 2])
+        };
+        assert_eq!(at(100, 60), (255, 0), "trap core: full red, no blue");
+        assert_eq!(at(200, 60), (0, 255), "effector core: full blue, no red");
+        // Monotone falloff along a row, still partly there AT the edge
+        // (8 tiles out) and gone past the feather.
+        let row: Vec<u8> = (100..=112).map(|x| at(x, 60).0).collect();
+        assert!(row.windows(2).all(|w| w[0] >= w[1]), "{row:?}");
+        assert!(row[8] > 0 && row[8] < 255, "soft across the edge: {row:?}");
+        assert_eq!(row[11], 0, "nothing past the feather: {row:?}");
+        assert_eq!(at(150, 60), (0, 0), "clear between the two");
+    }
+
+    #[test]
+    fn sight_field_wraps_and_keeps_the_denser_overlap() {
+        let a = SightArea {
+            x: 1.5,
+            z: 1.5,
+            radius: 4.0,
+            trap: true,
+            weight: 1.0,
+        };
+        let px = sight_field_pixels(&[a]);
+        let red = |px: &[u8], x: usize, z: usize| px[(z * MAP_TILES + x) * 4];
+        assert!(red(&px, MAP_TILES - 2, 1) > 0, "wraps across the seam");
+        assert!(red(&px, 1, MAP_TILES - 2) > 0, "on both axes");
+        // A second, wider area over the first never thins it.
+        let b = SightArea { radius: 12.0, ..a };
+        let both = sight_field_pixels(&[a, b]);
+        let wide = sight_field_pixels(&[b]);
+        assert_eq!(both, wide, "max, not sum");
+        assert!(sight_field_pixels(&[]).iter().all(|&v| v == 0));
+        // The weight scales the whole blob: half weight, half density,
+        // and a settled-out area leaves nothing.
+        let half = sight_field_pixels(&[SightArea { weight: 0.5, ..a }]);
+        assert_eq!(red(&half, 1, 1), 127);
+        let none = sight_field_pixels(&[SightArea { weight: 0.0, ..a }]);
+        assert!(none.iter().all(|&v| v == 0));
+    }
 
     /// A free-running FLC stream loops its DELTAS: a 25-frame bake
     /// (base + 24 deltas, the last ringing back to the base) shows

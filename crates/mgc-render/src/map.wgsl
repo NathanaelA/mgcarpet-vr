@@ -22,10 +22,18 @@ struct MapGlobals {
     // z = output alpha (HUD transparency; 1 = opaque), w = world period
     // in tiles (MAP_TILES; the toroidal wrap + texture size)
     mode: vec4<f32>,
+    // x = Beyond-Sight ripple strength (0 = off), y = its animation
+    // clock in seconds
+    fx: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> mg: MapGlobals;
 @group(0) @binding(1) var t_map: texture_2d<f32>;
+// The Beyond-Sight area field: one texel per tile, r = trap density,
+// b = effector density (lib.rs sight_field_pixels), filtered + wrapped.
+// (The channel is only a slot: the effector TINT is SIGHT_EFFECT.)
+@group(0) @binding(2) var t_sight: texture_2d<f32>;
+@group(0) @binding(3) var s_sight: sampler;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -44,6 +52,98 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     out.clip = vec4<f32>(mg.rect.xy + c * mg.rect.zw, 0.0, 1.0);
     out.uv = c;
     return out;
+}
+
+// ---- the Beyond-Sight ripple (`map_beyond_sight_areas`, a deviation:
+// neither original reveals trigger areas) ------------------------------
+//
+// A trigger area shows as DISTURBED MAP rather than as a shape: inside
+// it the map is looked up through a rippling surface, like the bed of
+// a pond seen through its waves — the terrain texels swim up to a tile
+// and more, a faint glint rides the swell (which is what carries the
+// effect over flat-coloured ground), and only a trace of tint says
+// which kind it is: red over traps, cyan over every other effect
+// (cyan, not blue: it has to read against the sea). The area's own
+// outline is warped by slow noise, so the edge swims and reshapes too.
+// All in world tile space, so both map surfaces show the same thing
+// whatever their zoom.
+const SIGHT_RIPPLE: f32 = 1.7;   // peak texel displacement, tiles
+const SIGHT_GLINT: f32 = 0.20;   // peak brightness swing on the swell
+const SIGHT_TINT: f32 = 0.17;    // the tint's share at full density
+const SIGHT_EDGE: f32 = 2.6;     // outline swim, tiles peak to peak
+const SIGHT_TRAP: vec3<f32> = vec3<f32>(0.90, 0.07, 0.05);
+const SIGHT_EFFECT: vec3<f32> = vec3<f32>(0.04, 0.80, 0.66);
+
+fn hash21(p: vec2<f32>) -> f32 {
+    var q = fract(p * vec2<f32>(123.34, 456.21));
+    q = q + dot(q, q + 45.32);
+    return fract(q.x * q.y);
+}
+
+fn vnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), u.x),
+        mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u.x),
+        u.y,
+    );
+}
+
+fn fbm(p: vec2<f32>) -> f32 {
+    return 0.5 * vnoise(p) + 0.3 * vnoise(p * 2.03 + 17.1) + 0.2 * vnoise(p * 4.11 + 5.7);
+}
+
+// The nearest map texel under a world position: toroidal wrap into the
+// world period (mode.w = MAP_TILES). The % guards the fract·tiles ==
+// tiles rounding edge (the old & 255 mask, period-agnostic).
+fn map_tile(world: vec2<f32>) -> vec2<i32> {
+    let tiles = mg.mode.w;
+    return vec2<i32>(
+        i32(fract(world.x / tiles) * tiles) % i32(tiles),
+        i32(fract(world.y / tiles) * tiles) % i32(tiles),
+    );
+}
+
+// The water surface: two sheets of smooth noise sliding across each
+// other, the second turned off the tile axes. xy = the refraction
+// offset, z = the swell height, all within ±1 (and mostly well inside
+// it). NOISE, not wave trains: crossing sine trains interfere into a
+// fixed lattice, which read as a moiré over the map's own dither.
+fn sight_waves(p: vec2<f32>, t: f32) -> vec3<f32> {
+    let turned = vec2<f32>(p.x * 0.80 - p.y * 0.60, p.x * 0.60 + p.y * 0.80);
+    let a = p * 0.42 + vec2<f32>(t * 0.55, t * 0.31);
+    let b = turned * 0.71 + vec2<f32>(-t * 0.47, t * 0.38);
+    let x = vnoise(a) + vnoise(b + 19.3) - 1.0;
+    let y = vnoise(a + 7.7) + vnoise(b + 41.9) - 1.0;
+    return vec3<f32>(x, y, (x + y) * 0.5);
+}
+
+fn sight_ripple(rgb: vec3<f32>, world: vec2<f32>) -> vec3<f32> {
+    let t = mg.fx.y;
+    // The area field, read through a slow noise warp: the outline
+    // swims and reshapes instead of standing as an edge.
+    let warp = vec2<f32>(
+        fbm(world * 0.13 + vec2<f32>(t * 0.07, -t * 0.05)),
+        fbm(world * 0.13 + vec2<f32>(31.7 - t * 0.06, 12.3 + t * 0.08)),
+    ) - 0.5;
+    let field = textureSampleLevel(t_sight, s_sight, (world + warp * SIGHT_EDGE) / mg.mode.w, 0.0);
+    let trap = field.r;
+    let effect = field.b;
+    let depth = clamp(max(trap, effect), 0.0, 1.0) * mg.fx.x;
+    if depth <= 0.0 {
+        return rgb;
+    }
+    // The water surface: the map under it is fetched displaced. A
+    // displaced fetch that lands on a baked entity dot (alpha 0) keeps
+    // the undisturbed texel — markers neither smear nor swim.
+    let waves = sight_waves(world, t);
+    let moved = textureLoad(t_map, map_tile(world + waves.xy * (SIGHT_RIPPLE * depth)), 0);
+    var out = select(rgb, moved.rgb, moved.a > 0.5);
+    out = out * (1.0 + SIGHT_GLINT * waves.z * depth);
+    let tint = (SIGHT_TRAP * trap + SIGHT_EFFECT * effect) / max(trap + effect, 0.0001);
+    return mix(out, tint, depth * SIGHT_TINT * (0.75 + 0.25 * waves.z));
 }
 
 @fragment
@@ -80,15 +180,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         mg.player.y + off.x * s - off.y * cth,
     );
 
-    // Toroidal wrap into the world period (mode.w = MAP_TILES),
-    // nearest-texel fetch. The % guards the fract·tiles == tiles
-    // rounding edge (the old & 255 mask, period-agnostic).
-    let tiles = mg.mode.w;
-    let tile = vec2<i32>(
-        i32(fract(world.x / tiles) * tiles) % i32(tiles),
-        i32(fract(world.y / tiles) * tiles) % i32(tiles),
-    );
-    var rgb = textureLoad(t_map, tile, 0).rgb;
+    // Nearest-texel fetch under the toroidal wrap.
+    let texel = textureLoad(t_map, map_tile(world), 0);
+    var rgb = texel.rgb;
+    // The Beyond-Sight ripple disturbs the terrain UNDER the baked
+    // entity dots (alpha 0 marks a dot texel — the pass never outputs
+    // it).
+    if mg.fx.x > 0.0 && texel.a > 0.5 {
+        rgb = sight_ripple(rgb, world);
+    }
 
     // Player marker (sub_48710 epilogue :57449-69): a four-arm CROSS
     // at the pane center, arm length = pane_width/12 (= 1/6 of the

@@ -389,6 +389,7 @@ pub const VISUALS_PRESET: PresetGroup = PresetGroup {
         "render.enhancement.map_marker_icons",
         "render.enhancement.autocontrasting_markers",
         "render.enhancement.map_extent_fog",
+        "render.enhancement.map_beyond_sight_areas",
         "render.enhancement.mc2_fancy_exit",
     ],
     apply: |c, p| {
@@ -422,6 +423,7 @@ pub const VISUALS_PRESET: PresetGroup = PresetGroup {
         enh.map_marker_icons = enhanced;
         enh.autocontrasting_markers = enhanced;
         enh.map_extent_fog = enhanced;
+        enh.map_beyond_sight_areas = enhanced;
         enh.mc2_fancy_exit = enhanced;
     },
 };
@@ -1328,6 +1330,32 @@ pub fn registry() -> Vec<Spec> {
                     "The map repeats past the world seam, as retail.",
                     "Soft black fog past the true extent hides the \
                      wrap-around duplicates.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · enhancement",
+            label: "map_beyond_sight_areas",
+            class: Enhancement,
+            key: None,
+            cli: None,
+            cfg_path: "render.enhancement.map_beyond_sight_areas",
+            read: toggle!(c => render.enhancement.map_beyond_sight_areas),
+            desc: "While Beyond Sight is up, the level's trigger areas ripple \
+                   on the map and the radar like a water surface, with a \
+                   trace of tint: red where flying in springs a trap, cyan \
+                   for any other effect. Faint on purpose — look for it. \
+                   Triggers that are not a place (a mana goal, a kill \
+                   count) are not shown, and nothing appears in the world \
+                   view. Neither original reveals trigger areas.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.enhancement.map_beyond_sight_areas = v,
+                descs: [
+                    "Beyond Sight shows what retail's does: rival wizards \
+                     (and MC2's tiers).",
+                    "Beyond Sight also reveals trigger areas as faint red / \
+                     cyan ripples on the map.",
                 ],
             },
         },

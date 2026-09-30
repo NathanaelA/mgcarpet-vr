@@ -24,6 +24,7 @@ mod movie;
 mod replay;
 mod saves;
 mod settings;
+mod sight;
 mod stats_screen;
 mod ui;
 mod worldmap;
@@ -777,6 +778,10 @@ struct LoadedLevel {
     ui: Option<ui::UiAssets>,
     /// Live trigger/portal volumes for the opt-in map overlay.
     map_areas: Vec<mgc_render::MapArea>,
+    /// The trigger areas Beyond Sight last revealed (the map ripple),
+    /// each with its own fade; refreshed per tick while the spell is
+    /// up, kept through the fade-out after it lapses.
+    sight: sight::SightAreas,
     /// Castle/balloon icon patches for the map marker pass.
     map_icons: entities::MapIcons,
     /// Live icon stamps (own castle/balloons), refreshed per tick.
@@ -812,6 +817,24 @@ fn map_areas(world: &mgc_sim::engine::world::World) -> Vec<mgc_render::MapArea> 
                 VolumeKind::Portal => [208, 96, 255],
                 VolumeKind::Objective => [96, 255, 96],
             },
+        })
+        .collect()
+}
+
+/// The trigger areas Beyond Sight reveals on the map surfaces
+/// (`render.enhancement.map_beyond_sight_areas`): the sim's fly-into
+/// volumes and their trap / effector verdict, for the renderer's
+/// ripple.
+fn sight_areas(world: &mgc_sim::engine::world::World) -> Vec<mgc_render::SightArea> {
+    world
+        .sight_areas()
+        .into_iter()
+        .map(|a| mgc_render::SightArea {
+            x: a.x,
+            z: a.z,
+            radius: a.radius,
+            trap: a.trap,
+            weight: 1.0,
         })
         .collect()
 }
@@ -1617,6 +1640,7 @@ fn load_level(
         map_dots,
         start,
         map_areas: world.as_ref().map(map_areas).unwrap_or_default(),
+        sight: sight::SightAreas::default(),
         world,
         world_init,
         palette_rgba: bundle.palette,
@@ -2341,6 +2365,10 @@ struct App {
     /// PROTOTYPE fire effect: wall-clock seconds, drives flame
     /// turbulence/shimmer (advances even while paused).
     effect_time: f32,
+    /// The Beyond-Sight map ripple's eased strength, 0..=1
+    /// (`map_beyond_sight_areas`): rises while the spell is up, falls
+    /// once it lapses.
+    sight_strength: f32,
     /// The `enhanced_fire()` value last applied to the renderer's
     /// billboard/fire sets — flipping the option in the PAUSE menu
     /// must swap sprites/particles immediately, and while paused
@@ -2642,6 +2670,7 @@ impl App {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
+            sight_strength: 0.0,
             fire_applied: None,
             lightning_applied: None,
             fps_frames: 0,
@@ -4443,6 +4472,7 @@ impl App {
         // A button held across the level change must not resume its
         // autofire chain in the new world.
         self.autofire.halt();
+        self.sight_strength = 0.0;
         self.session = Some(Box::new(Session {
             level,
             sim,
@@ -5058,6 +5088,17 @@ impl App {
                 .find(|p| p.class == 3 && p.model == 2 && p.player_owned)
                 .map(|p| (p.x, p.z));
             level.map_areas = map_areas(w);
+            // Beyond Sight's trigger areas: read only while the spell
+            // is up — a ripple settling out keeps the areas it had. An
+            // area whose trigger fired meanwhile settles out on its
+            // own (`sight::SightAreas`).
+            if self.cfg.render.enhancement.map_beyond_sight_areas
+                && w.beyond_sight_tier().is_some()
+            {
+                level
+                    .sight
+                    .merge(sight_areas(w), self.sight_strength <= 0.0);
+            }
             // MC2 objective-guide targets (non-optional): the current
             // objective's live world targets → blinking marks + a steer
             // arrow. Empty off-MC2 (mc2_stages empty), so MC1/HW draw
@@ -8099,7 +8140,30 @@ impl App {
         // down (won → menu/map) — the tick clock must come
         // from whatever session remains, if any.
         let anim_tick = self.session.as_deref().map(|s| s.sim.tick % 4096);
+        // Beyond Sight's trigger-area ripple swells and settles with
+        // the spell (wall clock: it keeps moving while paused).
+        let sight_up = self.cfg.render.enhancement.map_beyond_sight_areas
+            && self
+                .session
+                .as_deref()
+                .and_then(|s| s.sim.world.as_ref())
+                .is_some_and(|w| w.beyond_sight_tier().is_some());
+        let sight_step = dt / sight::FADE_SECS;
+        self.sight_strength = if sight_up {
+            (self.sight_strength + sight_step).min(1.0)
+        } else {
+            (self.sight_strength - sight_step).max(0.0)
+        };
+        // …and each area with its own trigger.
+        let sight_now = self.session.as_deref_mut().map(|s| {
+            s.level.sight.ease(dt);
+            s.level.sight.areas()
+        });
         if let Some(r) = &mut self.renderer {
+            if let Some(areas) = &sight_now {
+                r.set_sight_areas(areas);
+            }
+            r.set_sight_mist(self.sight_strength, self.effect_time);
             // Animation clock: sim ticks are the original's game
             // turns; wrapped so f32 stays exact (see set_anim_turn).
             if let Some(t) = anim_tick {
@@ -11008,6 +11072,15 @@ fn run_screenshot(
         mgc_render::MapScreenLayout::Mc1Book
     });
     renderer.set_anim_turn(anim_turn);
+    // MGC_SIGHT_MIST=1: a still of the Beyond-Sight trigger-area
+    // ripple at full strength (live, the spell has to be up), its clock taken
+    // from `--anim-turn`.
+    if std::env::var_os("MGC_SIGHT_MIST").is_some()
+        && let Some(w) = &level.world
+    {
+        renderer.set_sight_areas(&sight_areas(w));
+        renderer.set_sight_mist(1.0, anim_turn / 24.0);
+    }
     // Spell UI (book grid or HUD), from the level-start loadout.
     if let (Some(assets), Some(w)) = (&level.ui, &mut level.world) {
         // invincible/ghost/inert=false: a single headless frame
