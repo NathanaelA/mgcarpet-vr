@@ -1440,6 +1440,12 @@ pub struct LivePose {
     /// clock (every other animated sprite). See
     /// [`World::mc2_flc_frame`].
     pub flc_frame: Option<u8>,
+    /// Vertical stretch of the billboard (height only, feet fixed) —
+    /// 1.0 for everything but a leviathan strike that rolled a taller
+    /// lunge under the `mc2_leviathan_high_lunge` patch, which draws
+    /// `height / 768` times as tall as retail's. Read off the strike
+    /// pose's height extent, so it is 1.0 whenever the patch is off.
+    pub h_stretch: f32,
     /// The action index (`actionIndex_0x45_69`, our `tick70`) — MC2's
     /// minimap reads it (a charred tree, (2,0) action 2, plots nothing:
     /// `DrawMinimapEntities_B_61A00` GameUI.cpp:1151-58).
@@ -4806,6 +4812,7 @@ impl World {
                     .or_else(|| self.worm_owner_type_index(e)),
                 frame: e.frame88,
                 flc_frame: flc.and_then(|k| k),
+                h_stretch: self.mc2_lunge_stretch(e),
                 action: e.tick70,
                 x: e.x as f32 / 256.0,
                 z: e.y as f32 / 256.0,
@@ -5061,6 +5068,24 @@ impl World {
                     .then(|| Some((first - e.f26) as u8))
             }
             _ => None,
+        }
+    }
+
+    /// [`LivePose::h_stretch`]: a striking leviathan (row 291, the
+    /// swing machine's arms 4..=6) whose height extent was rolled past
+    /// retail's 768.
+    fn mc2_lunge_stretch(&self, e: &Ent) -> f32 {
+        use crate::mc2::roster::{M28_BASE, M28_BITE_REACH};
+        let striking = self.game == GameId::Mc2
+            && e.class64 == 5
+            && e.model65 == 28
+            && e.type86 == 291
+            && e.tick70 == M28_BASE + 2
+            && matches!(e.f71, 4..=6);
+        if striking && e.f84 > M28_BITE_REACH {
+            e.f84 as f32 / M28_BITE_REACH as f32
+        } else {
+            1.0
         }
     }
 
@@ -8628,6 +8653,12 @@ impl World {
         };
         self.human_pose_prev = self.human_pose;
         self.human_pose = (player.x, player.y, player.z);
+        // The human's true velocity, for the `mc2_leviathan_true_aim`
+        // lead (torus-wrapped like every position delta).
+        self.g.player_vel = crate::engine::features::HashSilent((
+            self.human_pose.0.wrapping_sub(self.human_pose_prev.0) as i16,
+            self.human_pose.1.wrapping_sub(self.human_pose_prev.1) as i16,
+        ));
         self.human_yaw_prev = self.human_yaw;
         self.human_yaw = player.heading;
         // (after the echo roll: human_pose_prev now holds the pose
@@ -42701,6 +42732,315 @@ mod tests {
             .find(|p| p.slot == i as u16)
             .expect("posed");
         assert_eq!((p.flc_frame, p.map_only), (None, false));
+    }
+
+    /// A leviathan staged on arm 3 of its swing machine (the strike
+    /// tick), speed pinned so it stays put, and a ctx with the human
+    /// at `(dh, dz)` from it. Returns `(world, slot, ctx)`.
+    fn staged_leviathan_strike(high_lunge: bool) -> (World, usize, MobCtx) {
+        const M28_BASE: u8 = 224;
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(60, 60);
+        let i = w.g.mc2_spawn_m28(x, y, 400).expect("m28 spawns");
+        {
+            let e = &mut w.g.ent[i];
+            e.tick70 = M28_BASE + 2;
+            e.f71 = 3;
+            e.f146 = PLAYER_TARGET;
+            e.f128 = 0;
+            e.f130 = 0;
+        }
+        let ctx = MobCtx {
+            px: x,
+            py: y.wrapping_add(9000),
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches {
+                mc2_leviathan_high_lunge: high_lunge,
+                ..crate::patches::WorldPatches::RETAIL
+            },
+            mc2_turn: 0,
+        };
+        (w, i, ctx)
+    }
+
+    /// Patch option `mc2_leviathan_high_lunge`, the roll: the strike
+    /// tick draws ONE number off the leviathan's own LCG into the
+    /// pose's height extent, uniform in 768..=1200; the retail arm
+    /// draws nothing and keeps 768 (so its stream, and everything the
+    /// creature does next, is retail's). About two rolls in five
+    /// clear the 1024 lift ceiling.
+    #[test]
+    fn the_leviathan_rolls_its_lunge_height_only_under_the_patch() {
+        let (mut off, i, ctx_off) = staged_leviathan_strike(false);
+        let (mut on, j, ctx_on) = staged_leviathan_strike(true);
+        assert_eq!(off.g.ent[i].rand, on.g.ent[j].rand, "same seed");
+        off.g.m28_tick(i, &ctx_off);
+        on.g.m28_tick(j, &ctx_on);
+        assert_eq!(off.g.ent[i].f84, 768, "retail: SetEntityShiftRot(384, 768)");
+        let h = on.g.ent[j].f84;
+        assert!((768..=1200).contains(&h), "rolled {h}");
+        assert_ne!(off.g.ent[i].rand, on.g.ent[j].rand, "the roll is a draw");
+        // The same draw, spelled out.
+        let (mut again, k, _) = staged_leviathan_strike(true);
+        let d = again.g.mc2_rand(k);
+        assert_eq!(h as u32, 768 + d % 433);
+        // Strict retail keeps the gate shut whatever the patch says.
+        let (mut strict, s, mut ctx) = staged_leviathan_strike(true);
+        ctx.strict = true;
+        strict.g.m28_tick(s, &ctx);
+        assert_eq!(strict.g.ent[s].f84, 768);
+        // The spread: 2000 strikes off one running stream.
+        let (mut w, n, ctx) = staged_leviathan_strike(true);
+        let mut over = 0;
+        for _ in 0..2000 {
+            w.g.ent[n].f71 = 3;
+            w.g.m28_tick(n, &ctx);
+            let h = w.g.ent[n].f84;
+            assert!((768..=1200).contains(&h), "rolled {h}");
+            over += (h > 1024) as u32;
+        }
+        assert!((700..=940).contains(&over), "{over} of 2000 clear 1024");
+    }
+
+    /// A leviathan on its CHASE arm (`sub_2B260` arm 2) on a steering
+    /// tick, the human due south of it facing EAST, moving `vel` per
+    /// tick. Returns the heading the chase steers at (`roll_0x20_32`).
+    fn leviathan_chase_heading(true_aim: bool, strict: bool, vel: (i16, i16)) -> u16 {
+        let (mut w, i, mut ctx) = staged_leviathan_strike(false);
+        {
+            let e = &mut w.g.ent[i];
+            e.f71 = 2;
+            e.f26 = 20;
+            e.f63 = 0;
+        }
+        ctx.pyaw = 512; // east
+        ctx.strict = strict;
+        ctx.patches.mc2_leviathan_true_aim = true_aim;
+        w.g.player_vel = crate::engine::features::HashSilent(vel);
+        w.g.m28_tick(i, &ctx);
+        w.g.ent[i].f34
+    }
+
+    /// Patch option `mc2_leviathan_true_aim`. Retail steers the chase
+    /// at a point a fixed 768 ahead of wherever the target FACES, so a
+    /// hovering human who looks east is lunged at three tiles east of
+    /// where he is. Patched, the lead scales with his true velocity:
+    /// none at a standstill (the chase heads straight at him), retail's
+    /// exact point at the 80/tick cap along his facing, in between in
+    /// between — and it follows the way he MOVES, not the way he looks.
+    #[test]
+    fn the_leviathan_leads_by_the_targets_speed_only_under_the_patch() {
+        // The human sits 9000 due south (+y): dead ahead is yaw 1024,
+        // and east of him is a little less.
+        let at_him = 1024u16;
+        let retail = leviathan_chase_heading(false, false, (0, 0));
+        assert!(
+            (824..1019).contains(&retail),
+            "retail aims east of a hovering target: yaw {retail}"
+        );
+        // Hovering: no lead at all.
+        assert_eq!(leviathan_chase_heading(true, false, (0, 0)), at_him);
+        // Flat out along his facing: retail's very point.
+        assert_eq!(leviathan_chase_heading(true, false, (80, 0)), retail);
+        // Past the cap (Speed Up) the lead stops growing.
+        assert_eq!(leviathan_chase_heading(true, false, (200, 0)), retail);
+        // Half speed: between the two.
+        let half = leviathan_chase_heading(true, false, (40, 0));
+        assert!(retail < half && half < at_him, "half-speed lead: yaw {half}");
+        // Sliding WEST while looking east: the lead goes west.
+        let west = leviathan_chase_heading(true, false, (-80, 0));
+        assert!(
+            (west as i32 - (2048 - retail as i32)).abs() <= 1,
+            "mirror of the east lead: yaw {west} against {retail}"
+        );
+        // Retail ignores the velocity; strict retail ignores the patch.
+        assert_eq!(leviathan_chase_heading(false, false, (-80, 0)), retail);
+        assert_eq!(leviathan_chase_heading(true, true, (0, 0)), retail);
+    }
+
+    /// The whole attack, end to end: a leviathan 12 tiles west of a
+    /// HOVERING human who faces north (so retail's lead point sits
+    /// three tiles off the line of approach). Counts the strikes that
+    /// land in 1500 ticks.
+    fn bites_on_a_hovering_human(true_aim: bool, above: i16) -> u32 {
+        const M28_BASE: u8 = 224;
+        let mut w = mc2_flat_world();
+        // Open sea: the leviathan swims, and dies beached.
+        w.g.t.tile_type.fill(0);
+        w.g.t.height.fill(0);
+        let (x, y) = mc2_pos(60, 60);
+        let i = w.g.mc2_spawn_m28(x, y, 0).expect("m28 spawns");
+        {
+            let e = &mut w.g.ent[i];
+            e.tick70 = M28_BASE + 2;
+            e.f71 = 0;
+            e.f146 = PLAYER_TARGET;
+        }
+        let mut ctx = MobCtx {
+            px: x.wrapping_add(12 * 256),
+            py: y,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches {
+                mc2_leviathan_true_aim: true_aim,
+                ..crate::patches::WorldPatches::RETAIL
+            },
+            mc2_turn: 0,
+        };
+        let mut bites = 0;
+        let mut was = 0;
+        for _ in 0..1500 {
+            w.g.ent[i].f63 = w.g.ent[i].f63.wrapping_add(1);
+            // Keep it on the attack and the human `above` it.
+            if w.g.ent[i].tick70 != M28_BASE + 2 {
+                w.g.ent[i].tick70 = M28_BASE + 2;
+                w.g.ent[i].f71 = 0;
+                w.g.ent[i].f146 = PLAYER_TARGET;
+            }
+            ctx.pz = w.g.ent[i].z + above;
+            w.g.m28_tick(i, &ctx);
+            let now = w.g.ent[i].f71;
+            bites += (now == 5 && was != 5) as u32;
+            was = now;
+        }
+        bites
+    }
+
+    /// `mc2_leviathan_true_aim`, the point of it: a carpet that simply
+    /// hovers is safe from retail's leviathan unless it happens to
+    /// face along the line of approach, and is not safe from the
+    /// patched one.
+    #[test]
+    fn a_hovering_carpet_is_bitten_only_under_the_true_aim() {
+        // Measured on this rig (about 31 strikes each): retail lands
+        // 29 / 18 / 7 of them on a carpet 100 / 200 / 300 above the
+        // water — the lunge passes 768 to the side, the very edge of
+        // the 768 bite sphere — and none from 400 up. Patched, every
+        // strike lands at every height the bite can reach.
+        assert!(bites_on_a_hovering_human(false, 100) > 20);
+        assert_eq!(bites_on_a_hovering_human(false, 400), 0);
+        assert_eq!(bites_on_a_hovering_human(false, 700), 0);
+        for above in [100, 400, 700] {
+            let n = bites_on_a_hovering_human(true, above);
+            assert!(n > 25, "patched, {above} above: {n} bites");
+        }
+    }
+
+    /// The same law for a target that lives in the pool (a rival, a
+    /// balloon): the lead follows its speed word along its yaw.
+    #[test]
+    fn the_leviathan_leads_a_pooled_target_by_its_speed_word() {
+        let heading = |true_aim: bool, speed: i16| -> u16 {
+            let (mut w, i, mut ctx) = staged_leviathan_strike(false);
+            let (x, y) = {
+                let e = &w.g.ent[i];
+                (e.x, e.y)
+            };
+            let t = w.g.new_event().expect("target");
+            {
+                let e = &mut w.g.ent[t];
+                e.class64 = 3;
+                e.model65 = 3;
+                e.act_life = 1000;
+                e.x = x;
+                e.y = y.wrapping_sub(9000);
+                e.f30 = 512; // facing east
+                e.f126 = speed;
+            }
+            {
+                let e = &mut w.g.ent[i];
+                e.f71 = 2;
+                e.f26 = 20;
+                e.f63 = 0;
+                e.f146 = t as u16;
+            }
+            ctx.patches.mc2_leviathan_true_aim = true_aim;
+            w.g.m28_tick(i, &ctx);
+            w.g.ent[i].f34
+        };
+        let retail = heading(false, 0);
+        assert!((5..200).contains(&retail), "retail: yaw {retail}");
+        assert_eq!(heading(false, 80), retail, "retail never reads the speed");
+        assert_eq!(heading(true, 0), 0, "parked: straight at it");
+        assert_eq!(heading(true, 80), retail, "flat out: retail's point");
+        assert_eq!(heading(true, 120), retail, "capped");
+        let half = heading(true, 40);
+        assert!(0 < half && half < retail, "half speed: yaw {half}");
+    }
+
+    /// Patch option `mc2_leviathan_high_lunge`, the bite: retail's 768
+    /// sphere cannot touch a carpet parked at the 1024 lift ceiling; a
+    /// taller strike is an ellipsoid that tall and still 768 wide, so
+    /// it reaches straight up past its own height's worth and a little
+    /// to the side — and the strike sprite stretches to match.
+    #[test]
+    fn a_tall_lunge_bites_a_carpet_parked_at_the_lift_ceiling() {
+        // Does a strike of `height` bite a human `dh` to the side and
+        // `dz` above the creature?
+        let bites = |high_lunge: bool, height: u16, dh: u16, dz: i16| -> bool {
+            let (mut w, i, mut ctx) = staged_leviathan_strike(high_lunge);
+            w.g.m28_tick(i, &ctx); // the strike tick (arm 3)
+            w.g.ent[i].f84 = height;
+            let (x, y, z) = {
+                let e = &w.g.ent[i];
+                (e.x, e.y, e.z)
+            };
+            ctx.px = x.wrapping_add(dh);
+            ctx.py = y;
+            ctx.pz = z + dz;
+            for _ in 0..24 {
+                w.g.m28_tick(i, &ctx);
+                if w.g.ent[i].f71 == 5 {
+                    return true;
+                }
+            }
+            false
+        };
+        // Retail: on the floor inside 724, never at 768 or above.
+        assert!(bites(false, 768, 700, 256));
+        assert!(!bites(false, 768, 730, 256));
+        assert!(!bites(false, 768, 0, 768));
+        assert!(!bites(false, 768, 0, 1024));
+        // The retail arm ignores a tall extent altogether.
+        assert!(!bites(false, 1200, 0, 1024));
+        // Patched: the ceiling is reached by a lunge taller than it...
+        assert!(!bites(true, 1000, 0, 1024));
+        assert!(bites(true, 1100, 0, 1024));
+        // ...and the tallest one catches a carpet 400 to the side.
+        assert!(bites(true, 1200, 400, 1024));
+        assert!(!bites(true, 1200, 420, 1024));
+        // A lunge that rolled the minimum is retail's bite exactly.
+        assert!(bites(true, 768, 700, 256));
+        assert!(!bites(true, 768, 730, 256));
+        assert!(!bites(true, 768, 0, 768));
+
+        // The pose: stretched by height/768 through the strike, plain
+        // again once the creature swims (pose 1 re-stamps the extent).
+        let (mut w, i, ctx) = staged_leviathan_strike(true);
+        w.g.m28_tick(i, &ctx);
+        w.g.ent[i].f84 = 1152;
+        w.g.m28_tick(i, &ctx);
+        let stretch = |w: &World| {
+            w.live_poses()
+                .into_iter()
+                .find(|p| p.slot == i as u16)
+                .expect("posed")
+                .h_stretch
+        };
+        assert_eq!(stretch(&w), 1.5);
+        w.g.ent[i].tick70 = 225;
+        assert_eq!(stretch(&w), 1.0, "not striking");
     }
 
     /// [`LivePose::flc_frame`] on the pyramid: `sub_221F0` runs the

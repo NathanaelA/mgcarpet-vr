@@ -251,6 +251,18 @@ pub(crate) fn no_m28_strike_frames() -> bool {
 /// ->CountOfFrames_16`, witnessed as 24 on mc2l24 (see
 /// [`no_m28_strike_frames`]).
 pub(crate) const M28_STRIKE_FRAMES: i16 = 24;
+/// The leviathan's bite reach AND its strike pose's height extent —
+/// retail uses 768 for both (`sub_1CED0`'s range, `sub_2B860` pose 2's
+/// `SetEntityShiftRot_49EA0(a1x, 384, 768)`).
+pub(crate) const M28_BITE_REACH: u16 = 768;
+/// Patch option `mc2_leviathan_high_lunge`: the tallest a strike can
+/// roll (see [`crate::patches::WorldPatches::mc2_leviathan_high_lunge`]).
+/// 1200 clears a carpet parked at the 1024 lift ceiling with room to
+/// catch it about 400 units off to the side on the best roll.
+pub(crate) const M28_LUNGE_MAX: u16 = 1200;
+/// The carpet's speed cap (`dword_93A90 = 80`), the speed at which the
+/// `mc2_leviathan_true_aim` lead reaches retail's full 768.
+const M28_LEAD_FULL_SPEED: i32 = 80;
 /// A/B toggle for the m28 CHASE STRIKE-RANGE law: set
 /// `MGC_NO_M28_STRIKE_RANGE_PRED` to restore the pre-dig
 /// `sub_2B260` arm 2, which measured the strike range to the
@@ -6633,6 +6645,73 @@ impl Gen {
         }
     }
 
+    /// The strike's bite. Retail: `sub_1CED0`, a 768 sphere. Patch
+    /// option `mc2_leviathan_high_lunge`: a strike that rolled a taller
+    /// lunge (its height extent, see [`Gen::m28_roll_lunge`]) tests
+    /// the same sphere with the target's height above the creature
+    /// scaled down by 768/height — an ellipsoid as tall as the lunge
+    /// and still 768 wide.
+    fn m28_bite(&mut self, i: usize, slot: u16, ctx: &MobCtx) -> bool {
+        let height = self.ent[i].f84;
+        if !(ctx.patches.mc2_leviathan_high_lunge && !ctx.strict) || height <= M28_BITE_REACH {
+            return self.mc2_atk_melee_768(i, slot, ctx);
+        }
+        let Some((tx, ty, tz)) = self.mc2_target(slot, ctx) else {
+            return false;
+        };
+        let (ex, ey, ez) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let dz = (tz as i32 - ez as i32) * M28_BITE_REACH as i32 / height as i32;
+        let squashed = (ez as i32 + dz).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        if Self::mc2_dist3((ex, ey, ez), (tx, ty, squashed)) >= M28_BITE_REACH as u32 {
+            return false;
+        }
+        let (amt, src) = (self.ent[i].f44 as u32, self.ent[i].id24);
+        self.mc2_melee_write(slot, amt, src);
+        true
+    }
+
+    /// Patch option `mc2_leviathan_high_lunge`: roll this strike's
+    /// height — ONE draw of the leviathan's own LCG, uniform in
+    /// 768..=[`M28_LUNGE_MAX`] — into the strike pose's height extent
+    /// (`array_0x52_82.fov`, which pose 2 has just stamped 768). The
+    /// extent is ordinary entity state (hashed, saved), is what the
+    /// bite and the sprite stretch read, and is re-stamped by the next
+    /// pose. The retail arm draws nothing.
+    fn m28_roll_lunge(&mut self, i: usize, ctx: &MobCtx) {
+        if !(ctx.patches.mc2_leviathan_high_lunge && !ctx.strict) {
+            return;
+        }
+        let span = (M28_LUNGE_MAX - M28_BITE_REACH + 1) as u32;
+        let d = self.mc2_rand(i);
+        self.ent[i].f84 = M28_BITE_REACH + (d % span) as u16;
+    }
+
+    /// Patch option `mc2_leviathan_true_aim`: how far ahead of its
+    /// target the chase steers, as an (x, y) offset. Retail's is a
+    /// fixed 768 along the target's yaw; this is the same point scaled
+    /// by the target's speed over the 80/tick carpet cap — 768 flat
+    /// out, nothing at a standstill. The human's follows his true
+    /// displacement ([`Gen::player_vel`]); any other target's follows
+    /// its speed word (`+126`) along its yaw, backwards if it backs.
+    fn m28_lead(&self, slot: u16, tyaw: u16) -> (i16, i16) {
+        if slot == PLAYER_TARGET {
+            let (dx, dy) = (self.player_vel.0.0 as i32, self.player_vel.0.1 as i32);
+            let speed = Self::isqrt((dx * dx) as u32 + (dy * dy) as u32) as i32;
+            // Past the cap (Speed Up, or a warp's one-tick jump) the
+            // lead keeps its direction and retail's length.
+            let per = speed.max(M28_LEAD_FULL_SPEED);
+            return ((dx * 768 / per) as i16, (dy * 768 / per) as i16);
+        }
+        let speed = (self.ent[slot as usize].f126 as i32)
+            .clamp(-M28_LEAD_FULL_SPEED, M28_LEAD_FULL_SPEED);
+        let mut p = (0u16, 0u16, 0i16);
+        Self::polar_step(&mut p, tyaw, 0, (speed * 768 / M28_LEAD_FULL_SPEED) as i16);
+        (p.0 as i16, p.1 as i16)
+    }
+
     /// LABEL_35 of `sub_2B260` (EF:21132-21170 + LABEL_58 at
     /// EF:21226-35) — the wind-up/swing body. Arm 3 falls into it
     /// the same tick (file 0x4FCBC), which is why it is a method.
@@ -6662,7 +6741,7 @@ impl Gen {
                 } else {
                     M28_STRIKE_FRAMES - 3 > f26 && f26 > 3
                 };
-                if hot && self.mc2_atk_melee_768(i, slot, ctx) {
+                if hot && self.m28_bite(i, slot, ctx) {
                     self.ent[i].f71 = 5;
                 }
             }
@@ -6728,14 +6807,21 @@ impl Gen {
                     }
                     return;
                 }
-                // Chase the point 768 ahead of the target's facing.
+                // Chase the point 768 ahead of the target's facing
+                // (`mc2_leviathan_true_aim`: ahead by its speed).
                 let tyaw = if slot == PLAYER_TARGET {
                     ctx.pyaw
                 } else {
                     self.ent[slot as usize].f30
                 };
                 let mut pred = (tx, ty, 0i16);
-                Self::polar_step(&mut pred, tyaw, 0, 768);
+                if ctx.patches.mc2_leviathan_true_aim && !ctx.strict {
+                    let (lx, ly) = self.m28_lead(slot, tyaw);
+                    pred.0 = pred.0.wrapping_add(lx as u16);
+                    pred.1 = pred.1.wrapping_add(ly as u16);
+                } else {
+                    Self::polar_step(&mut pred, tyaw, 0, 768);
+                }
                 if self.ent[i].f63 & 3 == 0 {
                     self.mc2_aim_avoid(i, pred.0, pred.1);
                 }
@@ -6763,6 +6849,7 @@ impl Gen {
             3 => {
                 self.m28_sub(i, 4);
                 self.m28_pose(i, 2);
+                self.m28_roll_lunge(i, ctx);
                 self.ent[i].f50 = self.ent[i].f30 as i16;
                 self.snd(38, i);
                 // `goto LABEL_35` — arm 3 has no epilogue (file

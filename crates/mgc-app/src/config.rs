@@ -1220,6 +1220,25 @@ pub struct GameplayPatches {
     /// (renamed from `mc1_volcano_register_revalidate` when it took
     /// MC2 on).
     pub volcano_register_revalidate: PatchArm,
+    /// MC2 leviathans lunge to a height rolled per strike (768..1200)
+    /// instead of retail's fixed 768 — a deliberate BALANCE deviation,
+    /// not a bug fix, and only in force while `controls.models.altitude`
+    /// is the enhanced lift. Retail's bite cannot reach a carpet 768
+    /// above the water; retail's carpet can get that high only by
+    /// flying pitched against a constant sink, while the enhanced lift
+    /// parks at 1024 and makes the immunity free. `patched` (default):
+    /// the bite is as tall as the strike rolled and the strike sprite
+    /// stretches upward to match. `retail`: 768, always. Player-ruled
+    /// 2026-09-30.
+    ///
+    /// The same option carries the leviathan's AIM (player-ruled the
+    /// same day, in force under either altitude model —
+    /// `WorldPatches::mc2_leviathan_true_aim`): retail steers at a
+    /// point a fixed 3 tiles ahead of wherever its target FACES, which
+    /// suits a carpet in full flight and misses a hovering one to the
+    /// side; `patched` scales that lead by the target's actual speed,
+    /// so a target standing still is lunged at directly.
+    pub mc2_leviathan_high_lunge: PatchArm,
     /// The arm the SIM half of `ball_owner_recolor` runs, when a
     /// take's policy pins it apart from the player's own (drawing)
     /// choice: `None` = follow the option (native play), `Some` =
@@ -1265,6 +1284,7 @@ impl Default for GameplayPatches {
             mc1_building_pad_saturate: PatchArm::Patched,
             mc1_segment_chain_revalidate: PatchArm::Patched,
             volcano_register_revalidate: PatchArm::Patched,
+            mc2_leviathan_high_lunge: PatchArm::Patched,
             owner_recolor_sim_pin: None,
         }
     }
@@ -1301,6 +1321,7 @@ impl GameplayPatches {
             mc1_building_pad_saturate: PatchArm::Retail,
             mc1_segment_chain_revalidate: PatchArm::Retail,
             volcano_register_revalidate: PatchArm::Retail,
+            mc2_leviathan_high_lunge: PatchArm::Retail,
             owner_recolor_sim_pin: None,
         }
     }
@@ -1358,6 +1379,8 @@ impl GameplayPatches {
             mc1_building_pad_saturate: PatchArm::Retail,
             mc1_segment_chain_revalidate: PatchArm::Retail,
             volcano_register_revalidate: PatchArm::Retail,
+            // 2026-09-30; no port take predates it.
+            mc2_leviathan_high_lunge: PatchArm::Retail,
             // Native MC2 freed in-walk from the first port (the sweep
             // landed 2026-09-17), so a legacy take ran the PATCHED arm
             // — `..Self::default()` supplies it.

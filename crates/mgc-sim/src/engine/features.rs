@@ -1416,6 +1416,13 @@ pub(crate) struct Gen {
     /// a cloak (castle turrets, the m27 branch scan). Per-tick echo
     /// of World state — not on the wire, not hashed.
     pub(crate) player_ghost: HashSilent<bool>,
+    /// The out-of-pool human's displacement over the last tick,
+    /// (dx, dy) in engine units — his TRUE velocity, whatever the
+    /// control model (the enhanced carpet can slide sideways of its
+    /// facing). Republished at the tick head; read only by the
+    /// `mc2_leviathan_true_aim` patch arm ([`Gen::m28_lead`]). Per-tick
+    /// echo of World state — not on the wire, not hashed.
+    pub(crate) player_vel: HashSilent<(i16, i16)>,
     /// ⭐ THE OUT-OF-POOL HUMAN'S `roll_0x20_32` — retail's TARGET-YAW
     /// word on the human carpet record, which the port has nowhere
     /// else to put (the conformance carpet is out of pool and
@@ -5886,6 +5893,7 @@ impl Gen {
             rival_wanted: [0; 8],
             player_invisible: false,
             player_ghost: HashSilent(false),
+            player_vel: HashSilent((0, 0)),
             human_roll_0x20: HashSilent(0),
             player_rebound: false,
             player_chain: PlayerChain::default(),
@@ -12609,6 +12617,7 @@ impl Gen {
             rival_wanted,
             player_invisible,
             player_ghost: _,
+            player_vel: _,
             // A shim for the out-of-pool carpet's @0x20 — see the
             // field doc; every conformance import seeds it outright
             // from the recorded carpet, on the `player_chain`

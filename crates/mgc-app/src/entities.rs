@@ -412,6 +412,9 @@ pub fn billboards_from_poses(
             // is the whole law; the renderer re-derives width from the
             // frame's pixel aspect exactly as retail does.
             world_h: p.sprite_h_units.map_or(s.world_h, |u| u / UNITS_PER_TILE),
+            // A leviathan strike that rolled a taller lunge
+            // (`mc2_leviathan_high_lunge`); 1.0 otherwise.
+            h_stretch: p.h_stretch,
             blend: p.blend,
             // Retail's co-tile paint order, read off the sim's live
             // tile chains (`LivePose::chain_depth`).
@@ -2121,6 +2124,7 @@ fn instrument_billboard(
         frame: 0,
         flc_frame: None,
         world_h: s.world_h,
+        h_stretch: 1.0,
         blend,
         // An instrument, not a retail entity — never distance-hidden,
         // and on no tile chain, so it takes the neutral co-tile rank.
@@ -2166,6 +2170,7 @@ fn push_billboard(
         frame: 0,
         flc_frame: None,
         world_h,
+        h_stretch: 1.0,
         blend: 0,
         conceal: false,
         // The static THING-list path (`--no-terrain-features`
@@ -2775,6 +2780,7 @@ mod tests {
             owner_type_index: None,
             frame: 0,
             flc_frame: None,
+            h_stretch: 1.0,
             action: 0,
             x: 10.0,
             z: 10.0,

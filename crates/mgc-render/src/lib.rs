@@ -1066,6 +1066,10 @@ pub struct Billboard {
     pub flc_frame: Option<u8>,
     /// World height of the quad (engine `var_8 / 256`).
     pub world_h: f32,
+    /// Extra vertical stretch: the quad is drawn `world_h * h_stretch`
+    /// tall at the width `world_h` alone gives it, feet fixed. 1.0 for
+    /// every retail entity (`LivePose::h_stretch`).
+    pub h_stretch: f32,
     /// RETAIL CO-TILE PAINT ORDER, `(0, 1)`: this sprite's place in
     /// its tile's entity chain, head→tail (higher = drawn later = on
     /// top). See `mgc_sim::engine::world::LivePose::chain_depth` for
@@ -5008,7 +5012,7 @@ impl Renderer {
             }
             let inst = BillboardInstance {
                 pos,
-                size: [world_w, b.world_h],
+                size: [world_w, b.world_h * b.h_stretch],
                 uv_pos: [frame.x as f32, frame.y as f32],
                 uv_size: [w, h],
                 flags: [mirror as u32, 32],

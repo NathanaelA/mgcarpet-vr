@@ -2277,6 +2277,42 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Gameplay,
             group: "gameplay · patches",
+            label: "mc2_leviathan_high_lunge",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_leviathan_high_lunge",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_leviathan_high_lunge.on(),
+                faithful: false,
+            },
+            desc: "Two leviathan changes, neither a bug fix. AIM: retail steers \
+                   at a point a fixed 3 tiles ahead of wherever its target \
+                   faces - right for a carpet in full flight, a miss to the \
+                   side for one that hovers. Patched, the lead scales with \
+                   the target's real speed, so a hovering carpet is lunged at \
+                   directly. HEIGHT (only with the enhanced altitude model): \
+                   lunges reach a random 768 to 1200 rolled per strike, where \
+                   retail's stop at 768 and the enhanced lift parks at 1024 \
+                   out of reach; parked straight overhead, about two strikes \
+                   in five now land, and the strike is drawn as tall as it \
+                   reaches.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_leviathan_high_lunge =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Retail: a fixed 3-tile lead and a 768 reach - hovering, \
+                     or parking at 1024, is safe.",
+                    "Lead by the target's speed; lunges reach 768..1200 \
+                     under the enhanced lift (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
             label: "castle_latch_bug",
             class: Patch,
             key: None,
@@ -3066,8 +3102,9 @@ mod tests {
         // volcano_register_revalidate the same round (w158b; renamed
         // from mc1_volcano_register_revalidate when w158e gave it the
         // MC2 twin). mc2_troglodyte_sprite_crop 2026-09-30
-        // (presentation-only).
-        assert_eq!(patches, 26, "all twenty-six patches ship on");
+        // (presentation-only), mc2_leviathan_high_lunge the same day
+        // (a balance deviation riding the class for its pin).
+        assert_eq!(patches, 27, "all twenty-seven patches ship on");
     }
 
     #[test]

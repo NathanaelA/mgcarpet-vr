@@ -473,6 +473,58 @@ pub struct WorldPatches {
     /// driver itself, the kill only on a `(10,19)` other than the new
     /// column. See [`crate::engine::features::Gen::mc2_summit18_tick`].
     pub volcano_register_revalidate: bool,
+    /// **THE LEVIATHAN LUNGES TO A ROLLED HEIGHT (MC2)** — player-ruled
+    /// 2026-09-30, an UNFAITHFUL balance deviation, the enhanced
+    /// lift's counterweight (the app raises it only while the
+    /// altitude model is the enhanced lift). Retail's (5,28) bite is
+    /// `sub_1CED0`: a 768 sphere (`sub_583F0` 3-D distance) around a
+    /// creature that strikes from sea level — all 162 strikes in the
+    /// corpus have it at z 0 — so a carpet 768 above the water cannot
+    /// be bitten. Retail's carpet CAN get there (band 1024), but only
+    /// by flying pitched against a 16/tick sink: of 151 recorded
+    /// strikes at the human 20 found him at 768 or higher and all 20
+    /// missed (mc2l18 t=7583..7985 holds 878..955 through eight).
+    /// The enhanced lift PARKS at 1024, which turns that effort into
+    /// standing immunity.
+    ///
+    /// Patched: each strike rolls its own height off the leviathan's
+    /// LCG, uniform in 768..=1200, and carries it in the strike
+    /// pose's height extent (`array_0x52_82.fov`, which retail stamps
+    /// 768 — `SetEntityShiftRot_49EA0(a1x, 384, 768)`); the bite
+    /// tests the same 768 sphere with the target's height above the
+    /// creature scaled by 768/height, i.e. an ellipsoid that tall and
+    /// 768 wide, and the strike sprite is drawn stretched upward by
+    /// the same factor. Parked at 1024 straight overhead, about two
+    /// strikes in five reach. Retail (conformance, recordings): no
+    /// roll, 768.
+    pub mc2_leviathan_high_lunge: bool,
+    /// **THE LEVIATHAN LEADS ITS TARGET BY THE TARGET'S SPEED (MC2)**
+    /// — player-ruled 2026-09-30, an UNFAITHFUL deviation; the second
+    /// half of the app's `mc2_leviathan_high_lunge` option (not gated
+    /// on the altitude model — it is right under either).
+    ///
+    /// Retail's (5,28) never steers at its target. `sub_2B260`'s chase
+    /// arm copies the target's position, steps the copy a FIXED 768
+    /// along the target's own yaw (`MoveEntity_57FA0(&v23x,
+    /// v25x->yaw_0x1C_28, 0, 768)`, EF:21035) and both steers at and
+    /// range-tests against that point; the strike then only re-aims at
+    /// the real target every 8th tick and only beyond 896. The lead is
+    /// what a carpet at the 80/tick speed cap covers in ~10 ticks, so
+    /// it suits a target in full flight — and lunges at empty water
+    /// three tiles off a target that is standing still, in whatever
+    /// direction that target happens to face. Retail's carpet keeps
+    /// its throttle, so it seldom stood still; the enhanced hold-to-fly
+    /// carpet rests at a hover, which made the creature all but
+    /// harmless ("faithful AND wrong", player).
+    ///
+    /// Patched: the lead is LINEAR in the target's speed — 768 at the
+    /// 80/tick cap and beyond (retail's point, for a target flying
+    /// flat out along its facing), nothing at a standstill, so a
+    /// hovering carpet is lunged at directly. The human's lead follows
+    /// his actual displacement over the last tick (the enhanced carpet
+    /// can slide sideways of its facing); any other target's follows
+    /// its speed word along its yaw. See `Gen::m28_lead`.
+    pub mc2_leviathan_true_aim: bool,
 }
 
 impl WorldPatches {
@@ -503,6 +555,8 @@ impl WorldPatches {
         mc1_building_pad_saturate: false,
         mc1_segment_chain_revalidate: false,
         volcano_register_revalidate: false,
+        mc2_leviathan_high_lunge: false,
+        mc2_leviathan_true_aim: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -544,5 +598,7 @@ impl WorldPatches {
         mc1_building_pad_saturate: false,
         mc1_segment_chain_revalidate: false,
         volcano_register_revalidate: false,
+        mc2_leviathan_high_lunge: false,
+        mc2_leviathan_true_aim: false,
     };
 }

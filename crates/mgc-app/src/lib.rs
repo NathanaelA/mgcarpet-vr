@@ -3339,6 +3339,15 @@ impl App {
                     // live pose when entering the enhanced tier.
                     sess.sim
                         .set_altitude_model(sim_altitude(self.cfg.controls.models.altitude));
+                    // `mc2_leviathan_high_lunge` follows the altitude
+                    // model (`world_patches`); a live recording or
+                    // replay keeps its pinned arms.
+                    if self.recorder.is_none()
+                        && self.replay.is_none()
+                        && let Some(w) = sess.sim.world.as_mut()
+                    {
+                        w.set_patches(world_patches(&self.cfg));
+                    }
                 }
                 self.queue_rec_toggle(
                     "altitude_model",
@@ -3460,7 +3469,7 @@ impl App {
                     .as_deref_mut()
                     .and_then(|s| s.sim.world.as_mut())
                 {
-                    w.set_patches(world_patches(&self.cfg.gameplay.patches));
+                    w.set_patches(world_patches(&self.cfg));
                 }
             }
             // Everything else is read live off self.cfg (game_speed,
@@ -3953,7 +3962,7 @@ impl App {
                 self.cfg.gameplay.cheat.invincible,
                 self.cfg.gameplay.cheat.ghost,
                 self.cfg.gameplay.cheat.inert,
-                world_patches(&self.cfg.gameplay.patches),
+                world_patches(&self.cfg),
             );
             if let Some(run) = &self.campaign {
                 // The restart is a fresh world — the campaign carry
@@ -4407,7 +4416,7 @@ impl App {
                     self.cfg.gameplay.cheat.invincible,
                     self.cfg.gameplay.cheat.ghost,
                     self.cfg.gameplay.cheat.inert,
-                    world_patches(&self.cfg.gameplay.patches),
+                    world_patches(&self.cfg),
                 );
                 if let Some(run) = &self.campaign {
                     apply_campaign_book(&mut w, run);
@@ -10534,8 +10543,19 @@ fn apply_instruments(
 /// world constructor defaults every arm to RETAIL (that is what keeps
 /// goldens/tests/mgc-conform faithful); the app opts the configured
 /// patches in here, and `apply_option` re-applies live.
-fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
+///
+/// `mc2_leviathan_high_lunge` is the one arm that also reads another
+/// option: it is the enhanced lift's counterweight, so it is in force
+/// only while the altitude model IS the enhanced lift (the altitude
+/// option's live handler re-applies the set). The option's other half,
+/// `mc2_leviathan_true_aim`, is right under either altitude model and
+/// follows the option alone.
+fn world_patches(cfg: &config::Config) -> mgc_sim::WorldPatches {
+    let p = &cfg.gameplay.patches;
     mgc_sim::WorldPatches {
+        mc2_leviathan_high_lunge: p.mc2_leviathan_high_lunge.on()
+            && cfg.controls.models.altitude == config::AltitudeModel::Enhanced,
+        mc2_leviathan_true_aim: p.mc2_leviathan_high_lunge.on(),
         jar_ground_snap: p.jar_ground_snap.on(),
         ball_ground_track: p.ball_ground_track.on(),
         map_wide_ball_rolling: p.map_wide_ball_rolling.on(),
@@ -11039,6 +11059,7 @@ fn run_screenshot(
             owner_type_index: None,
             frame: 0,
             flc_frame: None,
+            h_stretch: 1.0,
             action: 0,
             x,
             z,
@@ -11614,7 +11635,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         // under it (a retail take raises it at its own import, so the
         // retail path needs no help here).
         if let Some(w) = level.world.as_mut() {
-            w.set_patches(world_patches(&cfg.gameplay.patches));
+            w.set_patches(world_patches(&cfg));
             // The windowed path's apply_instruments equivalent for the
             // one instrument a replay honors (`--plausible-spellbook`,
             // the pre-pin-take rescue): the grants must run BEFORE the
