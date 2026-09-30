@@ -6422,8 +6422,17 @@ impl App {
                 }
                 MenuAction::LoadFrom(slot) => {
                     self.apply_map_action(worldmap::MapAction::LoadFrom(slot));
-                    // Retail: a successful menu load lands on the map.
-                    self.open_map_screen(event_loop);
+                    // Retail: a successful menu load lands on the map
+                    // — but a slot saved MID-LEVEL has just been
+                    // resumed into its level by `resume_slot`
+                    // (`install_level` left the screen on the level),
+                    // and opening the map here tore that session
+                    // straight back down: the temple menu was the one
+                    // load surface that dropped a mid-level save on
+                    // the hub (player-reported 2026-09-30).
+                    if self.screen != Screen::Level {
+                        self.open_map_screen(event_loop);
+                    }
                 }
                 MenuAction::SetName(name) => {
                     if let Some(s) = self.campaign.as_mut().and_then(|c| c.save.mc2_mut()) {
