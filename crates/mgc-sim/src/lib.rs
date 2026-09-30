@@ -563,6 +563,16 @@ impl Simulation {
         self.broll.active()
     }
 
+    /// What a hand offers the app's autofire macro this tick (see
+    /// [`world::autofire`]); world-less sims have no spells.
+    pub fn autofire_hand(&self, right: bool) -> world::autofire::AutofireHand {
+        self.world
+            .as_ref()
+            .map_or(world::autofire::AutofireHand::Manual, |w| {
+                w.autofire_hand(right)
+            })
+    }
+
     /// Ground altitude in tile units at a world position (nearest tile;
     /// the engine interpolates across the tile's two triangles, which
     /// can wait until collision matters beyond a hover clamp).

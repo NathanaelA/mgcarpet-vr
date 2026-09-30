@@ -146,6 +146,9 @@ faithful defaults:
   accelerate/strafe) | `wasd`.
 - `mouse_sensitivity`, `invert_y` — P-class preferences (the
   originals shipped an invert option too).
+- `autofire` — enhancement: a held fire button re-clicks a click-only
+  projectile spell at 4 Hz (an input macro; the sim sees ordinary
+  clicks). On by default, off under the Classic controls preset.
 
 **Deviations & interims.**
 - Camera ROLL is unrendered (the original banks slightly in turns).

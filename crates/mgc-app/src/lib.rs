@@ -9,6 +9,7 @@
 //! offscreen and exits, which is how terrain changes get verified
 //! without a display.
 
+mod autofire;
 mod bakecheck;
 mod camera;
 mod campaign;
@@ -2275,6 +2276,9 @@ struct App {
     /// Left/right button held while grabbed: the two casting hands.
     fire_held: bool,
     fire_right_held: bool,
+    /// The autofire input macro's per-hand click generators
+    /// (`controls.preferences.autofire`).
+    autofire: autofire::Autofire,
     grabbed: bool,
     /// A `--level` boot wants the pointer captured, but grabs against
     /// a window the platform has not finished focusing/mapping fail
@@ -2608,6 +2612,7 @@ impl App {
             roll_dx: 0.0,
             fire_held: false,
             fire_right_held: false,
+            autofire: autofire::Autofire::default(),
             grabbed: false,
             boot_grab: false,
             boot_focus_asks: 0,
@@ -4435,6 +4440,9 @@ impl App {
             sim.sync_carpet_from_flyer();
         }
         let prev_flyer = sim.flyer;
+        // A button held across the level change must not resume its
+        // autofire chain in the new world.
+        self.autofire.halt();
         self.session = Some(Box::new(Session {
             level,
             sim,
@@ -4660,6 +4668,22 @@ impl App {
             input.stick_y = self.stick.y.round() as i16;
             input.yaw_delta = 0.0;
             input.pitch_delta = 0.0;
+        }
+        // Autofire: a held button on a click-only projectile spell
+        // becomes a slow train of ordinary clicks (see `autofire`).
+        // Shaped last, so the fly assistant above still reads the
+        // physical buttons; off, the chains stay broken and the raw
+        // levels pass as they always did.
+        if self.cfg.controls.preferences.autofire
+            && let Some(s) = self.session.as_deref()
+        {
+            let hands = (s.sim.autofire_hand(false), s.sim.autofire_hand(true));
+            let level_over = s.sim.world.as_ref().is_some_and(|w| w.completed());
+            (input.fire_left, input.fire_right) =
+                self.autofire
+                    .tick((input.fire_left, input.fire_right), hands, level_over);
+        } else {
+            self.autofire.halt();
         }
         if book {
             // The original's map/book modes write NO movement input

@@ -334,6 +334,7 @@ pub const CONTROLS_PRESET: PresetGroup = PresetGroup {
         "controls.preferences.bindings",
         "controls.preferences.mouse_sensitivity_x",
         "controls.preferences.invert_y",
+        "controls.preferences.autofire",
         "controls.models.thrust",
         "controls.models.altitude",
     ],
@@ -345,6 +346,7 @@ pub const CONTROLS_PRESET: PresetGroup = PresetGroup {
                 prefs.bindings = Bindings::Wasd;
                 prefs.mouse_sensitivity_x = 1.0;
                 prefs.invert_y = false;
+                prefs.autofire = true;
                 models.thrust = ThrustModel::Enhanced;
                 models.altitude = AltitudeModel::Enhanced;
             }
@@ -352,6 +354,7 @@ pub const CONTROLS_PRESET: PresetGroup = PresetGroup {
                 prefs.bindings = Bindings::Classic;
                 prefs.mouse_sensitivity_x = 0.5;
                 prefs.invert_y = true;
+                prefs.autofire = false;
                 models.thrust = ThrustModel::Classic;
                 models.altitude = AltitudeModel::Classic;
             }
@@ -1719,6 +1722,35 @@ pub fn registry() -> Vec<Spec> {
                     "No auto-center — you trim your own drift (retail \
                      default).",
                     "Idle mouse recenters the steering stick.",
+                ],
+            },
+        },
+        Spec {
+            domain: Controls,
+            group: "controls · preferences",
+            label: "autofire",
+            class: Enhancement,
+            key: None,
+            cli: None,
+            cfg_path: "controls.preferences.autofire",
+            read: |c| Val::Toggle {
+                on: c.controls.preferences.autofire,
+                faithful: false,
+            },
+            desc: "Hold a fire button to keep casting a click-only projectile \
+                   spell (Fireball, Possession, Meteor, Steal Mana, Duel, \
+                   Alliance) at a gentle 4 casts a second — slower than fast \
+                   clicking, there to spare fingers and mouse. Spells that \
+                   already repeat when held, and every effect spell, are \
+                   untouched. Neither original has it.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.controls.preferences.autofire = v,
+                descs: [
+                    "One click, one cast, as both originals play (the \
+                     Classic preset).",
+                    "A held button re-casts at 4 Hz, or as fast as the \
+                     spell and your mana allow if that is slower (the \
+                     Enhanced preset and the default).",
                 ],
             },
         },

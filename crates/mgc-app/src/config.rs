@@ -712,6 +712,12 @@ pub struct ControlPreferences {
     /// default; MC1 never had it). Legacy config strings `auto`/`off`
     /// both parse as off.
     pub fly_assistant: FlyAssistant,
+    /// Autofire (player-set 2026-09-30; neither original has it):
+    /// holding a fire button on a click-only projectile spell re-casts
+    /// it at 4 Hz — the app's input macro, `crate::autofire`. A
+    /// CONTROLS PRESET member: on under Enhanced (the default), off
+    /// under Classic.
+    pub autofire: bool,
 }
 
 /// The Enhanced controls preset is the default (see
@@ -726,6 +732,7 @@ impl Default for ControlPreferences {
             mouse_sensitivity_y: 1.0,
             invert_y: false,
             fly_assistant: FlyAssistant::default(),
+            autofire: true,
         }
     }
 }
@@ -1626,7 +1633,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 45;
+const DEFAULTS_VERSION: u64 = 46;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

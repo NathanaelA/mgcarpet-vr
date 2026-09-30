@@ -73,6 +73,7 @@ use crate::verbs::{
 };
 use mgc_formats::{Thing, ThingKind};
 
+pub mod autofire;
 pub mod cheats;
 pub mod conformance;
 
