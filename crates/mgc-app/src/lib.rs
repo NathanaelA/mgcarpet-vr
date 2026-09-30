@@ -11002,6 +11002,7 @@ fn run_screenshot(
             type_index: 0,
             owner_type_index: None,
             frame: 0,
+            flc_frame: None,
             action: 0,
             x,
             z,

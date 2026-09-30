@@ -250,7 +250,7 @@ pub(crate) fn no_m28_strike_frames() -> bool {
 /// `GetAnimationByIndex(animations_E9C08x, *(int16_t *)&x_BYTE_D9F50[0x5b6])
 /// ->CountOfFrames_16`, witnessed as 24 on mc2l24 (see
 /// [`no_m28_strike_frames`]).
-const M28_STRIKE_FRAMES: i16 = 24;
+pub(crate) const M28_STRIKE_FRAMES: i16 = 24;
 /// A/B toggle for the m28 CHASE STRIKE-RANGE law: set
 /// `MGC_NO_M28_STRIKE_RANGE_PRED` to restore the pre-dig
 /// `sub_2B260` arm 2, which measured the strike range to the
@@ -577,7 +577,7 @@ const M23_BASE: u8 = 184;
 const M24_BASE: u8 = 192;
 const M25_BASE: u8 = 200;
 const M26_BASE: u8 = 208;
-const M28_BASE: u8 = 224;
+pub(crate) const M28_BASE: u8 = 224;
 
 /// ⛔⛔ **`byte_0x38_56` IS `@0x38` AND ITS PORT HOME IS `Ent::f28`, NOT
 /// `Ent::f56`. `Ent::f56` IS `@0x36` (`word_0x36_54`) ON CLASS 5.**

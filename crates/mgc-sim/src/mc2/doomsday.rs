@@ -91,6 +91,17 @@ const ANIM_FRAMES_343: i16 = 5;
 const ANIM_FRAMES_344: i16 = 15;
 const ANIM_FRAMES_345: i16 = 20;
 
+/// [`ANIM_FRAMES_343`] and its two siblings by sprite row — `None`
+/// for every row `sub_221F0` does not prime.
+pub(crate) fn pyramid_anim_frames(row: u16) -> Option<i16> {
+    match row {
+        343 => Some(ANIM_FRAMES_343),
+        344 => Some(ANIM_FRAMES_344),
+        345 => Some(ANIM_FRAMES_345),
+        _ => None,
+    }
+}
+
 /// A/B kill-switch for THE PYRAMID'S HIGH-BYTE FACING SNAP: set
 /// `MGC_NO_MC2_PYRAMID_SNAP_HIGH_BYTE` to restore the pre-dig
 /// behaviour, where `sub_222B0`'s `bucket >= 0xD` arm added the
@@ -416,11 +427,8 @@ impl Gen {
         } else {
             self.mc2_set_sprite_index(i, idx);
         }
-        let frames = match idx {
-            343 => ANIM_FRAMES_343,
-            344 => ANIM_FRAMES_344,
-            345 => ANIM_FRAMES_345,
-            _ => return,
+        let Some(frames) = pyramid_anim_frames(idx) else {
+            return;
         };
         self.ent[i].f26 = frames;
     }

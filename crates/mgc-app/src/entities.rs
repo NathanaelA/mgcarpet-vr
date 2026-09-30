@@ -325,6 +325,10 @@ pub fn billboards_from_poses(
             sprite_base: s.sprite_base,
             draw_type: s.draw_type,
             frame: p.frame,
+            // The seeked one-shot streams (the leviathan's strike, the
+            // pyramid's wind-up / recover / death) — see
+            // `LivePose::flc_frame`.
+            flc_frame: p.flc_frame,
             // A sprite-param row retail patched IN PLACE overrides the
             // baked `rot_speed_8` (the Vissuluth wait-phase shrink +
             // growth ramp — see `LivePose::sprite_h_units`). Retail's
@@ -2040,6 +2044,7 @@ fn instrument_billboard(
         sprite_base: s.sprite_base,
         draw_type: s.draw_type,
         frame: 0,
+        flc_frame: None,
         world_h: s.world_h,
         blend,
         // An instrument, not a retail entity — never distance-hidden,
@@ -2084,6 +2089,7 @@ fn push_billboard(
         sprite_base: stats.sprite_base,
         draw_type: stats.draw_type,
         frame: 0,
+        flc_frame: None,
         world_h,
         blend: 0,
         conceal: false,
@@ -2693,6 +2699,7 @@ mod tests {
             type_index,
             owner_type_index: None,
             frame: 0,
+            flc_frame: None,
             action: 0,
             x: 10.0,
             z: 10.0,

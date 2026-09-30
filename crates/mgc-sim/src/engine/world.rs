@@ -1425,6 +1425,21 @@ pub struct LivePose {
     pub owner_type_index: Option<u16>,
     /// Animation frame (entity offset 88) for the 2..=16 draw types.
     pub frame: u8,
+    /// The image of this sprite's FLC STREAM to draw, for the two MC2
+    /// creatures whose handlers SEEK their stream (`sub_71AB0`, two
+    /// call sites in the whole game): the (5,28) leviathan's strike
+    /// (row 291, rewound at the strike's first tick) and the (5,10)
+    /// pyramid's wind-up / recover / death (rows 343..=345, run to
+    /// their end when the row is set). Those four TMAPS groups (311,
+    /// 480, 488, 496) are the only ones retail steps as a group and
+    /// the only one-shot streams in the game — each state lasts
+    /// exactly `CountOfFrames` ticks — so which image is up is a
+    /// function of the state's own countdown. `Some(k)` = image `k`
+    /// of the stream (0 = the base image, `k` = after the k-th
+    /// delta); `None` = a free-running loop, the renderer's own
+    /// clock (every other animated sprite). See
+    /// [`World::mc2_flc_frame`].
+    pub flc_frame: Option<u8>,
     /// The action index (`actionIndex_0x45_69`, our `tick70`) — MC2's
     /// minimap reads it (a charred tree, (2,0) action 2, plots nothing:
     /// `DrawMinimapEntities_B_61A00` GameUI.cpp:1151-58).
@@ -4777,6 +4792,9 @@ impl World {
             if bits.skip {
                 continue;
             }
+            // `Some(None)` = the leviathan's rewind tick: retail draws
+            // the stream's ZEROED canvas, i.e. nothing.
+            let flc = self.mc2_flc_frame(e);
             out.push(LivePose {
                 slot: i as u16,
                 generation: self.g.slot_gen.0.get(i).copied().unwrap_or(0),
@@ -4787,6 +4805,7 @@ impl World {
                     .ball_owner_type_index(e)
                     .or_else(|| self.worm_owner_type_index(e)),
                 frame: e.frame88,
+                flc_frame: flc.and_then(|k| k),
                 action: e.tick70,
                 x: e.x as f32 / 256.0,
                 z: e.y as f32 / 256.0,
@@ -4835,7 +4854,7 @@ impl World {
                     self.owner_slot(owner)
                 },
                 blend: bits.blend,
-                map_only: bits.map_only,
+                map_only: bits.map_only || flc == Some(None),
                 flame_scale: flame_scale[i],
                 // THE VISSULUTH SIZE LAW. Retail's doomsday machine
                 // does not scale itself through any entity lane — it
@@ -4969,6 +4988,80 @@ impl World {
         };
         let want = base + size;
         (want != row).then_some(want)
+    }
+
+    /// [`LivePose::flc_frame`] — which image of a SEEKED FLC stream
+    /// retail has on screen. `None` = not a seeked stream (free-running
+    /// loop); `Some(None)` = the blank canvas of a rewind tick;
+    /// `Some(Some(k))` = stream image `k`.
+    ///
+    /// Retail keeps ONE decoder per animated sprite (`type_animations1`
+    /// — `FrameIndex_22`, `CountOfFrames_16`) and steps it at the top
+    /// of every game frame (`sub_715B0`, EF:45226, called from
+    /// `DrawAndEventsInGame_47560` before the entity walk): apply the
+    /// next delta, and wrap to the first once `FrameIndex > Count`.
+    /// Two handlers reposition it (`sub_71AB0`, the only two callers):
+    ///
+    /// - **The leviathan's strike** — `sub_2B860` pose 2 (EF:21289-303):
+    ///   `sub_71AB0(sprite, 0)` = `sub_723B0(a, 0)`, which ZEROES the
+    ///   canvas and rewinds to delta 1, then seeds the strike countdown
+    ///   `dword_0x10_16` with `CountOfFrames` (24). So the strike tick
+    ///   draws nothing, the next 22 draw the rise, the bite and the
+    ///   dive (images 1..=22), image 23 is empty water again and image
+    ///   24 (arm 6's tick) the ripple the stream rings back to — after
+    ///   which pose 3 hides the creature. One bump per strike.
+    /// - **The pyramid** — `sub_221F0` (EF:13614) for rows 343..=345:
+    ///   `sub_71AB0(sprite, 1)` runs the stream to its END (the canvas
+    ///   is the ring frame = the base image), and the state timer is
+    ///   overwritten with `CountOfFrames` (5 / 15 / 20), so the state
+    ///   shows the base image and then one image per tick, exactly
+    ///   once through: the death (345) collapses over images 1..=19
+    ///   and the corpse is hidden on the tick image 20 — the ring back
+    ///   to the standing boss — would have come up.
+    ///
+    /// The images are a function of the countdown the sim already
+    /// carries, so nothing is stored: a save, a replay seek or a
+    /// rewind lands on the right image. (Retail steps a stream only on
+    /// frames its sprite was DRAWN — bit 3 of the sprite header, set
+    /// by the rasteriser — so looking away mid-strike stalls it; the
+    /// port plays the strike the sim is running.)
+    ///
+    /// The port drew all four streams off the renderer's global
+    /// lockstep clock, so a strike or the death started at whatever
+    /// phase the clock held and wrapped mid-way (player-reported
+    /// 2026-09-30: the leviathan "starts mid-lunge, dives below, then
+    /// goes back up"; Vissuluth "keels over … more than once").
+    fn mc2_flc_frame(&self, e: &Ent) -> Option<Option<u8>> {
+        use crate::mc2::roster::{M28_BASE, M28_STRIKE_FRAMES};
+        if self.game != GameId::Mc2 || e.class64 != 5 {
+            return None;
+        }
+        match (e.model65, e.type86) {
+            (28, 291) if e.tick70 == M28_BASE + 2 => match e.f71 {
+                // Arms 4/5 (`m28_windup`): the countdown reads
+                // Count-1 after the strike tick's own decrement.
+                4 | 5 if (0..M28_STRIKE_FRAMES).contains(&e.f26) => {
+                    let k = (M28_STRIKE_FRAMES - 1 - e.f26) as u8;
+                    Some((k != 0).then_some(k))
+                }
+                // Arm 6's tick: the last delta, before pose 3 hides.
+                6 => Some(Some(M28_STRIKE_FRAMES as u8)),
+                _ => None,
+            },
+            (10, row) => {
+                let count = crate::mc2::doomsday::pyramid_anim_frames(row)?;
+                // The wind-up (343) and the recover (344) are set by a
+                // case that falls into its successor the same tick, so
+                // their countdown has already stepped once when the
+                // base image is up; the death (345) is set on the
+                // previous state's last tick and has not.
+                let first = if row == 345 { count } else { count - 1 };
+                (0..=first)
+                    .contains(&e.f26)
+                    .then(|| Some((first - e.f26) as u8))
+            }
+            _ => None,
+        }
     }
 
     /// [`LivePose::owner_type_index`] for a link of an MC2 mana worm
@@ -42539,6 +42632,135 @@ mod tests {
             (2, 4),
             "the predicted point is outside: chase on, @0x10 decremented"
         );
+    }
+
+    /// [`LivePose::flc_frame`] on the leviathan: a strike run through
+    /// the real swing machine poses the rewound stream's blank tick,
+    /// then images 1..=24 one per tick, then hides — ONE bump, the
+    /// timeline retail's own memory shows (mc2l24 slot 10,
+    /// t=28351..28376).
+    #[test]
+    fn the_leviathan_strike_plays_its_stream_once_from_the_rewind() {
+        const M28_BASE: u8 = 224;
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(60, 60);
+        let i = w.g.mc2_spawn_m28(x, y, 400).expect("m28 spawns");
+        {
+            let e = &mut w.g.ent[i];
+            e.tick70 = M28_BASE + 2; // the swing machine
+            e.f71 = 3; // arm 3: pose 2 + the first wind-up tick
+            // Pin the move (pose 2 takes the max speed): the fixture
+            // is dry land, and a leviathan that swims into a blocked
+            // tile kills itself.
+            e.f128 = 0;
+            e.f130 = 0;
+            e.f146 = PLAYER_TARGET;
+        }
+        let ctx = MobCtx {
+            px: x,
+            py: y.wrapping_add(9000), // far outside the melee ring
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        #[derive(Debug, PartialEq)]
+        enum Shown {
+            Hidden,
+            Blank,
+            Image(u8),
+            FreeRun,
+        }
+        let mut seen = Vec::new();
+        for _ in 0..27 {
+            w.g.m28_tick(i, &ctx);
+            let pose = w.live_poses().into_iter().find(|p| p.slot == i as u16);
+            seen.push(match pose {
+                None => Shown::Hidden,
+                Some(p) if p.map_only => Shown::Blank,
+                Some(p) => p.flc_frame.map_or(Shown::FreeRun, Shown::Image),
+            });
+        }
+        let mut want = vec![Shown::Blank];
+        want.extend((1..=24).map(Shown::Image));
+        want.extend([Shown::Hidden, Shown::Hidden]);
+        assert_eq!(seen, want);
+        // Swimming between strikes (pose 1, row 292) is no seeked
+        // stream at all.
+        w.g.ent[i].tick70 = M28_BASE + 1;
+        w.g.ent[i].flags &= !1;
+        w.g.mc2_set_sprite(i, 292);
+        let p = w
+            .live_poses()
+            .into_iter()
+            .find(|p| p.slot == i as u16)
+            .expect("posed");
+        assert_eq!((p.flc_frame, p.map_only), (None, false));
+    }
+
+    /// [`LivePose::flc_frame`] on the pyramid: `sub_221F0` runs the
+    /// stream to its end and sizes the state to one cycle, so the
+    /// image is the state countdown's complement — base first, then
+    /// one per tick (retail memory: mc2l24 slot 5 t=44543..44547 /
+    /// 44556..44570, mc2l24-crazy slot 6 t=73760..73779).
+    #[test]
+    fn the_pyramid_streams_play_once_off_the_state_countdown() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(60, 60);
+        let i = w.g.new_event().expect("pyramid");
+        {
+            let e = &mut w.g.ent[i];
+            e.class64 = 5;
+            e.model65 = 10;
+            e.tick70 = 80;
+            e.max_life = 300_000;
+            e.act_life = 300_000;
+        }
+        w.g.link(i, x, y, 400);
+        let shown = |w: &World| {
+            w.live_poses()
+                .into_iter()
+                .find(|p| p.slot == i as u16)
+                .expect("the pyramid poses")
+                .flc_frame
+        };
+        // The wind-up (343) and the recover (344): the setting case
+        // falls into its successor, which steps the countdown once in
+        // the same tick.
+        for (row, count) in [(343u16, 5i16), (344, 15)] {
+            w.g.mc2_pyramid_sprite(i, row);
+            assert_eq!(w.g.ent[i].f26, count, "sized to the stream");
+            let mut seen = Vec::new();
+            for _ in 0..count {
+                w.g.ent[i].f26 -= 1;
+                seen.push(shown(&w));
+            }
+            let want: Vec<Option<u8>> = (0..count as u8).map(Some).collect();
+            assert_eq!(seen, want, "row {row}");
+        }
+        // The death (345) is set on the previous state's last tick:
+        // the base that tick, then images 1..=19; the tick the ring
+        // frame would come up the corpse is already hidden.
+        w.g.mc2_pyramid_sprite(i, 345);
+        let mut seen = vec![shown(&w)];
+        for _ in 0..19 {
+            w.g.ent[i].f26 -= 1;
+            seen.push(shown(&w));
+        }
+        let want: Vec<Option<u8>> = (0..=19u8).map(Some).collect();
+        assert_eq!(seen, want, "row 345");
+        // Any other row, or a countdown that is not the stream's, is
+        // a free-running loop.
+        w.g.ent[i].f26 = 60;
+        assert_eq!(shown(&w), None, "state 0xF's 60-tick hold");
+        w.g.mc2_pyramid_sprite(i, 341);
+        w.g.ent[i].f26 = 3;
+        assert_eq!(shown(&w), None, "row 341 is not animated");
     }
 
     /// ⭐⭐⭐ A LAW ON ONE CALL PATH IS NOT LANDED — `sub_21F60` HAS

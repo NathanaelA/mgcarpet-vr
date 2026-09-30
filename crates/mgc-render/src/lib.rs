@@ -1017,6 +1017,21 @@ struct Globals {
     lights: [[f32; 4]; MAX_LIGHTS],
 }
 
+/// Which baked frame of an animated (FLC) sprite entry is on screen:
+/// `frames` = the entry's frame count (base + one per delta), `seek` =
+/// an explicit stream image ([`Billboard::flc_frame`]), `turn` = the
+/// animation clock. A free-running stream loops frames `1..=Count`
+/// and never returns to frame 0 — see the call site.
+fn flc_image(frames: usize, seek: Option<u8>, turn: usize) -> usize {
+    let Some(count) = frames.checked_sub(1).filter(|c| *c > 0) else {
+        return 0;
+    };
+    match seek {
+        Some(k) => (k as usize).min(count),
+        None => 1 + turn % count,
+    }
+}
+
 /// Uniform-array cap for dynamic lights (retail keeps a 50-slot
 /// cell-grid registry; our per-pixel pass rarely needs more than a
 /// handful on screen).
@@ -1044,6 +1059,11 @@ pub struct Billboard {
     /// animation draw types the original draws sprite `base + frame`.
     /// 0 for static/rotation-view entities.
     pub frame: u8,
+    /// An explicit image of the sprite's FLC stream (0 = the base
+    /// image, `k` = after the k-th delta), for the few one-shot
+    /// streams the sim positions itself (`LivePose::flc_frame`).
+    /// `None` = the free-running loop off the animation clock.
+    pub flc_frame: Option<u8>,
     /// World height of the quad (engine `var_8 / 256`).
     pub world_h: f32,
     /// RETAIL CO-TILE PAINT ORDER, `(0, 1)`: this sprite's place in
@@ -4926,10 +4946,17 @@ impl Renderer {
                 continue; // known-corrupt source entry
             }
             // Animated entries (flags bit 0, the TMAPS FLC streams) step
-            // one frame per turn in a forward loop, all in lockstep —
-            // the original's per-frame driver (remc1 sub_590D0_595E0).
+            // one delta per turn in a forward loop, all in lockstep —
+            // the original's per-frame driver (remc1 sub_590D0_595E0 /
+            // remc2 sub_715B0 → sub_72350). Baked frame 0 is the base
+            // image and frame k the canvas after the k-th delta; the
+            // LAST delta is the stream's ring back to the base, and
+            // retail wraps `FrameIndex > CountOfFrames` straight to
+            // delta 1 — so the loop is frames 1..=Count, never 0 (the
+            // base is only on screen before a stream's first step).
+            // Cycling all Count+1 held the base for two turns a loop.
             let fi = if entry.flags & 1 != 0 {
-                self.anim_turn as usize % entry.frames.len()
+                flc_image(entry.frames.len(), b.flc_frame, self.anim_turn as usize)
             } else {
                 0
             };
@@ -6423,6 +6450,25 @@ fn camera_matrix(cam: &CameraView, aspect: f32) -> [[f32; 4]; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A free-running FLC stream loops its DELTAS: a 25-frame bake
+    /// (base + 24 deltas, the last ringing back to the base) shows
+    /// frames 1..=24 and wraps straight to 1 — retail's `FrameIndex >
+    /// CountOfFrames` reset (remc2 `sub_72350`) — and a sim-seeked
+    /// stream shows exactly the image it names.
+    #[test]
+    fn flc_streams_loop_their_deltas_and_honour_a_seek() {
+        let run: Vec<usize> = (0..50).map(|t| flc_image(25, None, t)).collect();
+        let want: Vec<usize> = (0..50).map(|t| 1 + t % 24).collect();
+        assert_eq!(run, want);
+        assert!(!run.contains(&0), "the base is never part of the loop");
+        assert_eq!(flc_image(25, Some(0), 7), 0, "a seek can show the base");
+        assert_eq!(flc_image(25, Some(24), 7), 24);
+        assert_eq!(flc_image(25, Some(200), 7), 24, "clamped to the stream");
+        // Frame-less and single-frame entries have nothing to step.
+        assert_eq!(flc_image(0, None, 3), 0);
+        assert_eq!(flc_image(1, Some(5), 3), 0);
+    }
 
     /// The retail proximity-concealment ramp: full inside FogStart
     /// (15 tiles), gone at FogEnd (19 tiles), retail's linear-in-d²
