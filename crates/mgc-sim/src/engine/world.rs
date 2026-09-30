@@ -42736,6 +42736,48 @@ mod tests {
         assert_eq!((p.flc_frame, p.map_only), (None, false));
     }
 
+    /// The charmed-corpse law end to end (`mc2::mobs::
+    /// no_mc2_ally_dead_clock`): an allied wyvern following its caster
+    /// takes a killing blow and, through the clock, the expiry, the
+    /// kind-10 resume and the attack head, reaches its death state
+    /// within a handful of ticks — never moving. The pre-fix head left
+    /// it charmed in the controlled slot for good.
+    #[test]
+    fn a_charmed_wyvern_killed_while_following_reaches_its_death_state() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(40, 40);
+        let i = w.g.mc2_spawn_m16(x, y, 400).expect("m16 spawns");
+        {
+            let e = &mut w.g.ent[i];
+            e.tick70 = 16 * 8 + 7;
+            e.f146 = 0;
+            e.site_z = 14;
+            e.set_lease(600);
+        }
+        w.g.mc2_allied.0.insert(i as u16, PLAYER_TARGET);
+        let pose = PlayerPose::from_tiles(40.0, 400.0 / 256.0, 40.0, 0.0, 0.0, 0.0);
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(w.g.ent[i].tick70, 16 * 8 + 7, "following, charmed");
+        w.g.ent[i].mail[0] = (70_000, PLAYER_TARGET);
+        let (x0, y0) = (w.g.ent[i].x, w.g.ent[i].y);
+        let mut reached = None;
+        for t in 1..=8 {
+            w.tick(pose, PlayerCommand::default());
+            let e = &w.g.ent[i];
+            assert_eq!((e.x, e.y), (x0, y0), "a corpse does not move (tick {t})");
+            if e.tick70 == 16 * 8 + 4 || e.tick70 == 16 * 8 + 5 || e.flags & 0x400 != 0 {
+                reached = Some(t);
+                break;
+            }
+        }
+        assert!(
+            reached.is_some_and(|t| t <= 5),
+            "the death state within five ticks: {reached:?}, action {}, StageVar2 {}",
+            w.g.ent[i].tick70,
+            w.g.ent[i].site_z
+        );
+    }
+
     /// A leviathan staged on arm 3 of its swing machine (the strike
     /// tick), speed pinned so it stays put, and a ctx with the human
     /// at `(dh, dz)` from it. Returns `(world, slot, ctx)`.

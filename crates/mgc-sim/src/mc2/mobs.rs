@@ -207,6 +207,38 @@ pub(crate) fn no_mc2_ally_seat_recycle() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALLY_SEAT_RECYCLE").is_some())
 }
 
+/// A/B toggle for the CHARMED CORPSE law (2026-09-30): set
+/// `MGC_NO_MC2_ALLY_DEAD_CLOCK` to restore the pre-fix head of
+/// [`Gen::mc2_alliance_clock`], which returned before the charm clock
+/// for any record with `life < 0`.
+///
+/// ⭐⭐ **A CHARMED CREATURE THAT DIES IN THE CONTROLLED SLOT DIES
+/// THROUGH THE CLOCK.** `sub_1E9C0` opens with the decrement,
+/// unconditionally (EF:10873-77: `v2 = word_0x2E_46 - 1; … if (v2 <=
+/// 0) goto LABEL_66`), and the follow core `sub_1E700` it then runs
+/// answers a dead record by stamping `word_0x2E_46 = 1` (EF:10864-66,
+/// [`Gen::mc2_summon_core`]'s dead arm) and NOT returning — so the
+/// next head reads 0, takes the expiry leg (StageVar2 10, lock 0,
+/// parent 0), the kind-10 resume raises the record to `8m+2`, and
+/// THAT state's inbox head finally sends it to `8m+4`. Three ticks
+/// from the killing blow to the death state, with the corpse never
+/// moving (the dead arm skips the move) — which is the only way a
+/// creature in `8m+7` can die at all: no state-7 wrapper tests
+/// `life_0x8` itself.
+///
+/// The port's head returned on `life < 0` BEFORE the decrement (a
+/// seat-bookkeeping arm, see [`no_mc2_ally_seat_recycle`]), so the
+/// stamped 1 was never counted down and the corpse stayed charmed,
+/// alive to every scan, in `8m+7` forever — flapping in place at 0
+/// life. PLAYER-REPORTED 2026-09-30: allied wyverns hit by meteors
+/// "stopped in place, no movement, just flapping their wings" until
+/// the alliance lapsed. Unwitnessed in the corpus: every recorded
+/// charmed death happens in an ATTACK state, whose own head kills.
+pub(crate) fn no_mc2_ally_dead_clock() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_ALLY_DEAD_CLOCK").is_some())
+}
+
 /// `MGC_NO_MC2_AREA_ID_UNFUSE=1` restores the pre-dig
 /// [`crate::engine::features::Gen::area_write`], whose owner-immunity
 /// test read the candidate's RAW `id24` — a FUSION of retail's `@0x1A`
@@ -6135,7 +6167,16 @@ impl Gen {
     /// returns controlled creatures to `8m+7`; our model machines
     /// drop to their wander phases 0/1 instead).
     fn mc2_alliance_clock(&mut self, i: usize, ctx: &MobCtx) {
-        if self.ent[i].flags & 0x400 != 0 || self.ent[i].act_life < 0 {
+        let dead = self.ent[i].act_life < 0;
+        // A corpse counts its clock in the CONTROLLED slot only — the
+        // one state `sub_1E9C0` is the body of. Elsewhere the model's
+        // own head has already sent it to `8m+4`, and retail's record
+        // keeps StageVar2 14 and its parent word until the reap
+        // (mc2l17 slot 8, `owner,sv2` from t=24430 — the sweep row
+        // that moved when this ran in every state).
+        let dead_elsewhere = dead && self.ent[i].tick70 & 7 != 7;
+        if self.ent[i].flags & 0x400 != 0 || (dead && (dead_elsewhere || no_mc2_ally_dead_clock()))
+        {
             // ⚠ NO SEAT DROP HERE — retail clears `parentId_0x28_40`
             // only on the charm's EXPIRY leg (EF:11019-22), never on
             // death; the seat dies with the RECORD, in
@@ -6144,6 +6185,11 @@ impl Gen {
                 self.mc2_allied.0.remove(&(i as u16));
             }
             return;
+        }
+        // A dead record still counts its clock — that IS how it dies
+        // (see [`no_mc2_ally_dead_clock`]); only the reaped return above.
+        if dead && no_mc2_ally_seat_recycle() {
+            self.mc2_allied.0.remove(&(i as u16));
         }
         // ⭐ `sub_1E9C0` IS THE STATE-7 WRAPPER'S BODY. In the attack
         // state the clock belongs to `sub_1ED30`
@@ -6209,7 +6255,9 @@ impl Gen {
         // separately measurable law — it only differs for a record
         // that enters phase 0/1 DURING this walk, which retail would
         // not snap until the next frame. 🏦 BANKED.
-        if self.ent[i].tick70 & 7 < 2 {
+        // (A corpse is off the tick-top chains the real snap walks, so
+        // it is never snapped away from the head that will kill it.)
+        if self.ent[i].tick70 & 7 < 2 && !dead {
             self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(7);
         }
     }
@@ -7595,6 +7643,43 @@ mod tests {
                 "only the exact half-turn moves ({cur} → {tgt})"
             );
         }
+    }
+
+    /// The charmed-corpse law ([`super::no_mc2_ally_dead_clock`]): a
+    /// wyvern following its caster in the controlled slot takes a
+    /// killing blow. Retail: the follow core stamps the clock to 1, the
+    /// next head expires the charm, the resume raises it to the attack
+    /// state, whose head sends it to the death state — three ticks,
+    /// never moving. The pre-fix head froze it charmed at that life
+    /// for good.
+    #[test]
+    fn a_charmed_wyvern_killed_while_following_dies_through_the_clock() {
+        let mut g = q22_gen();
+        let i = g
+            .mc2_spawn_m16(40 * 256, 40 * 256, 400)
+            .expect("a pool slot");
+        g.ent[i].tick70 = 16 * 8 + 7;
+        g.ent[i].f146 = 0;
+        g.ent[i].site_z = 14;
+        g.ent[i].set_lease(600);
+        g.mc2_allied.0.insert(i as u16, PLAYER_TARGET);
+        let ctx = q22_ctx();
+        g.mc2_creature_tick(i, &ctx);
+        assert_eq!(g.ent[i].tick70, 16 * 8 + 7, "following, charmed");
+        // A meteor's worth of mail: more than its whole 60,000 life.
+        g.ent[i].mail[0] = (70_000, PLAYER_TARGET);
+        let (x0, y0) = (g.ent[i].x, g.ent[i].y);
+        g.mc2_creature_tick(i, &ctx);
+        assert!(g.ent[i].act_life < 0, "the inbox head applied the blow");
+        assert_eq!(g.ent[i].lease(), 1, "sub_1E700's dead arm stamps the clock to 1");
+        assert_eq!((g.ent[i].x, g.ent[i].y), (x0, y0), "the dead arm does not move");
+        g.mc2_creature_tick(i, &ctx);
+        assert_eq!(g.ent[i].site_z, 10, "the head counts to 0 and expires the charm");
+        assert!(!g.mc2_allied.0.contains_key(&(i as u16)));
+        assert_eq!((g.ent[i].x, g.ent[i].y), (x0, y0), "it never moved");
+        // The kind-10 resume and the death state are the world seam's
+        // (`World::mc2_held_tick`) — see world.rs
+        // `a_charmed_wyvern_killed_while_following_reaches_its_death_state`.
     }
 
     /// ⭐⭐⭐ THE ALLIED WYVERN'S BRAIN DEATH (`recordings/mc2l17.mgcr`,
