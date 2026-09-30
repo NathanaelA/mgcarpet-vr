@@ -305,7 +305,7 @@ impl Gen {
     /// (EF:26800; the human = team 0, rivals by slot; the sphere art
     /// families are authored in Transform order,
     /// crate::mc2::COLOR_ART).
-    fn mc2_ball_color(&self, target: u16) -> u16 {
+    pub(crate) fn mc2_ball_color(&self, target: u16) -> u16 {
         if target == PLAYER_TARGET {
             return 105;
         }
@@ -1073,7 +1073,11 @@ impl Gen {
     /// call; `Some(None)` = a call whose residue is not modelled) —
     /// see `no_mc2_m22_stale_probe`.
     fn m22_relay(&mut self, i: usize, ctx: &MobCtx) -> Option<Option<u32>> {
-        if self.ent[i].f58 == 0 {
+        // Patch option `mc2_worm_possess_map_wide`: an asleep segment
+        // still relays the ch1 tag (never the damage) — see
+        // [`Gen::m22_dmg`].
+        let awake = self.ent[i].f58 != 0;
+        if !awake && !(ctx.patches.mc2_worm_possess_map_wide && !ctx.strict) {
             return None;
         }
         let head = self.ent[i].f146 as usize;
@@ -1085,7 +1089,7 @@ impl Gen {
             return None; // relay only acts in 0xB0 / 0xB2 (EF:17460)
         }
         let mut residue = None;
-        if self.ent[i].mail[0].1 != 0 {
+        if awake && self.ent[i].mail[0].1 != 0 {
             // `26d97 e8 → sub_581E0`, two args: its return address.
             residue = Some(Some(0x0020_7D9C));
             let src = self.ent[i].mail[0].1;
@@ -1432,26 +1436,33 @@ impl Gen {
     /// life<0 → chain-kill transition. The head's own life NEVER
     /// drops here — melee only enrages.
     fn m22_dmg(&mut self, i: usize, ctx: &MobCtx) {
-        if self.ent[i].f58 != 0 {
-            if self.ent[i].mail[0].1 != 0 {
-                let (amt, src) = self.ent[i].mail[0];
-                let mut v = ((amt >> 2) as u16 as i16).wrapping_add(self.ent[i].f126);
-                if v < self.ent[i].f130 {
-                    v = self.ent[i].f130;
-                }
-                if v > self.ent[i].f128 {
-                    v = self.ent[i].f128;
-                }
-                self.ent[i].f126 = v;
-                self.ent[i].mail[0].1 = 0;
-                if let Some((ax, ay, _)) = self.mc2_raw_pos(src, ctx) {
-                    // tan2(attacker → self) = turn AWAY (EF:17568).
-                    let (ex, ey) = (self.ent[i].x, self.ent[i].y);
-                    let yaw = Self::angle_between(ax, ay, ex, ey);
-                    self.ent[i].f30 = yaw;
-                    self.ent[i].f34 = yaw;
-                }
+        // Retail gates BOTH mailboxes on the awake counter, so a
+        // possess that lands outside the 24-tile radius parks until
+        // the human walks in (mc2l18 worm 596: tag parked t=9333,
+        // consumed t=9466 on the wake). Patch option
+        // `mc2_worm_possess_map_wide` reads the ch1 TAG regardless;
+        // the damage steer stays awake-gated.
+        let awake = self.ent[i].f58 != 0;
+        if awake && self.ent[i].mail[0].1 != 0 {
+            let (amt, src) = self.ent[i].mail[0];
+            let mut v = ((amt >> 2) as u16 as i16).wrapping_add(self.ent[i].f126);
+            if v < self.ent[i].f130 {
+                v = self.ent[i].f130;
             }
+            if v > self.ent[i].f128 {
+                v = self.ent[i].f128;
+            }
+            self.ent[i].f126 = v;
+            self.ent[i].mail[0].1 = 0;
+            if let Some((ax, ay, _)) = self.mc2_raw_pos(src, ctx) {
+                // tan2(attacker → self) = turn AWAY (EF:17568).
+                let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+                let yaw = Self::angle_between(ax, ay, ex, ey);
+                self.ent[i].f30 = yaw;
+                self.ent[i].f34 = yaw;
+            }
+        }
+        if awake || (ctx.patches.mc2_worm_possess_map_wide && !ctx.strict) {
             let tag = self.ent[i].mail[1].1;
             if tag != 0 {
                 if tag != self.ent[i].f144 {

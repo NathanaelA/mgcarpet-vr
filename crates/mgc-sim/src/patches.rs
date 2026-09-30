@@ -40,6 +40,23 @@ pub struct WorldPatches {
     /// separate option: a settled ball that never wakes still wants
     /// its owner's colour.)
     pub map_wide_ball_rolling: bool,
+    /// A possess that lands on an MC2 mana worm (5,22) takes effect
+    /// at once, map-wide — the SIM half of the app's
+    /// `ball_owner_recolor` option (the draw half is
+    /// `LivePose::owner_type_index`). Retail's ch1 tag intake is
+    /// awake-gated (`byte_0x39_57`) on both doors — the head's own
+    /// (`sub_26F10`, EF:17542; `Gen::m22_dmg`) and the segment relay
+    /// (`sub_26D20`, EF:17447; `Gen::m22_relay`) — so
+    /// a tag that lands outside the 24-tile awake radius PARKS in the
+    /// mailbox and the worm only changes owner, runs its recolour
+    /// sweep and turns for the castle when the human walks into wake
+    /// range. Retail witness `recordings/mc2l18.mgcr` worm 596: tag
+    /// 529 parked at t=9333, 34 tiles out, and consumed at t=9466 the
+    /// tick the human crosses 24 tiles ("the worm only changes colour
+    /// when approached", player-reported 2026-09-30). Patched: the tag
+    /// is read asleep or awake. The DAMAGE intake stays awake-gated
+    /// (the `mc1_fix_dragon_tail` precedent).
+    pub mc2_worm_possess_map_wide: bool,
     /// A possessed dwelling keeps its footprint extents under the
     /// owner-flag sprite. Retail's sprite stamp (:30808) clobbers
     /// +78..+84 with the tiny flag extent, collapsing villager-emit /
@@ -466,6 +483,7 @@ impl WorldPatches {
         jar_ground_snap: false,
         ball_ground_track: false,
         map_wide_ball_rolling: false,
+        mc2_worm_possess_map_wide: false,
         possessed_footprint: false,
         mc2_downgrade_overflow: false,
         castle_latch_bug: false,
@@ -500,6 +518,7 @@ impl WorldPatches {
         jar_ground_snap: true,
         ball_ground_track: true,
         map_wide_ball_rolling: false,
+        mc2_worm_possess_map_wide: false,
         possessed_footprint: true,
         mc2_downgrade_overflow: true,
         castle_latch_bug: true,

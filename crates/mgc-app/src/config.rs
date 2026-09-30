@@ -1016,6 +1016,18 @@ pub struct GameplayPatches {
     /// you approach — the minimap is right at once. Presentation-only,
     /// hash-silent (the sim's sprite row is graded by conformance and
     /// stays retail's under both arms).
+    ///
+    /// The MC2 mana worm rides the same option (player-ruled
+    /// 2026-09-30: one toggle for every "owner colour waits for you
+    /// to approach" case). Its draw half is the same override — a
+    /// rival's possess writes the worm's owner directly and recolours
+    /// nothing. Its other half is SIM: retail parks a possess that
+    /// lands on an asleep worm until you come within 24 tiles, so the
+    /// worm only turns (and only heads for the castle) when
+    /// approached; patched, the tag is read at once
+    /// (`WorldPatches::mc2_worm_possess_map_wide`). That half pins
+    /// with the rest of the sim under `--record` / `--replay` — see
+    /// [`GameplayPatches::owner_recolor_sim_pin`].
     pub ball_owner_recolor: PatchArm,
     /// A possessed dwelling keeps its true footprint. Retail's
     /// owner-flag stamp shrinks it to the flag sprite, so villagers
@@ -1198,6 +1210,20 @@ pub struct GameplayPatches {
     /// (renamed from `mc1_volcano_register_revalidate` when it took
     /// MC2 on).
     pub volcano_register_revalidate: PatchArm,
+    /// The arm the SIM half of `ball_owner_recolor` runs, when a
+    /// take's policy pins it apart from the player's own (drawing)
+    /// choice: `None` = follow the option (native play), `Some` =
+    /// the pinned policy's arm, stamped by
+    /// [`GameplayPatches::with_presentation_of`]. Never in the file.
+    #[serde(skip)]
+    pub owner_recolor_sim_pin: Option<PatchArm>,
+}
+
+impl GameplayPatches {
+    /// The arm `WorldPatches::mc2_worm_possess_map_wide` takes.
+    pub fn owner_recolor_sim(&self) -> PatchArm {
+        self.owner_recolor_sim_pin.unwrap_or(self.ball_owner_recolor)
+    }
 }
 
 impl Default for GameplayPatches {
@@ -1228,6 +1254,7 @@ impl Default for GameplayPatches {
             mc1_building_pad_saturate: PatchArm::Patched,
             mc1_segment_chain_revalidate: PatchArm::Patched,
             volcano_register_revalidate: PatchArm::Patched,
+            owner_recolor_sim_pin: None,
         }
     }
 }
@@ -1262,6 +1289,7 @@ impl GameplayPatches {
             mc1_building_pad_saturate: PatchArm::Retail,
             mc1_segment_chain_revalidate: PatchArm::Retail,
             volcano_register_revalidate: PatchArm::Retail,
+            owner_recolor_sim_pin: None,
         }
     }
 
@@ -1275,8 +1303,13 @@ impl GameplayPatches {
     /// patches are broken" (player report 2026-09-10: a mc2l22 replay
     /// showed distant spheres in the old owner's colour and dwellers
     /// visible map-wide with both toggles plainly on).
+    ///
+    /// `ball_owner_recolor` also carries one SIM arm (the MC2 worm's
+    /// map-wide possess intake); that half stays on the pinned
+    /// policy's own arm through `owner_recolor_sim_pin`.
     pub fn with_presentation_of(self, user: &Self) -> Self {
         Self {
+            owner_recolor_sim_pin: Some(self.owner_recolor_sim()),
             ball_owner_recolor: user.ball_owner_recolor,
             mc2_dweller_invisibility: user.mc2_dweller_invisibility,
             win2_movie_score: user.win2_movie_score,

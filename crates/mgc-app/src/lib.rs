@@ -10507,6 +10507,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         jar_ground_snap: p.jar_ground_snap.on(),
         ball_ground_track: p.ball_ground_track.on(),
         map_wide_ball_rolling: p.map_wide_ball_rolling.on(),
+        mc2_worm_possess_map_wide: p.owner_recolor_sim().on(),
         possessed_footprint: p.possessed_footprint.on(),
         mc2_downgrade_overflow: p.mc2_downgrade_overflow.on(),
         castle_latch_bug: p.castle_latch_bug.on(),

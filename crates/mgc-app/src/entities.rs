@@ -306,7 +306,9 @@ pub fn billboards_from_poses(
         // possessing yours) keeps the previous owner's colour in the
         // viewport until you approach it while the minimap is already
         // right — see `LivePose::owner_type_index`. The sim's own
-        // (graded, hashed) row is untouched either way.
+        // (graded, hashed) row is untouched either way. Every link of
+        // an MC2 mana worm (5,22) rides the same override: a rival's
+        // direct claim re-owns the worm without its recolour sweep.
         let type_index = if ball_owner_recolor {
             p.owner_type_index.unwrap_or(p.type_index)
         } else {

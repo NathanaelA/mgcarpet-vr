@@ -2126,20 +2126,23 @@ pub fn registry() -> Vec<Spec> {
                 on: c.gameplay.patches.ball_owner_recolor.on(),
                 faithful: false,
             },
-            desc: "Mana balls show their current owner's colour everywhere. \
-                   Retail recolours a ball only when it moves, and a settled \
-                   ball only moves within 24 tiles of you, so mana that \
-                   changes hands out of range - a possessed corpse's spheres, \
-                   a rival possessing yours - keeps the old colour until you \
-                   approach it (the minimap is right at once). Drawing only; \
-                   the sim is untouched.",
+            desc: "Mana balls and MC2 mana worms show their current owner's \
+                   colour everywhere. Retail recolours a ball only when it \
+                   moves, and a settled ball only moves within 24 tiles of \
+                   you, so mana that changes hands out of range - a possessed \
+                   corpse's spheres, a rival possessing yours - keeps the old \
+                   colour until you approach it (the minimap is right at \
+                   once). Drawing only for balls. A worm possessed out of \
+                   range does not even change owner in retail until you \
+                   approach; patched, the possess lands at once (a sim \
+                   change, pinned to retail while recording or replaying).",
             ctl: Ctl::Toggle {
                 set: |c, v| {
                     c.gameplay.patches.ball_owner_recolor = crate::config::PatchArm::from_on(v)
                 },
                 descs: [
-                    "Far-off balls keep the previous owner's colour, as retail draws them.",
-                    "Every ball is drawn in its owner's colour (default).",
+                    "Far-off balls and worms keep the previous owner's colour, as retail.",
+                    "Every ball and mana worm wears its owner's colour (default).",
                 ],
             },
         },

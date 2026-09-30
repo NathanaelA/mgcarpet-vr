@@ -1412,6 +1412,16 @@ pub struct LivePose {
     /// (presentation-only) draws it instead of `type_index`. Never
     /// set for the (10,57) fool's sphere (model 57 / action 62):
     /// wearing the neutral family is its whole design.
+    ///
+    /// Also set for every link of an MC2 mana worm (5,22), which
+    /// wears the same sphere families (`sub_27590`'s colorize). The
+    /// worm recolours only through its own tag intake, and the
+    /// rival's possess writes the owner DIRECTLY (`sub_135C0`
+    /// EF:5849-50) — no sweep, and the bolt that follows finds the
+    /// owner already set and recolours nothing — so a rival-claimed
+    /// worm flies for its new owner's castle in the OLD owner's
+    /// colours (mc2l8: 8,505 of 15,671 worm-head ticks; see
+    /// [`World::worm_owner_type_index`]).
     pub owner_type_index: Option<u16>,
     /// Animation frame (entity offset 88) for the 2..=16 draw types.
     pub frame: u8,
@@ -4773,7 +4783,9 @@ impl World {
                 class: e.class64,
                 model: e.model65,
                 type_index: e.type86,
-                owner_type_index: self.ball_owner_type_index(e),
+                owner_type_index: self
+                    .ball_owner_type_index(e)
+                    .or_else(|| self.worm_owner_type_index(e)),
                 frame: e.frame88,
                 action: e.tick70,
                 x: e.x as f32 / 256.0,
@@ -4956,6 +4968,48 @@ impl World {
             None => 52,
         };
         let want = base + size;
+        (want != row).then_some(want)
+    }
+
+    /// [`LivePose::owner_type_index`] for a link of an MC2 mana worm
+    /// (5,22): the row `sub_27590`'s colorize WOULD stamp for the
+    /// HEAD's current owner, keeping the ramp step the link's row
+    /// already encodes (the `D400C` step is a function of tail length
+    /// and ring offset, and every resize re-colorizes, so it is never
+    /// stale). Segments (state 0xB4) resolve their head through
+    /// `word_0x96_150`. `None` while the head's own recolour sweep
+    /// (state 0xB1) is in flight — that travelling wave is retail's
+    /// designed claim effect and finishes inside eight ticks — and
+    /// when the row already agrees.
+    ///
+    /// Retail corpus, owner family vs sprite family outside the
+    /// sweep: mc2l8 8,505 head ticks, mc2l18 39,518, mc2l16 1,033 —
+    /// e.g. mc2l8 worm 5, t=9736: owner 139 → 132 (Possess-state
+    /// direct write, state 178 unchanged), rows still 129..136 until
+    /// 148's relayed tag sweeps it at t=9746.
+    fn worm_owner_type_index(&self, e: &Ent) -> Option<u16> {
+        use crate::mc2::multipart::M22_BASE;
+        if self.game != GameId::Mc2 || e.class64 != 5 || e.model65 != 22 {
+            return None;
+        }
+        let head = if e.tick70 == M22_BASE + 4 {
+            self.g.ent.get(e.f146 as usize)?
+        } else {
+            e
+        };
+        if head.class64 != 5
+            || head.model65 != 22
+            || matches!(head.tick70.wrapping_sub(M22_BASE), 1 | 4)
+        {
+            return None;
+        }
+        let row = e.type86;
+        let step = match row {
+            52..=59 => row - 52,
+            105..=168 => (row - 105) % 8,
+            _ => return None,
+        };
+        let want = self.g.mc2_ball_color(head.f144) + step;
         (want != row).then_some(want)
     }
 
@@ -38651,6 +38705,130 @@ mod tests {
         }
         assert_eq!(w.g.ent[b].type86, own, "retail: approaching recolours it");
         assert_eq!(pose(&w).owner_type_index, None);
+    }
+
+    /// An asleep MC2 mana worm, far outside the awake radius, with
+    /// its wake stagger run out. Returns the head slot.
+    fn far_asleep_worm(w: &mut World) -> usize {
+        let (x, y) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
+        let head = w.g.mc2_spawn_m22(x, y, 0, 5).expect("worm");
+        for _ in 0..300 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[head].f58, 0, "the distant worm is asleep");
+        assert_eq!(w.g.ent[head].tick70, 176, "idle");
+        assert!((52..=59).contains(&w.g.ent[head].type86), "wild family");
+        head
+    }
+
+    /// The draw half of `ball_owner_recolor` on the MC2 mana worm: an
+    /// owner written with no sweep (the rival Possess state's direct
+    /// claim, `sub_135C0` EF:5849-50) leaves every link's row on the
+    /// old family in the sim, and the pose reports the owner's family
+    /// for the head AND the segments, ramp step kept.
+    #[test]
+    fn ball_owner_recolor_mc2_worm_direct_claim() {
+        let mut w = mc2_flat_world();
+        let head = far_asleep_worm(&mut w);
+        let mut chain = vec![head];
+        let mut j = w.g.ent[head].f54 as usize;
+        while j != 0 {
+            chain.push(j);
+            j = w.g.ent[j].f54 as usize;
+        }
+        assert_eq!(chain.len(), 5, "head + two rings");
+        let rows: Vec<u16> = chain.iter().map(|&s| w.g.ent[s].type86).collect();
+        let overrides = |w: &World| -> Vec<Option<u16>> {
+            let poses = w.live_poses();
+            chain
+                .iter()
+                .map(|&s| {
+                    poses
+                        .iter()
+                        .find(|p| p.slot == s as u16)
+                        .expect("every link poses")
+                        .owner_type_index
+                })
+                .collect()
+        };
+        assert!(overrides(&w).iter().all(Option::is_none), "rows agree");
+        w.g.ent[head].f144 = PLAYER_TARGET;
+        w.tick(away(), PlayerCommand::default());
+        let now: Vec<u16> = chain.iter().map(|&s| w.g.ent[s].type86).collect();
+        assert_eq!(now, rows, "retail: a direct claim recolours nothing");
+        let want: Vec<Option<u16>> = rows.iter().map(|r| Some(105 + (r - 52))).collect();
+        assert_eq!(overrides(&w), want, "the patched viewport wears the owner");
+        // Released again: the override goes with the owner.
+        w.g.ent[head].f144 = 0;
+        assert!(overrides(&w).iter().all(Option::is_none));
+    }
+
+    /// The sim half (`WorldPatches::mc2_worm_possess_map_wide`): a
+    /// possess tag landing on an ASLEEP worm parks in the mailbox
+    /// under retail law (mc2l18 worm 596, t=9333..9466) and is read
+    /// at once under the patch — owner, sweep and all — on the head's
+    /// own door and on the segment relay. Strict-retail keeps the
+    /// gate.
+    #[test]
+    fn worm_possess_lands_map_wide_under_the_patch() {
+        let patched = crate::patches::WorldPatches {
+            mc2_worm_possess_map_wide: true,
+            ..crate::patches::WorldPatches::RETAIL
+        };
+        for (on, strict, via_segment) in [
+            (false, false, false),
+            (false, false, true),
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            let mut w = mc2_flat_world();
+            if on {
+                w.set_patches(patched);
+            }
+            let head = far_asleep_worm(&mut w);
+            w.strict_retail = strict;
+            let door = if via_segment {
+                let seg = w.g.ent[head].f54 as usize;
+                // Retail leaves a once-woken worm's segments on a
+                // stale nonzero counter; zero it so the relay's own
+                // gate is what is under test.
+                w.g.ent[seg].f58 = 0;
+                seg
+            } else {
+                head
+            };
+            w.g.ent[door].mail[1] = (0, PLAYER_TARGET);
+            w.tick(away(), PlayerCommand::default());
+            let tag = format!("on={on} strict={strict} via_segment={via_segment}");
+            if on && !strict {
+                assert_eq!(w.g.ent[head].f144, PLAYER_TARGET, "claimed at once: {tag}");
+                assert_eq!(w.g.ent[door].mail[1].1, 0, "tag consumed: {tag}");
+                assert_eq!(w.g.ent[head].f58, 0, "and the worm never woke: {tag}");
+                // The sweep runs asleep (retail's own, ungated) and
+                // hands every link the owner's family.
+                for _ in 0..12 {
+                    if w.g.ent[head].tick70 != 177 {
+                        break;
+                    }
+                    w.tick(away(), PlayerCommand::default());
+                }
+                assert_ne!(w.g.ent[head].tick70, 177, "sweep finished: {tag}");
+                let mut j = head;
+                while j != 0 {
+                    let row = w.g.ent[j].type86;
+                    assert!((105..=112).contains(&row), "link {j} row {row}: {tag}");
+                    j = w.g.ent[j].f54 as usize;
+                }
+            } else {
+                for _ in 0..40 {
+                    w.tick(away(), PlayerCommand::default());
+                }
+                assert_eq!(w.g.ent[head].f144, 0, "retail: still wild: {tag}");
+                assert_eq!(w.g.ent[door].mail[1].1, PLAYER_TARGET, "tag parked: {tag}");
+                assert!((52..=59).contains(&w.g.ent[head].type86), "{tag}");
+            }
+        }
     }
 
     /// `no_spell_loss` ⑵: the mc1l49 t=17809 shape — a stale handle
