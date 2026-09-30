@@ -3430,6 +3430,22 @@ impl App {
                     });
                 }
             }
+            // The troglodyte sprite crop is an index swap over the
+            // atlas already on the GPU — presentation-only, so it
+            // applies under a recording or a replay as well.
+            "gameplay.patches.mc2_troglodyte_sprite_crop" => {
+                let on = self.cfg.gameplay.patches.mc2_troglodyte_sprite_crop.on();
+                if let (Some(r), Some(sess)) = (&mut self.renderer, self.session.as_deref())
+                    && let Some((index, atlas)) = &sess.level.sprites
+                {
+                    r.set_sprite_index(entities::draw_sprite_index(
+                        sess.level.game,
+                        index,
+                        atlas,
+                        on,
+                    ));
+                }
+            }
             // The retail-bug patches: one live re-apply covers all of
             // them — the sim consumes the whole set per tick/event,
             // and the movie-score patch is read at play time. While a
@@ -4460,7 +4476,15 @@ impl App {
         if let Some(r) = &mut self.renderer {
             r.load_level(&sess.level.view, &overlay);
             if let Some((index, atlas)) = &sess.level.sprites {
-                r.load_sprites(index.clone(), atlas);
+                r.load_sprites(
+                    entities::draw_sprite_index(
+                        sess.level.game,
+                        index,
+                        atlas,
+                        self.cfg.gameplay.patches.mc2_troglodyte_sprite_crop.on(),
+                    ),
+                    atlas,
+                );
             }
             if let Some(assets) = &sess.level.ui {
                 r.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
@@ -8109,7 +8133,15 @@ impl ApplicationHandler for App {
                     let overlay = map_overlay(&sess.level, &self.cfg);
                     renderer.load_level(&sess.level.view, &overlay);
                     if let Some((index, atlas)) = &sess.level.sprites {
-                        renderer.load_sprites(index.clone(), atlas);
+                        renderer.load_sprites(
+                            entities::draw_sprite_index(
+                                sess.level.game,
+                                index,
+                                atlas,
+                                self.cfg.gameplay.patches.mc2_troglodyte_sprite_crop.on(),
+                            ),
+                            atlas,
+                        );
                     }
                     if let Some(assets) = &sess.level.ui {
                         renderer.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
@@ -10823,6 +10855,7 @@ fn run_screenshot(
     map_triggers: bool,
     dev_spells: bool,
     cfg_hud_transparent: bool,
+    troglodyte_crop: bool,
 ) -> Result<(), String> {
     // Same 2×-native 4:3 size as the live default window: integer
     // pixel grid (no fractional-scale aliasing), retail aspect.
@@ -10863,7 +10896,10 @@ fn run_screenshot(
         renderer.set_objective_marks(marks, 68);
     }
     if let Some((index, atlas)) = &level.sprites {
-        renderer.load_sprites(index.clone(), atlas);
+        renderer.load_sprites(
+            entities::draw_sprite_index(level.game, index, atlas, troglodyte_crop),
+            atlas,
+        );
     }
     if let Some(assets) = &level.ui {
         renderer.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
@@ -11658,6 +11694,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             cfg.render.debug.map_trigger_areas,
             cfg.gameplay.cheat.dev_spells,
             cfg.render.enhancement.hud_transparency.transparent(),
+            cfg.gameplay.patches.mc2_troglodyte_sprite_crop.on(),
         ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {

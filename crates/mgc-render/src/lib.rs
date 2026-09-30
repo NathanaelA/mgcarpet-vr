@@ -4634,6 +4634,19 @@ impl Renderer {
         self.rebuild_billboard_bind_group();
     }
 
+    /// Swap the sprite index over the atlas already uploaded by
+    /// [`Self::load_sprites`] — same pixels, different rectangles
+    /// (the app's live sprite-crop patch toggle). Ignored until an
+    /// atlas of the same size is loaded.
+    pub fn set_sprite_index(&mut self, index: mgc_formats::bundle::SpriteIndex) {
+        let same_atlas = self.sprite_index.as_ref().is_some_and(|cur| {
+            (cur.atlas_width, cur.atlas_height) == (index.atlas_width, index.atlas_height)
+        });
+        if same_atlas {
+            self.sprite_index = Some(index);
+        }
+    }
+
     /// Replace the set of world sprites drawn each frame.
     /// Upload the RGBA UI atlas (app-side composited: HSPR indices
     /// resolved through the blend LUT + palette; index-0 texels carry

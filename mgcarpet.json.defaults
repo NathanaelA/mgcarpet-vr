@@ -59,6 +59,7 @@
       "mc2_immediate_reap": "patched",
       "mc2_orphan_balloon_reap": "patched",
       "mc2_phantom_castle": "patched",
+      "mc2_troglodyte_sprite_crop": "patched",
       "mc2_wyvern_alliance_brain": "patched",
       "no_spell_loss": "patched",
       "one_castle_per_wizard": "patched",

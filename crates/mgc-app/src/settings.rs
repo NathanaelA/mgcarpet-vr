@@ -2253,6 +2253,30 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Gameplay,
             group: "gameplay · patches",
+            label: "mc2_troglodyte_sprite_crop",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_troglodyte_sprite_crop",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_troglodyte_sprite_crop.on(),
+                faithful: false,
+            },
+            desc: "A standing troglodyte keeps its size from every angle.                    Retail ships one of its eight standing views as an                    uncropped 320x200 drawing canvas with the creature in                    the middle, and scales the whole canvas to the                    creature's height - seen from that angle it shrinks to                    a third of its size and floats. Drawing only; the sim                    is untouched.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_troglodyte_sprite_crop =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "One standing view is tiny and floating, as retail draws it.",
+                    "That view is cropped to the creature (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
             label: "castle_latch_bug",
             class: Patch,
             key: None,
@@ -3041,8 +3065,9 @@ mod tests {
         // mc1_segment_chain_revalidate 2026-09-19 (round 158, w158a), and
         // volcano_register_revalidate the same round (w158b; renamed
         // from mc1_volcano_register_revalidate when w158e gave it the
-        // MC2 twin).
-        assert_eq!(patches, 25, "all twenty-five patches ship on");
+        // MC2 twin). mc2_troglodyte_sprite_crop 2026-09-30
+        // (presentation-only).
+        assert_eq!(patches, 26, "all twenty-six patches ship on");
     }
 
     #[test]
