@@ -3236,17 +3236,35 @@ impl Gen {
             let t = crate::engine::features::tile(cx, cy);
             let ty = self.t.tile_type[t];
             if ty != 0 {
+                // `dl` at the call: with the area pass skipped, the low
+                // byte of this record's position pointer (round 168,
+                // `mc2_fire_paint_residue`); with it run, `sub_10C80`'s
+                // own residue — unwitnessed, round 167's flags byte
+                // stands in.
+                // ⚖ FAITHFUL ARM ONLY (player, 2026-09-30): the pointer
+                // byte is a load-address artefact, so it is reproduced
+                // under `strict` (conformance and `--replay`) and
+                // nowhere else. Native play keeps the flags byte, which
+                // always classes 0.
+                let residue = if ctx.strict
+                    && self.ent[i].flags & 0x1_0000 != 0
+                    && !super::terrain_paint::no_mc2_fire_paint_pointer()
+                {
+                    super::terrain_paint::mc2_fire_paint_residue(i)
+                } else {
+                    (self.ent[i].flags & 0xFE) as u8
+                };
                 match ty {
                     26 => {
-                        self.mc2_paint_cell(in_type, cx, cy, 0x14);
+                        self.mc2_paint_cell(in_type, cx, cy, 0x14, residue);
                         dirty = true;
                     }
                     10 => {
-                        self.mc2_paint_cell(in_type, cx, cy, 0x15);
+                        self.mc2_paint_cell(in_type, cx, cy, 0x15, residue);
                         dirty = true;
                     }
                     11 => {
-                        self.mc2_paint_cell(in_type, cx, cy, 0x16);
+                        self.mc2_paint_cell(in_type, cx, cy, 0x16, residue);
                         dirty = true;
                     }
                     _ => {
@@ -4268,11 +4286,16 @@ impl Gen {
                     if code == 0xff {
                         continue;
                     }
+                    let cx = tlx.wrapping_add(dx as u8);
+                    // `dl` at the call: 0 for a row's first cell, then
+                    // the cell's own x (EF:27377; 0x5bd75 / 0x5bd9f).
+                    let residue = if dx == 0 { 0 } else { cx };
                     self.mc2_paint_cell(
                         dx as u8,
-                        tlx.wrapping_add(dx as u8),
+                        cx,
                         tly.wrapping_add(dy as u8),
                         code,
+                        residue,
                     );
                 }
             }
@@ -4370,11 +4393,15 @@ impl Gen {
                 if code == 0xff {
                     continue;
                 }
+                // `dl` here is the low byte of the template pointer
+                // (EF:27121, 0x5b9ed) — unreproducible, and only its
+                // `> 3` matters to the classifier: 0xFF.
                 self.mc2_paint_cell(
                     0,
                     tlx.wrapping_add(dx as u8),
                     tly.wrapping_add(dy as u8),
                     code,
+                    0xFF,
                 );
             }
         }
@@ -6597,6 +6624,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
     }
@@ -7129,6 +7157,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut g = Gen::new(
             planes,
@@ -7173,6 +7202,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         Gen::new(
             planes,

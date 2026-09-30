@@ -49,6 +49,14 @@ cargo run --release --example slot_census_mc2  -- <mgcr> <replay-report>  PER-SL
 cargo run --release --example field_walk_mc2 -- <mgcr> <slot> <t0> <t1> [field…]
       one slot's chosen fields over a window, printed only on CHANGE
       (run it as `CARGO_TARGET_DIR=../.cargo-target-<digid> nice -n 10 cargo run …`)
+cargo run --release --example class_walk_mc1 -- <mgcr> [--from t] [--to t] [--class c] [--model m]
+                                                 [--owner id24] [--slot s]… [--wiz n]… [--quiet f63,…]
+      ⭐ RETAIL'S CHANGE LOG BY FILTER (MC1 / HW): every record (and wizard block) matching
+      the filter, printed in full the tick it enters and then field by field as its lanes
+      move. Filter by class / owner instead of naming the slot first — round 167 read four of
+      six digs off it (a token walk, a wizard block's `owned_slots`, three `f48` zeroes in one
+      tick). ⚠ a class-12 token's owner is `f42`, not `id24`; `move_bits` at boundary t is the
+      input consumed in tick t+1.
 ```
 
 ## THE EVIDENCE STANDARD — THIS IS THE WHOLE JOB

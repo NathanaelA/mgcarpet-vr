@@ -98,6 +98,28 @@ pub(crate) fn force_building_patches() -> bool {
 pub(crate) fn force_volcano_guard() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_FORCE_VOLCANO_GUARD").is_some())
+        || TAKE_VOLCANO_GUARD.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// THE TAKE DECLARES ITS BINARY (round 166). A retake's header carries
+/// `capture.exe.volcano_guard`; a driver that replays such a take sets
+/// this for the run, and the guarded arm of
+/// `volcano_register_revalidate` then grades the take against the
+/// binary that produced it. Process-wide on purpose, like the probe it
+/// replaces: a replay process stands on one take at a time.
+static TAKE_VOLCANO_GUARD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// See [`TAKE_VOLCANO_GUARD`]. The driver must ALSO raise
+/// `patches.volcano_register_revalidate` on its world after every
+/// import (the importers re-force the retail set).
+pub fn set_take_volcano_guard(on: bool) {
+    TAKE_VOLCANO_GUARD.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the take in hand was recorded on the volcano-guarded binary.
+pub fn take_volcano_guard() -> bool {
+    TAKE_VOLCANO_GUARD.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A/B toggle for THE AUTHORED STANDING FIRE'S REAL CTOR (round 157,
@@ -126,6 +148,39 @@ pub(crate) fn force_volcano_guard() -> bool {
 pub(crate) fn no_mc1_creator_standing_fire() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CREATOR_STANDING_FIRE").is_some())
+}
+
+/// A/B toggle for THE AUTHORED `(10,8)` MARKER'S REAL CTOR (round 166).
+/// `spawn_creator` sent model 8 down its generic arm, which writes
+/// class, model, pose and a state byte and nothing else; retail's
+/// table row is `sub_3A870` (life 8, damage 100, extents 512). WITNESS
+/// mc1hwl10 t=19664 and t=19686: a trigger mints seven authored
+/// `(10,8)` records (slots 12, 17, 18, …), retail reads `max_life 8 /
+/// life 8 / flags 0`, the port `300 / 0 / 8`. They self-kill on their
+/// first tick (`sub_253E0`), so the birth frame is all there is to
+/// see. `MGC_NO_MC1_CREATOR_M8=1` restores the generic arm.
+pub(crate) fn no_mc1_creator_m8() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CREATOR_M8").is_some())
+}
+
+/// A/B toggle for THE GENIE EATS FROM THE TICK-TOP BALL CHAIN (round
+/// 167). [`Gen::genie_eat_ball`] scanned the POOL for a live `(10,39)`
+/// and skipped a record carrying `0x400`. Retail's `sub_1E810` (remc1hw
+/// sub_main.cpp:23308) walks the tick-top ball chain `+36466` and tests
+/// `+65 == 39` and nothing else — HIDDEN.EXE file 0x37241 `mov
+/// 0x8e72(%eax),%eax`, 0x37249 `cmpb $0x27,0x41(%eax)`, the range test
+/// `ja` at 0x37276 and the strict nearer test `jae` at 0x3727a. The
+/// destroy it calls (`sub_41E80`) only sets `+17 |= 4`, so an eaten ball
+/// stays a member until the next rebuild and EVERY genie whose eat runs
+/// later in the tick takes its whole `+140` again. WITNESS mc1hwl17
+/// t=45101: the human dies, genies 9, 10 and 11 all take the
+/// dead-target arm and each reads mana 10000 -> 10500 off ball 442
+/// (500), three `(10,0)` puffs; the port fed genie 9 alone.
+/// `MGC_NO_MC1_GENIE_EAT_CHAIN=1` restores the pool scan.
+pub(crate) fn no_mc1_genie_eat_chain() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_GENIE_EAT_CHAIN").is_some())
 }
 
 /// A/B toggle for THE LIVE HOUSE'S ONE-TICK HIT REGISTER (round 154,
@@ -326,6 +381,12 @@ pub struct FeatureAssets {
     /// EF:44870-44910). Empty = pre-dims caller → the static table's
     /// raw zero-box values stand.
     pub mc2_sprite_ext: Vec<(u16, u16)>,
+    /// MC1 / Hidden Worlds: the sprite-stat rows' (width, height) as
+    /// THIS LEVEL'S SPRITE SHEET derives them
+    /// ([`crate::mc1::derive_sprite_stats`]). Empty = the sheet derives
+    /// the static table ([`crate::mc1::sprite_stats::SPRITE_STATS`],
+    /// the temperate bank's own derivation), or a pre-dims caller.
+    pub mc1_sprite_ext: Vec<(u16, u16)>,
 }
 
 impl std::hash::Hash for FeatureAssets {
@@ -337,6 +398,7 @@ impl std::hash::Hash for FeatureAssets {
             bldgprm,
             spells,
             mc2_sprite_ext,
+            mc1_sprite_ext,
         } = self;
         rings.hash(state);
         build_tab.hash(state);
@@ -351,6 +413,9 @@ impl std::hash::Hash for FeatureAssets {
         }
         if !mc2_sprite_ext.is_empty() {
             mc2_sprite_ext.hash(state);
+        }
+        if !mc1_sprite_ext.is_empty() {
+            mc1_sprite_ext.hash(state);
         }
     }
 }
@@ -408,6 +473,7 @@ impl FeatureAssets {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         })
     }
 
@@ -489,6 +555,15 @@ impl FeatureAssets {
     /// index dims).
     pub fn with_mc2_sprite_ext(mut self, ext: Vec<(u16, u16)>) -> Self {
         self.mc2_sprite_ext = ext;
+        self
+    }
+
+    /// Attach the MC1 / Hidden Worlds sprite-stat sizes this level's
+    /// sprite sheet derives (feed [`crate::mc1::derive_sprite_stats`]
+    /// with the bundle's sprite index dims; it answers empty for a
+    /// sheet that derives the static table).
+    pub fn with_mc1_sprite_ext(mut self, ext: Vec<(u16, u16)>) -> Self {
+        self.mc1_sprite_ext = ext;
         self
     }
 }
@@ -5487,6 +5562,103 @@ pub(crate) fn no_mc2_rain_2a_seed() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_RAIN_2A_SEED").is_some())
 }
 
+/// A/B toggle for THE RIVAL'S SPEED REGISTER, READ BLIND (round 167):
+/// `MGC_NO_MC1_RIVAL_BLIND_SPEED=1` restores the validated token read
+/// in the rival's travel and cruise helpers. Citation and the mc1hwl14
+/// t=13453 witness at `World::rival_blind_speed_reg`.
+pub(crate) fn no_mc1_rival_blind_speed() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_BLIND_SPEED").is_some())
+}
+
+/// A/B toggle for THE RIVAL'S ATTACK REGISTERS, READ BLIND (round 168):
+/// `MGC_NO_MC1_RIVAL_BLIND_REGISTER=1` restores the static price table
+/// and the validated token read in the rival's picker, readiness and
+/// commit. Citation and the mc1hwl12 t=16994 witness at
+/// `World::rival_reg`.
+pub(crate) fn no_mc1_rival_blind_register() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_BLIND_REGISTER").is_some())
+}
+
+/// A/B toggle for THE RIVAL'S LANDING MAILBOX CLEAR (round 168): set
+/// `MGC_NO_MC1_RIVAL_LANDING_MAIL_CLEAR` to leave a rival corpse's
+/// mailbox standing at the touchdown. The class-3 fall handler
+/// `sub_45FC0` is shared by the human and the rivals, and its landing
+/// arm runs `memset(a1 + 90, 0, 36)` (remc1 sub_main.cpp:55518) ahead
+/// of the book scatter; the port had the line on the human's arm only.
+/// WITNESS mc1hwl0 t=6809, rival 473: the fatal letter `(6664, 472)`
+/// rides the whole fall and reads `(0, 0)` on the landing record,
+/// where the port's corpse kept it to the respawn (4.3 million
+/// `mail0` shadow rows on 70 takes). The respawn grace wipes the box
+/// again before any intake, so no graded lane moves.
+pub(crate) fn no_mc1_rival_landing_mail_clear() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_LANDING_MAIL_CLEAR").is_some())
+}
+
+/// A/B toggle for THE CASTLE-LESS TELEPORT'S SAVED AXIS (round 168):
+/// set `MGC_NO_MC1_TELEPORT_HOP_IN_PLACE` to leave the caster's own
+/// x/y in the Teleport token's `+150/+152` after the random hop.
+/// Witness mc1l0-spells-galore t=9071 at `World::cast_teleport`.
+pub(crate) fn no_mc1_teleport_hop_in_place() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TELEPORT_HOP_IN_PLACE").is_some())
+}
+
+/// A/B toggle for THE TRIGGER VOLUMES' WARP-AWARE POSE (round 168):
+/// set `MGC_NO_MC1_TRIGGER_WARP_POSE` to probe MC1 / HW trigger
+/// volumes with the pre-warp human pose. Witness mc1hwl17 t=42888 at
+/// the class-11 arm of `World`'s walk.
+pub(crate) fn no_mc1_trigger_warp_pose() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_TRIGGER_WARP_POSE").is_some())
+}
+
+/// A/B toggle for THE HATE LEDGER'S SELF ROW (round 168): set
+/// `MGC_NO_MC1_SELF_HATE` to restore the port's exclusion of a
+/// wizard's own colour in the projectile hate ledger. Witness
+/// mc1hwl14 t=62 at `World::rival_add_hate`.
+pub(crate) fn no_mc1_self_hate() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SELF_HATE").is_some())
+}
+
+/// A/B toggle for THE HUMAN TRUCE'S PLACE (round 168): set
+/// `MGC_NO_MC1_HUMAN_TRUCE_AFTER_MINT` to stamp the respawn amnesty
+/// before the book re-mint again. Citation and the mc1hwl5 t=5985 /
+/// mc1l49 t=15297 witnesses at `World::player_respawn`.
+pub(crate) fn no_mc1_human_truce_after_mint() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_HUMAN_TRUCE_AFTER_MINT").is_some())
+}
+
+/// A/B toggle for THE CASTLE MACHINE'S BLIND PIN (round 168): set
+/// `MGC_NO_MC1_CASTLE_PIN_BLIND` to restore the validated owner-token
+/// resolver on the castle's pin / release. `sub_46D20` (remc1
+/// sub_main.cpp:55949) reads the owner's `wizext+708` word — the
+/// `+676` register's entry 16 — tests it NONZERO and writes that
+/// record's `+48`: `+50 − 1` of the same record on a pin (:55963-66),
+/// 0 on a release (:55970). No class, no owner, no liveness. WITNESS
+/// mc1l9 t=32429: castle 374's teardown pins for its dead owner 118,
+/// whose stale register still names slot 10 — reborn that tick as one
+/// of the castle's own `(10,39)` spheres. The sphere's `+50` is 0, so
+/// its `+48` reads 65535 for its whole life (129 rows). The port's
+/// resolver demanded a live `(12,16)` and wrote nothing.
+/// ⭐ ORDER IS PART OF IT: the worker arms pin BEFORE they spawn (case
+/// 3 `sub_46D20(a1, 1); sub_47020(a1)`, case 5 likewise, :56084-90),
+/// the teardown pins AFTER its spheres (:56529). Same take, t=32281-87:
+/// the register names the dead owner's FREED token — `+48` 0 -> 100 on
+/// the class-0 record — and the painter the transform mints into that
+/// very slot six ticks later reads 0, the pin having landed before
+/// the allocator's memset. The three Gen-side releases
+/// (`Gen::release_castle_charge_pin`) keep their owner-tag scan: no
+/// take witnesses them through a stale register.
+pub(crate) fn no_mc1_castle_pin_blind() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_CASTLE_PIN_BLIND").is_some())
+}
+
 /// A/B toggle for the RAW `+48` TOKEN LANE: set
 /// `MGC_NO_MC1_TOKEN_RAW48` to restore the pre-dig upgrade gate, which
 /// read `Ent::f26` — retail's `+26` on anything that is not a live
@@ -5988,6 +6160,12 @@ impl Gen {
         // or any future free path that forgets) would otherwise leave
         // a dangling chain pointer, and the chain walk cycles once
         // the slot relinks on the same tile (unbounded victim lists).
+        // (deliberate) RETAIL DOES NOT UNLINK HERE: `NewEvent` memsets
+        // the record and the old tile's head keeps naming the slot,
+        // which is how a death's book scatter of a stale entry breaks
+        // retail's tile index for the rest of a level — player-ruled
+        // a deviation, round 166 (docs/DEVIATIONS.md, "THE BOOK
+        // SCATTER'S STALE ENTRY").
         if self.ent[idx].flags & 4 != 0 {
             self.unlink(idx);
         }
@@ -7263,6 +7441,25 @@ impl Gen {
         e.y = y;
         e.z = z;
         match model {
+            // sub_3A870 (remc1 :46685; HW `sub_3ABF0`, hw:42803): the
+            // (10,8) marker — life 8 refilled, damage 100, `+16 &=
+            // 0xF7`, a RAW position copy (never map-linked), extents
+            // 512/512/512; its state-8 row is the bare self-kill
+            // `sub_253E0`, so it lives one tick. The generic arm below
+            // left it lifeless with the slot's flag residue. See
+            // [`no_mc1_creator_m8`].
+            8 if !no_mc1_creator_m8()
+                && !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) =>
+            {
+                e.tick70 = 8;
+                e.max_life = 8;
+                e.act_life = 8;
+                e.f44 = 100;
+                e.flags &= !8;
+                e.f80 = 512;
+                e.f82 = 512;
+                e.f84 = 512;
+            }
             // sub_3A8D0: growing hill / volcano.
             9 => {
                 e.tick70 = 9;

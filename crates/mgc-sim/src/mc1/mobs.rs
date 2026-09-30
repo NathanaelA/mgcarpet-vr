@@ -61,6 +61,40 @@ fn no_deaf_states() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_DEAF_STATES").is_some())
 }
 
+/// `MGC_NO_MC1_LEADERLESS_PACK_DEAF=1` restores the mailbox prologue
+/// above a pack member that has NO LEADER (round 167). The shared pack
+/// routine `sub_1A390` (remc1hw sub_main.cpp:20234) opens on `if (!+52)
+/// { state = base + 1; return; }` — HIDDEN.EXE file 0x32d92 `cmpw
+/// $0x0,0x34(%ebx)` / 0x32d97 `jne` / 0x32d9d `jmp` to the state write
+/// — and the mail read, the segment walk and the `actLife < 0` test all
+/// sit BELOW it. A leaderless member therefore spends the tick being
+/// demoted to wander and cannot be hurt in it; the pending mail waits
+/// for the wander prologue. WITNESS mc1hwl10 t=21968 slot 579 `(5,4)`:
+/// state 27 -> 25 with `mail0` (1200, 629) standing and `actLife` 207;
+/// the port debited it (-993) and corpsed the militiaman a tick early.
+fn no_mc1_leaderless_pack_deaf() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_LEADERLESS_PACK_DEAF").is_some())
+}
+
+/// `MGC_NO_MC1HW_TREE_CTOR=1` restores MC1's tree ctor on a Hidden
+/// Worlds level (round 167). The two binaries differ: `CARPET.EXE`'s
+/// `sub_37BC0` (remc1 sub_main.cpp:44402) draws FOUR times and picks
+/// sprite 83 or 84 off the fourth; `HIDDEN.EXE`'s `sub_37F80` (remc1hw
+/// :40815) draws THREE times and takes sprite 83 always — file 0x509c3
+/// / 0x509f3 / 0x50a14 are the only three `imul $0x24a1,0x4(%ebx)` in
+/// the body, and 0x50a4c is `push $0x53` ahead of the sprite setter.
+/// One draw and one sprite row: `rand`, `type86` and the extents that
+/// follow the sprite (171 against 177). At level init this is round
+/// 165's `(2,0)` census leftover (983 rows, 12 HW takes — replay imports
+/// the pool, so it never graded); WITNESS at runtime mc1hwl10 t=48554,
+/// where a trigger mints the authored tree at slot 6: retail `rand`
+/// 1069502566 / `type86` 83, the port 4271901957 / 84.
+fn no_mc1hw_tree_ctor() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1HW_TREE_CTOR").is_some())
+}
+
 /// `MGC_NO_HIT_TRAILERS=1` restores the pre-dig BLANKET hit abort: the
 /// wizard-attacker arms return before the wrapper trailers, m1's idle
 /// mover is skipped on a hit tick, and m6's chase dive-clock reset is
@@ -310,14 +344,23 @@ impl Gen {
     /// derive extents from the sprite's world size halves.
     pub(crate) fn set_sprite(&mut self, i: usize, t: u16) {
         let s = SPRITE_STATS[t as usize];
+        // The row's size as this level's sprite sheet derives it
+        // ([`crate::mc1::derive_sprite_stats`]); the static table is
+        // the temperate bank's.
+        let (width, height) = self
+            .assets
+            .mc1_sprite_ext
+            .get(t as usize)
+            .copied()
+            .unwrap_or((s.width, s.height));
         let e = &mut self.ent[i];
         e.frame88 = 0;
         e.type86 = t;
         e.frames89 = FRAME_COUNTS.get(s.draw_type as usize).copied().unwrap_or(0);
-        e.f78 = s.height / 2;
-        e.f80 = s.width / 2;
-        e.f82 = s.width / 2;
-        e.f84 = s.height / 2;
+        e.f78 = height / 2;
+        e.f80 = width / 2;
+        e.f82 = width / 2;
+        e.f84 = height / 2;
     }
 
     /// sub_370A0_37460 (:43772): [`set_sprite`](Self::set_sprite), then
@@ -386,7 +429,8 @@ impl Gen {
         match model {
             // sub_37BC0 (:44402): the tree. Four draws of the event LCG
             // in strict order: a discarded life roll, x jitter, y
-            // jitter (±32 units), then the variant bit (83/84).
+            // jitter (±32 units), then the variant bit (83/84) — MC1's;
+            // Hidden Worlds stops at three.
             0 => {
                 let e = &mut self.ent[i];
                 e.tick70 = 0;
@@ -397,7 +441,15 @@ impl Gen {
                 let jy = ((self.ent_rand(i) & 0x3F) as i32 - 32) as i16;
                 self.link(i, x.wrapping_add(jx as u16), y.wrapping_add(jy as u16), z);
                 self.refill_life(i);
-                let t = if self.ent_rand(i) & 1 != 0 { 84 } else { 83 };
+                // HIDDEN.EXE's twin `sub_37F80` has no variant draw
+                // ([`no_mc1hw_tree_ctor`]).
+                let t = if self.is_hidden_worlds() && !no_mc1hw_tree_ctor() {
+                    83
+                } else if self.ent_rand(i) & 1 != 0 {
+                    84
+                } else {
+                    83
+                };
                 self.set_sprite(i, t);
             }
             // sub_37CF0/37D70/37E00 (:44451-): clear flag bit 3.
@@ -2168,6 +2220,10 @@ impl Gen {
     /// (+140 += ball's, ball unclaimed + destroyed) with a (10,0)
     /// explosion puff at the spot and sound 11. The other half of
     /// "genies steal mana": they drain the map economy too.
+    ///
+    /// The candidates are the TICK-TOP BALL CHAIN's, not the pool's
+    /// ([`crate::engine::features::no_mc1_genie_eat_chain`]): one ball
+    /// feeds every genie that reaches it in the tick.
     fn genie_eat_ball(&mut self, i: usize) {
         if self.ent[i].f140 >= self.ent[i].f136 {
             return;
@@ -2176,14 +2232,34 @@ impl Gen {
         let r2 = ((row.v_28 as i32) * (row.v_28 as i32)) as u32;
         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
         let mut best: Option<(usize, u32)> = None;
-        for j in 1..self.ent.len() {
-            let c = &self.ent[j];
-            if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
-                continue;
+        if crate::engine::features::no_mc1_genie_eat_chain() {
+            for j in 1..self.ent.len() {
+                let c = &self.ent[j];
+                if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
+                    continue;
+                }
+                let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
+                if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
+                    best = Some((j, d2));
+                }
             }
-            let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
-            if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
-                best = Some((j, d2));
+        } else {
+            // The walk is the TICK-TOP BALL CHAIN (+36466), per-node
+            // gate `+65 == 39` ALONE (HIDDEN.EXE file 0x37249 `cmpb
+            // $0x27,0x41(%eax)`): no 0x400, no class test. A ball a
+            // genie ate earlier THIS tick is still a member, so the
+            // next genie in reach eats it again — the full +140 lands
+            // a second time with its own (10,0) puff.
+            for k in 0..self.ball_chain.visible_len() {
+                let j = self.ball_chain.list[k] as usize;
+                let c = &self.ent[j];
+                if c.model65 != 39 {
+                    continue;
+                }
+                let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
+                if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
+                    best = Some((j, d2));
+                }
             }
         }
         if let Some((t, _)) = best {
@@ -4539,7 +4615,15 @@ impl Gen {
         //
         // ...except it does NOT open every live state handler, and a
         // state without it is DAMAGE-DEAF (see `state_is_damage_deaf`).
-        let intake = if self.state_is_damage_deaf(model, role) {
+        // …and a fifth, by DATA rather than by state: a pack member
+        // with no leader leaves `sub_1A390` at its first statement
+        // ([`no_mc1_leaderless_pack_deaf`]). m5 / m12 / m13 / m14 own
+        // their pack slot and never reach that routine.
+        let leaderless_pack = role == 3
+            && !matches!(model, 5 | 12 | 13 | 14)
+            && self.ent[i].f52 == 0
+            && !no_mc1_leaderless_pack_deaf();
+        let intake = if self.state_is_damage_deaf(model, role) || leaderless_pack {
             Inbox::Quiet
         } else {
             self.inbox(i)
@@ -5233,6 +5317,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         Gen::new(planes, assets, 1, ChassisParams::MC1, VerbSet::MC1)
     }
@@ -5250,6 +5335,156 @@ mod tests {
             strict: false,
             patches: WorldPatches::RETAIL,
             mc2_turn: 0,
+        }
+    }
+
+    /// Round 167: `sub_1E810` (remc1hw sub_main.cpp:23308) walks the
+    /// TICK-TOP BALL CHAIN and tests `+65 == 39` alone (HIDDEN.EXE file
+    /// 0x37249), and the destroy it calls only sets `+17 |= 4`. A ball
+    /// eaten this tick is still on the chain, so the next genie in reach
+    /// takes its whole `+140` again and mints its own `(10,0)` puff.
+    /// WITNESS mc1hwl17 t=45101 (genies 9, 10, 11 on ball 442, 500 each)
+    /// and mc1hwl20 t=23717. A ball born AFTER the rebuild is on no
+    /// chain and feeds nobody. `MGC_NO_MC1_GENIE_EAT_CHAIN=1` fails the
+    /// second genie's assert (the pool scan skips the `0x400` ball).
+    #[test]
+    fn one_ball_feeds_every_genie_that_reaches_it_in_the_tick() {
+        let mut g = flat_gen();
+        let a = g.spawn_creature(11, 100 << 8, 100 << 8, 100).unwrap();
+        let b = g.spawn_creature(11, 100 << 8, 101 << 8, 100).unwrap();
+        for &i in &[a, b] {
+            g.ent[i].f136 = 20_000;
+            g.ent[i].f140 = 10_000;
+        }
+        let ball = g.new_event().unwrap();
+        {
+            let e = &mut g.ent[ball];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.x = (100 << 8) + 64;
+            e.y = 100 << 8;
+            e.f140 = 500;
+            e.f144 = PLAYER_TARGET;
+        }
+        g.rebuild_ball_chain();
+        let puffs = |g: &Gen| {
+            g.ent
+                .iter()
+                .filter(|e| e.class64 == 10 && e.model65 == 0)
+                .count()
+        };
+        g.genie_eat_ball(a);
+        assert_eq!(g.ent[a].f140, 10_500, "the first genie eats the ball");
+        assert_ne!(g.ent[ball].flags & 0x400, 0, "the ball is soft-killed");
+        assert_eq!(g.ent[ball].f144, 0, "and unclaimed");
+        assert_eq!(puffs(&g), 1);
+        g.genie_eat_ball(b);
+        assert_eq!(
+            g.ent[b].f140, 10_500,
+            "the soft-killed ball is still on the tick-top chain"
+        );
+        assert_eq!(puffs(&g), 2, "each eat mints its own puff");
+
+        // A ball minted after the rebuild is on no chain.
+        let mut g = flat_gen();
+        let a = g.spawn_creature(11, 100 << 8, 100 << 8, 100).unwrap();
+        g.ent[a].f136 = 20_000;
+        g.ent[a].f140 = 10_000;
+        g.rebuild_ball_chain();
+        let late = g.new_event().unwrap();
+        {
+            let e = &mut g.ent[late];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.x = (100 << 8) + 64;
+            e.y = 100 << 8;
+            e.f140 = 500;
+        }
+        g.genie_eat_ball(a);
+        assert_eq!(g.ent[a].f140, 10_000, "a mid-tick ball is invisible");
+    }
+
+    /// Round 167 ([`super::no_mc1_leaderless_pack_deaf`]): `sub_1A390`
+    /// opens on `if (!+52) { state = base + 1; return; }` (HIDDEN.EXE
+    /// file 0x32d92), ABOVE its mail read and its `actLife < 0` test.
+    /// A pack member with no leader is demoted to wander and the
+    /// pending hit waits for the wander prologue. WITNESS mc1hwl10
+    /// t=21968 slot 579. `MGC_NO_MC1_LEADERLESS_PACK_DEAF=1` fails the
+    /// state assert (the prologue debits 1200 and corpses the record).
+    #[test]
+    fn a_leaderless_pack_member_is_demoted_before_it_can_be_hurt() {
+        let mut g = flat_gen();
+        let m = g.spawn_creature(4, 100 << 8, 100 << 8, 100).unwrap();
+        g.ent[m].tick70 = 27; // m4 PACK = 4*6 + 3
+        g.ent[m].f52 = 0;
+        g.ent[m].f58 = 16; // awake: the prologue WOULD read the mail
+        g.ent[m].act_life = 207;
+        g.ent[m].mail[0] = (1200, 629);
+        g.creature_tick(m, &ctx());
+        assert_eq!(g.ent[m].tick70, 25, "demoted to wander");
+        assert_eq!(g.ent[m].act_life, 207, "the hit is not read this tick");
+        assert_eq!(g.ent[m].mail[0], (1200, 629), "…and stays pending");
+        assert_eq!(g.ent[m].f38, 0, "no killer latched");
+
+        // A member WITH a leader still runs the prologue.
+        let mut g = flat_gen();
+        let l = g.spawn_creature(4, 100 << 8, 100 << 8, 100).unwrap();
+        let m = g.spawn_creature(4, 101 << 8, 100 << 8, 100).unwrap();
+        g.ent[m].tick70 = 27;
+        g.ent[m].f52 = l as u16;
+        g.ent[m].f58 = 16;
+        g.ent[m].act_life = 207;
+        g.ent[m].mail[0] = (1200, 629);
+        g.creature_tick(m, &ctx());
+        assert_eq!(g.ent[m].act_life, 207 - 1200, "led: the mail lands");
+        assert_eq!(g.ent[m].tick70, 28, "…and the member corpses");
+    }
+
+    /// Round 167 ([`super::no_mc1hw_tree_ctor`]): `HIDDEN.EXE`'s tree
+    /// ctor `sub_37F80` draws three times and takes sprite 83 always
+    /// (file 0x50a4c `push $0x53`); `CARPET.EXE`'s `sub_37BC0` draws a
+    /// fourth time for the 83 / 84 variant. WITNESS mc1hwl10 t=48554
+    /// slot 6. `MGC_NO_MC1HW_TREE_CTOR=1` fails the HW draw count.
+    #[test]
+    fn the_hidden_worlds_tree_draws_three_times_and_wears_sprite_83() {
+        let lcg = |r: u32| r.wrapping_mul(9377).wrapping_add(9439);
+        for (verbs, draws) in [(VerbSet::MC1HW, 3), (VerbSet::MC1, 4)] {
+            let mut saw84 = false;
+            for seed in 0..64u32 {
+                let planes = Planes {
+                    height: vec![100; 0x10000],
+                    tile_type: vec![5; 0x10000],
+                    shading: vec![32; 0x10000],
+                    angle: vec![5; 0x10000],
+                    ceiling: Vec::new(),
+                };
+                let assets = FeatureAssets {
+                    rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+                    build_tab: Vec::new(),
+                    build_dat: Vec::new(),
+                    bldgprm: Vec::new(),
+                    spells: Vec::new(),
+                    mc2_sprite_ext: Vec::new(),
+                    mc1_sprite_ext: Vec::new(),
+                };
+                let mut g = Gen::new(planes, assets, 1, ChassisParams::MC1, verbs);
+                g.rand = seed;
+                let t = g.spawn_scenery(0, 100 << 8, 100 << 8, 100).unwrap();
+                // The allocator seeds `+4` = slot + the world LCG.
+                let mut r = (t as u32).wrapping_add(seed);
+                for _ in 0..draws {
+                    r = lcg(r);
+                }
+                assert_eq!(g.ent[t].rand, r, "{draws} draws, seed {seed}");
+                if draws == 3 {
+                    assert_eq!(g.ent[t].type86, 83, "HW has no variant");
+                } else {
+                    let want = if r & 1 != 0 { 84 } else { 83 };
+                    assert_eq!(g.ent[t].type86, want, "MC1 picks off the 4th");
+                    saw84 |= want == 84;
+                }
+            }
+            assert_eq!(saw84, draws == 4, "non-vacuity: MC1 reaches 84");
         }
     }
 

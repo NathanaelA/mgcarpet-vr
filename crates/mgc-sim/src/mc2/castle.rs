@@ -2693,7 +2693,9 @@ impl Gen {
                             // per cell, ahead of the rise loop's
                             // flat-promotion gate. See
                             // [`no_mc2_painter_paint_first`].
-                            self.mc2_paint_cell(7, gx, gy, c[0]);
+                            // `dl` = `dword_0x10_16 % 7` (EF:27794), the
+                            // paint gate's own remainder.
+                            self.mc2_paint_cell(7, gx, gy, c[0], (countdown % 7) as u8);
                         }
                     }
                 }
@@ -2749,7 +2751,7 @@ impl Gen {
         for (gx, gy, code) in paint {
             // sub_45DC0(7, ...) — the groove-castle path's fixed
             // column counter (EF:27832).
-            self.mc2_paint_cell(7, gx, gy, code);
+            self.mc2_paint_cell(7, gx, gy, code, (countdown % 7) as u8);
         }
         true
     }
@@ -3633,6 +3635,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
     }
@@ -4417,6 +4420,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut g = Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2);
         let i = g.new_event().expect("painter slot");
@@ -4503,6 +4507,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut g = Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2);
         g.retile = crate::mc2::terrain_paint::retile_table_mc2();
@@ -4785,6 +4790,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut w = World::new_for_game(planes.clone(), &[], 1, assets.clone(), GameId::Mc2);
         // A building already in its collapse state (action 53): its
@@ -4897,6 +4903,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
         let mut configs: [Option<Mc2RivalConfig>; 8] = Default::default();
@@ -4963,6 +4970,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut w2 = World::new_for_game(planes2, &[], 1, assets2, GameId::Mc2);
         let mut cfg2: [Option<Mc2RivalConfig>; 8] = Default::default();
@@ -5044,6 +5052,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
         w.start_markers[1] = Some((37, 41));
@@ -5135,6 +5144,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
         w.set_mc2_castle_purge_level(true);
@@ -5240,6 +5250,7 @@ mod tests {
                 bldgprm: Vec::new(),
                 spells: Vec::new(),
                 mc2_sprite_ext: Vec::new(),
+                mc1_sprite_ext: Vec::new(),
             };
             let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
             w.set_mc2_castle_purge_level(gate);

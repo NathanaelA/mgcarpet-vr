@@ -93,6 +93,7 @@ pub(crate) fn init_check(path: &std::path::Path, args: &Args) -> i32 {
 
 fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> {
     let mut rec = Recording::open(path)?;
+    crate::take_binary(&rec);
     let game = rec.header.game.clone();
     let family = rec.header.family()?;
     let level = rec.header.level.ok_or("recording has no level number")?;
@@ -100,13 +101,52 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
         .next_tick()
         .ok_or("empty recording")?
         .map_err(|e| e.to_string())?;
-    let state = first
-        .state
-        .as_ref()
-        .ok_or("record 0 carries no state channel")?;
-    let (settle, corrected) = match args.settle {
-        Some(n) => (n, false),
-        None => crate::record0_settle(path, &first, family, &game, level, args)?,
+    // `--init`: the INIT RECORD stands where record 0 stood, and the
+    // port is not settled at all — the init park holds retail before
+    // frame 1. Record 0 still names the human's book and seat (the
+    // native build's inputs): the init record is PRE-SPAWN, so the
+    // port's carpet, tokens and rivals are frame 1's births and read
+    // as port-only rows here.
+    let init = if args.init_record {
+        Some(
+            rec.init
+                .clone()
+                .ok_or("the take carries no init record (--init)")?,
+        )
+    } else {
+        None
+    };
+    let rec0_human: Option<u16> = if init.is_some() {
+        first.state.as_ref().and_then(|s| match family {
+            Family::Mc1 => decode_retail_mc1(s).ok().and_then(|st| {
+                st.wizards
+                    .get(st.local_player as usize)
+                    .map(|w| w.play_index)
+            }),
+            Family::Mc2 => decode_retail_mc2(s).ok().and_then(|st| {
+                st.players
+                    .get(st.local_player as usize)
+                    .map(|p| p.play_index)
+            }),
+        })
+    } else {
+        None
+    };
+    let state = match &init {
+        Some(i) => i
+            .tick
+            .state
+            .as_ref()
+            .ok_or("the init record carries no state channel")?,
+        None => first
+            .state
+            .as_ref()
+            .ok_or("record 0 carries no state channel")?,
+    };
+    let (settle, corrected) = match (args.settle, &init) {
+        (Some(n), _) => (n, false),
+        (None, Some(_)) => (0, false),
+        (None, None) => crate::record0_settle(path, &first, family, &game, level, args)?,
     };
     let (world, _) = crate::native_settled_world(path, &first, family, &game, level, args, settle)?;
     let mut port: Occupancy = world
@@ -121,10 +161,11 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
     {
         Family::Mc1 => {
             let st = decode_retail_mc1(state)?;
-            let human = st
-                .wizards
-                .get(st.local_player as usize)
-                .map_or(0, |w| w.play_index);
+            let human = rec0_human.unwrap_or_else(|| {
+                st.wizards
+                    .get(st.local_player as usize)
+                    .map_or(0, |w| w.play_index)
+            });
             shadow.compare_core_mc1(&world, &st, human, t);
             shadow.compare_ents_mc1(&world, &st, human, t);
             shadow.compare_wiz_mc1(&world, &st, t);
@@ -150,10 +191,11 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
         }
         Family::Mc2 => {
             let st = decode_retail_mc2(state)?;
-            let human = st
-                .players
-                .get(st.local_player as usize)
-                .map_or(0, |p| p.play_index);
+            let human = rec0_human.unwrap_or_else(|| {
+                st.players
+                    .get(st.local_player as usize)
+                    .map_or(0, |p| p.play_index)
+            });
             let torn = BTreeSet::new();
             shadow.compare_ents_mc2(&world, &st, human, &torn, t);
             shadow.compare_map_heads_mc2(&world, &st, human, &torn, t);
@@ -234,9 +276,13 @@ fn run(path: &std::path::Path, args: &Args, name: &str) -> Result<bool, String> 
     };
 
     println!(
-        "== init-check {} (game {game}, level {level}, record 0 @t={t}, port settled {settle} \
-         tick(s){})",
+        "== init-check {} (game {game}, level {level}, {}, port settled {settle} tick(s){})",
         path.display(),
+        if init.is_some() {
+            "THE INIT RECORD (pre-frame-1)".to_string()
+        } else {
+            format!("record 0 @t={t}")
+        },
         if corrected {
             " = recorder phase CORRECTED BY THE LCG (the +63 phase read one off)"
         } else if args.settle.is_none() {

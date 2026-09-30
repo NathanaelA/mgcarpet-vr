@@ -97,6 +97,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         other => return Err(format!("--pin-pose {other:?}: want n or n1")),
     };
     let mut rec = Recording::open(path)?;
+    crate::take_binary(&rec);
     let game = rec.header.game.clone();
     if rec.header.family()? == mgc_formats::mgcr::Family::Mc2 {
         drop(rec);
@@ -1425,6 +1426,11 @@ pub(crate) fn build_world_mc1_with_book(
     }
     if let Some(sp) = bundle.spells.as_deref() {
         assets = assets.with_spells(sp)?;
+    }
+    // The sprite-stat widths are derived from the level's own sprite
+    // sheet (the arctic bank on a Hidden Worlds level).
+    if let Some(dims) = bundle.sprite_dims() {
+        assets = assets.with_mc1_sprite_ext(mgc_sim::mc1::derive_sprite_stats(&dims));
     }
     let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);
     let mut w = World::new_for_game(planes, &pkg.things.things, seed, assets, game_id);

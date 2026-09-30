@@ -366,11 +366,15 @@ impl Gen {
         for dy in 0..h {
             for dx in 0..w {
                 if let Some(code) = paint[dy * w + dx] {
+                    let cx = tlx.wrapping_add(dx as u8);
+                    // The re-stamp of `sub_37240`'s last frame: its `dl`
+                    // is 0 for a row's first cell, the cell's x after.
                     self.mc2_paint_cell(
                         7,
-                        tlx.wrapping_add(dx as u8),
+                        cx,
                         tly.wrapping_add(dy as u8),
                         code,
+                        if dx == 0 { 0 } else { cx },
                     );
                 }
             }
@@ -449,6 +453,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         }
     }
 

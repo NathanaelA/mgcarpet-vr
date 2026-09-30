@@ -1,0 +1,18 @@
+{
+ "dir": "fixtures/mc1hwl10",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 21967,
+   "file": "a-leaderless-pack-member-is-demoted-before-it-can-be-hurt.mgcr",
+   "source": "mc1hwl10",
+   "note": "A PACK MEMBER WITH NO LEADER IS DAMAGE-DEAF FOR THE TICK: the shared pack routine `sub_1A390` (remc1hw sub_main.cpp:20234) opens on `if (!a1x->+52) { v2 = a2; LABEL_34: v9 = v2 + 1; sub_424F0(a1x, v9); return; }` — the mail read (`+58` awake, `+94` source), the `+54` segment walk and the `actLife < 0` test all sit BELOW it. SHIPPED BYTES HIDDEN.EXE file 0x32D88 (VA 0x1A390 + 0x189F8): `32d92 cmpw $0x0,0x34(%ebx)` / `32d97 jne 0x32da2` / `32d99 mov 0x18(%esp),%al` / `32d9d jmp 0x33091` (the state write); the awake test `32dcd mov 0x3a(%ebx),%ah` and the mail test `32dda cmpw $0x0,0x5e(%ebx)` are only reached through the `jne`. WITNESS mc1hwl10 t=21967->21968 (whole-take numbering), militiaman slot 579 `(5,4)`: state 27 (m4 PACK) with `+52` 0, woken this tick (`+58` 0 -> 16), `mail0` (1200, 629) posted by a lower slot. Retail demotes him 27 -> 25 with `actLife` 207 untouched and the mail still standing, and debits 2400 on the NEXT tick from the wander prologue (207 -> -2193, state 28). The port's centralized intake ran above every live state, debited the 1200 (life -993), latched `+38` / `+40` = 629 and corpsed him a tick early. m5 / m12 / m13 / m14 own their pack slot and never reach `sub_1A390`. Kill switch MGC_NO_MC1_LEADERLESS_PACK_DEAF=1 restores the prologue and regresses this pair (slot 579 life: retail 207 port -993). Unit pin `mc1::mobs::tests::a_leaderless_pack_member_is_demoted_before_it_can_be_hurt`. Ledger ROUND 167."
+  },
+  {
+   "t": 48553,
+   "file": "the-hidden-worlds-tree-draws-three-times.mgcr",
+   "source": "mc1hwl10",
+   "note": "THE TREE CTOR IS NOT THE SAME FUNCTION IN THE TWO BINARIES: `CARPET.EXE`'s `sub_37BC0` (remc1 sub_main.cpp:44402) steps the record's LCG FOUR times — a discarded life roll, the x and y jitter, and a variant bit that picks sprite 83 or 84; `HIDDEN.EXE`'s `sub_37F80` (remc1hw :40815) steps it THREE times and calls the sprite setter with 83 unconditionally. SHIPPED BYTES HIDDEN.EXE file 0x50978 (VA 0x37F80 + 0x189F8): the body holds exactly three `imul $0x24a1,0x4(%ebx),%eax` (0x509c3, 0x509f3, 0x50a14), then the link `50a3b call`, RefillLife `50a44 call`, `50a4c push $0x53` / `50a4f call` (sprite 83). One draw and one sprite row, so `rand`, `type86` and the extents the sprite carries (171 against 177). At level init this is round 165's `(2,0)` census leftover (983 rows on 12 HW takes) — replay imports the pool, so it never graded. WITNESS at runtime mc1hwl10 t=48553->48554 (whole-take numbering): trigger volume slot 5 `(11,24)` fires and mints the authored tree at slot 6 and the `(11,2)` at slot 11; retail's tree reads `rand` 1069502566 / `type86` 83, the port's 4271901957 / 84. Kill switch MGC_NO_MC1HW_TREE_CTOR=1 restores MC1's ctor on an HW level and regresses this pair. Unit pin `mc1::mobs::tests::the_hidden_worlds_tree_draws_three_times_and_wears_sprite_83`. Ledger ROUND 167."
+  }
+ ]
+}

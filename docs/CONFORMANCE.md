@@ -918,6 +918,25 @@ where the lane is NOT graded:
 every lane — the complete census in one run, and the way to see the
 `owner28` rows the conservative family test over-skips.
 
+`flags.b2_sac2` (round 168) is the SACRIFICABLE bit — `byte[2] & 2`, bit
+17 on both sides, what `sub_49F90` lists for a dry pool. It is a shadow
+lane only: no boundary grades it. Until round 168 it was in no lane at
+all, and two constructors carried it wrong (the cave drip without it,
+the Magic Mine with it).
+
+**The corpus census (round 168).** Once a take reads END the graded
+lanes are silent; the shadow is what is left to steer by. One pass gives
+both boards — the BRIEF row and the shadow blocks ride one replay:
+
+    ls recordings/*.mgcr | xargs -P 20 -I{} sh -c \
+      './tools/conform --env MGC_RAW_SHADOW=1 replay {} --segmented --brief 2>&1 \
+         | sed -n "/^BRIEF/p;/RAW SHADOW/,\$p" > $OUT/$(basename {} .mgcr).txt'
+
+then sum the rows per `(class, model, lane)` and per wizard lane across
+the files (about six minutes for the 122 takes). Rank by rows, take the
+first witness tick of each family onto a slice, and read retail's side
+with `class_walk_mc1` / `explain`.
+
 Two gates the MC1 arm does not need. **Torn slots** are excluded:
 `torn_slots` drops any slot whose `phase3e` moved by an amount its
 species' CADENCE does not allow (round 149, `verify_mc2::slot_is_torn`:
@@ -1453,6 +1472,72 @@ recording opens on the severed side. `replay` imports that outcome
 `init-check` is the first instrument that does. `MGC_INIT_SEVER_AT=2`
 subtracts it: **mc2l4 173 → 0 entity rows, mc2l4-new 151 → 0, mc2l21
 185 → 2**. Run it before reading an MC2 init census as port defects.
+
+## `lane-check` — the init record, the entity index, `terrain_rand` (2026-09-29, round 166)
+
+Retail takes recorded from 2026-09-27 on carry three lanes nothing read (docs/RECORDING.md, "The init
+record", "The entity index"). These instruments read them. All are censuses or switches that are OFF by
+default; none moves a graded row.
+
+    ./tools/conform lane-check recordings/<take>.mgcr [--limit <n>] [--sample-every <n>]
+
+One verdict line per block, `LANE <take> <block>:`:
+
+- **INDEX** — retail against itself, every tick. The captured head table is walked through the pool's
+  own links and every sentence the importer's rebuild assumes is checked: a member is live, linked,
+  stands on the chain's cell, its back link names the member before it, no record sits in two chains,
+  no linked live record is unreached. `prev-0 rule` is the shadow census's rule ("a linked live record
+  with no back link heads its own cell") against the capture.
+- **INDEX-IMPORT** — the importer against the capture, every `--sample-every`-th tick (default 10):
+  the world is anchored at the record and each cell's chain is read beside retail's, the human spliced
+  out. `disabled-record` rows are the ones the MC2 ghost rule explains.
+- **TRAND** — the retile LCG's draws per tick (the LCG is full-period, so a count is the difference of
+  two ranks), beside the terrain channel's own edits.
+- **INIT** — the init record beside record 0 (what frame 1 did), and the port's native build beside
+  both: terrain planes, `terrain_rand`, the head table, the pool, MC2's retile table.
+
+    ./tools/conform init-check --init recordings/<take>.mgcr
+    ./tools/conform blob-census --init recordings/<take>.mgcr
+
+`init-check --init` puts the INIT RECORD where record 0 stood and settles nothing. The init record is
+pre-spawn: the port's carpet, tokens and rivals read as port-only rows, and they must be exactly the
+records retail's record 0 shows born. `blob-census --init` is the raw byte diff init → record 0.
+
+**Every anchor of a retail take seats the two capture lanes the importer never took** (round 166,
+`World::install_capture_lanes`, the conformance replay's anchors and the app's `--replay`): the measured
+SHADING plane and the retile LCG (`terrain_rand`). `MGC_NO_SHADING_SEED=1` / `MGC_NO_TRAND_SEED=1` restore
+the old anchor. The pair path (`verify-deltas`, the fixtures) is unchanged: a pair grades obs fields, and
+neither lane reaches one in a single tick.
+
+**The take declares its binary** (round 166, `crate::take_binary`). A retake's header carries
+`capture.exe.volcano_guard`; every mode that runs the sim against a take reads it and grades a guarded
+take on the guarded arm of `volcano_register_revalidate`. Its BRIEF row carries `exe=guarded`, and it is
+certified against the guarded binary, not the shipped one. `MGC_NO_TAKE_VOLCANO_GUARD=1` ignores the
+header; the old probes `MGC_REPLAY_VOLCANO_GUARD` / `MGC_FORCE_VOLCANO_GUARD` still force the arm on a
+take that declares nothing.
+
+The `replay` switches (set the variable to anything):
+
+| switch | what it does |
+| --- | --- |
+| `MGC_TRAND` | every stepped boundary compares the tick's retile-LCG draw COUNT with retail's. Prints `TRAND <take>:` |
+| `MGC_INDEX` | after every stepped tick, each cell's chain beside the captured one, and the out-of-pool human's SEAT (`Gen::player_chain`) beside his own record's cell and `next` link. Prints `INDEX <take>:` and the swap classes |
+| `MGC_INDEX_VERBOSE` | with `MGC_INDEX`: every row on stdout as `INDEXROW …` (the seat rows: the first 400) |
+| `MGC_INDEX_IMPORT` | every anchor installs the captured heads and raw links over the importer's rebuild. An ATTRIBUTION switch: a boundary that closes with it set was downstream of a chain the pool cannot rebuild |
+
+An `INDEX` row is sorted by what retail's own table holds. `retail-unsound` = the chain passes through a
+record that is free, unlinked or standing on another tile, or either side's chain holds a record retail's
+table misplaces that tick: the registered book-scatter deviation (docs/DEVIATIONS.md), left out of the
+verdict. Everything else is the port's: `head` / `order` (same records, another order — the `INDEX SWAPS`
+line names the pair), `membership`, `human seat`.
+
+`MGC_PLANE_CENSUS` prints a `shading=` tail. Its old `anglebits=0x70` floor is gone with the LCG seated: any
+angle row is the port's. A dirty angle plane names its first eight cells (`angle_first=[(x, y, port, truth)]`,
+round 168) — feed them to `MGC_CELL_TRACE`.
+
+`dump-state` closes on the two allocator stacks (8-deep tails). When a stack's MEMBERSHIP differs it adds
+`<free|recycle> stack members: retail-only [...]  port-only [...]` (round 168): the tails cannot name a record
+one side lacks.
 
 ## Recording slices — the dig instrument for late ticks (2026-09-05)
 

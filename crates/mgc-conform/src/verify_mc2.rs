@@ -148,6 +148,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         other => return Err(format!("--pin-pose {other:?}: want n or n1")),
     };
     let mut rec = Recording::open(path)?;
+    crate::take_binary(&rec);
     let level = rec.header.level.ok_or("recording has no level number")?;
     println!(
         "== verify-deltas {} (game mc2, level {level}, pin-pose {})",

@@ -82,6 +82,9 @@ pub struct ReplayFile {
 impl ReplayFile {
     pub fn open(path: &Path) -> Result<ReplayFile, String> {
         let rec = Recording::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        // The take declares its binary: a guarded take replays on the
+        // guarded arm (round 166, the conformance runner's law).
+        mgc_sim::engine::features::set_take_volcano_guard(rec.volcano_guarded());
         let family = rec.header.family()?;
         let level = rec.header.level.ok_or("recording has no level number")?;
         let source = match rec.header.source.as_str() {
@@ -713,6 +716,17 @@ impl ReplayDriver {
                 w.install_measured_terrain(h, ty, ceil, an)
                     .map_err(|e| format!("terrain: {e}"))?;
             }
+            // The shading plane and the retile LCG ride every anchor
+            // too (round 166): the take's own texture rotation and
+            // light, not the pristine build's.
+            w.install_capture_lanes(
+                self.timg
+                    .as_ref()
+                    .filter(|i| i.based())
+                    .and_then(|i| i.plane("shading")),
+                tick.terrain_rand,
+            )
+            .map_err(|e| format!("capture lanes: {e}"))?;
             let (fl, fr) = recover::mc1_fire(st.wizards[st.local_player as usize].move_bits);
             w.set_prev_fire(fl, fr);
             w.terrain_dirty = true;
@@ -838,6 +852,17 @@ impl ReplayDriver {
                 w.install_measured_terrain(h, ty, ceil, an)
                     .map_err(|e| format!("terrain: {e}"))?;
             }
+            // The shading plane and the retile LCG ride every anchor
+            // too (round 166): the take's own texture rotation and
+            // light, not the pristine build's.
+            w.install_capture_lanes(
+                self.timg
+                    .as_ref()
+                    .filter(|i| i.based())
+                    .and_then(|i| i.plane("shading")),
+                tick.terrain_rand,
+            )
+            .map_err(|e| format!("capture lanes: {e}"))?;
             let (fl, fr) = recover::mc1_fire(st.players[st.local_player as usize].move_bits);
             w.set_prev_fire(fl, fr);
             w.terrain_dirty = true;

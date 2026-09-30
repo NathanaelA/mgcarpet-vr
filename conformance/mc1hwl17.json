@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1hwl17",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 45100,
+   "file": "one-ball-feeds-every-genie-that-reaches-it-in-the-tick.mgcr",
+   "source": "mc1hwl17",
+   "note": "THE GENIE EATS FROM THE TICK-TOP BALL CHAIN, AND A BALL EATEN THIS TICK IS STILL ON IT: `sub_1E810` (remc1hw sub_main.cpp:23308, `//SYNCHRONIZED WITH REMC1`) walks `dword_AE408 + 36466` and its only per-node test is `+65 == 39`; the destroy it calls, `sub_41E80`, is `+17 |= 4` and nothing else. SHIPPED BYTES HIDDEN.EXE (file = VA + 0x189F8), `sub_1E810` at file 0x37208: `37241 mov 0x8e72(%eax),%eax` (the chain head) / `37249 cmpb $0x27,0x41(%eax)` / `37276 ja` (range, `v_28` squared) / `3727a jae` (strictly nearer) / `3729c add %eax,0x8c(%ebx)` (the whole `+140`) / `372aa movw $0x0,0x90(%ebp)` (unclaim) / `372b7 call` (the soft kill) / `372c8 call` (the `(10,0)` puff). No class test, no `0x400` test, no life test. WITNESS mc1hwl17 t=45100->45101 (whole-take numbering): the human (slot 82) dies, genies 9, 10 and 11 `(5,11)` all leave the chase through the dead-target arm (`sub_1E380`: eat, then `sub_1E720` home, state 68 -> 66, `+146` 82 -> 0) and EACH reads mana 10000 -> 10500 off ball 442 `(10,39)`, `+140` 500, which is reap-flagged once (flags 12 -> 1036); three `(10,0)` puffs. The port scanned the POOL and skipped a record carrying `0x400`, so genie 9 ate and 10 and 11 found nothing: mana 10500 / 10000 on both, three records missing, the free stack two pops apart. Second witness mc1hwl20 t=23717, genie 65 (mana 11500 / 10000) — same law, not pinned twice. Kill switch MGC_NO_MC1_GENIE_EAT_CHAIN=1 restores the pool scan and regresses this pair. Unit pin `mc1::mobs::tests::one_ball_feeds_every_genie_that_reaches_it_in_the_tick`. Ledger ROUND 167."
+  }
+ ]
+}

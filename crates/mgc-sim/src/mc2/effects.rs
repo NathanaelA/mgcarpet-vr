@@ -166,6 +166,14 @@ pub(crate) fn no_mc2_command_word_cast() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_COMMAND_WORD_CAST").is_some())
 }
 
+/// `MGC_NO_MC2_MINE_NOT_SACRIFICABLE=1` restores the sacrificable bit
+/// on the (10,78) Magic Mine (round 168). Citation and witness at
+/// [`Gen::mc2_spawn_magic_mine`]'s flags write.
+fn no_mc2_mine_not_sacrificable() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_MINE_NOT_SACRIFICABLE").is_some())
+}
+
 impl Gen {
     // ---- ctors ---------------------------------------------------------------
 
@@ -587,7 +595,19 @@ impl Gen {
             };
             // `byte[0] |= 8` (EF:36969) — the mine is SOLID, which is
             // what lets `sub_10780` hand it to `sub_68AC0`.
-            e.flags = (e.flags & !0x2_0000) | 0x2_0008;
+            // ⭐ …AND NOTHING ELSE: the ctor never touches `byte[2]`,
+            // so a mine is NOT sacrificable (round 168). The port set
+            // bit 17 with the solid bit and listed every standing mine
+            // for a dry pool's seizure: mc2l6-rival-spells-galore
+            // t=15007, eight mines (flags 0xC in retail) on the port's
+            // recycle stack alone — 459 victims against 451, 2,776
+            // boundaries. `MGC_NO_MC2_MINE_NOT_SACRIFICABLE=1` restores
+            // the bit.
+            e.flags = if no_mc2_mine_not_sacrificable() {
+                (e.flags & !0x2_0000) | 0x2_0008
+            } else {
+                (e.flags & !0x2_0000) | 8
+            };
         }
         self.link(i, x, y, at_z);
         self.refill_life(i);
@@ -1483,8 +1503,30 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    /// Round 168: the Magic Mine's ctor `sub_50840` writes `byte[0] |=
+    /// 8` and never touches `byte[2]` (EF:36969) — a mine is solid and
+    /// NOT sacrificable, so the recycle scan passes it by. WITNESS
+    /// mc2l6-rival-spells-galore t=15007 (eight mines, flags 0xC).
+    /// `MGC_NO_MC2_MINE_NOT_SACRIFICABLE=1` fails the first assert.
+    #[test]
+    fn a_magic_mine_is_solid_and_not_sacrificable() {
+        let mut g = flat_gen();
+        let m = g
+            .mc2_spawn_magic_mine(40 << 8, 40 << 8, 3200, 0, 1000)
+            .expect("a mine");
+        assert_eq!(g.ent[m].flags & 0x2_0000, 0, "no `byte[2] |= 2` in the ctor");
+        assert_eq!(g.ent[m].flags & 8, 8, "`byte[0] |= 8`: solid");
+        let mask = g.victim_mask();
+        g.rebuild_recycle(mask);
+        assert!(
+            !g.mc2_recycle.stack.contains(&(m as u16)),
+            "sub_49F90 does not list a mine"
+        );
     }
 
     /// ⭐ THE (10,34) TELEPORT PAD'S LAUNCH AXIS IS NOT DEAD — ITS Z

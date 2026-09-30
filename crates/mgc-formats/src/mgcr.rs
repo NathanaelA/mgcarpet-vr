@@ -753,6 +753,18 @@ impl Recording {
             .as_u64()
     }
 
+    /// Whether the take DECLARES the volcano-guarded binary (header
+    /// `capture.exe.volcano_guard`, written by the retake rig; see
+    /// docs/RECORDING.md). A take that does not say is not guarded.
+    pub fn volcano_guarded(&self) -> bool {
+        self.header_json
+            .get("capture")
+            .and_then(|c| c.get("exe"))
+            .and_then(|e| e.get("volcano_guard"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
     /// `"SLICE of <file> t=<from>..<to>"` when this recording was cut
     /// by `mgc-conform slice` (header `capture.slice`), else `None`.
     /// Every instrument that SEEDS from the first record prints it: a

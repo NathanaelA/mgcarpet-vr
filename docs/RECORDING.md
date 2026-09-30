@@ -318,6 +318,10 @@ it, and a disagreement with the reconstruction is itself a finding).
 Consumers that grade terrain skip planes they do not model
 (`terrain-check` reports them as skipped). A moving entity changes a
 handful of cells per tick; measured on mc2l0, ≤334 delta bytes/tick.
+Read by `mgc-conform lane-check` and the `MGC_INDEX` replay switch
+(docs/CONFORMANCE.md) since round 166. ⚠ Retail's table is NOT always
+derivable from the pool: on four MC1/HW takes a wizard's death links a
+FREE record into a chain (ledger 166-4).
 
 Size: empty deltas are 4 bytes per plane before compression;
 terraform windows tens of cells; volcano/doomsday storms hundreds —

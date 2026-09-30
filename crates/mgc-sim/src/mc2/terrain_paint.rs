@@ -62,6 +62,82 @@ fn road_step(idx: u16, carry: bool) -> u16 {
     }
 }
 
+/// `MGC_NO_MC2_PAINT_RESIDUE_TYPE=1` restores the fixed `type = 0` seed
+/// in [`classify_slope`] (round 167). Retail's `sub_45BE0` (Terrain.cpp
+/// :1630, NETHERW.EXE file 0x6a3e0) takes `type` in `dl` and writes it
+/// only on a nonzero corner 0 or a strictly-higher later corner, so a
+/// quad flat at zero classes off the CALLER's `dl`:
+/// - `sub_37240` (the village footprint, EF:27377): `xor %edx,%edx` at
+///   0x5bd75 for a row's first cell, then `mov -0x8(%ebp),%dl; inc %dl`
+///   at 0x5bd9f — the NEXT cell's x — for every cell after it.
+/// - `sub_36FC0` (the instant stamp, EF:27121): the low byte of the
+///   template pointer, unreproducible; only `> 3` matters → 0xFF.
+/// - the (10,42) castle painter (EF:27794): `dword_0x10_16 % 7`, the
+///   paint gate's own remainder (0, or 1 on the last frame).
+/// - the scorch arm (EF:22685-91): the low byte of the record's
+///   position pointer — see [`mc2_fire_paint_residue`] (round 168; the
+///   flags byte round 167 put here is gone before the call).
+/// WITNESS mc2l4 t=11434..11458 (and mc2l4-new 30258).
+pub(crate) fn no_mc2_paint_residue_type() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_PAINT_RESIDUE_TYPE").is_some())
+}
+
+/// The low byte of the entity pool's GUEST address, `&D41A0_0.Entities[0]`
+/// = 3,526,342 (0x35CEC6). The pool is a static of the image:
+/// `dword_0x36DF6` reads 2,790,316 on every MC2 take of the corpus, and
+/// the pool sits 736,026 above it (`mgc_formats::mgcr`,
+/// `MC2_BASE160_TO_POOL`).
+///
+/// ⚠ A LOAD-ADDRESS CONSTANT, seeded on the precedent of the IVT ghost
+/// and the painter residue (docs/DEVIATIONS.md: "one stable witnessed
+/// value ⇒ seed it"): it is the address DOS/4GW gives the image under
+/// the DOSBox every take was made on, the same on all 40 of them. A
+/// machine that loads the image elsewhere moves the residue to other
+/// slots; the law — `dl` is a pointer byte — does not change.
+///
+/// ⚖ PLAYER-RULED 2026-09-30: reproduce it, but in the FAITHFUL arm
+/// only (`MobCtx::strict`) — a workaround of this kind must not sit on
+/// the native path. The one caller, `Gen::mc2_fire_tick`, gates it.
+const MC2_POOL_GUEST_LOW: u8 = 0xC6;
+
+/// `MGC_NO_MC2_FIRE_PAINT_POINTER=1` restores round 167's residue for
+/// the fire tick's paint (the record's flags byte 0 & 0xFE). See
+/// [`mc2_fire_paint_residue`].
+pub(crate) fn no_mc2_fire_paint_pointer() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_FIRE_PAINT_POINTER").is_some())
+}
+
+/// `dl` AT THE FIRE TICK'S PAINT CALL IS A POINTER BYTE (round 168).
+/// `sub_30D50` masks the flags byte in `dl` (NETHERW.EXE file 0x55584
+/// `and $0xfe,%dl`) and then calls `getTerrainAlt_10C40`, whose wrapper
+/// opens on `mov 0x8(%ebp),%edx` (0x35443) — `edx = &record.position`,
+/// the record's address + 0x4C — and whose callee 0xda460 saves and
+/// restores `edx`. The caller reloads the flags into `dh` alone
+/// (0x55593 `mov 0xc(%ebx),%dh`), so with the area pass skipped
+/// (`byte[2] & 1`, 0x555c3) `sub_45DC0` is entered on `dl` = the low
+/// byte of that pointer and `cl` = `byte[2]` (0x555bd), and
+/// `sub_45BE0` classes a quad flat at zero off them. Records are 168
+/// bytes apart, so the byte is `0x12 + 0xA8 * slot`: 2 on every slot
+/// that is 6 mod 32, above 3 on the other 31.
+///
+/// WITNESS mc2l10-secondtake t=10964: fire slot 294 (flags 0x30084,
+/// `byte[2]` 3) burns the type-11 path cell (124,120) on a sea-level
+/// quad. `dl` = 2, `cl` = 3 → class 6 → type 12, angle nibble 0x30;
+/// the flags byte (0x84) classed it 0 → nibble 0x00. One cell for nine
+/// ticks, the last plane row of the MC2 corpus.
+///
+/// ⚠ With the area pass RUN (`byte[2] & 1` clear) both registers are
+/// `sub_10C80`'s: `cl` = its last column offset, `dl` = 0 off its last
+/// cell index — or a victim's pointer when that cell held one. No take
+/// witnesses that arm; it keeps round 167's pair.
+pub(crate) fn mc2_fire_paint_residue(slot: usize) -> u8 {
+    MC2_POOL_GUEST_LOW
+        .wrapping_add(0x4C)
+        .wrapping_add((slot as u32).wrapping_mul(168) as u8)
+}
+
 /// A/B toggle for THE ROAD STRIP'S SEAM CARRY: set
 /// `MGC_NO_MC2_ROAD_STRIP_SEAM_CARRY` to restore the pre-dig port,
 /// where a road strip that ran past x = 255 wrapped back to x = 0 on
@@ -321,14 +397,28 @@ pub fn retile_table_mc2() -> Vec<[u8; 2]> {
 /// (quad relief <= 8), which codes 0x0A..0x0E consume as a +8 row
 /// select. `in_type` seeds the second-corner register exactly like
 /// the original's in-out argument.
-fn classify_slope(height: &[u8], mut in_type: u8, cx: u8, cy: u8) -> (u8, bool) {
+///
+/// ⭐ `residue` SEEDS THE FIRST-CORNER REGISTER (round 167). Retail's
+/// `type` (`dl`) is only written when corner 0 is nonzero (`xor
+/// %dl,%dl`, NETHERW.EXE 0x6a3fe) or a later corner is STRICTLY
+/// higher than the running maximum, so a quad that is flat at ZERO
+/// keeps whatever the CALLER left in `dl` — and every caller leaves
+/// something different (see [`no_mc2_paint_residue_type`]). A residue
+/// above 3 falls into the `switch`'s default and classes the cell 0;
+/// 0..3 pick the paired-corner classes 4..7 off `in_type`. mc2l4
+/// t=11434: `sub_37240` paints a 32-cell village footprint at height
+/// 0 with `dl` = the cell's x (47..60), retail classes every cell 0 →
+/// type 27 / angle 0x00; the port's fixed 0 classed them 4 → 26 /
+/// 0x60. 1,044 type + 1,056 angle cells for 24 ticks, on a take at
+/// horizon END (the planes are graded by no boundary).
+fn classify_slope(height: &[u8], mut in_type: u8, residue: u8, cx: u8, cy: u8) -> (u8, bool) {
     let q = [
         height[tile(cx, cy)],
         height[tile(cx.wrapping_add(1), cy)],
         height[tile(cx.wrapping_add(1), cy.wrapping_add(1))],
         height[tile(cx, cy.wrapping_add(1))],
     ];
-    let mut ty = 0u8;
+    let mut ty = if no_mc2_paint_residue_type() { 0 } else { residue };
     let mut min_h = 255u8;
     let mut max_h = 0u8;
     if q[0] != 0 {
@@ -414,7 +504,12 @@ impl Gen {
     /// and resolve through [`Gen::mc2_retile_region`]. `in_type` = the
     /// caller's column counter (the original passes the footprint
     /// column; the groove-castle path passes 7).
-    pub(crate) fn mc2_paint_cell(&mut self, in_type: u8, cx: u8, cy: u8, code: u8) {
+    ///
+    /// `residue` = what the caller left in `dl`, read by
+    /// [`classify_slope`] on a quad flat at zero — `sub_45DC0` itself
+    /// never writes `dl` on the `>= 8` arm (0x6a60f..0x6a687 touch
+    /// `al` / `ch` / `eax` only).
+    pub(crate) fn mc2_paint_cell(&mut self, in_type: u8, cx: u8, cy: u8, code: u8, residue: u8) {
         let t = tile(cx, cy);
         if code < 8 {
             self.t.angle[t] = code | (self.t.angle[t] & 0xF0);
@@ -423,7 +518,7 @@ impl Gen {
         }
         // (family base into UNK_D4A30, class offset, +8 on low_diff)
         let band = |g: &mut Gen, base: usize, extra: u8, low_diff_rows: bool| {
-            let (class, low_diff) = classify_slope(&g.t.height, in_type, cx, cy);
+            let (class, low_diff) = classify_slope(&g.t.height, in_type, residue, cx, cy);
             let mut row = class + extra;
             if low_diff_rows && low_diff {
                 row += 8;
@@ -1024,5 +1119,70 @@ impl Gen {
             }
             cx = cx.wrapping_add(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Round 167 ([`no_mc2_paint_residue_type`]): on a quad flat at
+    /// ZERO the classifier's first-corner register is the caller's
+    /// residue — `> 3` classes 0 (type 27 / angle 0x00 through the base-0
+    /// band), `0..3` the paired classes 4..7 off `in_type`; a nonzero
+    /// corner overwrites it and the residue is inert. WITNESS mc2l4
+    /// t=11434: 1,044 cells classed 4 → 26 instead of 0 → 27.
+    /// `MGC_NO_MC2_PAINT_RESIDUE_TYPE=1` fails the `47` assert.
+    #[test]
+    fn a_flat_zero_quad_classes_off_the_callers_residue() {
+        let flat = vec![0u8; 0x10000];
+        // sub_37240's cells after the first: dl = the cell's x (47).
+        assert_eq!(classify_slope(&flat, 1, 47, 47, 114), (0, true), "> 3 → default 0");
+        assert_eq!(classify_slope(&flat, 1, 0xFF, 5, 5), (0, true), "the template byte");
+        // A row's first cell: dl = 0 → switch(0) on in_type.
+        assert_eq!(classify_slope(&flat, 0, 0, 40, 114), (7, true));
+        assert_eq!(classify_slope(&flat, 1, 0, 40, 114), (4, true));
+        // Residues 1..3 pick the other paired classes.
+        assert_eq!(classify_slope(&flat, 2, 1, 40, 114), (5, true));
+        assert_eq!(classify_slope(&flat, 0, 1, 40, 114), (4, true));
+        assert_eq!(classify_slope(&flat, 3, 2, 40, 114), (6, true));
+        assert_eq!(classify_slope(&flat, 0, 3, 40, 114), (7, true));
+        assert_eq!(classify_slope(&flat, 1, 3, 40, 114), (6, true));
+        // A raised corner writes the register: the residue is inert.
+        let mut hill = flat.clone();
+        hill[tile(41, 115)] = 20; // corner 2 of the quad at (40,114)
+        assert_eq!(classify_slope(&hill, 0, 47, 40, 114), (2, false));
+        assert_eq!(classify_slope(&hill, 0, 0, 40, 114), (2, false));
+        // Corner 0 nonzero clears it too (`xor %dl,%dl`).
+        let mut plateau = flat.clone();
+        for (x, y) in [(40u8, 114u8), (41, 114), (41, 115), (40, 115)] {
+            plateau[tile(x, y)] = 9;
+        }
+        // type 0, corner 1 becomes the second corner → in_type 1 → 4.
+        assert_eq!(classify_slope(&plateau, 0, 47, 40, 114), (4, true));
+    }
+
+    /// Round 168 ([`mc2_fire_paint_residue`]): the fire tick enters the
+    /// painter on `dl` = the low byte of its record's position pointer,
+    /// `0x12 + 0xA8 * slot` — 2 on a slot that is 6 mod 32, above 3 on
+    /// every other. WITNESS mc2l10-secondtake t=10964, fire slot 294
+    /// (`byte[2]` 3) on the sea-level path cell (124,120): class 6, the
+    /// base-0x30 band's row 6 = type 12 / nibble 0x30.
+    #[test]
+    fn the_fire_paints_off_its_position_pointers_low_byte() {
+        assert_eq!(mc2_fire_paint_residue(0), 0x12, "pool base 0xC6 + 0x4C");
+        assert_eq!(mc2_fire_paint_residue(294), 2, "the witness slot");
+        for slot in 1..1000usize {
+            let r = mc2_fire_paint_residue(slot);
+            assert_eq!(r <= 3, slot % 32 == 6, "slot {slot}: residue {r}");
+            assert_eq!(r % 8, 2, "records are 168 bytes apart");
+        }
+        let flat = vec![0u8; 0x10000];
+        let (class, _) = classify_slope(&flat, 3, mc2_fire_paint_residue(294), 124, 120);
+        assert_eq!(class, 6);
+        assert_eq!(UNK_D4A30[0x30 + 2 * class as usize..][..2], [0x0c, 0x30]);
+        // The flags byte round 167 read there (0x84) classes 0.
+        assert_eq!(classify_slope(&flat, 3, 0x84, 124, 120).0, 0);
+        assert_eq!(UNK_D4A30[0x30..][..2], [0x0c, 0x00]);
     }
 }

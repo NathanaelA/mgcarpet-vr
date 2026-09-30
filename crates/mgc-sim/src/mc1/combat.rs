@@ -471,6 +471,50 @@ pub(crate) fn no_mc1_shot_stats_model_gate() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SHOT_STATS_MODEL_GATE").is_some())
 }
 
+/// A/B toggle for HIDDEN WORLDS' SHOT GATE (round 168): set
+/// `MGC_NO_MC1HW_SHOT_STATS_M16` to keep `CARPET.EXE`'s model list on
+/// an HW level. `HIDDEN.EXE`'s `sub_526C0` twin (VA 0x52A00, remc1hw
+/// sub_main.cpp:58673) is not the same gate: file 0x6b407 `cmp
+/// $0x7,%al; jb` (0, 1 and 3 below it) / 0x6b40b `cmp $0x9,%al; jbe
+/// ok` / 0x6b40f `cmp $0x10,%al; jb ret; jbe ok` / 0x6b419 `cmp
+/// $0x13,%al; je ok` — model **16**, the beam segment, IS a shot
+/// there, where `CARPET.EXE` returns on it (the mc1l49 t=633 witness
+/// of [`no_mc1_shot_stats_model_gate`]). WITNESS mc1hwl9-crashed
+/// t=808: the human's `shots` 36 -> 37 and `hits` 6 -> 7 on a (9,16)
+/// detonation the port left uncounted; 13 takes' counters ran one or
+/// more short from their first beam on (255,353 `shots` rows).
+fn no_mc1hw_shot_stats_m16() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1HW_SHOT_STATS_M16").is_some())
+}
+
+/// A/B toggle for THE UNDEAD-ARMY BOLT'S `+44` (round 168): set
+/// `MGC_NO_MC1_UNDEAD_BOLT_44` to restore the spell table's damage word
+/// (100) on the (9,11) bolt. The token machine `sub_57800` (remc1
+/// sub_main.cpp:65926; one function for the human and the AI) writes
+/// the word three times: the token's own `+44`, then `+44 = 1`
+/// (:65964), then — when the owner's `wizext+50` register is nonzero
+/// and that record's `+136` covers the token's `+136` (:65967-71) —
+/// the low word of the token's price. The bolt hands the word to its
+/// (10,36) child through the generic explode, whose first tick
+/// overwrites it, so it shows only on the bolt's flight and the
+/// spawner's birth boundary. WITNESS mc1hwl0 t=47086, bolt slot 906:
+/// the human's castle 340 stores 30,000,000, `+44` reads 13000.
+fn no_mc1_undead_bolt_44() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_UNDEAD_BOLT_44").is_some())
+}
+
+/// A/B toggle for THE SILENT END'S SHOT (round 168): set
+/// `MGC_NO_MC1_SILENT_END_SHOT` to stop scoring the no-spawn end of
+/// the state 7 / 8 flight handler and the duel dart's tail. Citation
+/// and the mc1l32-quick t=9962 / mc1l48 t=59118 witnesses at
+/// [`Gen::mc1_shot_stats_silent`].
+fn no_mc1_silent_end_shot() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_SILENT_END_SHOT").is_some())
+}
+
 /// A/B toggle for THE HIT-STAT AIM LATCH (round 154, w154f; round 153
 /// finding #5): set `MGC_NO_MC1_HIT_STAT_AIM_LATCH` to restore the
 /// pre-dig `hits` test, which read the bolt's `+146` AT THE
@@ -2938,12 +2982,28 @@ impl Gen {
         v
     }
 
+    /// The Undead-Army bolt's `+44` as `sub_57800` leaves it (:65962-71):
+    /// 1, or the token's price when wizard `wiz`'s castle register
+    /// names a record whose `+136` covers it — the register is an index
+    /// test alone. `None` under [`no_mc1_undead_bolt_44`].
+    pub(crate) fn mc1_undead_bolt_44(&self, wiz: usize, price: u32) -> Option<u16> {
+        if no_mc1_undead_bolt_44() {
+            return None;
+        }
+        let reg = self.castle_reg[wiz & 7] as usize;
+        let housed = reg != 0 && reg < self.ent.len() && self.ent[reg].f136 as u32 >= price;
+        Some(if housed { price as u16 } else { 1 })
+    }
+
     /// `sub_526C0`'s model gate (:62591-98, CARPET.EXE 0x526CC-0x526F2):
     /// which class-9 models are SHOTS for the human's `+343/+347`
     /// counters — 0, 1, 3, 7, 8, 9 and 19; every other model returns
     /// before `shots++`. `MGC_NO_MC1_SHOT_STATS_MODEL_GATE` counts all.
+    /// `HIDDEN.EXE`'s twin adds model 16 ([`no_mc1hw_shot_stats_m16`]).
     fn mc1_shot_counts(&self, model: u8) -> bool {
-        no_mc1_shot_stats_model_gate() || matches!(model, 0 | 1 | 3 | 7..=9 | 19)
+        no_mc1_shot_stats_model_gate()
+            || matches!(model, 0 | 1 | 3 | 7..=9 | 19)
+            || (model == 16 && self.is_hidden_worlds() && !no_mc1hw_shot_stats_m16())
     }
 
     /// `sub_526C0` (:62585-612) for a human-owned detonation: the
@@ -2963,6 +3023,30 @@ impl Gen {
         };
         let hit = self.mc1_shot_hit(struck, aimed);
         self.mc1_note_shot(self.ent[i].model65, hit);
+    }
+
+    /// `sub_526C0(a1, 0, ..)` — THE SILENT END IS A SHOT (round 168).
+    /// `sub_530C0`'s tail (remc1 sub_main.cpp:63186-63210, the state
+    /// 7 / 8 handler: the duel dart, the steal ball and every REBOUNDED
+    /// bolt) forks on the struck record: a wizard mints the child and
+    /// scores inside the allocation guard (:63193-95); ANYTHING ELSE —
+    /// a creature, the ground, the life running out — is
+    /// `sub_526C0(a1, 0, v21); sub_41E80(a1)` (:63208-09), no spawn
+    /// and no guard. A null struck record can never be a hit, so it is
+    /// `shots++` alone, behind the same model gate and owner test.
+    /// WITNESS mc1l32-quick t=9962: the human's rebounded fireball
+    /// (slot 2, `+70` 8) flies its life out at z 8759 and `shots`
+    /// reads 1226 -> 1227 with no effect born; the port's three
+    /// silent ends scored nothing. `MGC_NO_MC1_SILENT_END_SHOT=1`
+    /// restores that.
+    fn mc1_shot_stats_silent(&mut self, i: usize) {
+        if no_mc1_silent_end_shot() {
+            return;
+        }
+        let (own, model) = (self.ent[i].id24, self.ent[i].model65);
+        if own == PLAYER_TARGET && self.mc1_shot_counts(model) {
+            self.mc1_note_shot(model, false);
+        }
     }
 
     /// Bill one gated shot: retail's `shots++` / `hits++`, plus the
@@ -3939,10 +4023,27 @@ impl Gen {
                 (e.id24, e.x, e.y, e.z)
             };
             if let Some(f) = self.spawn_effect(0, x, y, z) {
+                // ⭐ THE TRAIL CAN SEIZE ITS OWN BOLT — the HW site of
+                // [`no_mc1_self_seize`], the one the class census
+                // listed as exposed. `sub_54600` hands the ctor a
+                // POINTER to the bolt's `+72` and reads `+24` after it
+                // returns (`HIDDEN.EXE` file 0x6D011 `8d 43 48` lea
+                // 0x48(%ebx) / 0x6D015 call / 0x6D028 `66 8b 5b 18`
+                // mov 0x18(%ebx),%bx), so on a dry free stack the fire
+                // is born at (0,0,0) wearing its own slot stamp.
+                // WITNESS mc1hwl5 t=6188: the human's bolt at slot 912
+                // (free 0, recycle 102 → 74) becomes retail's `(10,0)`
+                // at x/y/z 0 with `id24` 912; the port's hoisted
+                // copies posed it at the bolt, owned by the human
+                // (341). Found through the captured entity index
+                // (round 166): retail's chain for cell (0,0) held 912.
+                let seized = self.mc1_self_seized(f, i);
                 let e = &mut self.ent[f];
                 e.flags |= 0x80; // +16 |= 0x80
                 e.flags |= 0x1_0000; // +18 |= 1
-                e.id24 = own;
+                if !seized {
+                    e.id24 = own;
+                }
             }
         }
         hit
@@ -4684,6 +4785,8 @@ impl Gen {
                 // reads chase 331 on every recorded strike.
                 self.proj_explode(i, ctx, Some(v), true, true);
             } else {
+                // :63208-09 — a shot, then the kill.
+                self.mc1_shot_stats_silent(i);
                 self.ent[i].flags |= 0x400;
             }
             return false;
@@ -4692,15 +4795,19 @@ impl Gen {
         if ground <= tmp.2 {
             self.ent[i].act_life -= 1;
             if self.ent[i].act_life < 0 {
+                self.mc1_shot_stats_silent(i);
                 self.ent[i].flags |= 0x400; // silent timeout
             }
         } else {
             // Terrain block: no revert — the water test, the splash
             // and the silent end all read the point the seeker flew
-            // TO (:63161-83), where the pre-probe move left it.
+            // TO (:63161-83), where the pre-probe move left it. The
+            // splash arm leaves the detonation flag clear (:63175-80):
+            // no shot.
             if self.on_water_pub(tmp.0, tmp.1) {
                 self.splash_and_die(i);
             } else {
+                self.mc1_shot_stats_silent(i);
                 self.ent[i].flags |= 0x400; // silent ground end
             }
         }
@@ -5477,6 +5584,13 @@ impl Gen {
                     let Some(t) = self.spawn_effect(26, x, y, z) else {
                         return false;
                     };
+                    // :63195 — `sub_526C0(a1, v6, v21)`, first
+                    // statement inside the allocation guard (mc1l48
+                    // t=59118: `shots` 2528 -> 2529, `hits` 279 -> 280
+                    // on the tether's birth tick).
+                    if own == PLAYER_TARGET && !no_mc1_silent_end_shot() {
+                        self.mc1_shot_stats(i, hit);
+                    }
                     {
                         let e = &mut self.ent[t];
                         e.id24 = own;
@@ -5485,6 +5599,9 @@ impl Gen {
                         e.f146 = struck.unwrap_or(0);
                         e.f44 = bolt_f44;
                     }
+                } else {
+                    // :63208 — the miss arm: a shot, no spawn.
+                    self.mc1_shot_stats_silent(i);
                 }
             }
             // The pre-dig arm, kept under
@@ -5740,7 +5857,10 @@ impl Gen {
                 // plume kill below soft-kills whatever inherited the old
                 // plume's slot (mc1l45: a rival's Fireball token).
                 let revalidate = ctx.patches.volcano_register_revalidate
-                    && (!ctx.strict || crate::engine::features::force_volcano_guard());
+                    && (!ctx.strict || crate::engine::features::force_volcano_guard())
+                    // …or the take itself was recorded on the guarded
+                    // binary and says so (round 166).
+                    || crate::engine::features::take_volcano_guard();
                 let kick_ok = !revalidate
                     || prev != i
                         && prev < self.ent.len()
@@ -6658,8 +6778,10 @@ impl Gen {
     ///   :63424 (stack axis, operands only), the creature shooter
     ///   thunks :21884/:21916/:21943/:22026/:22051/:22074/:22111/
     ///   :22144/:23248/:25848/:26159 ([`Gen::mc1_arm_live`]), the
-    ///   corpse's puff :21866 and ball `sub_27690` :29675, and the
-    ///   standing fire's exhaust `sub_252D0` :28230.
+    ///   corpse's puff :21866 and ball `sub_27690` :29675, the
+    ///   standing fire's exhaust `sub_252D0` :28230, and the HW-only
+    ///   firewall trail `sub_54600` (hw:59934, `proj_firewall_tick`;
+    ///   witness mc1hwl5 t=6188, round 166).
     /// * UNREACHABLE — the sixteen cast token machines
     ///   (`sub_56090`…`sub_58240`, :65058-66325) and
     ///   `sub_44D30`/`sub_45FC0`/`sub_155F0`/`sub_3C9D0`: their
@@ -6680,10 +6802,8 @@ impl Gen {
     ///   draw on the caller AFTER the allocation), its siblings
     ///   :57707/:57744/:57762, the castle's `sub_47020`/`sub_47080`
     ///   :56105/:56124 (`+150`, so the child reads the castle's
-    ///   zeroed SITE triple) and `sub_47400` :56343/:56428, the m6
-    ///   spit `sub_1BD20` :22947, and the HW-only trail
-    ///   (`proj_firewall_tick`, hw:59934) whose bytes live in
-    ///   `HIDDEN.EXE`, not `CARPET.EXE`.
+    ///   zeroed SITE triple) and `sub_47400` :56343/:56428, and the
+    ///   m6 spit `sub_1BD20` :22947.
     pub(crate) fn mc1_self_seized(&mut self, child: usize, src: usize) -> bool {
         if !self.mc1_seized_caller(child, src) {
             return false;
@@ -9850,6 +9970,7 @@ mod ring_seizure_tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         Gen::new(planes, assets, 1, ChassisParams::MC1, verbs)
     }
@@ -10234,5 +10355,70 @@ mod ring_seizure_tests {
             g.ent[s].f26, 2,
             "the ring step reads the child's +26 = 0 -> (0 + 2) % 7, not (3 + 2) % 7"
         );
+    }
+
+    /// Round 168 ([`no_mc1hw_shot_stats_m16`]): `HIDDEN.EXE`'s shot
+    /// gate takes model 16 (file 0x6b40f `cmp $0x10,%al; jb ret; jbe
+    /// ok`), `CARPET.EXE`'s returns on it. WITNESS mc1hwl9-crashed
+    /// t=808. `MGC_NO_MC1HW_SHOT_STATS_M16=1` fails the HW assert.
+    #[test]
+    fn the_hidden_worlds_shot_gate_counts_the_beam_segment() {
+        let (mc1, ..) = rig(rings_at(3, 4), VerbSet::MC1, 53, 3, 4);
+        let (hw, ..) = rig(rings_at(3, 4), VerbSet::MC1HW, 53, 3, 4);
+        for m in [0u8, 1, 3, 7, 8, 9, 19] {
+            assert!(mc1.mc1_shot_counts(m) && hw.mc1_shot_counts(m), "model {m}");
+        }
+        for m in [2u8, 4, 5, 6, 10, 11, 12, 13, 14, 15, 17, 18, 20] {
+            assert!(!mc1.mc1_shot_counts(m) && !hw.mc1_shot_counts(m), "model {m}");
+        }
+        assert!(!mc1.mc1_shot_counts(16), "CARPET.EXE returns on the beam segment");
+        assert!(hw.mc1_shot_counts(16), "HIDDEN.EXE counts it");
+    }
+
+    /// Round 168 ([`Gen::mc1_undead_bolt_44`]): `sub_57800` leaves the
+    /// Undead-Army bolt's `+44` at 1, or at the token's price when the
+    /// owner's castle register names a record whose `+136` covers it
+    /// (:65962-71) — an index test alone. WITNESS mc1hwl0 t=47086
+    /// (13000 under a castle storing 30,000,000).
+    /// `MGC_NO_MC1_UNDEAD_BOLT_44=1` answers `None`.
+    #[test]
+    fn the_undead_bolt_carries_one_or_the_housed_price() {
+        let (mut g, ..) = rig(rings_at(3, 4), VerbSet::MC1, 53, 3, 4);
+        assert_eq!(g.mc1_undead_bolt_44(0, 13000), Some(1), "no register: 1");
+        let c = g.new_event().expect("a record");
+        g.castle_reg[0] = c as u16;
+        g.ent[c].f136 = 12_999;
+        assert_eq!(g.mc1_undead_bolt_44(0, 13000), Some(1), "a store under the price");
+        g.ent[c].f136 = 13_000;
+        assert_eq!(g.mc1_undead_bolt_44(0, 13000), Some(13000), "covered: the price");
+        // Blind: the record need not be a castle.
+        assert_ne!(g.ent[c].class64, 3);
+        assert_eq!(g.mc1_undead_bolt_44(1, 13000), Some(1), "another wizard's register");
+    }
+
+    /// Round 168 ([`Gen::mc1_shot_stats_silent`]): the no-spawn end of
+    /// the state 7 / 8 handler is `sub_526C0(a1, 0, ..)` (:63208) — a
+    /// shot and never a hit, for the human's gated models only.
+    /// WITNESS mc1l32-quick t=9962 (a rebounded fireball timing out).
+    /// `MGC_NO_MC1_SILENT_END_SHOT=1` fails the first assert.
+    #[test]
+    fn a_silent_end_is_a_shot_and_never_a_hit() {
+        let (mut g, ..) = rig(rings_at(3, 4), VerbSet::MC1, 53, 3, 4);
+        let b = g.new_event().expect("a bolt");
+        g.ent[b].class64 = 9;
+        g.ent[b].model65 = 0;
+        g.ent[b].id24 = crate::mc1::mobs::PLAYER_TARGET;
+        let (s0, h0) = (g.shots, g.hits);
+        g.mc1_shot_stats_silent(b);
+        assert_eq!((g.shots, g.hits), (s0 + 1, h0), "shots++ alone");
+        // A model behind the gate (the volcano lob) scores nothing…
+        g.ent[b].model65 = 4;
+        g.mc1_shot_stats_silent(b);
+        assert_eq!(g.shots, s0 + 1, "model 4 returns before `shots++`");
+        // …and neither does a bolt that is not the human's.
+        g.ent[b].model65 = 0;
+        g.ent[b].id24 = 600;
+        g.mc1_shot_stats_silent(b);
+        assert_eq!(g.shots, s0 + 1, "the owner test is class 3, model 0");
     }
 }

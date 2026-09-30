@@ -462,6 +462,38 @@ pub(crate) fn rival_fall_wall_gate() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_RIVAL_FALL_WALL_GATE").is_none())
 }
 
+/// ⭐ THE NATIVE HUMAN IS SEATED IN HIS TILE CHAIN WHERE HE IS MINTED.
+/// Retail's carpet is linked the moment `sub_44D30` (MC2:
+/// `AddPlayer_4A920`) pops it, so everything minted on his tile after
+/// him — his own book's tokens first — head-inserts AHEAD of him and he
+/// ends the prologue at the chain's TAIL. The port's out-of-pool seat
+/// (`features::PlayerChain`) stayed unseeded through the constructor,
+/// and the first walk then took him for a fresh arrival: HEAD of his
+/// tile, the last token his successor. Found by the captured entity
+/// index (round 166): record 0 reads successor 0 on all 115 whole
+/// takes, the native build's seat was unseeded on all 115.
+/// `MGC_NO_NATIVE_HUMAN_SEAT=1` restores the unseeded constructor.
+pub(crate) fn native_human_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_NATIVE_HUMAN_SEAT").is_none())
+}
+
+/// ⭐ THE FALLING CORPSE IS RELINKED BEFORE ITS TRAIL PUFF IS MINTED.
+/// `sub_45FC0` (`reference/remc1/sub_main.cpp:55463-84`) opens with the
+/// mover `sub_455D0`, whose commit relinks the record (`sub_41C70`,
+/// :55250-52), and only then mints the `(10,1)` puff (:55480). The port
+/// minted first and relinked after, so on every tick the corpse crossed
+/// into a new tile the puff sat BEHIND the carpet in that tile's chain
+/// where retail walks it first. Found by the captured entity index
+/// (round 166, `MGC_INDEX`): 10,883 chain rows on 62 MC1/HW takes, all
+/// of them this one pair; witness mc1hwl15 t=1030 cell (204,101),
+/// retail `[35, 234]` port `[234, 35]`. No graded field reads it.
+/// `MGC_NO_MC1_FALL_RELINK_FIRST=1` restores the old order.
+pub(crate) fn fall_relink_first() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC1_FALL_RELINK_FIRST").is_none())
+}
+
 /// ⭐⭐⭐ THE OWNED REGISTER HAS EXACTLY ONE WRITER IN THE WHOLE MC1
 /// BINARY — `sub_45C10_45F50` (`reference/remc1/sub_main.cpp:55304-20`,
 /// twin `remc1hw:51372`). A grep of every `+676` reference in the
@@ -1553,6 +1585,9 @@ impl World {
         };
         self.mc1_carpet_slot = i as u16;
         self.g.mc1_pinned = crate::engine::features::Mc1Pinned(i as u16);
+        if native_human_seat() {
+            self.g.player_relink(x, y);
+        }
     }
 
     fn spawn_rival(&mut self, slot: u8, cfg: RivalConfig) {
@@ -2357,7 +2392,17 @@ impl World {
     /// the castle arm of the sweep (:19733-39); the carpet/balloon
     /// and mana-ball arms bump and stop.
     fn rival_add_hate(&mut self, ri: usize, shooter: u8, amount: u16) {
-        if shooter as usize >= 8 || self.rivals[ri].slot == shooter {
+        // ⭐ NO SELF TEST (round 168). The ledger arms index the
+        // victim-owner's table by the shooter's colour and add; when
+        // the two are one wizard the row is its own. mc1hwl14 t=62:
+        // wizard 3 lobs Possess at a sphere it already claims (716
+        // mana) and its `hate[3]` reads 24607 -> 24786, the claimed-
+        // ball arm's `mana / 4`; the port's invented exclusion left it
+        // flat. `MGC_NO_MC1_SELF_HATE=1` restores the exclusion.
+        if shooter as usize >= 8
+            || (self.rivals[ri].slot == shooter
+                && crate::engine::features::no_mc1_self_hate())
+        {
             return;
         }
         let r = &mut self.rivals[ri];
@@ -4007,6 +4052,48 @@ impl World {
         }
     }
 
+    /// THE ATTACK REGISTERS, READ BLIND (round 168). `sub_14E60` (remc1hw
+    /// sub_main.cpp:16905; [`Self::mc1_token_word48`] carries the
+    /// shipped bytes) resolves `pool[wizext+676+2*spell]` on a SIGNED
+    /// index test alone, and the `+676` rebuild files an acquisition
+    /// entry under the MODEL byte of whatever record its slot now holds.
+    /// The picker `sub_16030`, the readiness `sub_15A00`, the
+    /// wait-or-continue test `sub_15E90` and the commit `sub_155F0` then
+    /// take that record's words as a token's: `+136` is the PRICE (no
+    /// static table anywhere in the four), `+48` the busy word, and the
+    /// commit's arm is `+48 = +50` on the record, whatever it is.
+    ///
+    /// WITNESS mc1hwl12 t=16994: wizard 3's acquisition list names slot
+    /// 941, recycled into a `(5,15)` mob, so `owned[15] = 941`. The
+    /// mob's `+136` is 0, which a purse of 1000 covers: retail walks
+    /// 17 (13000 over the 1000 ceiling), 7, 20, 0 (on cooldown) and
+    /// commits "Lightning" through the mob — `cooldown[15]` 0 -> 1,
+    /// burst 1 -> 2, the mob's `+48 = +50` (0), no bolt — and a fired
+    /// cast tick skips the arrival hover. The port priced spell 15 off
+    /// the table, found the purse short, hovered: z 4 off on nine heads.
+    ///
+    /// The speed register has its own reader
+    /// ([`Self::rival_blind_speed_reg`], round 167); Castle keeps
+    /// [`Self::rival_castle_price`] and [`castle_token_index`].
+    /// `MGC_NO_MC1_RIVAL_BLIND_REGISTER=1` restores the table price and
+    /// the validated token.
+    fn rival_reg(&self, ri: usize, s: usize) -> Option<usize> {
+        let m = self.rivals[ri].owned[s] as i16;
+        (m > 0 && (m as usize) < self.g.ent.len()).then_some(m as usize)
+    }
+
+    /// The commit's arm through [`Self::rival_reg`]: `+48 = +50`
+    /// (`sub_155F0`, every case). `+48` homes in `f26` on a class-12
+    /// record and in the raw shadow on any other.
+    fn rival_reg_arm(&mut self, m: usize) {
+        let reload = self.g.ent[m].f50;
+        if self.g.ent[m].class64 == 12 {
+            self.g.ent[m].f26 = reload;
+        } else {
+            self.g.ent[m].raw48 = crate::engine::features::Raw48(reload as u16);
+        }
+    }
+
     fn set_rival_state(&mut self, ri: usize, s: AiState, target: u16) {
         self.rivals[ri].state = s;
         self.rivals[ri].target = target;
@@ -5206,6 +5293,65 @@ impl World {
         }
     }
 
+    /// THE SPEED REGISTER, READ BLIND (round 167). `sub_14E60` (remc1hw
+    /// sub_main.cpp:16905) resolves `pool[wizext+676+2*spell]` on an
+    /// index test alone, and the `+676` rebuild re-points an entry at
+    /// whatever record a recycled acquisition slot now holds. Every
+    /// reader then takes that record's words as a token's: `sub_15E60`
+    /// its `+48`, `sub_15A00` case 2 its `+136` as the PRICE, `sub_155F0`
+    /// case 2 its `+50` as the reload. [`Self::rival_token`] validates
+    /// the binding and answered "no token", which sent the travel
+    /// helper to its plain-throttle leg — and that leg sets `v_14`,
+    /// which kills the rival's REAL burst at the token's next pass.
+    ///
+    /// WITNESS mc1hwl14 t=13453: slot 733, a stale entry of wizard 5's
+    /// acquisition list, is minted as a `(10,2)` contrail; the rebuild
+    /// sets `owned[2]` 130 -> 733. The contrail's `+48`, `+50` and
+    /// `+136` are all 0, so retail's brain "casts" through it every
+    /// tick (`cooldown[2]` re-armed to 32 on each of them, `v_14`
+    /// standing at 0) while the real token 130 (`+48` 246, 245, …)
+    /// runs its burst out: speed 160, regen pinned. The port throttled,
+    /// killed the burst at 13454 and paid the regen — 45 graded heads.
+    ///
+    /// Returns the record when the register names one that is NOT this
+    /// rival's own token. `MGC_NO_MC1_RIVAL_BLIND_SPEED=1` restores the
+    /// validated read.
+    fn rival_blind_speed_reg(&self, ri: usize) -> Option<usize> {
+        if crate::engine::features::no_mc1_rival_blind_speed() {
+            return None;
+        }
+        let m = self.rivals[ri].owned[2] as usize;
+        (m != 0 && m < self.g.ent.len() && self.rival_token(ri, 2).is_none()).then_some(m)
+    }
+
+    /// The three blind reads of [`Self::rival_blind_speed_reg`], in
+    /// retail's order. `far` is the caller's boost-distance test
+    /// (`sub_15470` :17199; the Cruise twin has none). `true` = the
+    /// helper returns here, speed columns and `v_14` untouched.
+    fn rival_blind_speed(&mut self, ri: usize, i: usize, b: usize, far: bool) -> bool {
+        let word48 = self.mc1_token_word48(b);
+        if word48 > 0 {
+            return true; // sub_15E60 — "a burst is running"
+        }
+        // sub_15A00 case 2: the purse against the RECORD's `+136`.
+        if !far || (self.rivals[ri].mana as i32) < self.g.ent[b].f136 {
+            return false;
+        }
+        // sub_155F0: readiness passed, so `+17 &= ~1` lands; case 2
+        // then refuses on a NONZERO `+48` and reloads otherwise.
+        self.g.ent[i].flags &= !0x100;
+        if word48 == 0 {
+            let reload = self.g.ent[b].f50;
+            if self.g.ent[b].class64 == 12 {
+                self.g.ent[b].f26 = reload;
+            } else {
+                self.g.ent[b].raw48 = crate::engine::features::Raw48(reload as u16);
+            }
+            self.rivals[ri].cooldown[2] = AI_RECAST[2];
+        }
+        true
+    }
+
     /// The Cruise speed logic (sub_13A10 :18188-203, shared by the
     /// castle-less Home arm sub_13A70 :18213-22): an ACTIVE speed
     /// burst owns the speed columns (sub_15E60's +48 test — vdes
@@ -5219,6 +5365,13 @@ impl World {
     /// running entirely (the `sub_15E60` early return) and the latch
     /// keeps whatever the cast tick left.
     fn rival_cruise_speed(&mut self, ri: usize, i: usize) {
+        if let Some(b) = self.rival_blind_speed_reg(ri) {
+            if !self.rival_blind_speed(ri, i, b, true) {
+                self.rivals[ri].vdes = self.g.ent[i].f128;
+                self.rivals[ri].v14 = true;
+            }
+            return;
+        }
         if self
             .rival_token(ri, 2)
             .is_some_and(|m| self.g.ent[m].f26 > 0)
@@ -5291,6 +5444,13 @@ impl World {
             self.rivals[ri].vdes = 0;
             self.rivals[ri].v14 = true; // :19075-76 — the arrival stop
             return true;
+        }
+        if let Some(b) = self.rival_blind_speed_reg(ri) {
+            if !self.rival_blind_speed(ri, i, b, d > boost) {
+                self.rivals[ri].vdes = self.g.ent[i].f128;
+                self.rivals[ri].v14 = true;
+            }
+            return false;
         }
         if self
             .rival_token(ri, 2)
@@ -5431,7 +5591,9 @@ impl World {
     /// `plan15` is the anti-rebound SUCCESS arm (:19509-16), whose
     /// only outcomes are cast-15 and hold — it has no fall-through.
     fn rival_arm(&mut self, ri: usize, s: usize, plan15: bool) -> ArmStep {
-        if self.rivals[ri].owned[s] == 0 {
+        let blind = !crate::engine::features::no_mc1_rival_blind_register();
+        let reg = self.rival_reg(ri, s);
+        if if blind { reg.is_none() } else { self.rivals[ri].owned[s] == 0 } {
             return ArmStep::Next;
         }
         if self.rival_cast_ready(ri, s) {
@@ -5448,9 +5610,13 @@ impl World {
         // (The cooldown escape is what lets a just-fired — or
         // castle-fizzled — high-priority spell yield to a cheaper
         // castle-free one like Fireball while it recharges.)
-        if self.rivals[ri].mana_max < self.spells()[s].possess_mana
-            || self.rivals[ri].cooldown[s] != 0
-        {
+        // ⭐ The ceiling is held against the REGISTERED RECORD's `+136`
+        // (`sub_15E90` :17510, signed `<=`) — see [`Self::rival_reg`].
+        let over_ceiling = match reg {
+            Some(m) if blind => self.g.ent[m].f136 > self.rivals[ri].mana_max as i32,
+            _ => self.rivals[ri].mana_max < self.spells()[s].possess_mana,
+        };
+        if over_ceiling || self.rivals[ri].cooldown[s] != 0 {
             return ArmStep::Next;
         }
         ArmStep::Stop(None)
@@ -5474,8 +5640,18 @@ impl World {
     /// wizard's own entity LCG — burning ent_rand here stole a
     /// graded-lane draw (mc1l49 t=2788).
     fn rival_rebound_roll(&mut self, ri: usize, vs_wizard: bool) -> bool {
-        let token_live =
-            |m: u16| m != 0 && (m as usize) < self.g.ent.len() && self.g.ent[m as usize].f26 > 0;
+        // `sub_16000` :17585-87 — the register's record, its `+48` word
+        // (see [`Self::rival_reg`]; `f26` is `+26` off class 12).
+        let blind = !crate::engine::features::no_mc1_rival_blind_register();
+        let token_live = |m: u16| {
+            m != 0
+                && (m as usize) < self.g.ent.len()
+                && if blind {
+                    (m as i16) > 0 && self.mc1_token_word48(m as usize) > 0
+                } else {
+                    self.g.ent[m as usize].f26 > 0
+                }
+        };
         let target_rebounds = vs_wizard
             && match self.rivals[ri].target {
                 PLAYER_TARGET => token_live(self.player.owned[14]),
@@ -5522,6 +5698,17 @@ impl World {
         if m == 0 {
             return false;
         }
+        // ⭐ The register is an index and the record behind it answers
+        // for the price and the busy word — see [`Self::rival_reg`].
+        // Castle keeps its own price reader.
+        let blind = if s == 16 || crate::engine::features::no_mc1_rival_blind_register() {
+            None
+        } else {
+            let Some(b) = self.rival_reg(ri, s) else {
+                return false; // `sub_14E60` answered 0
+            };
+            Some(b)
+        };
         // The recast cooldown gates every case EXCEPT Accelerate —
         // sub_15A00's case 2 tests token + mana only (:19260-63);
         // its cadence comes from the burst window (the commit's +48
@@ -5543,7 +5730,9 @@ impl World {
         // ⭐ SIGNED (`jl`, CARPET.EXE 0x15B8C and every sibling case):
         // a purse the fatal tick wrapped negative refuses — see
         // [`crate::engine::features::no_mc1_rival_cast_signed_purse`].
-        let short = if crate::engine::features::no_mc1_rival_cast_signed_purse() {
+        let short = if let Some(b) = blind {
+            (r.mana as i32) < self.g.ent[b].f136
+        } else if crate::engine::features::no_mc1_rival_cast_signed_purse() {
             r.mana < cost
         } else {
             (r.mana as i32) < cost as i32
@@ -5558,10 +5747,15 @@ impl World {
         // for the fireball group (case 0/0xB/0xD/0xF), whose bolts
         // re-arm mid-burst freely. Accelerate's lives in the COMMIT
         // (sub_155F0 case 2 :19151), mirrored in `rival_cast`.
+        // Blind, the word is tested NONZERO (`cmpw $0x0,0x30(%eax)` /
+        // `jne`, HIDDEN.EXE file 0x2e45e).
         if matches!(s, 3 | 4 | 7 | 8 | 12 | 14 | 17 | 20)
-            && self
-                .rival_token(ri, s)
-                .is_some_and(|m| self.g.ent[m].f26 > 0)
+            && match blind {
+                Some(b) => self.mc1_token_word48(b) != 0,
+                None => self
+                    .rival_token(ri, s)
+                    .is_some_and(|m| self.g.ent[m].f26 > 0),
+            }
         {
             return false;
         }
@@ -5739,8 +5933,14 @@ impl World {
         // ([`World::rival_manifestation_tick`], retail's sub_56090
         // machine). A token below the caster fires next pass, above
         // it the same tick — retail's phase for free.
-        if let Some(m) = self.rival_token(ri, s) {
-            self.g.ent[m].f26 = def.count as i16;
+        // ⭐ Blind, the arm is `+48 = +50` on whatever record the
+        // register names — see [`Self::rival_reg`].
+        if crate::engine::features::no_mc1_rival_blind_register() {
+            if let Some(m) = self.rival_token(ri, s) {
+                self.g.ent[m].f26 = def.count as i16;
+            }
+        } else if let Some(m) = self.rival_reg(ri, s) {
+            self.rival_reg_arm(m);
         }
         let _ = (ex, ey, ez, yaw);
         true
@@ -5883,6 +6083,9 @@ impl World {
             _ => None,
         };
         let Some(pr) = pr else { return };
+        let undead_44 = self
+            .g
+            .mc1_undead_bolt_44(self.rivals[ri].slot as usize, def.possess_mana);
         let e = &mut self.g.ent[pr];
         // Every retail emit arm adds the caster's speed to +126 ONLY
         // (:65237/:65956/:66143 …) — no emit site in the binary
@@ -5913,6 +6116,13 @@ impl World {
             e.f36 = pitch;
         }
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
+        if s == 17 {
+            // `sub_57800`'s own `+44` (:65962-71) — one machine for
+            // the human and the AI.
+            if let Some(v) = undead_44 {
+                e.f44 = v;
+            }
+        }
         // +140 carries the per-burst-tick debit quantum (cost/count —
         // the token ctor's stamp, corpus: fireball token 200/5 = 40 on
         // the bolt), not the full one-shot cost.
@@ -6178,12 +6388,21 @@ impl World {
         if body.2 < floor {
             body.2 = floor;
         }
+        // The mover's commit relinked the body BEFORE the puff exists
+        // (see [`fall_relink_first`]); `body` is final by here, so the
+        // one relink carries the gravity and the floor with it.
+        let first = fall_relink_first();
+        if first {
+            self.g.move_relink(i, body.0, body.1, body.2);
+        }
         // The trail (10,1) burning puff (:55480-84) — at the SCRATCH.
         if let Some(s) = self.g.spawn_effect(1, puff.0, puff.1, puff.2) {
             self.g.ent[s].flags |= 0x80;
             self.g.ent[s].id24 = self.rivals[ri].ent;
         }
-        self.g.move_relink(i, body.0, body.1, body.2);
+        if !first {
+            self.g.move_relink(i, body.0, body.1, body.2);
+        }
         if body.2 == floor {
             self.rival_death_impact(ri, i);
         }
@@ -6235,6 +6454,14 @@ impl World {
         self.rival_deaths.push(slot);
         let name = RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");
         self.set_notification(format!("{name} has died."), 100, [0xFF, 0, 0]);
+        // :55518 `memset(a1 + 90, 0, 36)` — the touchdown wipes the
+        // corpse's whole mailbox, the fatal letter the fall carried
+        // included. The human's twin had the line
+        // (`World::player_land`); the rival's arm did not. See
+        // [`crate::engine::features::no_mc1_rival_landing_mail_clear`].
+        if !crate::engine::features::no_mc1_rival_landing_mail_clear() {
+            self.g.ent[i].mail = [(0, 0); 6];
+        }
         // JAR SCATTER (:55519-49): every owned manifestation detaches
         // into a decaying ground jar around the corpse — iterated over
         // the +532 ACQUISITION LIST in PICKUP order, not the spell-id
@@ -7257,6 +7484,118 @@ mod tests {
             "slots follow the walk: {:?}",
             &r.acq[..4]
         );
+    }
+
+    /// Round 167 ([`World::rival_blind_speed_reg`]): the rival's travel
+    /// helper reads its speed register BLIND. With `owned[2]` naming a
+    /// recycled non-token record (mc1hwl14 t=13453: a `(10,2)`
+    /// contrail, `+48` / `+50` / `+136` all 0) retail's brain finds no
+    /// burst, finds the "token" affordable at price 0, reloads its
+    /// `+48` from its `+50` and re-arms `cooldown[2]` — and never
+    /// reaches the plain-throttle leg that sets `v_14`.
+    /// `MGC_NO_MC1_RIVAL_BLIND_SPEED=1` fails the first `v14` assert.
+    #[test]
+    fn the_travel_helper_reads_a_recycled_speed_register_blind() {
+        let mut w = rebound_world();
+        let i = w.rivals[0].ent as usize;
+        let (x, y, z) = (w.g.ent[i].x, w.g.ent[i].y, w.g.ent[i].z);
+        let puff = w.g.spawn_effect(2, x, y, z).expect("a contrail");
+        assert_ne!(w.g.ent[puff].class64, 12, "non-vacuity: not a token");
+        w.rivals[0].owned[2] = puff as u16;
+        assert!(w.rival_token(0, 2).is_none(), "the validated read refuses it");
+        w.rivals[0].mana = 750; // under Accelerate's real 1000
+        w.rivals[0].cooldown[2] = 0;
+        w.rivals[0].vdes = 160;
+        w.g.ent[i].flags |= 0x100;
+        let far = (x.wrapping_add(8000), y);
+
+        // Beyond the boost range: the blind cast.
+        let arrived = w.rival_approach(0, i, far.0, far.1, Some(z), 1024, 3072);
+        assert!(!arrived);
+        assert!(!w.rivals[0].v14, "the throttle leg is never reached");
+        assert_eq!(w.rivals[0].vdes, 160, "the speed column is untouched");
+        assert_eq!(w.rivals[0].cooldown[2], AI_RECAST[2], "the commit's cooldown");
+        assert_eq!(w.g.ent[i].flags & 0x100, 0, "sub_155F0's `+17 &= ~1`");
+        assert_eq!(w.mc1_token_word48(puff), 0, "`+48 = +50`, both 0");
+
+        // A nonzero `+48` on the record reads as a running burst.
+        w.g.ent[puff].raw48 = crate::engine::features::Raw48(5);
+        w.rivals[0].cooldown[2] = 0;
+        w.rival_approach(0, i, far.0, far.1, Some(z), 1024, 3072);
+        assert!(!w.rivals[0].v14);
+        assert_eq!(w.rivals[0].cooldown[2], 0, "sub_15E60 returns first");
+
+        // Inside the boost range (and not arrived) retail throttles.
+        w.g.ent[puff].raw48 = crate::engine::features::Raw48(0);
+        let near = (x.wrapping_add(2000), y);
+        w.rival_approach(0, i, near.0, near.1, Some(z), 1024, 3072);
+        assert!(w.rivals[0].v14, "the plain throttle sets the latch");
+        assert_eq!(w.rivals[0].vdes, w.g.ent[i].f128);
+
+        // A record priced above the purse is not "ready" either.
+        w.g.ent[puff].f136 = 751;
+        w.rivals[0].cooldown[2] = 0;
+        w.rival_approach(0, i, far.0, far.1, Some(z), 1024, 3072);
+        assert!(w.rivals[0].v14, "unaffordable: throttle");
+        assert_eq!(w.rivals[0].cooldown[2], 0);
+    }
+
+    /// Round 168 ([`World::rival_reg`]): the attack picker, the
+    /// readiness and the commit read their register BLIND. With
+    /// `owned[15]` naming a recycled non-token record (mc1hwl12
+    /// t=16994: a `(5,15)` mob, `+48` / `+50` / `+136` all 0) retail
+    /// prices "Lightning" at the record's `+136`, commits it on a purse
+    /// the table price refuses, and arms the record's `+48` from its
+    /// `+50`. `MGC_NO_MC1_RIVAL_BLIND_REGISTER=1` fails the first pick.
+    #[test]
+    fn the_attack_picker_prices_a_recycled_register_off_the_record() {
+        let mut w = rebound_world();
+        let i = w.rivals[0].ent as usize;
+        let (x, y, z) = (w.g.ent[i].x, w.g.ent[i].y, w.g.ent[i].z);
+        let puff = w.g.spawn_effect(2, x, y, z).expect("a stand-in record");
+        assert_ne!(w.g.ent[puff].class64, 12, "non-vacuity: not a token");
+        let table = w.spells()[15].possess_mana;
+        assert!(table > 1, "non-vacuity: Lightning has a table price");
+        w.rivals[0].owned[0] = 0;
+        w.rivals[0].owned[15] = puff as u16;
+        assert!(w.rival_token(0, 15).is_none(), "the validated read refuses it");
+        // A purse the table price refuses and the poverty latch passes.
+        w.rivals[0].mana_max = table - 1;
+        w.rivals[0].mana = table - 1;
+        w.rivals[0].poverty = false;
+        w.rivals[0].burst = 0;
+        w.rivals[0].cooldown = [0; SPELL_COUNT];
+        w.g.ent[i].f34 = w.g.ent[i].f30;
+
+        // `+136 == 0`: the purse covers it, the picker returns 15.
+        assert_eq!(w.rival_attack_pick(0, false), Some(15), "priced off the record");
+        assert!(w.rival_cast(0, i, 15), "and the commit fires");
+        assert_eq!(w.rivals[0].cooldown[15], AI_RECAST[15], "the commit's cooldown");
+        assert_eq!(w.rivals[0].burst, 1, "the precision pair's burst counter");
+        assert_eq!(w.mc1_token_word48(puff), 0, "`+48 = +50`, both 0");
+
+        // The arm is `+48 = +50` on the record, whatever its class.
+        w.rivals[0].cooldown[15] = 0;
+        w.g.ent[puff].f50 = 7;
+        assert!(w.rival_cast(0, i, 15));
+        assert_eq!(w.mc1_token_word48(puff), 7, "the record's own reload");
+
+        // A record priced over the purse but under the ceiling HOLDS
+        // the walk (`sub_15E90` reads the same `+136`)…
+        w.rivals[0].cooldown[15] = 0;
+        w.rivals[0].owned[7] = puff as u16;
+        w.g.ent[puff].raw48 = crate::engine::features::Raw48(0);
+        w.g.ent[puff].f136 = table as i32 - 1;
+        w.rivals[0].mana = table - 2;
+        assert_eq!(w.rival_attack_pick(0, false), None, "7 holds: affordable by ceiling");
+        // …and one priced over the ceiling is walked past.
+        w.g.ent[puff].f136 = table as i32;
+        assert_eq!(w.rival_attack_pick(0, false), None, "nothing affordable at all");
+        w.g.ent[puff].f136 = 0;
+        // The aimed group's busy word is the record's `+48`, nonzero.
+        w.g.ent[puff].raw48 = crate::engine::features::Raw48(0xFFFF);
+        assert!(!w.rival_cast_ready(0, 7), "a nonzero `+48` refuses the aimed group");
+        assert!(w.rival_cast_ready(0, 15), "the fireball group has no busy gate");
     }
 
     /// ⭐⭐⭐ **RETAIL'S `+48` IS JUST A WORD IN A 164-BYTE RECORD, AND
@@ -9291,6 +9630,121 @@ mod tests {
         assert_eq!(w.g.ent[i].f46, -58, "and gravity steps it by 2");
     }
 
+    /// ⭐ THE FALLING CORPSE IS RELINKED BEFORE ITS TRAIL PUFF IS MINTED
+    /// — see [`fall_relink_first`]. A corpse that crosses into a new
+    /// tile on a fall step must sit BEHIND the puff that step mints:
+    /// retail's mover relinks it (`sub_41C70`, :55250-52) and the
+    /// `(10,1)` head-inserts after (:55480). The port minted first.
+    /// The fall is run once to learn the step, then again from a pose
+    /// one step short of a tile edge.
+    /// NON-VACUITY: `MGC_NO_MC1_FALL_RELINK_FIRST=1` hands the tile
+    /// back as carpet → puff and the head assert fails.
+    #[test]
+    fn a_falling_corpse_enters_a_tile_ahead_of_its_own_trail_puff() {
+        let rig = |seat: Option<(u16, u16)>| -> (World, usize, (u16, u16), (u16, u16)) {
+            let mut w = rebound_world();
+            let i = w.rivals[0].ent as usize;
+            let (x, y, z) = {
+                let e = &w.g.ent[i];
+                (e.x.wrapping_add(0x4000), e.y, e.z.wrapping_add(4000))
+            };
+            let (x, y) = seat.unwrap_or((x, y));
+            w.g.move_relink(i, x, y, z);
+            w.g.ent[i].tick70 = 1;
+            w.g.ent[i].f46 = -56;
+            w.g.ent[i].f126 = 160;
+            w.rivals[0].grace = 0;
+            w.g.ent[i].act_life = 10;
+            w.g.ent[i].mail[0] = (10_000, 7);
+            w.rival_entity_tick(i);
+            assert_eq!(w.g.ent[i].tick70, 2, "the intake killed it into the fall");
+            let from = (w.g.ent[i].x, w.g.ent[i].y);
+            w.rival_entity_tick(i);
+            let to = (w.g.ent[i].x, w.g.ent[i].y);
+            (w, i, from, to)
+        };
+        let (_, _, from, to) = rig(None);
+        let (dx, dy) = (
+            to.0.wrapping_sub(from.0) as i16,
+            to.1.wrapping_sub(from.1) as i16,
+        );
+        assert!(dx != 0 || dy != 0, "rig: the corpse moves on its first fall step");
+        // One unit short of the edge the step is heading for.
+        let edge = |v: u16, d: i16| match d {
+            d if d > 0 => (v & 0xFF00) | 0xFF,
+            d if d < 0 => v & 0xFF00,
+            _ => (v & 0xFF00) | 0x80,
+        };
+        let (w, i, from, to) = rig(Some((edge(from.0, dx), edge(from.1, dy))));
+        assert_ne!(
+            (from.0 >> 8, from.1 >> 8),
+            (to.0 >> 8, to.1 >> 8),
+            "rig: the fall step crosses a tile edge"
+        );
+        let cell = crate::engine::features::tile((to.0 >> 8) as u8, (to.1 >> 8) as u8);
+        let head = w.g.map_entity[cell] as usize;
+        assert_eq!(
+            (w.g.ent[head].class64, w.g.ent[head].model65, w.g.ent[head].id24),
+            (10, 1, w.rivals[0].ent),
+            "the tile's head is the corpse's own trail puff"
+        );
+        assert_eq!(
+            w.g.ent[head].next20 as usize, i,
+            "and the corpse sits right behind it"
+        );
+    }
+
+    /// ⭐ THE NATIVE HUMAN IS SEATED WHERE HE IS MINTED, UNDER HIS OWN
+    /// BOOK — see [`native_human_seat`]. Record 0 of all 115 whole
+    /// takes holds the carpet at the TAIL of his tile's chain, the
+    /// tokens minted after him in front.
+    /// NON-VACUITY: `MGC_NO_NATIVE_HUMAN_SEAT=1` leaves the seat
+    /// unseeded (`cell == usize::MAX`).
+    #[test]
+    fn the_native_human_is_seated_at_his_mint_behind_his_book() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 3,
+            model: 4,
+            x: 120,
+            y: 120,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        let cell = crate::engine::features::tile(120, 120);
+        assert_ne!(w.mc1_carpet_slot, 0, "rig: the carpet is pooled");
+        let seat = w.g.player_chain;
+        assert_eq!(seat.cell, cell, "seated on his start tile by the constructor");
+        w.grant_spells(&[0, 3]);
+        let head = w.g.map_entity[cell] as usize;
+        assert_eq!(
+            (w.g.ent[head].class64, w.g.ent[head].model65),
+            (12, 3),
+            "rig: the book's last token heads his tile"
+        );
+        assert_eq!(
+            w.g.player_chain, seat,
+            "and the tokens went in AHEAD of him: his successor did not move"
+        );
+        assert_ne!(
+            w.g.player_chain.next as usize, head,
+            "he is not the head's predecessor"
+        );
+    }
+
     /// The SPEED arm of the same law (`sub_455D0` :55171-72): the
     /// sink's `!actSpeed` guard is real, so a corpse still carrying
     /// speed spends its `+46` and NOTHING else — the same first fall
@@ -9594,7 +10048,15 @@ mod tests {
             );
         }
 
+        // Round 168: the corpse lands with the fatal letter standing.
+        w.g.ent[i].mail[0] = (6664, 472);
+        w.g.ent[i].mail[3] = (3000, 0);
         w.rival_death_impact(ri, i);
+        assert_eq!(
+            w.g.ent[i].mail,
+            [(0, 0); 6],
+            "the touchdown memsets the mailbox (:55518; mc1hwl0 t=6809 slot 473)"
+        );
 
         let gv = (1..w.g.ent.len())
             .find(|&j| w.g.ent[j].class64 == 10 && w.g.ent[j].model65 == 40)
@@ -10002,6 +10464,23 @@ mod tests {
         e.tick70 = 3;
         e.act_life = -100;
         e.f26 = countdown;
+    }
+
+    /// Round 168 ([`World::rival_add_hate`]): the hate ledger has no
+    /// self test — a wizard whose own bolt feeds its own table takes
+    /// the row under its own colour (mc1hwl14 t=62: `hate[3]` 24607 ->
+    /// 24786 on wizard 3). `MGC_NO_MC1_SELF_HATE=1` leaves it flat.
+    #[test]
+    fn the_hate_ledger_has_no_self_test() {
+        let mut w = three_rival_world();
+        let own = w.rivals[0].slot;
+        let other = w.rivals[1].slot;
+        let h0 = w.rivals[0].hate[own as usize];
+        w.rival_add_hate(0, own, 179);
+        assert_eq!(w.rivals[0].hate[own as usize], h0 + 179, "its own colour");
+        let o0 = w.rivals[0].hate[other as usize];
+        w.rival_add_hate(0, other, 500);
+        assert_eq!(w.rivals[0].hate[other as usize], o0 + 500, "and any other");
     }
 
     /// ⭐⭐⭐ THE POST-(RE)SPAWN TRUCE WALKS THE TICK-TOP BUCKET-0

@@ -230,7 +230,7 @@ fn roster_excuse(
 /// `Simulation` owns in the app (integer carpet + MC2 channels + the
 /// Accelerate expiry edge).
 #[derive(Default, Clone)]
-struct Chain {
+pub(crate) struct Chain {
     s: Mc1State,
     ext: Mc2Ext,
     accel_was_active: bool,
@@ -673,6 +673,186 @@ impl CellTrace {
     }
 }
 
+thread_local! {
+    /// The `terrain_rand` of the record the runner is standing on —
+    /// what an anchor at that record seats the port's retile LCG from.
+    static TRAND_NOW: std::cell::Cell<Option<u16>> = const { std::cell::Cell::new(None) };
+}
+
+/// `MGC_TRAND=1` — GRADE the retile LCG (`terrain_rand`, retail takes
+/// from 2026-09-27): every stepped boundary compares the port's DRAW
+/// COUNT for the tick with retail's (the LCG is full-period, so a count
+/// is the difference of two ranks on the cycle — see
+/// `lanes::lcg_rank`). The SEAT itself is every anchor's since round
+/// 166 (`World::install_capture_lanes`).
+fn trand_on() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_TRAND").is_some())
+}
+
+/// The anchor's half of `World::install_capture_lanes`: the shading
+/// plane of the image and the `terrain_rand` of the record the runner
+/// stands on.
+fn capture_lanes_seed(
+    world: &mut World,
+    timg: &Option<mgc_formats::mgcr::TerrainImage>,
+    t: u64,
+) -> Result<(), String> {
+    world
+        .install_capture_lanes(
+            timg.as_ref()
+                .filter(|i| i.based())
+                .and_then(|i| i.plane("shading")),
+            TRAND_NOW.with(|c| c.get()),
+        )
+        .map_err(|e| format!("t={t}: capture lanes: {e}"))
+}
+
+/// `MGC_INDEX_IMPORT=1` — every anchor installs retail's CAPTURED
+/// tile index (`World::install_captured_index`) over the importer's
+/// rebuild. An attribution switch: a boundary that closes with it set
+/// was downstream of a chain the pool cannot rebuild.
+fn index_seed(
+    world: &mut World,
+    timg: &Option<mgc_formats::mgcr::TerrainImage>,
+    links: impl FnOnce() -> (Vec<(u16, u16)>, u16),
+) {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*V.get_or_init(|| std::env::var_os("MGC_INDEX_IMPORT").is_some()) {
+        return;
+    }
+    let Some(img) = timg.as_ref().filter(|i| i.based()) else {
+        return;
+    };
+    let (Some(lo), Some(hi)) = (img.plane("entity_index_lo"), img.plane("entity_index_hi")) else {
+        return;
+    };
+    let heads: Vec<u16> = lo
+        .iter()
+        .zip(hi)
+        .map(|(&l, &h)| l as u16 | (h as u16) << 8)
+        .collect();
+    let (links, human) = links();
+    world.install_captured_index(&heads, &links, human);
+}
+
+struct TrandLane {
+    rank: Vec<u16>,
+    name: String,
+    /// (port, retail) before the step.
+    pre: Option<(u16, Option<u16>)>,
+    pairs: u64,
+    retail_draw_ticks: u64,
+    port_draw_ticks: u64,
+    retail_draws: u64,
+    port_draws: u64,
+    /// Ticks whose draw COUNT differs.
+    count_rows: u64,
+    /// Ticks the port's register stands off retail's after the step.
+    off_ticks: u64,
+    first: Vec<String>,
+    /// Signed (port − retail) count differences, tallied.
+    by_delta: std::collections::BTreeMap<(u16, u16), u64>,
+}
+
+impl TrandLane {
+    fn new(path: &std::path::Path) -> Self {
+        Self {
+            rank: if trand_on() {
+                crate::lanes::lcg_rank()
+            } else {
+                Vec::new()
+            },
+            name: crate::verify::take_stem(path),
+            pre: None,
+            pairs: 0,
+            retail_draw_ticks: 0,
+            port_draw_ticks: 0,
+            retail_draws: 0,
+            port_draws: 0,
+            count_rows: 0,
+            off_ticks: 0,
+            first: Vec::new(),
+            by_delta: Default::default(),
+        }
+    }
+
+    /// Before the step: what both registers hold.
+    fn arm(&mut self, world: &World, retail_prev: Option<u16>) {
+        if trand_on() {
+            self.pre = Some((world.pseudo_state(), retail_prev));
+        }
+    }
+
+    /// After the step.
+    fn emit(&mut self, world: &World, retail_now: Option<u16>, t: u64) {
+        let Some((p0, Some(r0))) = self.pre.take() else {
+            return;
+        };
+        let Some(r1) = retail_now else { return };
+        let p1 = world.pseudo_state();
+        let dp = self.rank[p1 as usize].wrapping_sub(self.rank[p0 as usize]);
+        let dr = self.rank[r1 as usize].wrapping_sub(self.rank[r0 as usize]);
+        self.pairs += 1;
+        if dr != 0 {
+            self.retail_draw_ticks += 1;
+            self.retail_draws += dr as u64;
+        }
+        if dp != 0 {
+            self.port_draw_ticks += 1;
+            self.port_draws += dp as u64;
+        }
+        if p1 != r1 {
+            self.off_ticks += 1;
+        }
+        if dp != dr {
+            self.count_rows += 1;
+            *self.by_delta.entry((dr, dp)).or_default() += 1;
+            if self.first.len() < 12 {
+                self.first.push(format!("t={t} retail {dr} port {dp}"));
+            }
+        }
+    }
+}
+
+impl Drop for TrandLane {
+    fn drop(&mut self) {
+        if !trand_on() {
+            return;
+        }
+        if !self.first.is_empty() {
+            println!("   TRAND rows (draws this tick): {}", self.first.join(" · "));
+            let mut d: Vec<_> = self.by_delta.iter().collect();
+            d.sort_by(|a, b| b.1.cmp(a.1));
+            let d: Vec<String> = d
+                .iter()
+                .take(10)
+                .map(|((r, p), n)| format!("retail {r}/port {p} ×{n}"))
+                .collect();
+            println!("   TRAND by count: {}", d.join(" · "));
+        }
+        println!(
+            "TRAND {}: {} — {} stepped pair(s) · retail drew on {} tick(s) ({} draw(s)), port on \
+             {} ({}) · draw-count rows {} · register off after the step on {} tick(s)",
+            self.name,
+            if self.pairs == 0 {
+                "NONE"
+            } else if self.count_rows == 0 {
+                "IDENTICAL"
+            } else {
+                "ROWS"
+            },
+            self.pairs,
+            self.retail_draw_ticks,
+            self.retail_draws,
+            self.port_draw_ticks,
+            self.port_draws,
+            self.count_rows,
+            self.off_ticks
+        );
+    }
+}
+
 /// `MGC_PLANE_CENSUS=<t0>:<t1>` — the CARVING comparator: all four
 /// terrain planes, whole map, every tick of the window, port beside
 /// the take's measured truth channel.
@@ -729,6 +909,11 @@ struct PlaneCensus {
     ticks: u64,
     dirty_ticks: u64,
     done: bool,
+    /// THE SHADING PLANE — captured on every take, never installed at
+    /// an anchor and never graded over time: (worst cell count, dirty
+    /// ticks, first dirty tick, first witness). Summary only; it does
+    /// not move the VERDICT the four planes above own.
+    shade: (usize, u64, Option<u64>, Option<(usize, usize, u8, u8)>),
 }
 
 impl PlaneCensus {
@@ -746,6 +931,7 @@ impl PlaneCensus {
             ticks: 0,
             dirty_ticks: 0,
             done: false,
+            shade: (0, 0, None, None),
         }
     }
 
@@ -773,6 +959,9 @@ impl PlaneCensus {
         let mut n = [0usize; 4];
         let mut bits = 0u8;
         let mut first: Vec<(usize, usize, u8, u8)> = Vec::new();
+        // The angle plane's own witnesses (x, y, port, truth) — the
+        // nibble names no cell otherwise.
+        let mut afirst: Vec<(usize, usize, u8, u8)> = Vec::new();
         for (k, name) in ["height", "type", "ceiling", "angle"].iter().enumerate() {
             let Some(truth) = img.plane(name) else {
                 continue;
@@ -789,6 +978,9 @@ impl PlaneCensus {
                     n[k] += 1;
                     if k == 3 {
                         bits |= truth[i] ^ pk[i];
+                        if afirst.len() < 8 {
+                            afirst.push((i & 0xFF, i >> 8, pk[i], truth[i]));
+                        }
                     } else if first.len() < 8 {
                         first.push((i & 0xFF, i >> 8, pk[i], truth[i]));
                     }
@@ -796,6 +988,26 @@ impl PlaneCensus {
             }
         }
         self.ticks += 1;
+        if let Some(truth) = img.plane("shading") {
+            let mut c = 0usize;
+            let mut w = None;
+            for (i, (a, b)) in truth.iter().zip(&p.shading).enumerate() {
+                if a != b {
+                    c += 1;
+                    if w.is_none() {
+                        w = Some((i & 0xFF, i >> 8, *b, *a));
+                    }
+                }
+            }
+            self.shade.0 = self.shade.0.max(c);
+            if c > 0 {
+                self.shade.1 += 1;
+                if self.shade.2.is_none() {
+                    self.shade.2 = Some(t);
+                    self.shade.3 = w;
+                }
+            }
+        }
         for k in 0..4 {
             self.worst[k] = self.worst[k].max(n[k]);
         }
@@ -817,10 +1029,11 @@ impl PlaneCensus {
             n[2],
             n[3],
             bits,
-            if first.is_empty() {
-                String::new()
-            } else {
-                format!(" first={first:?}")
+            match (first.is_empty(), afirst.is_empty()) {
+                (true, true) => String::new(),
+                (false, true) => format!(" first={first:?}"),
+                (true, false) => format!(" angle_first={afirst:?}"),
+                (false, false) => format!(" first={first:?} angle_first={afirst:?}"),
             },
             // The two angle bits the castle-site rule reads. Bits 4-6
             // are the texture-rotation nibble (cosmetic).
@@ -841,7 +1054,8 @@ impl PlaneCensus {
         let (t0, t1) = self.window.unwrap();
         println!(
             "PLANECENSUS SUMMARY window={t0}:{t1} ticks={} planes={} dirty={} worst height={} \
-             type={} ceiling={} angle={} anglebits={:#04x} first_dirty={} VERDICT={}",
+             type={} ceiling={} angle={} anglebits={:#04x} first_dirty={} VERDICT={} \
+             shading={} shading_dirty={} shading_first={}",
             self.ticks,
             self.graded.join(","),
             self.dirty_ticks,
@@ -860,6 +1074,14 @@ impl PlaneCensus {
                 }
             } else {
                 "DRIFT"
+            },
+            self.shade.0,
+            self.shade.1,
+            match (self.shade.2, self.shade.3) {
+                (Some(t), Some((x, y, port, truth))) => {
+                    format!("{t}@({x},{y})port={port}/retail={truth}")
+                }
+                _ => "none".to_string(),
             }
         );
     }
@@ -1197,7 +1419,7 @@ impl KnockTrace {
 /// operation — that is the whole content of the segmented design: a
 /// detected deviation re-anchors exactly the way a capture gap
 /// already did.
-fn anchor_mc1(
+pub(crate) fn anchor_mc1(
     world: &mut World,
     pristine: &mgc_sim::engine::features::Planes,
     timg: &Option<mgc_formats::mgcr::TerrainImage>,
@@ -1215,6 +1437,13 @@ fn anchor_mc1(
     }
     let (fl, fr) = recover::mc1_fire(st.wizards[st.local_player as usize].move_bits);
     world.set_prev_fire(fl, fr);
+    capture_lanes_seed(world, timg, t)?;
+    index_seed(world, timg, || {
+        (
+            st.ents.iter().map(|e| (e.next20, e.prev22)).collect(),
+            report.human_slot,
+        )
+    });
     Ok((
         Chain::seed_mc1(st, report.human_slot),
         report.human_slot,
@@ -1232,7 +1461,7 @@ fn anchor_mc1(
 /// anchor burns phantom pseudo draws against a gate that was meant to
 /// be closed; MC1's importer reconstructs unconditionally and its
 /// edits must be measured OVER (see anchor_mc1's doc).
-fn anchor_mc2(
+pub(crate) fn anchor_mc2(
     world: &mut World,
     pristine: &mgc_sim::engine::features::Planes,
     things: &mgc_sim::engine::world::conformance::ThingTable,
@@ -1267,6 +1496,13 @@ fn anchor_mc2(
     }
     let (fl, fr) = recover::mc1_fire(st.players[st.local_player as usize].move_bits);
     world.set_prev_fire(fl, fr);
+    capture_lanes_seed(world, timg, t)?;
+    index_seed(world, timg, || {
+        (
+            st.ents.iter().map(|e| (e.next16, e.prev18)).collect(),
+            report.human_slot,
+        )
+    });
     let row = world.mc2_carpet_row();
     Ok((
         Chain::seed_mc2(st, report.human_slot, row),
@@ -1915,8 +2151,16 @@ impl RStats {
             None => String::new(),
             Some((t, _)) => format!(" save={t}"),
         };
+        // Conditional like the rest: only a take that DECLARES the
+        // volcano-guarded binary carries the field, and its row is
+        // graded against that binary (`crate::take_binary`).
+        let exe = if mgc_sim::engine::features::take_volcano_guard() {
+            " exe=guarded"
+        } else {
+            ""
+        };
         format!(
-            "BRIEF {take} mode={mode} terrain={terrain}{save}{stopped} end={end} segments={} gaps={gaps}{restarts}{roster} \
+            "BRIEF {take} mode={mode} terrain={terrain}{exe}{save}{stopped} end={end} segments={} gaps={gaps}{restarts}{roster} \
              devs={devs} graded={graded}{paused} clean={clean} horizon={} first={} sig={sig}{tags}{artifact}\n",
             self.segs.len(),
             first.map_or_else(|| "END".to_string(), |t| t.saturating_sub(1).to_string()),
@@ -1967,6 +2211,7 @@ fn run_mc1(
     port_dump: Option<&PortDump>,
 ) -> Result<bool, String> {
     let mut rec = Recording::open(path)?;
+    crate::take_binary(&rec);
     let game = rec.header.game.clone();
     let level = rec.header.level.ok_or("recording has no level number")?;
     if !args.brief {
@@ -2100,6 +2345,9 @@ fn run_mc1(
     });
     let mut celltrace = CellTrace::from_env();
     let mut pcensus = PlaneCensus::from_env();
+    let mut trand = TrandLane::new(path);
+    let mut index_lane = crate::lanes::IndexLane::new(path);
+    let mut trand_prev: Option<u16> = None;
     let mut ktrace = KnockTrace::from_env();
     // `--segmented`: the boundary grade sets this, and the re-anchor
     // runs after the tick body so the break's own diagnostics (traces,
@@ -2128,6 +2376,8 @@ fn run_mc1(
     let mut stop_at: Option<u64> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
+        let trand_before = std::mem::replace(&mut trand_prev, tick.terrain_rand);
+        TRAND_NOW.with(|c| c.set(tick.terrain_rand));
         // The terrain image tracks the take continuously (self-healing
         // deltas) — installed into the world only at anchors
         // (world mode) or per pair (pose-only, terrain@N+1).
@@ -2274,6 +2524,7 @@ fn run_mc1(
             // what the mover consumed this tick vs what the world tick
             // armed for the next, beside retail's recorded +22/+24.
             ktrace.arm(&world);
+            trand.arm(&world, trand_before);
             mgc_sim::DEBUG_TICK.store(tick.t, std::sync::atomic::Ordering::Relaxed);
             // `--port --at-slot <n>`: arm the mid-walk pool snapshot
             // for the tick INTO the dump boundary.
@@ -2385,6 +2636,8 @@ fn run_mc1(
             }
             celltrace.emit(&world, &timg, tick.t);
             pcensus.emit(&world, &timg, tick.t);
+            trand.emit(&world, tick.terrain_rand, tick.t);
+            index_lane.emit(&world, &timg, || crate::lanes::pool_mc1(&st), tick.t);
             if let Some((t0, t1)) = ctrace
                 && tick.t >= t0
                 && tick.t <= t1
@@ -3005,6 +3258,7 @@ fn run_mc2(
     port_dump: Option<&PortDump>,
 ) -> Result<bool, String> {
     let mut rec = Recording::open(path)?;
+    crate::take_binary(&rec);
     let level = rec.header.level.ok_or("recording has no level number")?;
     if !args.brief {
         println!(
@@ -3073,6 +3327,9 @@ fn run_mc2(
     let mut stats = RStats::default();
     let mut celltrace = CellTrace::from_env();
     let mut pcensus = PlaneCensus::from_env();
+    let mut trand = TrandLane::new(path);
+    let mut index_lane = crate::lanes::IndexLane::new(path);
+    let mut trand_prev: Option<u16> = None;
     let mut pace = PaceTrace::from_env();
     let mut ktrace = KnockTrace::from_env();
     // MGC_ALLOC_TRACE — the pool-allocator microscope (dig 98-Q13).
@@ -3108,6 +3365,8 @@ fn run_mc2(
     let mut stop_at: Option<u64> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
+        let trand_before = std::mem::replace(&mut trand_prev, tick.terrain_rand);
+        TRAND_NOW.with(|c| c.set(tick.terrain_rand));
         // `--classify` keeps the PRE-apply planes: the pair check at
         // boundary t must run on terrain@t-1, and after this apply
         // the image holds t.
@@ -3394,6 +3653,7 @@ fn run_mc2(
             }
             book_cheat(&world, rec.cheat, &mut stats);
             ktrace.arm(&world);
+            trand.arm(&world, trand_before);
             // The MC1 law's twin — see the `paused_turn_mc1` branch in
             // the MC1 loop. MC2's frame function draws at its top
             // (EF:39947) and gates the body below, measured on
@@ -3455,6 +3715,8 @@ fn run_mc2(
             }
             celltrace.emit(&world, &timg, tick.t);
             pcensus.emit(&world, &timg, tick.t);
+            trand.emit(&world, tick.terrain_rand, tick.t);
+            index_lane.emit(&world, &timg, || crate::lanes::pool_mc2(&st), tick.t);
             pace.emit(&world, &st, tick.t);
             // `MGC_MOB_TRACE` — the MC1 arm has carried the creature-
             // machine microscope since 19c, and on MC2 it silently
@@ -4240,6 +4502,18 @@ fn render_port_dump_mc2(
         got_rec.len(),
         &got_rec[got_rec.len().saturating_sub(8)..],
     );
+    // The tails cannot name a member one side lacks: say which slots
+    // each stack holds alone.
+    for (name, want, got) in [
+        ("free", &want_free, &got_free),
+        ("recycle", &want_rec, &got_rec),
+    ] {
+        let retail_only: Vec<u16> = want.iter().copied().filter(|s| !got.contains(s)).collect();
+        let port_only: Vec<u16> = got.iter().copied().filter(|s| !want.contains(s)).collect();
+        if !retail_only.is_empty() || !port_only.is_empty() {
+            println!("  {name} stack members: retail-only {retail_only:?}  port-only {port_only:?}");
+        }
+    }
 }
 
 // -------------------------------------------------------------- plumbing

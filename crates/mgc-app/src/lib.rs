@@ -1281,6 +1281,12 @@ fn load_level(
                 if is_mc2 && let Some(dims) = bundle.mc2_extent_dims(&baked_root.join("assets")) {
                     assets = assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims));
                 }
+                // MC1 / Hidden Worlds: the sprite-stat widths come off
+                // the level's own sprite sheet (remc1 :66699) — the
+                // arctic bank derives four rows unlike the temperate.
+                if !is_mc2 && let Some(dims) = bundle.sprite_dims() {
+                    assets = assets.with_mc1_sprite_ext(mgc_sim::mc1::derive_sprite_stats(&dims));
+                }
                 let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
                 // The MC1 level goal: footer[0] = the required banked
                 // percentage of world mana (level offset 38800 —

@@ -553,7 +553,10 @@ impl Gen {
                 // the patch doc): each register write lands only on the
                 // record the register was meant to name.
                 let revalidate = ctx.patches.volcano_register_revalidate
-                    && (!ctx.strict || crate::engine::features::force_volcano_guard());
+                    && (!ctx.strict || crate::engine::features::force_volcano_guard())
+                    // …or the take itself was recorded on the guarded
+                    // binary and says so (round 166).
+                    || crate::engine::features::take_volcano_guard();
                 let prev = self.erupting as usize;
                 if prev != 0
                     && prev < self.ent.len()
@@ -964,6 +967,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
     }
@@ -1382,6 +1386,7 @@ mod tests {
             bldgprm: Vec::new(),
             spells,
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut g = Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2);
         // ⚠ The summit MUST come out of `new_event()` — a hand-stamped

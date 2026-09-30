@@ -6117,6 +6117,7 @@ mod fools_retaliation_arm_tests {
             bldgprm: Vec::new(),
             spells: vec![Default::default(); MC2_SPELL_ROWS],
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         World::new_for_game(planes, &[], 1, assets, GameId::Mc2)
     }
@@ -6255,6 +6256,7 @@ mod shield_billing_tests {
             bldgprm: Vec::new(),
             spells,
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
         w.mc2_grant_plausible(&[(6, 0)]);
@@ -6477,6 +6479,7 @@ mod rebound_xp_tests {
             bldgprm: Vec::new(),
             spells,
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
         w.mc2_grant_plausible(&[(8, 0)]);
@@ -6577,6 +6580,7 @@ mod replay_xp_gate_tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
         w.set_mc2_level_replayed(replayed);
@@ -6705,6 +6709,7 @@ mod invis_grace_tests {
             bldgprm: Vec::new(),
             spells,
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         let mut w = World::new_for_game(planes, &[], 1, assets, GameId::Mc2);
         w.mc2_grant_plausible(&[(11, 0)]);
@@ -6793,6 +6798,7 @@ mod scatter_window_tests {
             bldgprm: Vec::new(),
             spells,
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         World::new_for_game(planes, &[], 1, assets, GameId::Mc2)
     }

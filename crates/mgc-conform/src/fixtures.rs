@@ -169,6 +169,7 @@ fn for_each_pair(
     mut f: impl FnMut(u64, PairDiff, &BTreeMap<u16, (u8, u8)>) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut rec = Recording::open(path)?;
+    crate::take_binary(&rec);
     let game = rec.header.game.clone();
     if rec.header.family()? == mgc_formats::mgcr::Family::Mc2 {
         drop(rec);
@@ -298,6 +299,7 @@ fn for_each_pair_mc2(
 ) -> Result<(), String> {
     use mgc_formats::mgcr::{ObsMc2, RetailMc2, decode_retail_mc2};
     let mut rec = Recording::open(path)?;
+    crate::take_binary(&rec);
     let level = rec.header.level.ok_or("recording has no level number")?;
     // The witness rides in the fixture file itself (a cut fixture keeps the
     // pair's raw retail states), so this is derived, not declared — a

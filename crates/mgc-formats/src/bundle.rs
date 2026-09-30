@@ -361,6 +361,16 @@ impl Bundle {
     /// Load a bundle directory. Optional members (atlas, sprites,
     /// feature data) load as `None` when absent; the manifest, palette
     /// and color LUTs are required.
+    /// This bundle's own (w, h)-per-sprite list — what the MC1 /
+    /// Hidden Worlds sprite-stat derivation reads (the loader derives
+    /// each row's width from the row's first sprite, remc1
+    /// sub_main.cpp:66699). `None` when the bundle carries no sprites.
+    pub fn sprite_dims(&self) -> Option<Vec<(u16, u16)>> {
+        self.sprites
+            .as_ref()
+            .map(|(s, _)| s.sprites.iter().map(|e| (e.width, e.height)).collect())
+    }
+
     /// The (w,h)-per-sprite list feeding the MC2 extents derivation:
     /// DAY-sourced — retail computes its particle-param table once
     /// at boot against TMAPS0-0 (`sub_71410_process_tmaps`' sole

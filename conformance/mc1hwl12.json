@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1hwl12",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 16993,
+   "file": "the-attack-picker-prices-a-recycled-register-off-the-record.mgcr",
+   "source": "mc1hwl12",
+   "note": "THE RIVAL'S ATTACK REGISTERS ARE READ BLIND: `sub_14E60` (remc1hw sub_main.cpp:16901) resolves `pool[wizext+676+2*spell]` on a signed index test alone, and the picker `sub_16030` (:17592), the readiness `sub_15A00` (:17352), the wait-or-continue test `sub_15E90` (:17508) and the commit `sub_155F0` (:17229) take the record behind it as a token whatever it is: `+136` is the PRICE (there is no static table in the four), `+48` the busy word, and the commit arms `+48 = +50` on it. SHIPPED BYTES HIDDEN.EXE file 0x2E3F8 (VA 0x15A00 + 0x189F8): `2e41e call 0x2d858` (sub_14E60) / `2e42e mov 0x8c(%ebx),%edx` / `2e434 cmp 0x88(%eax),%edx` / `2e43a jl` — the purse against the RECORD's `+136`, signed; `2e45e cmpw $0x0,0x30(%eax)` / `2e463 jne` — the aimed group's busy word, nonzero. WITNESS mc1hwl12 (torn take, its own numbering) t=16993->16994: wizard 3 (carpet 259) carries slot 941 on its acquisition list, the slot is a `(5,15)` mob now and the `+676` rebuild files it under its model byte, `owned[15] = 941`. The mob's `+136` is 0. With a purse of 1000 under a 1000 ceiling retail walks 17 (token 997 priced 13000, over the ceiling), 7 (10000), 20 (5000), 0 (on cooldown) and commits spell 15 through the mob: `cooldown[15]` 0 -> 1, burst 1 -> 2, the mob's `+48 = +50` (0), no bolt. A fired cast tick skips the arrival hover, so carpet 259's z reads 5468; the port priced spell 15 off the table, refused, hovered one `v_14` (4) down to 5464. Nine graded heads 16994..17159, all this. Kill switch MGC_NO_MC1_RIVAL_BLIND_REGISTER=1 restores the table price and the validated token and regresses this pair (slot 259 z: retail 5468 port 5464). Unit pin `mc1::rivals::tests::the_attack_picker_prices_a_recycled_register_off_the_record`. Ledger ROUND 168."
+  }
+ ]
+}

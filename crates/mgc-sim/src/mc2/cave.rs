@@ -34,6 +34,14 @@ fn no_mc2_dome_stale_ceiling() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_DOME_STALE_CEILING").is_some())
 }
 
+/// `MGC_NO_MC2_CAVE_DRIP_SACRIFICABLE=1` restores the (10,86) cave drip
+/// without the sacrificable bit (round 168). Citation and witness at
+/// [`Gen::mc2_spawn_cave_drip`].
+fn no_mc2_cave_drip_sacrificable() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_CAVE_DRIP_SACRIFICABLE").is_some())
+}
+
 impl Gen {
     /// The level is a cave iff the package carried a ceiling plane
     /// (retail `isCaveLevel_D41B6`; non-cave worlds keep the field
@@ -475,8 +483,17 @@ impl Gen {
     /// sprite (332..334), rejected unless the cell's angle class is
     /// 0 (`sub_104A0 & 1`). NOT ctor-gated on the cave flag — its
     /// runtime spawner is (the authored records ride the settle
-    /// disable band). Byte2 bit1 (recycle-list membership) has no
-    /// ported home; the pool free list covers it.
+    /// disable band).
+    ///
+    /// ⭐ THE DRIP IS SACRIFICABLE (round 168): `dword &= 0xFFFDFFF7`
+    /// then `byte[2] |= 2` (EF:37050-52) — the recycle scan
+    /// `sub_49F90` pushes it, so a dry pool seizes a drip. The port
+    /// cleared bit 3 and wrote no bit 17 ("no ported home"); the home
+    /// is the flags word every other effect ctor already uses. WITNESS
+    /// mc2l14 t=18845: the human's death rebuilds the stack, retail
+    /// holds 102 victims and the port 101 — drip slot 232, flags
+    /// 0x20004. 2,776 boundaries on mc2l6-rival-spells-galore, five
+    /// more takes. `MGC_NO_MC2_CAVE_DRIP_SACRIFICABLE=1` drops the bit.
     pub(crate) fn mc2_spawn_cave_drip(&mut self, x: u16, y: u16, _z: i16) -> Option<usize> {
         let i = self.new_event()?;
         {
@@ -487,6 +504,9 @@ impl Gen {
             e.max_life = 9;
             e.act_life = 9;
             e.flags &= !8;
+            if !no_mc2_cave_drip_sacrificable() {
+                e.flags = (e.flags & !0x2_0008) | 0x2_0000;
+            }
         }
         let z = self.ground_z(x, y) as i16;
         self.link(i, x, y, z);
@@ -1350,8 +1370,32 @@ mod tests {
             bldgprm: Vec::new(),
             spells: Vec::new(),
             mc2_sprite_ext: Vec::new(),
+            mc1_sprite_ext: Vec::new(),
         };
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    /// Round 168 ([`Gen::mc2_spawn_cave_drip`]): the drip's ctor ends
+    /// on `byte[2] |= 2` (EF:37052), so the recycle scan lists it.
+    /// WITNESS mc2l14 t=18845, slot 232, flags 0x20004.
+    /// `MGC_NO_MC2_CAVE_DRIP_SACRIFICABLE=1` fails the first assert.
+    #[test]
+    fn a_cave_drip_is_born_sacrificable() {
+        let mut g = cave_gen();
+        // Angle class 0 under the drip (`sub_104A0 & 1`), or the ctor
+        // rejects it.
+        g.t.angle[tile(50, 50)] = 0;
+        let d = g
+            .mc2_spawn_cave_drip(50 << 8, 50 << 8, 0)
+            .expect("a drip on an angle-0 cell");
+        assert_eq!(g.ent[d].flags & 0x2_0000, 0x2_0000, "byte[2] |= 2");
+        assert_eq!(g.ent[d].flags & 8, 0, "…and bit 3 stays clear (0xFFFDFFF7)");
+        let mask = g.victim_mask();
+        g.rebuild_recycle(mask);
+        assert!(
+            g.mc2_recycle.stack.contains(&(d as u16)),
+            "sub_49F90 pushes the drip"
+        );
     }
 
     /// The a6=0 floor write (the mesa's form of `sub_570F0`) always

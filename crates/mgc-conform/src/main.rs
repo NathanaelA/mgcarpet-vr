@@ -18,6 +18,7 @@ mod explain;
 mod fixtures;
 mod init_check;
 mod jsondiff;
+mod lanes;
 mod pose_lane;
 mod replay;
 mod roster;
@@ -43,13 +44,24 @@ fn usage() -> ! {
                                           take, pool/wizard records folded onto\n\
                                           their stride, each offset tagged DECODED\n\
                                           or UNDECODED (a lane no decoder lifts is\n\
-                                          in no channel). MC1 only\n\
+                                          in no channel). --init: the INIT RECORD\n\
+                                          against record 0 instead — what frame 1\n\
+                                          wrote, old → new\n\
            init-check <file.mgcr>…        NATIVE-vs-RECORDED FIRST STATE: build the\n\
                                           level the way the port does, settle it by\n\
                                           the recorder's phase, and diff the pool,\n\
                                           every entity lane, the wizard block, the\n\
                                           board, the allocator and the LCG against\n\
-                                          record 0 (census only; --settle <n>)\n\
+                                          record 0 (census only; --settle <n>).\n\
+                                          --init: against the take's INIT RECORD\n\
+                                          (pre-frame-1, settle 0) instead\n\
+           lane-check <file.mgcr>…        THE LANES NOTHING ELSE READS: the captured\n\
+                                          entity index walked through the pool's own\n\
+                                          links (every tick) and beside the importer's\n\
+                                          rebuild (every --sample-every-th tick), the\n\
+                                          retile LCG's draw count per tick, and the\n\
+                                          init record beside record 0 and the port's\n\
+                                          native build (census only)\n\
            terrain-check <file.mgcr>…     THE NAKED TRUTH: one VERDICT line per\n\
                                           take — is the port's GENERATED terrain\n\
                                           bit-identical to what retail had at\n\
@@ -254,6 +266,9 @@ pub struct Args {
     pub to: Option<u64>,
     /// Skip the known-deviation roster (raw, unclassified report).
     pub no_roster: bool,
+    /// init-check: grade the port's settle-0 build against the take's
+    /// INIT RECORD instead of record 0.
+    pub init_record: bool,
     pub no_pose_alt: bool,
     /// Skip the computed slot-desync pass (balanced same-(class,model)
     /// missing/extra = free-list slot-order desync).
@@ -341,6 +356,7 @@ fn parse_args() -> Args {
         settle: None,
         sample_every: 10,
         no_roster: false,
+        init_record: false,
         resync_deviations: false,
         resync_restarts: false,
         no_pose_alt: false,
@@ -380,6 +396,7 @@ fn parse_args() -> Args {
             "--dump-first" => a.dump_first = true,
             "--dump-port" => a.dump_port = true,
             "--no-roster" => a.no_roster = true,
+            "--init" => a.init_record = true,
             "--no-pose-alt" => a.no_pose_alt = true,
             "--no-slot-desync" => a.no_slot_desync = true,
             "--no-terrain" => a.no_terrain = true,
@@ -524,7 +541,13 @@ fn main() {
         "blob-census" => args
             .files
             .iter()
-            .map(|f| blob_census::blob_census(f, args.limit.map(|n| n as usize)))
+            .map(|f| {
+                if args.init_record {
+                    blob_census::blob_frame1(f)
+                } else {
+                    blob_census::blob_census(f, args.limit.map(|n| n as usize))
+                }
+            })
             .max()
             .unwrap_or(0),
         "verify-deltas" => args
@@ -560,6 +583,12 @@ fn main() {
             .files
             .iter()
             .map(|f| init_check::init_check(f, &args))
+            .max()
+            .unwrap_or(0),
+        "lane-check" => args
+            .files
+            .iter()
+            .map(|f| lanes::lane_check(f, &args))
             .max()
             .unwrap_or(0),
         "extract" => args
@@ -1126,6 +1155,20 @@ fn retail_record0_phase(
     }
 }
 
+/// THE TAKE DECLARES ITS BINARY (round 166): a take recorded on the
+/// volcano-guarded `*_RECVG.EXE` says so in its header, and every mode
+/// that runs the sim against it grades the guarded arm of
+/// `volcano_register_revalidate` — the binary that produced the take.
+/// Until the retakes no take declared anything and the guarded takes
+/// were graded against the unguarded arm (the port's own blind `+26 =
+/// 250` kick and plume soft-kill read as divergences). Returns whether
+/// the guard is on. `MGC_NO_TAKE_VOLCANO_GUARD=1` ignores the header.
+pub(crate) fn take_binary(rec: &Recording) -> bool {
+    let on = rec.volcano_guarded() && std::env::var_os("MGC_NO_TAKE_VOLCANO_GUARD").is_none();
+    mgc_sim::engine::features::set_take_volcano_guard(on);
+    on
+}
+
 /// The settle count `init-check`/`terrain-check` use when `--settle` is
 /// not given: the record-0 phase, CORRECTED BY THE LCG. Round 153: on
 /// four of 39 MC1 takes (mc1l11/l16/l42 — and mc1l6, which no count
@@ -1646,6 +1689,7 @@ fn terrain_compare(
     settle: Option<u32>,
 ) -> Result<TerrainReport, String> {
     let mut rec = Recording::open(path)?;
+    take_binary(&rec);
     let decl = rec
         .header
         .channels

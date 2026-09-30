@@ -315,3 +315,157 @@ pub(crate) fn blob_census(path: &std::path::Path, limit: Option<usize>) -> i32 {
     );
     0
 }
+
+/// `blob-census --init` — WHAT FRAME 1 WROTE: the take's INIT RECORD
+/// (pre-frame-1) against record 0, byte by byte. The pool is read on
+/// the records BOTH images hold (a birth is the constructor's, and
+/// `lane-check` counts those); wizard records on every row either
+/// image seats; globals by absolute offset, old → new.
+pub(crate) fn blob_frame1(path: &std::path::Path) -> i32 {
+    let name = crate::verify::take_stem(path);
+    let fail = |e: String| {
+        println!("FRAME1 {name}: ERROR — {e}");
+        2
+    };
+    let mut rec = match Recording::open(path) {
+        Ok(r) => r,
+        Err(e) => return fail(e),
+    };
+    let lay: &Layout = match rec.header.family() {
+        Ok(Family::Mc1) => &MC1,
+        Ok(Family::Mc2) => &MC2,
+        Err(e) => return fail(e),
+    };
+    let Some(init) = rec.init.clone().and_then(|i| i.tick.state) else {
+        println!("FRAME1 {name}: NONE — no init record");
+        return 0;
+    };
+    let (cur, t0) = loop {
+        match rec.next_tick() {
+            Some(Ok(r)) => {
+                if let Some(s) = r.state {
+                    break (s, r.t);
+                }
+            }
+            Some(Err(e)) => return fail(e),
+            None => return fail("no record with a state".into()),
+        }
+    };
+    if cur.len() != lay.size || init.len() != lay.size {
+        return fail(format!(
+            "struct images {} / {} bytes, want {}",
+            init.len(),
+            cur.len(),
+            lay.size
+        ));
+    }
+    let (wiz_end, pool_end) = (
+        lay.wiz_base + lay.wiz_stride * WIZ_COUNT,
+        lay.pool + lay.ent_stride * ENT_COUNT,
+    );
+    let (class_at, model_at) = if lay.ent_stride == 164 {
+        (64, 65)
+    } else {
+        (0x3F, 0x40)
+    };
+    println!("== blob-census --init {name}: init record → record 0 (t={t0})");
+    // Pool: records both images hold.
+    let mut ent: Vec<(u64, Vec<String>)> = vec![(0, Vec::new()); lay.ent_stride];
+    let mut both = 0usize;
+    for s in 1..ENT_COUNT {
+        let o = lay.pool + s * lay.ent_stride;
+        let (a, b) = (&init[o..o + lay.ent_stride], &cur[o..o + lay.ent_stride]);
+        if !(lay.ent_live)(a) || !(lay.ent_live)(b) {
+            continue;
+        }
+        both += 1;
+        for k in 0..lay.ent_stride {
+            if a[k] != b[k] {
+                ent[k].0 += 1;
+                if ent[k].1.len() < 3 {
+                    ent[k].1.push(format!(
+                        "slot {s} ({},{}) {:#04x}→{:#04x}",
+                        b[class_at], b[model_at], a[k], b[k]
+                    ));
+                }
+            }
+        }
+    }
+    let (mut rows, mut undec) = (0, 0);
+    println!("  -- POOL ({both} record(s) held by both images):");
+    for (k, (c, eg)) in ent.iter().enumerate() {
+        if *c == 0 {
+            continue;
+        }
+        rows += 1;
+        let d = (lay.ent_decoded)(k);
+        if !d {
+            undec += 1;
+        }
+        println!(
+            "     {}+{k:<4} {c:>5} record(s)  {}",
+            if d { "         " } else { "UNDECODED" },
+            eg.join(" · ")
+        );
+    }
+    let (pool_rows, pool_undec) = (rows, undec);
+    // Wizards.
+    let (mut wrows, mut wundec) = (0, 0);
+    for w in 0..WIZ_COUNT {
+        let o = lay.wiz_base + w * lay.wiz_stride;
+        let (a, b) = (&init[o..o + lay.wiz_stride], &cur[o..o + lay.wiz_stride]);
+        if !(lay.wiz_seated)(a) && !(lay.wiz_seated)(b) {
+            continue;
+        }
+        let ch: Vec<usize> = (0..lay.wiz_stride).filter(|&k| a[k] != b[k]).collect();
+        let un: Vec<String> = ch
+            .iter()
+            .filter(|&&k| !(lay.wiz_decoded)(k))
+            .map(|&k| format!("+{k} {:#04x}→{:#04x}", a[k], b[k]))
+            .collect();
+        wrows += ch.len();
+        wundec += un.len();
+        println!(
+            "  -- WIZARD {w}: {} byte(s) changed, {} UNDECODED{}",
+            ch.len(),
+            un.len(),
+            if un.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", un.join(" "))
+            }
+        );
+    }
+    // Globals.
+    let (mut grows, mut gundec) = (0, 0);
+    let mut line = Vec::new();
+    for k in 0..lay.size {
+        if (lay.wiz_base..wiz_end).contains(&k) || (lay.pool..pool_end).contains(&k) {
+            continue;
+        }
+        if init[k] != cur[k] {
+            grows += 1;
+            let d = (lay.global_decoded)(k);
+            if !d {
+                gundec += 1;
+                if line.len() < 96 {
+                    line.push(format!("{k:#x} {:#04x}→{:#04x}", init[k], cur[k]));
+                }
+            }
+        }
+    }
+    println!(
+        "  -- GLOBALS: {grows} byte(s) changed, {gundec} UNDECODED{}",
+        if line.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", line.join(" "))
+        }
+    );
+    println!(
+        "FRAME1 {name}: pool offsets {pool_rows} ({pool_undec} undecoded) on {both} shared \
+         record(s) · wizard bytes {wrows} ({wundec} undecoded) · global bytes {grows} ({gundec} \
+         undecoded)"
+    );
+    0
+}

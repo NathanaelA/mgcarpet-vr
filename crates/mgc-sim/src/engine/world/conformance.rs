@@ -1996,6 +1996,123 @@ impl World {
         self.g.map_entity.get(cell).copied().unwrap_or(0)
     }
 
+    /// The out-of-pool human's chain seat, `(cell, successor)` — see
+    /// `features::PlayerChain`. `cell` is `usize::MAX` while unseeded.
+    pub fn player_chain_shadow(&self) -> (usize, u16) {
+        (self.g.player_chain.cell, self.g.player_chain.next)
+    }
+
+    /// One cell's whole tile chain in walk order, head first (the
+    /// `lane-check` census reads it beside retail's captured index and
+    /// links). Capped at the pool size — a cycle ends the walk.
+    pub fn map_chain_cell(&self, cell: usize) -> Vec<u16> {
+        let mut out = Vec::new();
+        let mut cur = self.map_head_cell(cell) as usize;
+        while cur != 0 && cur < self.g.ent.len() && out.len() < self.g.ent.len() {
+            out.push(cur as u16);
+            cur = self.g.ent[cur].next20 as usize;
+        }
+        out
+    }
+
+    /// The retile LCG (`pseudoRand_12C1E0` / `rand2_17B4E0`), the lane
+    /// retail takes carry as `terrain_rand` since 2026-09-27.
+    pub fn pseudo_state(&self) -> u16 {
+        self.g.pseudo
+    }
+
+    /// Install retail's CAPTURED tile index over the importer's rebuild
+    /// (the conformance anchors, under `MGC_INDEX_IMPORT`): the head
+    /// table and every record's raw `next`/`prev` words, FREE records
+    /// included — retail's own table is not always derivable from the
+    /// pool (a death's book scatter can link a free record, and the
+    /// slot's next tenant then hangs under two cells). The human is out
+    /// of the pool here, so every link through his slot is taken past
+    /// him. `links[slot] = (next, prev)`.
+    pub fn install_captured_index(&mut self, heads: &[u16], links: &[(u16, u16)], human: u16) {
+        let n = self.g.ent.len().min(links.len());
+        let past = |s: u16, back: bool| -> u16 {
+            if s != 0 && s == human {
+                let l = links[human as usize];
+                if back { l.1 } else { l.0 }
+            } else if (s as usize) < n {
+                s
+            } else {
+                0
+            }
+        };
+        for (h, &c) in self.g.map_entity.iter_mut().zip(heads) {
+            *h = past(c, false);
+        }
+        for s in 1..n {
+            if s as u16 == human {
+                continue;
+            }
+            self.g.ent[s].next20 = past(links[s].0, false);
+            self.g.ent[s].prev22 = past(links[s].1, true);
+        }
+    }
+
+    /// THE TWO LANES [`Self::install_measured_terrain`] NEVER TOOK, for
+    /// every ANCHOR of a retail take (the conformance replay's and the
+    /// app's), called after the import and the terrain install:
+    ///
+    /// - the SHADING plane. An anchor left the port's shading at the
+    ///   pristine build's, whatever retail's held by then (mc1l34 stood
+    ///   43,872 cells off after its first reset);
+    /// - the RETILE LCG (`terrain_rand`, retail takes from 2026-09-27).
+    ///   The importers zero it — "no capture" — so every anchor
+    ///   re-phased the texture-rotation nibble (`angle & 0x70`).
+    ///
+    /// Round 166 measured both over the 115 whole takes: no BRIEF row
+    /// moves, the draw count is retail's on every tick (42,484,929
+    /// draws), and the plane census loses its `anglebits=0x70` floor.
+    /// A take that carries neither lane passes `None` and nothing
+    /// moves. `MGC_NO_TRAND_SEED=1` / `MGC_NO_SHADING_SEED=1` restore
+    /// the old anchor.
+    pub fn install_capture_lanes(
+        &mut self,
+        shading: Option<&[u8]>,
+        rand: Option<u16>,
+    ) -> Result<(), String> {
+        static NO_RAND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        static NO_SHADE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if let Some(v) = rand
+            && !*NO_RAND.get_or_init(|| std::env::var_os("MGC_NO_TRAND_SEED").is_some())
+        {
+            self.g.pseudo = v;
+        }
+        if let Some(sh) = shading
+            && !*NO_SHADE.get_or_init(|| std::env::var_os("MGC_NO_SHADING_SEED").is_some())
+        {
+            self.install_measured_shading(sh)?;
+            self.terrain_dirty = true;
+        }
+        Ok(())
+    }
+
+    /// Install a take's measured SHADING plane — see
+    /// [`Self::install_capture_lanes`].
+    pub fn install_measured_shading(&mut self, shading: &[u8]) -> Result<(), String> {
+        if shading.len() != self.g.t.shading.len() {
+            return Err(format!(
+                "measured shading {} cells, want {}",
+                shading.len(),
+                self.g.t.shading.len()
+            ));
+        }
+        self.g.t.shading.copy_from_slice(shading);
+        Ok(())
+    }
+
+    /// The retile table as retail lays it out (MC2 `building_F2CD0x`:
+    /// 2401 × {texture, orientation bits}) — an MC2 init record carries
+    /// retail's own copy (`building_f2cd0_b64`).
+    pub fn retile_bytes(&self) -> Vec<u8> {
+        self.g.retile.iter().flatten().copied().collect()
+    }
+
+
     pub fn port_ent_lanes_mc2(
         &self,
         slot: u16,
@@ -2154,6 +2271,11 @@ impl World {
                 if sphere || c == 9 { bit(13) } else { None },
             ),
             ("flags.b2_kill1", bit(16)),
+            // SACRIFICABLE (`byte[2] & 2`, retail's and the port's bit
+            // 17): what `sub_49F90` lists for a dry pool. Round 168
+            // put it under the shadow — two ctors had it wrong and no
+            // lane could say so.
+            ("flags.b2_sac2", bit(17)),
             ("flags.b2_x4", bit(27)),
             ("flags.b2_x10", bit(28)),
             ("flags.b2_x20", if proj9 { None } else { bit(29) }),
@@ -3238,12 +3360,14 @@ impl World {
         for h in self.g.map_entity.iter_mut() {
             *h = 0;
         }
-        // Ghosts never link: retail unlinks at disable — the
-        // record's link bit is stale bytes. A linked ghost whose
-        // slot is later reallocated leaves a dangling chain
-        // pointer (a tile-chain CYCLE once the new occupant
-        // relinks on the same tile — the pair-9074 OOM).
-        let linkable = |r: &RetailEntMc2| r.class3f != 0 && r.flags & 4 != 0 && !ghost(r);
+        // ⭐ A DISABLED RECORD STAYS IN ITS CHAIN UNTIL THE TOP REAP —
+        // see [`mc2_import_ghost_linked`]. (The old rule here read
+        // "ghosts never link: retail unlinks at disable, the link bit
+        // is stale bytes"; retail's captured index says otherwise.)
+        let ghost_linked = mc2_import_ghost_linked();
+        let linkable = |r: &RetailEntMc2| {
+            r.class3f != 0 && r.flags & 4 != 0 && (ghost_linked || !ghost(r))
+        };
         // ⭐⭐⭐ DIG W2-F — SPLICE the ghosts out instead of TRUNCATING
         // at them. A ghost at a chain's head orphaned every record
         // below it into the ascending fallback, which head-inserts in
@@ -3330,6 +3454,25 @@ impl World {
                 let (x, y, z) = (e.x, e.y, e.z);
                 self.g.link(slot, x, y, z);
             }
+        }
+
+        // ⭐ THE HUMAN'S SEAT — the MC1 importer's block above, which
+        // this copy never got. See [`mc2_import_seat`].
+        if mc2_import_seat() {
+            let cell = crate::engine::features::tile((carpet.x >> 8) as u8, (carpet.y >> 8) as u8);
+            let succ = hop(carpet.next16 as usize, false);
+            let next = if succ != 0
+                && succ < n
+                && crate::engine::features::tile(
+                    (st.ents[succ].x >> 8) as u8,
+                    (st.ents[succ].y >> 8) as u8,
+                ) == cell
+            {
+                succ as u16
+            } else {
+                0
+            };
+            self.g.player_chain = crate::engine::features::PlayerChain { cell, next };
         }
 
         // Free stack: retail pops the FREE stack first and recycle
@@ -5130,6 +5273,45 @@ pub(crate) fn mc2_import_hole_unlinked() -> bool {
     *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_IMPORT_HOLE_UNLINKED").is_none())
 }
 
+/// ⭐⭐⭐ **RETAIL KEEPS A DISABLED RECORD LINKED UNTIL THE NEXT FRAME'S
+/// TOP REAP.** The importer's chain rebuild refused every record with
+/// the disable bit (`flags & 0x400`) on the theory that retail unlinks
+/// at disable. The captured entity index (round 166) is the table
+/// itself: on all 40 MC2 takes every such record with its link bit set
+/// IS a member of its cell's chain, in its recorded place (271,757
+/// import rows at stride 10, and they were the ONLY MC2 import rows),
+/// and no linked record is ever unreached (0 orphans over 1,331,039
+/// ticks) — the link bit is not stale. The free run always agreed with
+/// retail (0 rows); only the import took the record out. The top reap
+/// (`UpdateEntities`, EF:39948-56) unlinks it before any walker runs,
+/// which is why no pair graded the difference.
+///
+/// `MGC_NO_MC2_IMPORT_GHOST_LINKED=1` restores the ghost-less rebuild.
+pub(crate) fn mc2_import_ghost_linked() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_IMPORT_GHOST_LINKED").is_none())
+}
+
+/// ⭐⭐⭐ **THE MC2 IMPORTER NEVER SEATED THE HUMAN IN HIS TILE CHAIN.**
+/// `Gen::player_chain` is `(cell, successor)`, the out-of-pool human's
+/// rank in his own cell (see `features::PlayerChain`); the flood and
+/// the chain walkers of `mc2/tail.rs` read it. The MC1 importer has
+/// carried it since it was written — the recorded carpet's `+20`,
+/// hopped past anything unlinkable, accepted when it shares his tile.
+/// The MC2 copy left the register at whatever the world held, so the
+/// first walk after every anchor took him for a fresh arrival and made
+/// him the HEAD of his cell. Found by the captured entity index
+/// (round 166, `MGC_INDEX`'s human-seat rows): mc2l1's record 0 holds
+/// the chain `137 → 136 → … → 112 → 111`, the carpet 111 at the TAIL
+/// under the 26 tokens minted after him, and the port read successor
+/// 137 for the 38 ticks he stayed in that cell.
+///
+/// `MGC_NO_MC2_IMPORT_SEAT=1` restores the unseated import.
+pub(crate) fn mc2_import_seat() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MC2_IMPORT_SEAT").is_none())
+}
+
 /// `MGC_NO_ORB_SAT_FOV=1` restores the dropped lane for A/B.
 pub(crate) fn orb_sat_fov(class: u8, model: u8) -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -6674,6 +6856,7 @@ pub fn retail_ent_lanes_mc2(r: &RetailEntMc2) -> Vec<(&'static str, i64)> {
         ("flags.b1_x8", bit(11)),
         ("flags.b1_decay20", bit(13)),
         ("flags.b2_kill1", bit(16)),
+        ("flags.b2_sac2", bit(17)),
         ("flags.b2_x4", bit(18)),
         ("flags.b2_x10", bit(20)),
         ("flags.b2_x20", bit(21)),
@@ -7886,26 +8069,32 @@ mod tests {
         );
     }
 
-    /// ⭐⭐⭐ A GHOST AT THE HEAD OF A TILE CHAIN MUST BE SPLICED OUT,
-    /// NOT TRUNCATED AT — see [`chain_ghost_splice`].
+    /// ⭐⭐⭐ THE IMPORTED TILE CHAINS ARE RETAIL'S, DISABLED RECORDS AND
+    /// THE HUMAN'S SEAT INCLUDED — see [`mc2_import_ghost_linked`],
+    /// [`mc2_import_seat`] and [`chain_ghost_splice`].
     ///
-    /// The recording captures a ghost (`byte[1] & 4`) still IN its
-    /// tile chain, because retail only reaps it at the TOP of the next
-    /// frame (`UpdateEntities_57730`, EF:39948-56 → `sub_57F20`). The
-    /// rebuild refuses to link ghosts — correctly — but used to start
-    /// chains only at `prev18 == 0`, so every record under a ghost head
-    /// was unreachable and fell into the ascending fallback, which
-    /// head-inserts in slot order and hands the chain back REVERSED.
+    /// RE-DERIVED IN ROUND 166. This test used to pin "a ghost never
+    /// joins a chain": the recording captures a disabled record
+    /// (`byte[1] & 4`) still IN its chain because retail only reaps it
+    /// at the top of the next frame (`UpdateEntities_57730`,
+    /// EF:39948-56 → `sub_57F20`), and the rebuild spliced it out. The
+    /// captured entity index says the record IS the chain's member
+    /// until that reap, so it is imported in its recorded place. The
+    /// splice still stands for what cannot link at all — a record with
+    /// its link bit clear in the middle of a chain (tile C) — and must
+    /// keep the recorded order there (the truncating rebuild reversed
+    /// it).
     ///
-    /// Two shapes are pinned here, because they fail differently:
-    /// a ghost at the HEAD (the whole tail reverses) and a ghost in the
-    /// MIDDLE (the chain splits and the two halves swap).
+    /// Tile B also seats the HUMAN: he sits between 7 and 8, the port
+    /// carries him out of the pool, and his rank must come back as
+    /// `(tile B, successor 8)`.
     ///
-    /// NON-VACUITY: with `MGC_NO_CHAIN_GHOST_SPLICE=1` tile A comes
-    /// back as 5 → 4 → 3 and tile B as 8 → 6, and every assert below
-    /// fails.
+    /// NON-VACUITY: `MGC_NO_MC2_IMPORT_GHOST_LINKED=1` takes 2 and 7
+    /// out again, `MGC_NO_MC2_IMPORT_SEAT=1` leaves the seat unseeded,
+    /// `MGC_NO_CHAIN_GHOST_SPLICE=1` hands tile C back as 11 alone
+    /// under a separate head.
     #[test]
-    fn a_ghost_is_spliced_out_of_its_tile_chain_not_truncated_at() {
+    fn the_imported_chains_keep_disabled_records_and_seat_the_human() {
         let planes = Planes {
             height: vec![100; 0x10000],
             tile_type: vec![5; 0x10000],
@@ -7955,23 +8144,38 @@ mod tests {
         };
         let (ax, ay) = (0x10u16 << 8, 0x14u16 << 8); // tile (16, 20)
         let (bx, by) = (0x12u16 << 8, 0x16u16 << 8); // tile (18, 22)
+        let (cx, cy) = (0x20u16 << 8, 0x24u16 << 8); // tile (32, 36)
         let mut ents = vec![RetailEntMc2::default(); pool];
+        // The human carpet (out-of-pool in the port), linked in tile B
+        // between the disabled 7 and the tail 8.
         ents[1] = RetailEntMc2 {
             class3f: 3,
+            flags: 0x004,
             max_life: 100,
             life: 100,
+            x: bx,
+            y: by,
+            z: 100,
+            next16: 8,
+            prev18: 7,
             ..Default::default()
-        }; // the human carpet (out-of-pool in the port)
-        // Tile A — the GHOST IS THE HEAD: 2* -> 3 -> 4 -> 5.
+        };
+        // Tile A — the DISABLED RECORD IS THE HEAD: 2* -> 3 -> 4 -> 5.
         ents[2] = node(0x404, ax, ay, 3, 0);
         ents[3] = node(0x004, ax, ay, 4, 2);
         ents[4] = node(0x004, ax, ay, 5, 3);
         ents[5] = node(0x004, ax, ay, 0, 4);
-        // Tile B — the GHOST IS IN THE MIDDLE: 6 -> 7* -> 8.
+        // Tile B — DISABLED IN THE MIDDLE, the human under it:
+        // 6 -> 7* -> (1) -> 8.
         ents[6] = node(0x004, bx, by, 7, 0);
-        ents[7] = node(0x404, bx, by, 8, 6);
-        ents[8] = node(0x004, bx, by, 0, 7);
-        let stack: Vec<u16> = (9..pool as u16).collect();
+        ents[7] = node(0x404, bx, by, 1, 6);
+        ents[8] = node(0x004, bx, by, 0, 1);
+        // Tile C — a record that CANNOT link (its link bit is clear)
+        // in the middle: 9 -> 10- -> 11.
+        ents[9] = node(0x004, cx, cy, 10, 0);
+        ents[10] = node(0x000, cx, cy, 11, 9);
+        ents[11] = node(0x004, cx, cy, 0, 10);
+        let stack: Vec<u16> = (12..pool as u16).collect();
         let st = RetailMc2 {
             things: vec![],
             stage_binds: [(0, 0, None); 8],
@@ -8010,20 +8214,33 @@ mod tests {
 
         let ta = crate::engine::features::tile(0x10, 0x14);
         let tb = crate::engine::features::tile(0x12, 0x16);
-        // A ghost never joins a chain, on either arm.
-        assert_eq!(w.g.ent[2].flags & 4, 0, "the ghost head must not link");
-        assert_eq!(w.g.ent[7].flags & 4, 0, "the mid-chain ghost must not link");
-        // Tile A: the ghost head is spliced out and 3 -> 4 -> 5 keeps
-        // the RECORDED order (the fallback would give 5 -> 4 -> 3).
-        assert_eq!(w.g.map_entity[ta] as usize, 3, "tile A head");
-        assert_eq!((w.g.ent[3].next20, w.g.ent[3].prev22), (4, 0), "tile A: 3");
+        let tc = crate::engine::features::tile(0x20, 0x24);
+        // A disabled record keeps its place until the top reap.
+        assert_ne!(w.g.ent[2].flags & 4, 0, "the disabled head stays linked");
+        assert_ne!(w.g.ent[7].flags & 4, 0, "the disabled mid-chain record too");
+        // Tile A: 2 -> 3 -> 4 -> 5, the RECORDED order.
+        assert_eq!(w.g.map_entity[ta] as usize, 2, "tile A head");
+        assert_eq!((w.g.ent[2].next20, w.g.ent[2].prev22), (3, 0), "tile A: 2");
+        assert_eq!((w.g.ent[3].next20, w.g.ent[3].prev22), (4, 2), "tile A: 3");
         assert_eq!((w.g.ent[4].next20, w.g.ent[4].prev22), (5, 3), "tile A: 4");
         assert_eq!((w.g.ent[5].next20, w.g.ent[5].prev22), (0, 4), "tile A: 5");
-        // Tile B: the mid-chain ghost is spliced out and the two halves
-        // stay in order (the truncating rebuild swapped them to 8 -> 6).
+        // Tile B: 6 -> 7 -> 8 in the pool, the human's seat between
+        // 7 and 8.
         assert_eq!(w.g.map_entity[tb] as usize, 6, "tile B head");
-        assert_eq!((w.g.ent[6].next20, w.g.ent[6].prev22), (8, 0), "tile B: 6");
-        assert_eq!((w.g.ent[8].next20, w.g.ent[8].prev22), (0, 6), "tile B: 8");
+        assert_eq!((w.g.ent[6].next20, w.g.ent[6].prev22), (7, 0), "tile B: 6");
+        assert_eq!((w.g.ent[7].next20, w.g.ent[7].prev22), (8, 6), "tile B: 7");
+        assert_eq!((w.g.ent[8].next20, w.g.ent[8].prev22), (0, 7), "tile B: 8");
+        assert_eq!(
+            (w.g.player_chain.cell, w.g.player_chain.next),
+            (tb, 8),
+            "the human's seat: tile B, in front of 8"
+        );
+        // Tile C: the unlinkable record is spliced out and the two
+        // halves stay in order.
+        assert_eq!(w.g.ent[10].flags & 4, 0, "a clear link bit never links");
+        assert_eq!(w.g.map_entity[tc] as usize, 9, "tile C head");
+        assert_eq!((w.g.ent[9].next20, w.g.ent[9].prev22), (11, 0), "tile C: 9");
+        assert_eq!((w.g.ent[11].next20, w.g.ent[11].prev22), (0, 9), "tile C: 11");
     }
 
     /// A FREED MC2 slot keeps the behaviour row its ctor stamped.
