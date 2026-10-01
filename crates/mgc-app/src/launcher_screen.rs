@@ -44,6 +44,7 @@ use mgc_render::UiQuad;
 use crate::bakecheck::{self, BakeStatus};
 use crate::campaign::CampaignId;
 use crate::config::{Config, WindowSize};
+use crate::IS_ANDROID;
 use crate::settings::{self, Preset, PresetGroup};
 
 const FONT: &[u8] = include_bytes!("../../../assets/launcher/DejaVuSerif-Bold.ttf");
@@ -691,6 +692,9 @@ impl Launcher {
         );
 
         for (row, (label, _)) in OPTIONS.iter().enumerate() {
+            if !IS_ANDROID && row < 2 {
+               continue;
+            }
             let focused = key.focus == Focus::Option(row);
             let (_, y, _, hh) = value_rect(row);
             let base = y + hh / 2.0 + 7.0;

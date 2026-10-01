@@ -17,6 +17,7 @@
 
 use crate::config::Config;
 use mgc_sim::ids::GameId;
+use crate::IS_ANDROID;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Domain {
@@ -396,8 +397,14 @@ pub const VISUALS_PRESET: PresetGroup = PresetGroup {
         use crate::config::{FireEffects, LightningEffects, RivalTags};
         let enhanced = p == Preset::Enhanced;
         let (pref, enh) = (&mut c.render.preference, &mut c.render.enhancement);
-        pref.crosshair = enhanced;
-        pref.sky = true;
+        if IS_ANDROID {
+            c.sim.parameters.awake_range = if enhanced { Option::Some(105) } else { Option::Some(24) };
+            pref.crosshair = false;
+            pref.sky = false;
+        } else {
+            pref.crosshair = enhanced;
+            pref.sky = true;
+        }
         pref.reflections = true;
         pref.horizon_cull = true;
         pref.light_sources = true;
