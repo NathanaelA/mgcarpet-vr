@@ -91,12 +91,12 @@ AI tools.
 ## Current Status
 
 Both games and the expansion are playable end to end. The simulation is
-bit-exact against retail gameplay recordings across the certified takes,
-strange and quirky retail behaviour included, and every remaining
+bit-exact against thorough retail gameplay recordings across the certified
+takes, strange and quirky retail behaviour included, and every remaining
 divergence is registered rather than papered over.
 
-Deviations from the retail game are deliberate — bug fixes or playability
-improvements — and nearly all of them can be switched back to the retail
+Deviations from the retail game are deliberate - bug fixes or playability
+improvements - and nearly all of them can be switched back to the retail
 behaviour with a toggle.
 
 The main issue of all retail Magic Carpet games is the dreaded entity pool
@@ -109,7 +109,30 @@ the original hidden levels that were removed from the campaign for various
 reasons, one of them being that they don't even load correctly due to limited
 entity pool size.
 
-Detailed conformance report is TODO.
+### How "bit-exact" is checked
+
+The original executables are the oracle. Retail play was recorded under
+an instrumented DOSBox that wrote down the complete state of every game
+entity on every game turn, together with the player's input. The port
+replays that input through its own simulation and must reproduce the
+recorded state exactly, turn by turn. Every campaign level of all three
+games has been played through this way and replays identically (a few
+recordings tore mid-take; those are certified up to the tear); where the retail
+executable diverges from its own data (it reads past the ends of tables,
+and damages its own memory in a few known places), the tick is
+investigated until the cause is known and registered, never papered
+over.
+
+Rendering, visuals and audio is specifically excluded from exactness and
+reimplemented from scratch, visually compared and tweaked. Most visual
+deviations from retail are deliberate, given the age of the original game.
+
+The faithfulness evidence that travels with the repository is in
+[docs/CONFORMANCE-REPORT.md](docs/CONFORMANCE-REPORT.md): per level, the
+retail state pairs the suite replays on every change, and the finite
+list of ticks where retail diverges by definition. The deliberate
+differences are in [docs/DEVIATIONS.md](docs/DEVIATIONS.md) — everything
+not listed there is the retail game.
 
 ## Architecture
 
