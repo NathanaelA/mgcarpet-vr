@@ -2335,6 +2335,8 @@ struct App {
     last_map_tick: Option<u64>,
     /// P-key pause: the sim clock freezes, rendering and UI stay live.
     paused: bool,
+    /// Used because VR has a Pause button when the menu is open
+    #[cfg(target_os = "android")]
     prior_paused: bool,
     /// The in-game options menu. On the frontend screens P opens this
     /// directly; IN A LEVEL it is a second layer opened from the
@@ -2573,9 +2575,9 @@ struct App {
     /// (or exits, single-level).
     exit_confirm: bool,
 
-    // Used to track which slot  was picked  so that the pregame menu has
+    // Used to track which slot was picked so that the pregame menu has
     // the valid slot to use when launching the game.
-    pregame_slot: usize,
+    launcher_slot: usize,
 
     // Used to track if playing with vr enhancements
     vr_enhancement: bool,
@@ -2675,7 +2677,7 @@ impl App {
         record_path: Option<PathBuf>,
         third_person: bool,
         film: Option<film::Film>,
-        pregame_slot: usize,
+        launcher_slot: usize,
     ) -> Self {
         // The running game's identity is known without a level: the
         // campaign id (a campaign boots to its frontend, level-less).
@@ -2739,6 +2741,7 @@ impl App {
             spell_levels: [0; 26],
             last_map_tick: None,
             paused: false,
+            #[cfg(target_os = "android")]
             prior_paused: false,
             menu: None,
             mini: None,
@@ -2838,7 +2841,7 @@ impl App {
             frontend_ui: None,
             won_handled: false,
             exit_confirm: false,
-            pregame_slot,
+            launcher_slot,
             vr_enhancement: false,
             #[cfg(target_os = "android")]
             swapchain: None,
@@ -2875,6 +2878,8 @@ impl App {
             // blip of menu MIDI under the opening (player-reported).
             // The chain hands back to `enter_main_menu`, which starts
             // it properly.
+            // The pre-game selection menu is silent (no game — hence
+            // no game audio bundle — has been chosen yet).
             None if app.screen == Screen::Launcher => {
                 app.launcher = Some(launcher_screen::Launcher::new(
                     &get_baked_directory(),
@@ -4744,12 +4749,12 @@ impl App {
 
         // Return the equip for the hand that was selected
         if self.is_mc2() {
-            return FlightInput {
+            FlightInput {
                 mc2_select: self.pending_mc2_select.take(),
                 ..FlightInput::default()
             }
         } else {
-            return FlightInput {
+            FlightInput {
                 equip_left: if hand == 0 {
                     self
                         .pending_equip
@@ -4808,7 +4813,7 @@ impl App {
             };
         }
 
-        let in_pregame_screen = self.screen == Screen::PreGameMenu;
+        let in_launcher_menu = self.screen == Screen::Launcher;
 
         // We have to reset grabbed if we are on the book/map view (not the MC2 main map screen).
         let in_bookview = if let Some(r) = &mut self.renderer {
@@ -4821,7 +4826,7 @@ impl App {
         let mut in_panel = false;
         // Since our state is handled a bit differently than the original system as we still need inputs
         // We set a flag if we are in a panel in the game screen
-        if in_bookview || self.paused || in_pregame_screen || self.ctrl_held {
+        if in_bookview || self.paused || in_launcher_menu || self.ctrl_held {
             // grabbed = true;
             in_panel = true;
         }
@@ -4858,9 +4863,10 @@ impl App {
             }
 
             if input.fire_right || input.fire_left {
-                if in_pregame_screen && input.fire_right {
-                    if let Some(m) = &mut self.pre_game_menu {
-                        m.click(screen_size, self.cursor);
+                if in_launcher_menu && input.fire_right {
+                    if let Some(m) = &mut self.launcher {
+                        m.click(screen_size, self.cursor, &mut self.cfg);
+                        self.launcher_changes();
                     }
                 } else if self.screen == Screen::Movie {
                     // Either fire button skips the movie.
@@ -5033,9 +5039,9 @@ impl App {
                 }
             }
 
-            // If we are in the pregame screen or not  in a panel we want to swallow all input
+            // If we are in the launcher screen or not  in a panel we want to swallow all input
             // Otherwise we want to fall thru because if they are in a panel we want the menu button to close the panel
-            if !in_panel || in_pregame_screen {
+            if !in_panel || in_launcher_menu {
                 return FlightInput::default();
             }
         }
@@ -6345,119 +6351,6 @@ impl App {
         }
     }
 
-    /// One pre-game selection-menu frame: compose the CPU screen
-    /// (option art + Enhanced switch + Start), upload it as the UI
-    /// atlas, and act on a Start/Quit.
-    fn pregame_menu_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
-        if self.pre_game_menu.is_none() {
-
-            let enhanced = if IS_ANDROID { true } else { false };
-            match pregamemenu::PreGameMenu::new(enhanced) {
-                Ok(m) => {
-                    self.pre_game_menu = Some(m);
-                    // Windowed: the OS pointer clicks the menu;
-                    // fullscreen draws the software arrow via
-                    // `append_software_cursor`.
-                    self.set_grab(false);
-                }
-                Err(e) => {
-                    // The compiled-in art failed to decode (should not
-                    // happen): fall back to a Magic Carpet campaign so
-                    // the game is still reachable.
-                    eprintln!("note: main menu unavailable: {e} — starting Magic Carpet");
-                    self.start_from_main_menu(campaign::CampaignId::Mc1, enhanced, event_loop);
-                    return;
-                }
-            }
-        }
-        let size = self.view_size();
-        let cursor = self.cursor;
-        let action = {
-            let Some(menu) = &mut self.pre_game_menu else {
-                return;
-            };
-            menu.tick(dt);
-            let (rgba, quads) = menu.frame(size, cursor);
-            let action = menu.take_action();
-            let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
-            q.extend(quads);
-            self.append_software_cursor(&mut q);
-            if let Some(r) = &mut self.renderer {
-                // The composed screen IS the atlas — re-uploaded per
-                // frame (hover/selection live in the pixels).
-                r.load_ui_atlas(pregamemenu::W as u32, pregamemenu::H as u32, &rgba);
-                self.ui_atlas = UiAtlas::PreGameMenu;
-                r.set_ui_quads(q);
-            }
-            action
-        };
-        if let Some(a) = action {
-            match a {
-                pregamemenu::MenuAction::Start { game, enhanced } => {
-                    self.start_from_main_menu(game, enhanced, event_loop);
-                }
-                pregamemenu::MenuAction::Quit => event_loop.exit(),
-            }
-        }
-    }
-
-    /// Launch the game chosen on the pre-game menu: apply the vr Enhanced
-    /// (re)load that game's audio, and hand off to the campaign boot
-    /// (its intro chain + retail frontend) exactly as `--campaign`
-    /// would have.
-    fn start_from_main_menu(
-        &mut self,
-        game: campaign::CampaignId,
-        enhanced: bool,
-        event_loop: &ActiveEventLoop,
-    ) {
-        self.vr_enhancement = enhanced;
-        #[cfg(target_os = "android")]
-        if enhanced {
-            self.cfg.render.preference.fog_distance = 50;
-            self.cfg.sim.parameters.awake_range = Option::from(55);
-        } else {
-            // We reset this to actual defaults.
-            self.cfg.render.preference.fog_distance = 20;
-            self.cfg.sim.parameters.awake_range = Option::from(24);
-        }
-
-        match CampaignRun::start(game, Option::from(self.pregame_slot), false) {
-            Ok(run) => self.campaign = Some(run),
-            Err(e) => {
-                eprintln!("error: cannot start {} campaign: {e}", game.tag());
-                event_loop.exit();
-                return;
-            }
-        }
-        // The audio bundle is per-game; the boot loaded MC1's, so swap
-        // to the chosen game's before its frontend needs it.
-        let is_mc2 = game == campaign::CampaignId::Mc2;
-        self.reload_game_audio(is_mc2);
-        // Done with the selection menu; hand the app to the campaign
-        // boot: the intro chain plays, then the retail frontend.
-        self.pre_game_menu = None;
-        self.boot_intro = true;
-        self.screen = Screen::Menu;
-        self.ui_atlas = UiAtlas::None;
-    }
-
-    /// (Re)open the audio device and load a game's bundle — the
-    /// per-game load `App::new` runs at boot, replayed when the
-    /// pre-game menu picks a different game.
-    fn reload_game_audio(&mut self, is_mc2: bool) {
-        // We need to reset this so that ensure_audio will reload the proper bundle.
-        self.audio = None;
-        if !(self.cfg.audio.sound || self.cfg.audio.music) {
-            return;
-        }
-
-        // self.audio is assigned in ensure_audio.
-        self.ensure_audio();
-        self.apply_volumes();
-
-    }
-
     /// One frontend frame (`screen != Level`): the P options menu
     /// over a frozen screen, or the live menu/map frame.
     fn frontend_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
@@ -6822,7 +6715,12 @@ impl App {
     /// as `--campaign` would (the intro chain, then the retail main
     /// menu), in this same window.
     fn start_from_launcher(&mut self, id: campaign::CampaignId, event_loop: &ActiveEventLoop) {
-        let run = match CampaignRun::start(id, None, false) {
+
+        if IS_ANDROID {
+            self.vr_enhancement = self.cfg.render.preference.fog_distance >= 25;
+        }
+
+        let run = match CampaignRun::start(id, Option::from(self.launcher_slot), false) {
             Ok(run) => run,
             Err(e) => {
                 eprintln!("error: cannot start the {} campaign: {e}", id.tag());
@@ -9839,13 +9737,6 @@ impl ApplicationHandler for App {
                         // (no mini-menu behind it): Esc closes it and
                         // unpauses, as before.
                         self.toggle_menu();
-                    } else if self.pre_game_menu.is_some() {
-                        // Pre-game menu: Esc = cancel, back to the
-                        if let Some(m) = &mut self.pre_game_menu {
-                            m.escape();
-                        } else {
-                            event_loop.exit();
-                        }
                     } else if self.screen == Screen::Menu {
                         // Main menu: close the modal, else the exit
                         // confirm (retail Esc = the Exit button).
@@ -12801,7 +12692,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         }
     }
 
-    let pregame_slot = if let Some(s) = args.slot {
+    let launcher_slot = if let Some(s) = args.slot {
         s
     } else {
         0
@@ -13221,10 +13112,9 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         },
         replay_boot,
         args.record.clone(),
-        args.show_pregame_menu,
-        pregame_slot,
         args.third_person,
         film,
+        launcher_slot,
     );
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
