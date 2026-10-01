@@ -5805,6 +5805,7 @@ impl Renderer {
         let (width, height) = match &self.target {
             Target::Window { config, .. } => (config.width, config.height),
             Target::Offscreen { width, height, .. } => (*width, *height),
+            Target::Xr { .. } => (0, 0),
         };
         let stale = !matches!(&self.capture, Some((_, w, h)) if *w == width && *h == height);
         if stale {
@@ -5826,7 +5827,7 @@ impl Renderer {
         }
         let tex = self.capture.take().expect("capture texture just ensured");
         let view = tex.0.create_view(&Default::default());
-        self.render_texture(cam, &view);
+        self.render_texture(cam, &view, None);
         let rgba = self.read_texture(&tex.0, width, height);
         self.capture = Some(tex);
         (width, height, rgba)
