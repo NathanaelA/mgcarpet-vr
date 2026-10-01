@@ -236,8 +236,7 @@ impl IndexCensus {
             while cur != 0 && cur < n {
                 let e = pool.ents[cur];
                 if seen[cur] != 0 {
-                    if seen[cur] as usize == cell + 1 || steps > 0 && seen[cur] as usize == cell + 1
-                    {
+                    if seen[cur] as usize == cell + 1 {
                         self.cycle.hit(t, cm(cur), || {
                             format!("t={t} cell {cell} head {h} re-enters slot {cur}")
                         });
@@ -785,7 +784,10 @@ impl ImportCheck {
 
     fn render(&self) -> Vec<String> {
         [
-            ("IMPORT retail links a DISABLED record, the port does not", &self.ghost),
+            (
+                "IMPORT retail links a DISABLED record, the port does not",
+                &self.ghost,
+            ),
             ("IMPORT head differs", &self.heads),
             ("IMPORT chain differs under one head", &self.order),
             ("IMPORT human seat differs", &self.seat),
@@ -916,8 +918,14 @@ fn init_block(
             ("init: member stands on another cell", &icensus.wrong_cell),
             ("init: back link broken", &icensus.prev_break),
             ("init: linked live record no chain reaches", &icensus.orphan),
-            ("init: RULE captured head, none derived", &icensus.rule_cap_only),
-            ("init: RULE derived head, none captured", &icensus.rule_der_only),
+            (
+                "init: RULE captured head, none derived",
+                &icensus.rule_cap_only,
+            ),
+            (
+                "init: RULE derived head, none captured",
+                &icensus.rule_der_only,
+            ),
             ("init: RULE heads differ", &icensus.rule_differ),
         ] {
             if let Some(l) = tl.render(nm) {
@@ -1095,13 +1103,23 @@ fn init_block(
         (heads.rows, order.rows)
     };
     let (ih, io_) = head_diff(iidx.as_deref(), &ipool, w_init, true, "PORT index vs INIT:");
-    let (fh, fo_) = head_diff(first_index, &fpool, &w_rec0, false, "PORT index vs RECORD 0:");
+    let (fh, fo_) = head_diff(
+        first_index,
+        &fpool,
+        &w_rec0,
+        false,
+        "PORT index vs RECORD 0:",
+    );
 
     // The human's seat in the NATIVE build, at record 0 (he does not
     // exist before frame 1).
     let seat = {
         let h = fpool.human as usize;
-        match fpool.ents.get(h).filter(|e| h != 0 && e.class != 0 && e.linked) {
+        match fpool
+            .ents
+            .get(h)
+            .filter(|e| h != 0 && e.class != 0 && e.linked)
+        {
             Some(e) => {
                 let (pc, pn) = w_rec0.player_chain_shadow();
                 let ok = pc == e.cell as usize && pn == e.next;
@@ -1167,9 +1185,7 @@ fn init_block(
             "drawn"
         },
         match (init.tick.terrain_rand, first.terrain_rand) {
-            (Some(a), Some(b)) => rank[b as usize]
-                .wrapping_sub(rank[a as usize])
-                .to_string(),
+            (Some(a), Some(b)) => rank[b as usize].wrapping_sub(rank[a as usize]).to_string(),
             _ => "—".into(),
         },
         init_cells,
@@ -1414,7 +1430,11 @@ impl IndexLane {
             b.sort_unstable();
             if a == b {
                 if let Some((x, y)) = want.iter().zip(&got).find(|(x, y)| x != y) {
-                    let of = |s: u16| pool.ents.get(s as usize).map_or((0, 0), |e| (e.class, e.model));
+                    let of = |s: u16| {
+                        pool.ents
+                            .get(s as usize)
+                            .map_or((0, 0), |e| (e.class, e.model))
+                    };
                     *self.swapped.entry((of(*x), of(*y))).or_default() += 1;
                 }
             } else {
@@ -1435,11 +1455,20 @@ impl Drop for IndexLane {
             return;
         }
         for (nm, tl) in [
-            ("INDEX head differs (retail's chain sound)", &self.clean_head),
-            ("INDEX order differs (retail's chain sound)", &self.clean_order),
+            (
+                "INDEX head differs (retail's chain sound)",
+                &self.clean_head,
+            ),
+            (
+                "INDEX order differs (retail's chain sound)",
+                &self.clean_order,
+            ),
             ("INDEX retail's own chain is unsound", &self.stale),
             ("INDEX retail links a disabled record", &self.ghost),
-            ("INDEX MEMBERSHIP differs (retail's chain sound)", &self.membership),
+            (
+                "INDEX MEMBERSHIP differs (retail's chain sound)",
+                &self.membership,
+            ),
             ("INDEX human seat: CELL differs", &self.seat_cell),
             ("INDEX human seat: SUCCESSOR differs", &self.seat_next),
         ] {

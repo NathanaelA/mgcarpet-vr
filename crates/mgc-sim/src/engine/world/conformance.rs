@@ -2112,7 +2112,6 @@ impl World {
         self.g.retile.iter().flatten().copied().collect()
     }
 
-
     pub fn port_ent_lanes_mc2(
         &self,
         slot: u16,
@@ -3365,9 +3364,8 @@ impl World {
         // "ghosts never link: retail unlinks at disable, the link bit
         // is stale bytes"; retail's captured index says otherwise.)
         let ghost_linked = mc2_import_ghost_linked();
-        let linkable = |r: &RetailEntMc2| {
-            r.class3f != 0 && r.flags & 4 != 0 && (ghost_linked || !ghost(r))
-        };
+        let linkable =
+            |r: &RetailEntMc2| r.class3f != 0 && r.flags & 4 != 0 && (ghost_linked || !ghost(r));
         // ⭐⭐⭐ DIG W2-F — SPLICE the ghosts out instead of TRUNCATING
         // at them. A ghost at a chain's head orphaned every record
         // below it into the ascending fallback, which head-inserts in
@@ -8240,7 +8238,11 @@ mod tests {
         assert_eq!(w.g.ent[10].flags & 4, 0, "a clear link bit never links");
         assert_eq!(w.g.map_entity[tc] as usize, 9, "tile C head");
         assert_eq!((w.g.ent[9].next20, w.g.ent[9].prev22), (11, 0), "tile C: 9");
-        assert_eq!((w.g.ent[11].next20, w.g.ent[11].prev22), (0, 9), "tile C: 11");
+        assert_eq!(
+            (w.g.ent[11].next20, w.g.ent[11].prev22),
+            (0, 9),
+            "tile C: 11"
+        );
     }
 
     /// A FREED MC2 slot keeps the behaviour row its ctor stamped.
@@ -9468,12 +9470,18 @@ mod tests {
             &w.g.free[w.g.free.len() - 4..]
         );
         assert_eq!(
-            (w.mc2_stagevars[2].watch_ent, w.mc2_stagevars[2].flags & 0x04),
+            (
+                w.mc2_stagevars[2].watch_ent,
+                w.mc2_stagevars[2].flags & 0x04
+            ),
             (0, 0),
             "row 2: severed, and NOT fired — retail's FIRED bit is the roster's"
         );
         assert_eq!(
-            (w.mc2_stagevars[5].watch_ent, w.mc2_stagevars[5].flags & 0x04),
+            (
+                w.mc2_stagevars[5].watch_ent,
+                w.mc2_stagevars[5].flags & 0x04
+            ),
             (0, 0),
             "row 5: severed, not fired"
         );

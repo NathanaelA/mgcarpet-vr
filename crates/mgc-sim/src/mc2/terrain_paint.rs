@@ -77,6 +77,7 @@ fn road_step(idx: u16, carry: bool) -> u16 {
 /// - the scorch arm (EF:22685-91): the low byte of the record's
 ///   position pointer — see [`mc2_fire_paint_residue`] (round 168; the
 ///   flags byte round 167 put here is gone before the call).
+///
 /// WITNESS mc2l4 t=11434..11458 (and mc2l4-new 30258).
 pub(crate) fn no_mc2_paint_residue_type() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -418,7 +419,11 @@ fn classify_slope(height: &[u8], mut in_type: u8, residue: u8, cx: u8, cy: u8) -
         height[tile(cx.wrapping_add(1), cy.wrapping_add(1))],
         height[tile(cx, cy.wrapping_add(1))],
     ];
-    let mut ty = if no_mc2_paint_residue_type() { 0 } else { residue };
+    let mut ty = if no_mc2_paint_residue_type() {
+        0
+    } else {
+        residue
+    };
     let mut min_h = 255u8;
     let mut max_h = 0u8;
     if q[0] != 0 {
@@ -1137,8 +1142,16 @@ mod tests {
     fn a_flat_zero_quad_classes_off_the_callers_residue() {
         let flat = vec![0u8; 0x10000];
         // sub_37240's cells after the first: dl = the cell's x (47).
-        assert_eq!(classify_slope(&flat, 1, 47, 47, 114), (0, true), "> 3 → default 0");
-        assert_eq!(classify_slope(&flat, 1, 0xFF, 5, 5), (0, true), "the template byte");
+        assert_eq!(
+            classify_slope(&flat, 1, 47, 47, 114),
+            (0, true),
+            "> 3 → default 0"
+        );
+        assert_eq!(
+            classify_slope(&flat, 1, 0xFF, 5, 5),
+            (0, true),
+            "the template byte"
+        );
         // A row's first cell: dl = 0 → switch(0) on in_type.
         assert_eq!(classify_slope(&flat, 0, 0, 40, 114), (7, true));
         assert_eq!(classify_slope(&flat, 1, 0, 40, 114), (4, true));

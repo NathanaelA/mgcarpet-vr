@@ -4362,7 +4362,11 @@ impl App {
         let path = run.level_path(n);
         println!(
             "campaign: launching level {n}{}",
-            if replayed { " (replay: no spell XP)" } else { "" }
+            if replayed {
+                " (replay: no spell XP)"
+            } else {
+                ""
+            }
         );
         let carry = mc1_campaign_carry(Some(run));
         let level = match load_level(
@@ -5098,8 +5102,7 @@ impl App {
             // is up — a ripple settling out keeps the areas it had. An
             // area whose trigger fired meanwhile settles out on its
             // own (`sight::SightAreas`).
-            if self.cfg.render.enhancement.map_beyond_sight_areas
-                && w.beyond_sight_tier().is_some()
+            if self.cfg.render.enhancement.map_beyond_sight_areas && w.beyond_sight_tier().is_some()
             {
                 level
                     .sight
@@ -6131,11 +6134,9 @@ impl App {
         match then {
             StatsThen::Menu => self.enter_main_menu(),
             // Skippable, like every movie (player ruling 2026-09-27).
-            StatsThen::Outro => self.play_movies(
-                &[movie::Cue::new("outro")],
-                AfterMovie::Quit,
-                event_loop,
-            ),
+            StatsThen::Outro => {
+                self.play_movies(&[movie::Cue::new("outro")], AfterMovie::Quit, event_loop)
+            }
             StatsThen::Quit => event_loop.exit(),
         }
     }
@@ -12098,7 +12099,10 @@ mod replay_gate_tests {
             ..Default::default()
         };
         assert!(mc2_map_launch_replayed(&save, 0));
-        assert!(mc2_map_launch_replayed(&save, 7), "the last completed main level");
+        assert!(
+            mc2_map_launch_replayed(&save, 7),
+            "the last completed main level"
+        );
         assert!(!mc2_map_launch_replayed(&save, 8), "the pending main level");
 
         let secret = save.secrets[0].level as u32;

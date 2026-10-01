@@ -4322,13 +4322,7 @@ impl Gen {
                     // `dl` at the call: 0 for a row's first cell, then
                     // the cell's own x (EF:27377; 0x5bd75 / 0x5bd9f).
                     let residue = if dx == 0 { 0 } else { cx };
-                    self.mc2_paint_cell(
-                        dx as u8,
-                        cx,
-                        tly.wrapping_add(dy as u8),
-                        code,
-                        residue,
-                    );
+                    self.mc2_paint_cell(dx as u8, cx, tly.wrapping_add(dy as u8), code, residue);
                 }
             }
         }
@@ -7671,10 +7665,21 @@ mod tests {
         let (x0, y0) = (g.ent[i].x, g.ent[i].y);
         g.mc2_creature_tick(i, &ctx);
         assert!(g.ent[i].act_life < 0, "the inbox head applied the blow");
-        assert_eq!(g.ent[i].lease(), 1, "sub_1E700's dead arm stamps the clock to 1");
-        assert_eq!((g.ent[i].x, g.ent[i].y), (x0, y0), "the dead arm does not move");
+        assert_eq!(
+            g.ent[i].lease(),
+            1,
+            "sub_1E700's dead arm stamps the clock to 1"
+        );
+        assert_eq!(
+            (g.ent[i].x, g.ent[i].y),
+            (x0, y0),
+            "the dead arm does not move"
+        );
         g.mc2_creature_tick(i, &ctx);
-        assert_eq!(g.ent[i].site_z, 10, "the head counts to 0 and expires the charm");
+        assert_eq!(
+            g.ent[i].site_z, 10,
+            "the head counts to 0 and expires the charm"
+        );
         assert!(!g.mc2_allied.0.contains_key(&(i as u16)));
         assert_eq!((g.ent[i].x, g.ent[i].y), (x0, y0), "it never moved");
         // The kind-10 resume and the death state are the world seam's

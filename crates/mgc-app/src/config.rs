@@ -1268,7 +1268,8 @@ pub struct GameplayPatches {
 impl GameplayPatches {
     /// The arm `WorldPatches::mc2_worm_possess_map_wide` takes.
     pub fn owner_recolor_sim(&self) -> PatchArm {
-        self.owner_recolor_sim_pin.unwrap_or(self.ball_owner_recolor)
+        self.owner_recolor_sim_pin
+            .unwrap_or(self.ball_owner_recolor)
     }
 }
 

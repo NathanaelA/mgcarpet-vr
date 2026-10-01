@@ -2108,7 +2108,10 @@ mod tests {
     fn a_torn_takes_stem_is_its_takes_name() {
         let stem = |p: &str| super::take_stem(std::path::Path::new(p));
         assert_eq!(stem("recordings/mc1l48.torn.mgcr"), "mc1l48");
-        assert_eq!(stem("recordings/mc1l48-nodeath.torn.mgcr"), "mc1l48-nodeath");
+        assert_eq!(
+            stem("recordings/mc1l48-nodeath.torn.mgcr"),
+            "mc1l48-nodeath"
+        );
         assert_eq!(stem("recordings/mc1l48.mgcr"), "mc1l48");
         assert_eq!(stem("recordings/mc1l32-new.mgcr"), "mc1l32-new");
         assert_eq!(stem("recordings/mc1l48-torn.mgcr"), "mc1l48-torn");

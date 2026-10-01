@@ -10369,9 +10369,15 @@ mod ring_seizure_tests {
             assert!(mc1.mc1_shot_counts(m) && hw.mc1_shot_counts(m), "model {m}");
         }
         for m in [2u8, 4, 5, 6, 10, 11, 12, 13, 14, 15, 17, 18, 20] {
-            assert!(!mc1.mc1_shot_counts(m) && !hw.mc1_shot_counts(m), "model {m}");
+            assert!(
+                !mc1.mc1_shot_counts(m) && !hw.mc1_shot_counts(m),
+                "model {m}"
+            );
         }
-        assert!(!mc1.mc1_shot_counts(16), "CARPET.EXE returns on the beam segment");
+        assert!(
+            !mc1.mc1_shot_counts(16),
+            "CARPET.EXE returns on the beam segment"
+        );
         assert!(hw.mc1_shot_counts(16), "HIDDEN.EXE counts it");
     }
 
@@ -10388,12 +10394,24 @@ mod ring_seizure_tests {
         let c = g.new_event().expect("a record");
         g.castle_reg[0] = c as u16;
         g.ent[c].f136 = 12_999;
-        assert_eq!(g.mc1_undead_bolt_44(0, 13000), Some(1), "a store under the price");
+        assert_eq!(
+            g.mc1_undead_bolt_44(0, 13000),
+            Some(1),
+            "a store under the price"
+        );
         g.ent[c].f136 = 13_000;
-        assert_eq!(g.mc1_undead_bolt_44(0, 13000), Some(13000), "covered: the price");
+        assert_eq!(
+            g.mc1_undead_bolt_44(0, 13000),
+            Some(13000),
+            "covered: the price"
+        );
         // Blind: the record need not be a castle.
         assert_ne!(g.ent[c].class64, 3);
-        assert_eq!(g.mc1_undead_bolt_44(1, 13000), Some(1), "another wizard's register");
+        assert_eq!(
+            g.mc1_undead_bolt_44(1, 13000),
+            Some(1),
+            "another wizard's register"
+        );
     }
 
     /// Round 168 ([`Gen::mc1_shot_stats_silent`]): the no-spawn end of

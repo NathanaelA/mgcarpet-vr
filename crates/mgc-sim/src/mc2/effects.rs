@@ -1519,7 +1519,11 @@ mod tests {
         let m = g
             .mc2_spawn_magic_mine(40 << 8, 40 << 8, 3200, 0, 1000)
             .expect("a mine");
-        assert_eq!(g.ent[m].flags & 0x2_0000, 0, "no `byte[2] |= 2` in the ctor");
+        assert_eq!(
+            g.ent[m].flags & 0x2_0000,
+            0,
+            "no `byte[2] |= 2` in the ctor"
+        );
         assert_eq!(g.ent[m].flags & 8, 8, "`byte[0] |= 8`: solid");
         let mask = g.victim_mask();
         g.rebuild_recycle(mask);

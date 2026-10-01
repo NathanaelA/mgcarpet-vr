@@ -6705,8 +6705,8 @@ impl Gen {
             let per = speed.max(M28_LEAD_FULL_SPEED);
             return ((dx * 768 / per) as i16, (dy * 768 / per) as i16);
         }
-        let speed = (self.ent[slot as usize].f126 as i32)
-            .clamp(-M28_LEAD_FULL_SPEED, M28_LEAD_FULL_SPEED);
+        let speed =
+            (self.ent[slot as usize].f126 as i32).clamp(-M28_LEAD_FULL_SPEED, M28_LEAD_FULL_SPEED);
         let mut p = (0u16, 0u16, 0i16);
         Self::polar_step(&mut p, tyaw, 0, (speed * 768 / M28_LEAD_FULL_SPEED) as i16);
         (p.0 as i16, p.1 as i16)

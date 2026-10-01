@@ -137,6 +137,9 @@ mod tests {
         s.ease(FADE_SECS / 4.0);
         let w = weights(&s);
         assert_eq!(w.len(), 3, "old red settling, new cyan swelling: {w:?}");
-        assert!((w[0] - 0.75).abs() < 1e-5 && (w[2] - 0.25).abs() < 1e-5, "{w:?}");
+        assert!(
+            (w[0] - 0.75).abs() < 1e-5 && (w[2] - 0.25).abs() < 1e-5,
+            "{w:?}"
+        );
     }
 }

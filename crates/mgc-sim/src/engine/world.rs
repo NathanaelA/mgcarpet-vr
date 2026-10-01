@@ -13111,7 +13111,10 @@ impl World {
         let reg = if own == PLAYER_TARGET {
             Some(self.player.owned[16])
         } else {
-            self.rivals.iter().find(|r| r.ent == own).map(|r| r.owned[16])
+            self.rivals
+                .iter()
+                .find(|r| r.ent == own)
+                .map(|r| r.owned[16])
         };
         let Some(m16) = reg else {
             return false;
@@ -17744,9 +17747,8 @@ impl World {
         // broken outside the machine dies on this pass — `+48 = 1`,
         // then `sub_55E80` (the pin below) and the shared decrement.
         // The FULL tick is the one that sets the bit.
-        let cloak_full = spell == 12
-            && was_live
-            && self.g.ent[i].f26 == self.spells()[12].count as i16;
+        let cloak_full =
+            spell == 12 && was_live && self.g.ent[i].f26 == self.spells()[12].count as i16;
         if spell == 12
             && was_live
             && !cloak_full
@@ -29323,7 +29325,10 @@ mod tests {
         w.g.ent[inv].f26 = n;
         w.manifestation_tick(inv, 12, &ctx);
         assert!(w.player.invisible, "the FULL tick raises the cloak");
-        assert!(w.g.player_invisible, "…and publishes it at the token's slot");
+        assert!(
+            w.g.player_invisible,
+            "…and publishes it at the token's slot"
+        );
         assert_eq!(w.g.ent[inv].f26, n - 1);
         w.manifestation_tick(inv, 12, &ctx);
         assert!(w.player.invisible, "a cloaked mid-burst pass counts down");
@@ -29334,7 +29339,10 @@ mod tests {
         w.cast_spell(SpellId(2), false, true, 50_000, firing_line(), &ctx);
         assert_eq!(w.g.ent[acc].f26, SPELLS[2].count as i16, "the re-arm");
         assert!(!w.player.invisible, "every arm clears the caster's 0x20");
-        assert!(!w.g.player_invisible, "the mirror follows at the carpet's slot");
+        assert!(
+            !w.g.player_invisible,
+            "the mirror follows at the carpet's slot"
+        );
         assert_eq!(w.g.ent[inv].f26, n - 2, "the command writes no token");
 
         // The token finds the bit clear at its own pass.
@@ -42896,7 +42904,10 @@ mod tests {
         assert_eq!(leviathan_chase_heading(true, false, (200, 0)), retail);
         // Half speed: between the two.
         let half = leviathan_chase_heading(true, false, (40, 0));
-        assert!(retail < half && half < at_him, "half-speed lead: yaw {half}");
+        assert!(
+            retail < half && half < at_him,
+            "half-speed lead: yaw {half}"
+        );
         // Sliding WEST while looking east: the lead goes west.
         let west = leviathan_chase_heading(true, false, (-80, 0));
         assert!(

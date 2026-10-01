@@ -2400,8 +2400,7 @@ impl World {
         // ball arm's `mana / 4`; the port's invented exclusion left it
         // flat. `MGC_NO_MC1_SELF_HATE=1` restores the exclusion.
         if shooter as usize >= 8
-            || (self.rivals[ri].slot == shooter
-                && crate::engine::features::no_mc1_self_hate())
+            || (self.rivals[ri].slot == shooter && crate::engine::features::no_mc1_self_hate())
         {
             return;
         }
@@ -5593,7 +5592,11 @@ impl World {
     fn rival_arm(&mut self, ri: usize, s: usize, plan15: bool) -> ArmStep {
         let blind = !crate::engine::features::no_mc1_rival_blind_register();
         let reg = self.rival_reg(ri, s);
-        if if blind { reg.is_none() } else { self.rivals[ri].owned[s] == 0 } {
+        if if blind {
+            reg.is_none()
+        } else {
+            self.rivals[ri].owned[s] == 0
+        } {
             return ArmStep::Next;
         }
         if self.rival_cast_ready(ri, s) {
@@ -7502,7 +7505,10 @@ mod tests {
         let puff = w.g.spawn_effect(2, x, y, z).expect("a contrail");
         assert_ne!(w.g.ent[puff].class64, 12, "non-vacuity: not a token");
         w.rivals[0].owned[2] = puff as u16;
-        assert!(w.rival_token(0, 2).is_none(), "the validated read refuses it");
+        assert!(
+            w.rival_token(0, 2).is_none(),
+            "the validated read refuses it"
+        );
         w.rivals[0].mana = 750; // under Accelerate's real 1000
         w.rivals[0].cooldown[2] = 0;
         w.rivals[0].vdes = 160;
@@ -7514,7 +7520,10 @@ mod tests {
         assert!(!arrived);
         assert!(!w.rivals[0].v14, "the throttle leg is never reached");
         assert_eq!(w.rivals[0].vdes, 160, "the speed column is untouched");
-        assert_eq!(w.rivals[0].cooldown[2], AI_RECAST[2], "the commit's cooldown");
+        assert_eq!(
+            w.rivals[0].cooldown[2], AI_RECAST[2],
+            "the commit's cooldown"
+        );
         assert_eq!(w.g.ent[i].flags & 0x100, 0, "sub_155F0's `+17 &= ~1`");
         assert_eq!(w.mc1_token_word48(puff), 0, "`+48 = +50`, both 0");
 
@@ -7558,7 +7567,10 @@ mod tests {
         assert!(table > 1, "non-vacuity: Lightning has a table price");
         w.rivals[0].owned[0] = 0;
         w.rivals[0].owned[15] = puff as u16;
-        assert!(w.rival_token(0, 15).is_none(), "the validated read refuses it");
+        assert!(
+            w.rival_token(0, 15).is_none(),
+            "the validated read refuses it"
+        );
         // A purse the table price refuses and the poverty latch passes.
         w.rivals[0].mana_max = table - 1;
         w.rivals[0].mana = table - 1;
@@ -7568,9 +7580,16 @@ mod tests {
         w.g.ent[i].f34 = w.g.ent[i].f30;
 
         // `+136 == 0`: the purse covers it, the picker returns 15.
-        assert_eq!(w.rival_attack_pick(0, false), Some(15), "priced off the record");
+        assert_eq!(
+            w.rival_attack_pick(0, false),
+            Some(15),
+            "priced off the record"
+        );
         assert!(w.rival_cast(0, i, 15), "and the commit fires");
-        assert_eq!(w.rivals[0].cooldown[15], AI_RECAST[15], "the commit's cooldown");
+        assert_eq!(
+            w.rivals[0].cooldown[15], AI_RECAST[15],
+            "the commit's cooldown"
+        );
         assert_eq!(w.rivals[0].burst, 1, "the precision pair's burst counter");
         assert_eq!(w.mc1_token_word48(puff), 0, "`+48 = +50`, both 0");
 
@@ -7587,15 +7606,29 @@ mod tests {
         w.g.ent[puff].raw48 = crate::engine::features::Raw48(0);
         w.g.ent[puff].f136 = table as i32 - 1;
         w.rivals[0].mana = table - 2;
-        assert_eq!(w.rival_attack_pick(0, false), None, "7 holds: affordable by ceiling");
+        assert_eq!(
+            w.rival_attack_pick(0, false),
+            None,
+            "7 holds: affordable by ceiling"
+        );
         // …and one priced over the ceiling is walked past.
         w.g.ent[puff].f136 = table as i32;
-        assert_eq!(w.rival_attack_pick(0, false), None, "nothing affordable at all");
+        assert_eq!(
+            w.rival_attack_pick(0, false),
+            None,
+            "nothing affordable at all"
+        );
         w.g.ent[puff].f136 = 0;
         // The aimed group's busy word is the record's `+48`, nonzero.
         w.g.ent[puff].raw48 = crate::engine::features::Raw48(0xFFFF);
-        assert!(!w.rival_cast_ready(0, 7), "a nonzero `+48` refuses the aimed group");
-        assert!(w.rival_cast_ready(0, 15), "the fireball group has no busy gate");
+        assert!(
+            !w.rival_cast_ready(0, 7),
+            "a nonzero `+48` refuses the aimed group"
+        );
+        assert!(
+            w.rival_cast_ready(0, 15),
+            "the fireball group has no busy gate"
+        );
     }
 
     /// ⭐⭐⭐ **RETAIL'S `+48` IS JUST A WORD IN A 164-BYTE RECORD, AND
@@ -9668,7 +9701,10 @@ mod tests {
             to.0.wrapping_sub(from.0) as i16,
             to.1.wrapping_sub(from.1) as i16,
         );
-        assert!(dx != 0 || dy != 0, "rig: the corpse moves on its first fall step");
+        assert!(
+            dx != 0 || dy != 0,
+            "rig: the corpse moves on its first fall step"
+        );
         // One unit short of the edge the step is heading for.
         let edge = |v: u16, d: i16| match d {
             d if d > 0 => (v & 0xFF00) | 0xFF,
@@ -9684,7 +9720,11 @@ mod tests {
         let cell = crate::engine::features::tile((to.0 >> 8) as u8, (to.1 >> 8) as u8);
         let head = w.g.map_entity[cell] as usize;
         assert_eq!(
-            (w.g.ent[head].class64, w.g.ent[head].model65, w.g.ent[head].id24),
+            (
+                w.g.ent[head].class64,
+                w.g.ent[head].model65,
+                w.g.ent[head].id24
+            ),
             (10, 1, w.rivals[0].ent),
             "the tile's head is the corpse's own trail puff"
         );
@@ -9727,7 +9767,10 @@ mod tests {
         let cell = crate::engine::features::tile(120, 120);
         assert_ne!(w.mc1_carpet_slot, 0, "rig: the carpet is pooled");
         let seat = w.g.player_chain;
-        assert_eq!(seat.cell, cell, "seated on his start tile by the constructor");
+        assert_eq!(
+            seat.cell, cell,
+            "seated on his start tile by the constructor"
+        );
         w.grant_spells(&[0, 3]);
         let head = w.g.map_entity[cell] as usize;
         assert_eq!(

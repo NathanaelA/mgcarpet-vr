@@ -53,7 +53,9 @@ pub enum Step {
 impl Film {
     pub fn new(dir: PathBuf, from: u64, to: u64, rate: u32) -> Result<Film, String> {
         if to <= from {
-            return Err(format!("--film-to ({to}) must be after --film-from ({from})"));
+            return Err(format!(
+                "--film-to ({to}) must be after --film-from ({from})"
+            ));
         }
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(Film {

@@ -108,7 +108,10 @@ fn main() {
             };
             if !hit {
                 if last.remove(&s).is_some() {
-                    println!("t={} slot {s}: LEFT the filter ({},{})", tick.t, e.class64, e.model65);
+                    println!(
+                        "t={} slot {s}: LEFT the filter ({},{})",
+                        tick.t, e.class64, e.model65
+                    );
                 }
                 continue;
             }
@@ -130,7 +133,13 @@ fn main() {
                         .map(|(a, b)| format!("{} {} -> {}", a.0, b.1, a.1))
                         .collect();
                     if !ch.is_empty() {
-                        println!("t={} slot {s} ({},{}): {}", tick.t, e.class64, e.model65, ch.join(", "));
+                        println!(
+                            "t={} slot {s} ({},{}): {}",
+                            tick.t,
+                            e.class64,
+                            e.model65,
+                            ch.join(", ")
+                        );
                     }
                 }
             }

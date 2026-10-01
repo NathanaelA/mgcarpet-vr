@@ -118,7 +118,10 @@ mod sheet_tests {
             .iter()
             .all(|s| dims[s.sprite_base as usize] == (s.width, s.height));
         if same {
-            assert!(derive_sprite_stats(&dims).is_empty(), "the static table's own sheet");
+            assert!(
+                derive_sprite_stats(&dims).is_empty(),
+                "the static table's own sheet"
+            );
         }
         dims[140] = (110, 96);
         dims[299] = (122, 103);

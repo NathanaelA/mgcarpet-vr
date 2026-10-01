@@ -821,7 +821,10 @@ impl Drop for TrandLane {
             return;
         }
         if !self.first.is_empty() {
-            println!("   TRAND rows (draws this tick): {}", self.first.join(" · "));
+            println!(
+                "   TRAND rows (draws this tick): {}",
+                self.first.join(" · ")
+            );
             let mut d: Vec<_> = self.by_delta.iter().collect();
             d.sort_by(|a, b| b.1.cmp(a.1));
             let d: Vec<String> = d
@@ -4511,7 +4514,9 @@ fn render_port_dump_mc2(
         let retail_only: Vec<u16> = want.iter().copied().filter(|s| !got.contains(s)).collect();
         let port_only: Vec<u16> = got.iter().copied().filter(|s| !want.contains(s)).collect();
         if !retail_only.is_empty() || !port_only.is_empty() {
-            println!("  {name} stack members: retail-only {retail_only:?}  port-only {port_only:?}");
+            println!(
+                "  {name} stack members: retail-only {retail_only:?}  port-only {port_only:?}"
+            );
         }
     }
 }

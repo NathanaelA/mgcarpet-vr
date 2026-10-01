@@ -58,8 +58,7 @@ impl World {
     /// BEFORE the tick whose input it shapes, so the purse it judges
     /// is the one the command-site gates will read.
     pub fn autofire_hand(&self, right: bool) -> AutofireHand {
-        let halted =
-            self.player.state != LifeState::Alive || self.won || self.mc2_endseq.is_some();
+        let halted = self.player.state != LifeState::Alive || self.won || self.mc2_endseq.is_some();
         if matches!(self.game, GameId::Mc2) {
             self.autofire_hand_mc2(right, halted)
         } else {
