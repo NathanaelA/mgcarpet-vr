@@ -4909,7 +4909,7 @@ impl App {
                                 return self.close_spell_pane(hand, slot);
                             }
                         }
-                    } else if let Some((slot, h)) = self.selector_drag {
+                    } else if let Some((slot, _h)) = self.selector_drag {
                         return self.close_spell_pane(hand, slot);
                     }
                     // return FlightInput::default();
@@ -7269,8 +7269,7 @@ impl App {
     /// next redraw.
     fn redraw_requested(
         &mut self,
-        event_loop: &ActiveEventLoop,
-        render: fn(app: &mut App, cam: &CameraView) -> Result<(), wgpu::SurfaceError>,
+        event_loop: &ActiveEventLoop
     ) {
         let now = std::time::Instant::now();
         // Clamp huge pauses (debugger, suspend) to keep the sim
@@ -7372,23 +7371,29 @@ impl App {
         // the void (the renderer holds no level).
         if self.screen != Screen::Level || self.session.is_none() {
             self.frontend_frame(dt, event_loop);
-            let cam = CameraView {
-                x: 0.0,
-                y: 4.0,
-                z: 0.0,
-                yaw: 0.0,
-                pitch: 0.0,
-                roll: 0.0,
-                fov_y: FOV_Y,
-            };
-            // quads.extend(minimenu::draw(assets, mini, size.0, size.1, self.cursor));
 
-            match render(self, &cam) {
-                Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
-                Err(e) => eprintln!("render: {e}"),
-            }
             if IS_ANDROID {
+                match self.xr_tick() {
+                    Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
+                    Err(e) => eprintln!("render: {e}"),
+                }
                 let _input = self.tick_input(event_loop);
+            } else {
+                if let Some(r) = &mut self.renderer {
+                    let cam = CameraView {
+                        x: 0.0,
+                        y: 4.0,
+                        z: 0.0,
+                        yaw: 0.0,
+                        pitch: 0.0,
+                        roll: 0.0,
+                        fov_y: FOV_Y,
+                    };
+                    match r.render(&cam) {
+                        Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
+                        Err(e) => eprintln!("render: {e}"),
+                    }
+                }
             }
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -8767,19 +8772,29 @@ impl App {
             if let Some(t) = anim_tick {
                 r.set_anim_turn(t as f32 + alpha);
             }
-            match render(self, &cam) {
+
+            if !IS_ANDROID {
+                match r.render(&cam) {
+                    Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
+                    Err(e) => eprintln!("render: {e}"),
+                }
+
+                // `--film`: the same frame again into the capture texture
+                // and out to disk. Drawn twice rather than read off the
+                // surface, so the window keeps showing the shot.
+                if let Some(f) = self.film.as_mut().filter(|f| f.capturing()) {
+                    let (w, h, rgba) = r.render_capture(&cam);
+                    if let Err(e) = f.write(w, h, &rgba) {
+                        eprintln!("error: film: {e}");
+                        event_loop.exit();
+                    }
+                }
+            }
+        }
+        if IS_ANDROID {
+            match self.xr_tick() {
                 Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
                 Err(e) => eprintln!("render: {e}"),
-            }
-            // `--film`: the same frame again into the capture texture
-            // and out to disk. Drawn twice rather than read off the
-            // surface, so the window keeps showing the shot.
-            if let Some(f) = self.film.as_mut().filter(|f| f.capturing()) {
-                let (w, h, rgba) = r.render_capture(&cam);
-                if let Err(e) = f.write(w, h, &rgba) {
-                    eprintln!("error: film: {e}");
-                    event_loop.exit();
-                }
             }
         }
         if let Some(w) = &self.window {
@@ -8855,6 +8870,12 @@ impl App {
         } else {
             return Err("XR context is missing".into());
         }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn xr_tick(&mut self) -> Result<(), wgpu::SurfaceError> {
+        // Dummy function to keep rust happy on non-Android platforms
         Ok(())
     }
 
@@ -10232,11 +10253,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                fn run_render(this: &mut App, cam: &CameraView) -> Result<(), wgpu::SurfaceError> {
-                    this.renderer.as_mut().unwrap().render(cam)
-                }
-
-                self.redraw_requested(event_loop, run_render);
+                self.redraw_requested(event_loop);
             }
             _ => {}
         }
@@ -10480,14 +10497,7 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
-                fn handle_redraw(
-                    this: &mut App,
-                    _cam: &CameraView,
-                ) -> Result<(), wgpu::SurfaceError> {
-                    this.xr_tick()
-                }
-
-                self.redraw_requested(event_loop, handle_redraw);
+                self.redraw_requested(event_loop);
             }
             WindowEvent::Focused(focused) => {
                 // IF the user was in the Mini menu which pauses the game
