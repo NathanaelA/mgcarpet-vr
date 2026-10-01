@@ -2211,6 +2211,24 @@ numbering.
     port's solid one is the A/B picture.
   `--thirdperson` is replay-only — it breaks aiming, so live play
   keeps retail's eye.
+  **`--film <dir> [--film-from T] [--film-to T] [--film-rate N]`**
+  (LANDED 2026-09-30) captures the session as numbered PNG frames
+  on a FILM CLOCK: the frame loop stops reading wall time and every
+  rendered frame advances exactly `1/N` of a turn (`N` frames per
+  turn, so `N × 24` fps), nothing dropped, nothing paced by the
+  display. Before `--film-from` the session SEEKS (bursts of 240
+  turns per frame, no capture); it exits at `--film-to` or when the
+  take ends. The frame is the ordinary live frame drawn a second
+  time into a capture texture (`Renderer::render_capture`, the
+  `render_texture` seam), so every effect, the HUD, the chase cam
+  and the smooth-motion interpolation are in it; the wall-time FPS
+  counter is the one thing suppressed. Verified bit-identical across
+  runs (48 frames of mc2l7, two runs, every PNG equal). Audio is
+  muted for the run. `tools/film.py` turns a SHOT LIST
+  (`docs/media/shots.json`: take, turn window, camera, width) into
+  animated WebP / GIF / MP4 / stills via ffmpeg — a README clip is
+  a replay of a certified take, re-rendered after any visual change
+  by re-running the script.
   **`--replay-check <file>`** is the headless twin: whole take, drift
   summary on stdout, exit 0 only on zero divergence. Its retail
   results are certified against `mgc-conform replay`'s (identical

@@ -15,6 +15,7 @@ mod camera;
 mod campaign;
 mod config;
 mod entities;
+mod film;
 mod frontend;
 mod frontend_mc1;
 mod launcher_screen;
@@ -2412,6 +2413,9 @@ struct App {
     /// `--thirdperson`: the replay viewpoint (`camera.rs`). Read only
     /// while a replay is live — live play always flies first person.
     third_person: bool,
+    /// `--film`: the frame capture driving the level frame loop on
+    /// the film clock (`film.rs`); `None` = wall time, no capture.
+    film: Option<film::Film>,
     /// The third-person CHASE state (`camera::ChaseCam`): the lagged
     /// heading, the elastic eye and the subject's smoothed bank,
     /// stepped once per rendered frame.
@@ -2562,6 +2566,7 @@ impl App {
         replay_boot: Option<replay::ReplayFile>,
         record_path: Option<PathBuf>,
         third_person: bool,
+        film: Option<film::Film>,
     ) -> Self {
         // The running game's identity is known without a level: the
         // campaign id (a campaign boots to its frontend, level-less).
@@ -2696,6 +2701,7 @@ impl App {
             replay_pending: replay_boot,
             replay: None,
             third_person,
+            film,
             chase: camera::ChaseCam::default(),
             fancy_exit_t: None,
             fancy_arrived_t: None,
@@ -6736,8 +6742,33 @@ impl App {
         // Clamp huge pauses (debugger, suspend) to keep the sim
         // from spiraling through hundreds of catch-up ticks.
         let raw_dt = (now - self.last_frame).as_secs_f32();
-        let dt = raw_dt.min(0.25);
+        let mut dt = raw_dt.min(0.25);
         self.last_frame = now;
+        // `--film`: the FILM CLOCK replaces wall time for the whole
+        // frame (`film.rs`) — every clock below that reads `dt` (the
+        // effect clock, toasts, the chase cam) and the sim accumulator
+        // advance by exactly what the frame plan says, so the same
+        // shot renders the same frames every time. Planned only while
+        // a level session is on screen.
+        let film_step = match (&self.film, self.screen, self.session.as_deref()) {
+            (Some(_), Screen::Level, Some(sess)) => {
+                let tick = sess.sim.tick;
+                self.film.as_mut().map(|f| f.step(tick))
+            }
+            _ => None,
+        };
+        match &film_step {
+            Some(film::Step::Seek { turns }) => dt = TICK_DT * *turns as f32,
+            Some(film::Step::Frame { dt: frame_dt, .. }) => dt = *frame_dt,
+            Some(film::Step::Done) => {
+                if let Some(f) = &self.film {
+                    println!("{}", f.summary());
+                }
+                event_loop.exit();
+                return;
+            }
+            None => {}
+        }
         // PROTOTYPE fire clock (advances while paused too). WRAPPED:
         // the clock feeds shader sin() through the particle seeds
         // (~96·t radians at the fastest term), and WGSL guarantees
@@ -6753,8 +6784,9 @@ impl App {
         // above is sim pacing, not measurement), readout
         // refreshed every half-second. Counts while paused
         // too — the menu is where you toggle effects to
-        // watch their cost.
-        if self.cfg.render.debug.fps {
+        // watch their cost. Never in a film: the counter is wall
+        // time, the one thing a filmed frame must not contain.
+        if self.cfg.render.debug.fps && self.film.is_none() {
             self.fps_frames += 1;
             self.fps_elapsed += raw_dt;
             if self.fps_elapsed >= 0.5 {
@@ -6832,7 +6864,22 @@ impl App {
         // same multiplier by scaling wall time. Every tick is
         // bit-identical — only the pacing changes.
         let speed = self.cfg.sim.options.game_speed.multiplier(self.is_mc2());
-        self.accumulator += dt * speed;
+        // Under `--film` the plan SETS the accumulator (a filmed frame
+        // is always 1/rate of a turn, whatever the game speed; a seek
+        // is a burst of whole turns), and lifts the per-frame tick
+        // cap to the burst.
+        let mut film_burst = None;
+        match &film_step {
+            Some(film::Step::Seek { turns }) => {
+                self.accumulator = TICK_DT * *turns as f32;
+                film_burst = Some(*turns as u32);
+            }
+            Some(film::Step::Frame { accumulator, .. }) => {
+                self.accumulator = *accumulator;
+                film_burst = Some(1);
+            }
+            _ => self.accumulator += dt * speed,
+        }
         if self.paused {
             // ⭐ A PAUSED TURN STILL DRAWS. Retail's pause test is the
             // SECOND statement of `sub_41780_41AC0` (:52197) — the
@@ -6895,7 +6942,7 @@ impl App {
         // frame must shed sim time instead of spiraling (retail
         // effectively did the same — its N steps per frame
         // stretched wall time when frames slowed).
-        let max_ticks = ((2.0 * speed).ceil() as u32).max(4);
+        let max_ticks = film_burst.unwrap_or(((2.0 * speed).ceil() as u32).max(4));
         let mut ran = 0u32;
         while self.accumulator >= TICK_DT {
             self.accumulator -= TICK_DT;
@@ -6924,6 +6971,11 @@ impl App {
                         }
                         None => {
                             self.mini_toast(format!("replay ended — {}", d.summary()));
+                            // A film of the take ends with it (the
+                            // frame in flight is still captured).
+                            if let Some(f) = &mut self.film {
+                                f.end();
+                            }
                             // Hand control back cleanly: drop the
                             // stale live-input accumulators the
                             // replay never drained.
@@ -8019,7 +8071,10 @@ impl App {
             // backing out the eye lift the camera rides
             // (`mgc_sim::EYE_LIFT`): the floor/band numbers this
             // readout speaks in are carpet-relative.
-            if self.cfg.render.debug.coords && assets.has_font() {
+            // None of the debug readouts below belong in a `--film`
+            // frame (the fps line is already muted at its source).
+            let debug_lines = self.film.is_none();
+            if self.cfg.render.debug.coords && debug_lines && assets.has_font() {
                 let g = sess.sim.ground_height(eye.x, eye.z);
                 let xe = (eye.x.rem_euclid(256.0) * 256.0) as u16;
                 let ye = (eye.z.rem_euclid(256.0) * 256.0) as u16;
@@ -8035,6 +8090,7 @@ impl App {
             // fixed bottom-left line, one above the coordinate
             // readout — the lines never re-stack when one is off.
             if self.cfg.render.debug.entities
+                && debug_lines
                 && assets.has_font()
                 && let Some(w) = &sess.sim.world
             {
@@ -8047,8 +8103,10 @@ impl App {
             }
             // The replay counter (④, docs/RECORDING.md "Consumers"):
             // the third fixed bottom-left line — bit-exact/diverged
-            // since t=N, always on while a take drives the session.
+            // since t=N, always on while a take drives the session —
+            // except on film, where it is pure nuisance.
             if let Some(d) = &self.replay
+                && debug_lines
                 && assets.has_font()
             {
                 let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
@@ -8172,6 +8230,16 @@ impl App {
             match r.render(&cam) {
                 Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
                 Err(e) => eprintln!("render: {e}"),
+            }
+            // `--film`: the same frame again into the capture texture
+            // and out to disk. Drawn twice rather than read off the
+            // surface, so the window keeps showing the shot.
+            if let Some(f) = self.film.as_mut().filter(|f| f.capturing()) {
+                let (w, h, rgba) = r.render_capture(&cam);
+                if let Err(e) = f.write(w, h, &rgba) {
+                    eprintln!("error: film: {e}");
+                    event_loop.exit();
+                }
             }
         }
         if let Some(w) = &self.window {
@@ -9556,6 +9624,13 @@ struct Args {
     /// Replay-only for now — player ruling 2026-09-20: third person
     /// breaks aiming, so live play keeps the retail eye.
     third_person: bool,
+    /// `--film <dir>`: capture the session as numbered PNG frames on
+    /// the film clock (`film.rs`), turns `--film-from`..`--film-to`
+    /// at `--film-rate` frames per turn. Usually with `--replay`.
+    film: Option<PathBuf>,
+    film_from: u64,
+    film_to: u64,
+    film_rate: u32,
     /// `--replay-check <take.mgcr>`: the headless verifying twin —
     /// run the whole take, print the drift summary; exit 0 only on
     /// zero divergence.
@@ -9634,6 +9709,10 @@ fn parse_args() -> Result<Args, String> {
     let mut pool_slots = None;
     let mut replay = None;
     let mut third_person = false;
+    let mut film = None;
+    let mut film_from = 0u64;
+    let mut film_to = u64::MAX;
+    let mut film_rate = 1u32;
     let mut replay_check = None;
     let mut record = None;
     let mut flock_probe = None;
@@ -9719,6 +9798,32 @@ fn parse_args() -> Result<Args, String> {
             // the eye onto a boom behind the carpet (`camera.rs`).
             "--firstperson" => third_person = false,
             "--thirdperson" => third_person = true,
+            "--film" => {
+                film = Some(PathBuf::from(
+                    it.next().ok_or("--film needs an output directory")?,
+                ));
+            }
+            "--film-from" => {
+                film_from = it
+                    .next()
+                    .ok_or("--film-from needs a turn")?
+                    .parse()
+                    .map_err(|e| format!("--film-from: {e}"))?;
+            }
+            "--film-to" => {
+                film_to = it
+                    .next()
+                    .ok_or("--film-to needs a turn")?
+                    .parse()
+                    .map_err(|e| format!("--film-to: {e}"))?;
+            }
+            "--film-rate" => {
+                film_rate = it
+                    .next()
+                    .ok_or("--film-rate needs a frames-per-turn count")?
+                    .parse()
+                    .map_err(|e| format!("--film-rate: {e}"))?;
+            }
             "--replay-check" => {
                 replay_check = Some(PathBuf::from(
                     it.next().ok_or("--replay-check needs a .mgcr path")?,
@@ -10003,6 +10108,12 @@ fn parse_args() -> Result<Args, String> {
                      [--firstperson (default: replay through the carpet's own \
                      eye, the recorded pose hidden) | --thirdperson (watch it \
                      from a boom behind the carpet, the recorded pose solid)] \
+                     [--film DIR [--film-from TURN] [--film-to TURN] \
+                     [--film-rate N (frames per game turn, default 1 = 24 fps)] \
+                     (capture the session as numbered PNG frames on a fixed \
+                     clock — one frame per 1/N turn, nothing dropped — seeking \
+                     to --film-from first, exiting at --film-to or when the \
+                     take ends; usually with --replay; encode with tools/film.py)] \
                      [--replay-check take.mgcr (headless: whole take + drift \
                      summary; exit 0 = zero divergence)] \
                      [--record out.mgcr (write this session as a port recording; \
@@ -10074,6 +10185,10 @@ fn parse_args() -> Result<Args, String> {
         awake_range,
         replay,
         third_person,
+        film,
+        film_from,
+        film_to,
+        film_rate,
         replay_check,
         record,
         flock_probe,
@@ -11904,6 +12019,25 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     };
     settings::print_summary(&cfg, boot_game, &boot_label);
 
+    // `--film`: a silent batch job — the seek bursts hundreds of
+    // turns a frame, and a film has no soundtrack anyway.
+    let film = match &args.film {
+        Some(dir) => {
+            match film::Film::new(dir.clone(), args.film_from, args.film_to, args.film_rate) {
+                Ok(f) => {
+                    cfg.audio.sound = false;
+                    cfg.audio.music = false;
+                    Some(f)
+                }
+                Err(e) => {
+                    eprintln!("error: --film: {e}");
+                    return std::process::ExitCode::from(2);
+                }
+            }
+        }
+        None => None,
+    };
+
     let event_loop = match event_loop {
         Some(el) => el,
         None => match EventLoop::new() {
@@ -11929,6 +12063,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         replay_boot,
         args.record.clone(),
         args.third_person,
+        film,
     );
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");

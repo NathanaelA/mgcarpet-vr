@@ -1861,6 +1861,10 @@ pub struct Renderer {
     /// whenever `render_scale` is 1.0 or the target is already
     /// offscreen (screenshots render at their own size).
     ssaa: Option<Ssaa>,
+    /// `render_capture`'s target: a window-sized twin of the surface
+    /// in the surface format, kept across frames (rebuilt on a size
+    /// change) so filming does not allocate a texture per frame.
+    capture: Option<(wgpu::Texture, u32, u32)>,
     ssaa_pipeline: wgpu::RenderPipeline,
     ssaa_layout: wgpu::BindGroupLayout,
     ssaa_sampler: wgpu::Sampler,
@@ -3525,6 +3529,7 @@ impl Renderer {
             msaa_mirror_size: (0, 0),
             render_scale: 1.0,
             ssaa: None,
+            capture: None,
             ssaa_pipeline,
             ssaa_layout,
             ssaa_sampler,
@@ -5463,6 +5468,43 @@ impl Renderer {
         Ok(())
     }
 
+    /// Render one frame into a capture texture and read it back as
+    /// tightly-packed RGBA8 rows — the whole frame (supersample /
+    /// MSAA resolve included) at the target's size, without touching
+    /// the window surface. The `--film` path calls this beside the
+    /// ordinary `render`, so the window still shows what is being
+    /// filmed. Works on the offscreen target too.
+    pub fn render_capture(&mut self, cam: &CameraView) -> (u32, u32, Vec<u8>) {
+        let (width, height) = match &self.target {
+            Target::Window { config, .. } => (config.width, config.height),
+            Target::Offscreen { width, height, .. } => (*width, *height),
+        };
+        let stale = !matches!(&self.capture, Some((_, w, h)) if *w == width && *h == height);
+        if stale {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("capture color"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            self.capture = Some((tex, width, height));
+        }
+        let tex = self.capture.take().expect("capture texture just ensured");
+        let view = tex.0.create_view(&Default::default());
+        self.render_texture(cam, &view);
+        let rgba = self.read_texture(&tex.0, width, height);
+        self.capture = Some(tex);
+        (width, height, rgba)
+    }
+
     /// Render one frame into `surface_view` — any color view of the
     /// surface format and current size. This is the whole frame minus
     /// target acquisition and present, so an embedder can point it at
@@ -6456,6 +6498,15 @@ impl Renderer {
             panic!("read_offscreen on a windowed renderer");
         };
         let (width, height) = (*width, *height);
+        let rgba = self.read_texture(color, width, height);
+        (width, height, rgba)
+    }
+
+    /// Read a colour texture of the target format back as
+    /// tightly-packed RGBA8 rows. A BGRA surface format (the usual
+    /// window format) is swizzled on the way out, so the caller always
+    /// gets RGBA.
+    fn read_texture(&self, color: &wgpu::Texture, width: u32, height: u32) -> Vec<u8> {
         let unpadded = width * 4;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded = unpadded.div_ceil(align) * align;
@@ -6499,7 +6550,15 @@ impl Renderer {
             let start = (row * padded) as usize;
             out.extend_from_slice(&data[start..start + unpadded as usize]);
         }
-        (width, height, out)
+        if matches!(
+            self.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for px in out.chunks_exact_mut(4) {
+                px.swap(0, 2);
+            }
+        }
+        out
     }
 }
 

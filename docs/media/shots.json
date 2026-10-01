@@ -1,0 +1,30 @@
+[
+  {
+    "name": "mc1-l49",
+    "note": "Final level death shot",
+    "take": "recordings/mc1l49.mgcr",
+    "from": 5550,
+    "to": 5740,
+    "camera": "thirdperson",
+    "width": 640
+  },
+  {
+    "name": "mc1hw-l20",
+    "note": "Hidden Worlds rapid start",
+    "take": "recordings/mc1hwl20.mgcr",
+    "from": 1320,
+    "to": 1600,
+    "camera": "firstperson",
+    "width": 640
+  },
+  {
+    "name": "mc2-l20",
+    "note": "Netherworlds finale",
+    "take": "recordings/mc2l24.mgcr",
+    "from": 19750,
+    "to": 20100,
+    "camera": "firstperson",
+    "width": 640
+  }
+]
+

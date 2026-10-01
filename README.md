@@ -23,6 +23,10 @@ behavioral fidelity by default, deviations deliberate and opt-in.
 It is built with heavy use of Claude Code (Fable / Opus) as well as other
 AI tools.
 
+![Magic Carpet 1 - Final level](docs/media/mc1-l49.webp)
+![Hidden Worlds - Level 20 rough start](docs/media/mc1hw-l20.webp)
+![Magic Carpet 2 - Final level Hydra](docs/media/mc2-l20.webp)
+
 ## Quickstart (playtesting)
 
 1. Get the `mgcarpet` binary: a
