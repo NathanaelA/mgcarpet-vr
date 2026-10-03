@@ -6380,6 +6380,7 @@ impl App {
                 .map(|s| s.name.clone())
                 .unwrap_or_default();
             if let Some(m) = &mut self.mc1menu {
+                m.reset_dialogs();
                 m.set_slots(slots);
                 m.game_active = active;
                 m.player_name = name;

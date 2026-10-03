@@ -358,6 +358,14 @@ impl Mc1Menu {
         self.slots = slots;
     }
 
+    /// A fresh menu entry: no slot list, no dialog. The submode and
+    /// modals are menu-visit state — a slot list left open before a
+    /// level must not be waiting when the level hands back.
+    pub fn reset_dialogs(&mut self) {
+        self.sub = Sub::None;
+        self.modal = None;
+    }
+
     pub fn tick(&mut self, dt: f32) {
         self.anim += dt;
     }
@@ -430,8 +438,12 @@ impl Mc1Menu {
         let id = self.mask[my as usize * W + mx as usize];
         let valid = match id {
             0 => false,
+            // While the slot list is up it is modal: only the six slot
+            // regions answer (hover and click) until a slot is picked
+            // or Esc backs out.
+            _ if self.sub != Sub::None => (5..=10).contains(&id),
             3 => false, // multiplayer: no network in this remake
-            7..=10 => self.sub != Sub::None,
+            7..=10 => false,
             11 => self.game_active,
             _ => true,
         };
@@ -705,5 +717,48 @@ impl Mc1Menu {
             tint: [1.0, 1.0, 1.0, 1.0],
         }];
         (rgba, quads)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn menu() -> Option<Mc1Menu> {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../baked/assets/mc1-ui");
+        Mc1Menu::load(&dir).ok()
+    }
+
+    /// The first 320-space pixel whose hotspot id is `id`.
+    fn spot(m: &Mc1Menu, id: u8) -> (f32, f32) {
+        let i = m.mask.iter().position(|&v| v == id).expect("hotspot");
+        ((i % W) as f32 + 0.5, (i / W) as f32 + 0.5)
+    }
+
+    /// The open slot list is modal: only the six slot regions answer,
+    /// and a fresh menu entry closes it (player report 2026-10-03: a
+    /// Load list opened by mistake was still waiting after the level).
+    #[test]
+    fn the_slot_list_is_modal_and_closes_on_entry() {
+        let Some(mut m) = menu() else {
+            eprintln!("skipping: no baked mc1-ui");
+            return;
+        };
+        m.game_active = true;
+        let (nx, ny) = spot(&m, 1);
+        let (cx, cy) = spot(&m, 11);
+        let (lx, ly) = spot(&m, 5);
+        assert_eq!(m.hot_id(nx, ny), Some(1), "base menu: New Game live");
+        assert_eq!(m.hot_id(cx, cy), Some(11), "base menu: Continue live");
+
+        m.sub = Sub::Load;
+        assert_eq!(m.hot_id(nx, ny), None, "slot list: New Game dead");
+        assert_eq!(m.hot_id(cx, cy), None, "slot list: Continue dead");
+        assert_eq!(m.hot_id(lx, ly), Some(5), "slot list: slot 1 live");
+
+        m.modal = Some(Modal::ConfirmQuit);
+        m.reset_dialogs();
+        assert!(m.sub == Sub::None && m.modal.is_none());
     }
 }
