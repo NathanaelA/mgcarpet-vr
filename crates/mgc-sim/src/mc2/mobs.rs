@@ -70,6 +70,14 @@
 //!   suicide, :8860) has no reader in the slice; not tracked.
 
 use super::behavior::{BEHAVIOR, Mc2BehaviorRow};
+
+/// `mc2_flyers_clear_terrain`: how far above its own tile's ground a
+/// creature must be to count as airborne (a walker stands at its
+/// row's hover height, 0 for every ground walker).
+pub(crate) const FLY_OVER_AIRBORNE: i32 = 256;
+/// ...and how far above the destination tile's ground it must pass
+/// for that tile not to fence it.
+pub(crate) const FLY_OVER_CLEARANCE: i32 = 128;
 use super::sprite_params::SPRITE_PARAMS;
 use crate::engine::features::Gen;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
@@ -1160,8 +1168,25 @@ impl Gen {
         Self::polar_step(&mut pos, e.f30, 0, e.f126);
         let crossed = e.x >> 8 != pos.0 >> 8 || e.y >> 8 != pos.1 >> 8;
         let blocked = (always_test || crossed)
-            && (self.mc2_path_blocked(i, pos) || self.roughness(pos.0, pos.1) >= row.v_16 as i32);
+            && (self.mc2_path_blocked(i, pos) || self.roughness(pos.0, pos.1) >= row.v_16 as i32)
+            && !self.mc2_flies_over(i, pos);
         (pos, blocked)
+    }
+
+    /// The `mc2_flyers_clear_terrain` patch arm (see
+    /// [`crate::patches::WorldPatches::mc2_flyers_clear_terrain`]): the
+    /// creature is airborne where it stands and would pass clear over
+    /// the destination tile, so that tile's fence does not stop it.
+    /// Always false on retail law and in caves.
+    fn mc2_flies_over(&self, i: usize, pos: (u16, u16, i16)) -> bool {
+        if !self.mc2_flyers_clear.0 || self.is_cave() {
+            return false;
+        }
+        let e = &self.ent[i];
+        let here = self.ground_z(e.x, e.y);
+        let there = self.ground_z(pos.0, pos.1);
+        let z = (e.z as i32).max(pos.2 as i32);
+        e.z as i32 - here as i32 >= FLY_OVER_AIRBORNE && z - there as i32 >= FLY_OVER_CLEARANCE
     }
 
     /// `sub_1B8C0` (:8741): the MC2 creature move core. Result codes

@@ -8789,6 +8789,9 @@ impl World {
         // lets see THROUGH a cloak (turrets, `sub_2A6F0`).
         self.g.player_invisible = self.player.invisible || self.ghost;
         self.g.player_ghost = crate::engine::features::HashSilent(self.ghost);
+        self.g.mc2_flyers_clear = crate::engine::features::HashSilent(
+            self.patches.mc2_flyers_clear_terrain && !self.strict_retail,
+        );
         self.g.player_rebound = self.player.rebound;
 
         // Hand equips (the original's commands 0x15/0x16, :48717-31).
@@ -43722,6 +43725,42 @@ mod tests {
             ceiling: Vec::new(),
         };
         World::new_for_game(planes, &[], 1, assets(), GameId::Mc2)
+    }
+
+    /// `mc2_flyers_clear_terrain`: an AIRBORNE flyer heading straight
+    /// at a steep ridge far below it is fenced by retail's move core
+    /// (the destination tile's roughness, altitude-blind) and passes
+    /// over it under the patch. Both arms from the same start.
+    #[test]
+    fn mc2_airborne_flyers_clear_the_terrain_fence_under_the_patch() {
+        let mut crossed = [false; 2];
+        for (k, patched) in [false, true].into_iter().enumerate() {
+            let mut w = mc2_flat_world();
+            // A full-width ridge on tile row 121: tiles 120 and 121
+            // read steep, everything else flat.
+            for tx in 0..256usize {
+                w.g.t.height[(121 << 8) | tx] = 150;
+            }
+            let (x, y) = ((100u16 << 8) | 128, (124u16 << 8) | 128);
+            let i = w.g.mc2_spawn_m23(x, y, 0).expect("m23");
+            w.g.ent[i].z = 0x2000; // its cruising altitude, far above
+            w.g.ent[i].f30 = 0; // yaw 0 = north (−y), at the ridge
+            w.g.ent[i].f34 = 0;
+            w.g.ent[i].f126 = 128;
+            assert!(w.g.ent[i].z as i32 - w.g.ground_z(x, y) as i32 >= 256);
+            w.g.mc2_flyers_clear = crate::engine::features::HashSilent(patched);
+            for _ in 0..40 {
+                w.g.ent[i].f30 = 0;
+                w.g.ent[i].f34 = 0;
+                w.g.mc2_move_core(i);
+                if w.g.ent[i].y >> 8 <= 119 {
+                    crossed[k] = true;
+                    break;
+                }
+            }
+        }
+        assert!(!crossed[0], "retail: the ridge fences the flyer");
+        assert!(crossed[1], "patched: the airborne flyer passes over");
     }
 
     /// A bare flat MC2 world built from the given THING table.

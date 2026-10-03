@@ -1423,6 +1423,11 @@ pub(crate) struct Gen {
     /// `mc2_leviathan_true_aim` patch arm ([`Gen::m28_lead`]). Per-tick
     /// echo of World state — not on the wire, not hashed.
     pub(crate) player_vel: HashSilent<(i16, i16)>,
+    /// The `mc2_flyers_clear_terrain` patch arm, republished per tick
+    /// from `World::patches` (off under `strict_retail`) — the MC2
+    /// move core has no ctx to read the set from. Config echo: not on
+    /// the wire, not hashed.
+    pub(crate) mc2_flyers_clear: HashSilent<bool>,
     /// ⭐ THE OUT-OF-POOL HUMAN'S `roll_0x20_32` — retail's TARGET-YAW
     /// word on the human carpet record, which the port has nowhere
     /// else to put (the conformance carpet is out of pool and
@@ -5894,6 +5899,7 @@ impl Gen {
             player_invisible: false,
             player_ghost: HashSilent(false),
             player_vel: HashSilent((0, 0)),
+            mc2_flyers_clear: HashSilent(false),
             human_roll_0x20: HashSilent(0),
             player_rebound: false,
             player_chain: PlayerChain::default(),
@@ -12618,6 +12624,7 @@ impl Gen {
             player_invisible,
             player_ghost: _,
             player_vel: _,
+            mc2_flyers_clear: _,
             // A shim for the out-of-pool carpet's @0x20 — see the
             // field doc; every conformance import seeds it outright
             // from the recorded carpet, on the `player_chain`

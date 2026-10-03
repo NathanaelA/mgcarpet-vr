@@ -1256,6 +1256,17 @@ pub struct GameplayPatches {
     /// side; `patched` scales that lead by the target's actual speed,
     /// so a target standing still is lunged at directly.
     pub mc2_leviathan_high_lunge: PatchArm,
+    /// MC2 flying creatures that are well above a steep wall or
+    /// rampart fly over it. Retail fences every creature by the
+    /// DESTINATION tile's steepness and type alone, whatever its
+    /// altitude, so a mana worm heading straight for its castle parks
+    /// forever against a slope it is visibly far above (mc2:022's tall
+    /// rampart blocks trap whole worms). `patched` (default): a
+    /// creature already airborne that would pass clear over the tile
+    /// is not stopped by it; walkers and caves keep retail's law.
+    /// `retail`: the stall. Player-ruled 2026-10-03 (an unfaithful
+    /// deviation).
+    pub mc2_flyers_clear_terrain: PatchArm,
     /// The arm the SIM half of `ball_owner_recolor` runs, when a
     /// take's policy pins it apart from the player's own (drawing)
     /// choice: `None` = follow the option (native play), `Some` =
@@ -1303,6 +1314,7 @@ impl Default for GameplayPatches {
             mc1_segment_chain_revalidate: PatchArm::Patched,
             volcano_register_revalidate: PatchArm::Patched,
             mc2_leviathan_high_lunge: PatchArm::Patched,
+            mc2_flyers_clear_terrain: PatchArm::Patched,
             owner_recolor_sim_pin: None,
         }
     }
@@ -1340,6 +1352,7 @@ impl GameplayPatches {
             mc1_segment_chain_revalidate: PatchArm::Retail,
             volcano_register_revalidate: PatchArm::Retail,
             mc2_leviathan_high_lunge: PatchArm::Retail,
+            mc2_flyers_clear_terrain: PatchArm::Retail,
             owner_recolor_sim_pin: None,
         }
     }
@@ -1399,6 +1412,8 @@ impl GameplayPatches {
             volcano_register_revalidate: PatchArm::Retail,
             // 2026-09-30; no port take predates it.
             mc2_leviathan_high_lunge: PatchArm::Retail,
+            // 2026-10-03; no port take predates it.
+            mc2_flyers_clear_terrain: PatchArm::Retail,
             // Native MC2 freed in-walk from the first port (the sweep
             // landed 2026-09-17), so a legacy take ran the PATCHED arm
             // — `..Self::default()` supplies it.

@@ -2575,6 +2575,35 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Gameplay,
             group: "gameplay · patches",
+            label: "mc2_flyers_clear_terrain",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_flyers_clear_terrain",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_flyers_clear_terrain.on(),
+                faithful: false,
+            },
+            desc: "Flying creatures pass over steep walls they are well above \
+                   (MC2). Retail stops every creature at a steep or forbidden \
+                   tile whatever its altitude, so a mana worm heading straight \
+                   for its castle can hang forever against a rampart far below \
+                   it, until a crater clears the way. Patched, a creature that \
+                   is already airborne and would pass clear over the tile is \
+                   not stopped by it; walkers and caves keep retail's rule.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_flyers_clear_terrain = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Flyers stall against steep tiles far below them, as retail.",
+                    "Airborne flyers pass over steep tiles below them (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
             label: "mc2_orphan_balloon_reap",
             class: Patch,
             key: None,
@@ -3163,8 +3192,9 @@ mod tests {
         // from mc1_volcano_register_revalidate when w158e gave it the
         // MC2 twin). mc2_troglodyte_sprite_crop 2026-09-30
         // (presentation-only), mc2_leviathan_high_lunge the same day
-        // (a balance deviation riding the class for its pin).
-        assert_eq!(patches, 27, "all twenty-seven patches ship on");
+        // (a balance deviation riding the class for its pin), and
+        // mc2_flyers_clear_terrain 2026-10-03.
+        assert_eq!(patches, 28, "all twenty-eight patches ship on");
     }
 
     #[test]

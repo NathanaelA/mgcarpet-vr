@@ -10878,6 +10878,7 @@ fn world_patches(cfg: &config::Config) -> mgc_sim::WorldPatches {
         mc2_leviathan_high_lunge: p.mc2_leviathan_high_lunge.on()
             && cfg.controls.models.altitude == config::AltitudeModel::Enhanced,
         mc2_leviathan_true_aim: p.mc2_leviathan_high_lunge.on(),
+        mc2_flyers_clear_terrain: p.mc2_flyers_clear_terrain.on(),
         jar_ground_snap: p.jar_ground_snap.on(),
         ball_ground_track: p.ball_ground_track.on(),
         map_wide_ball_rolling: p.map_wide_ball_rolling.on(),

@@ -525,6 +525,31 @@ pub struct WorldPatches {
     /// can slide sideways of its facing); any other target's follows
     /// its speed word along its yaw. See `Gen::m28_lead`.
     pub mc2_leviathan_true_aim: bool,
+    /// **AIRBORNE CREATURES FLY OVER THE TERRAIN FENCE (MC2)** —
+    /// player-ruled 2026-10-03, an UNFAITHFUL deviation.
+    ///
+    /// Retail's creature move core (`sub_1B8C0`, `Gen::mc2_move_core`)
+    /// tests each step's DESTINATION TILE — its capability bits against
+    /// the behaviour row's mask (`sub_102D0`) and its roughness against
+    /// the row's slope fence `v_16` — and never looks at the creature's
+    /// altitude. A creature high in the sky is fenced exactly like one
+    /// on the ground. Wanderers shrug it off (their next turn finds
+    /// another way), but the mana worm (5,22) steers in a straight line
+    /// for its owner's castle and parks forever against a steep wall it
+    /// is visibly far above — mc2:022's tall rampart blocks trap whole
+    /// worms — and the m23 mana siphon (slope fence 20) shows the same
+    /// stalls. Crater clearing the way was the only cure.
+    ///
+    /// Patched: a creature AIRBORNE where it stands (at least
+    /// [`crate::mc2::mobs::FLY_OVER_AIRBORNE`] above its own tile's
+    /// ground) that would pass at least
+    /// [`crate::mc2::mobs::FLY_OVER_CLEARANCE`] above the destination
+    /// tile's ground is not fenced by that tile. Walkers never qualify
+    /// (they stand at their row's hover height over the ground — a
+    /// walker at a cliff top is not airborne, so it cannot step off
+    /// the cliff), and caves keep retail's law whole (the ceiling
+    /// tests are the real obstacle there).
+    pub mc2_flyers_clear_terrain: bool,
 }
 
 impl WorldPatches {
@@ -557,6 +582,7 @@ impl WorldPatches {
         volcano_register_revalidate: false,
         mc2_leviathan_high_lunge: false,
         mc2_leviathan_true_aim: false,
+        mc2_flyers_clear_terrain: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -600,5 +626,6 @@ impl WorldPatches {
         volcano_register_revalidate: false,
         mc2_leviathan_high_lunge: false,
         mc2_leviathan_true_aim: false,
+        mc2_flyers_clear_terrain: false,
     };
 }
