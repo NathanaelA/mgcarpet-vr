@@ -1603,6 +1603,12 @@ pub struct Mc2BookView {
     pub right: i8,
     /// `array_0x3B5` cycle-ring membership (0/1=left/2=right).
     pub ring: [u8; 26],
+    /// The level is a cave (`isCaveLevel_D41B6`). Off-cave retail's
+    /// grid draws Cave-In (25) as the plain empty box whatever the
+    /// book says (EF:22429) and the pane refuses to select it
+    /// (PlayerInput.cpp:849); the cast gate refuses it too
+    /// (`mc2_cast_gate`).
+    pub cave: bool,
 }
 
 /// One `sub_6DCA0` projectile arm (cast-path trace §2): the class-9
@@ -2635,6 +2641,7 @@ impl World {
             left: self.mc2_book.left,
             right: self.mc2_book.right,
             ring: self.mc2_book.ring,
+            cave: self.g.is_cave(),
         }
     }
 
@@ -2671,6 +2678,13 @@ impl World {
             // Unbind semantic (spell out of range clears the hand —
             // the pane's empty-slot commit).
             self.mc2_set_hand(hand != 0, -1);
+            return;
+        }
+        // Cave-In is refused off-cave before anything else
+        // (PlayerInput.cpp:849: `!SpellEnabled[s] || !isCaveLevel &&
+        // s == 25` skips the whole select) — the pane draws it as the
+        // plain box there (`Mc2BookView::cave`).
+        if s == 25 && !self.g.is_cave() {
             return;
         }
         // Dev instrument: selecting an unowned spell under the
@@ -2857,6 +2871,29 @@ impl World {
         }
         // Level-start binding, not the pickup law (see the fn doc).
         self.mc2_rebind_hands_canonical();
+    }
+
+    /// The carried spells this level BLOCKS for the human
+    /// (`BlockedSpells_0x36115x`): retail's level-start grant skips
+    /// them (`InitialiseSpells_54A50` EF:39014 — the carry is consulted
+    /// only `if (!BlockedSpells[s])`), yet they stay KNOWN
+    /// (`array_0x3E9`, never cleared) with their XP intact, so the
+    /// level's own jar hands them back at their old tier. mc2:017's
+    /// Alliance quest jar is the case the player meets. For each
+    /// `(spell, banked_xp)` not already owned: bank the XP and derive
+    /// the tier, minting nothing. No-op off-MC2.
+    pub fn mc2_bank_withheld(&mut self, withheld: &[(u8, i32)]) {
+        if !matches!(self.game(), crate::ids::GameId::Mc2) {
+            return;
+        }
+        for &(spell, xp) in withheld {
+            let s = spell as usize;
+            if s >= 26 || self.mc2_book.ent[s] != 0 {
+                continue;
+            }
+            self.mc2_book.xp_bank[s] = xp.max(0);
+            self.mc2_relevel(s, false, false);
+        }
     }
 
     /// The collect wiring shared by the jar pickup and the dev grant
@@ -5800,8 +5837,11 @@ impl World {
     /// row applies ONLY when there is no carry (campaign level 0, or a
     /// direct `--level N`); on campaign levels > 0 the carried book is
     /// the whole story, and the level's `allowed`/`blocked` rows only
-    /// ever TAKE spells away (MC1 does this from index 025; MC2 not at
-    /// all in campaign).
+    /// ever TAKE spells away (MC1 does this from index 025). MC2's
+    /// campaign does it too: the human's `BlockedSpells` row withholds
+    /// Alliance on maps 16/17 and the four earth spells on the finale
+    /// (map 24), keeping them known with their XP
+    /// ([`Self::mc2_bank_withheld`]).
     ///
     /// So seeding `{0, 1}` unconditionally here is a floor retail does
     /// not have: a spell permanently lost to the wraith steal would be

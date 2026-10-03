@@ -2648,6 +2648,11 @@ pub struct SelectorView<'a> {
     /// Expiry-blink eligibility per spell (the hand panels' law —
     /// EF:22493-99 runs the same gate on the pane cell).
     pub expiring: &'a [bool],
+    /// Not possessed but KNOWN (MC2 `array_0x3E9`: a carried spell
+    /// this level withholds, or one lost on it) — the grey 0xA6
+    /// relief instead of the empty box (EF:22557-61). All false on
+    /// MC1.
+    pub known: &'a [bool],
     /// The blink bank's index-[1] phase (Turn & 1); false = the
     /// skip frame for expiring cells.
     pub blink: bool,
@@ -2842,20 +2847,29 @@ pub fn selector_quads(
             // owned-unaffordable ghost(91+blended icon). The bake made
             // the treatment choice; the draw is a single quad.
             //
-            // NOT POSSESSED = the plain empty box, exactly like retail
-            // (EF:22557: SPELL_ICON_PANEL only; the grey 0xA6 relief
-            // is retail's "learnable/present" hint, gated on the
-            // learn flags 0x3E9/0x403 we don't model yet). The relief
-            // tile stays baked (variant 3) for a future opt-in.
+            // NOT POSSESSED = the plain empty box (EF:22557:
+            // SPELL_ICON_PANEL only) — unless the spell is KNOWN
+            // (`array_0x3E9`), when retail colourizes its icon into
+            // the box with 0xA6: the baked relief tile, variant 3.
             if !owned {
-                push_opt(
-                    &mut quads,
-                    assets.sprite_quad_rect_tint(MC2_SPR_BOX, cell, WHITE),
-                );
-                // Future learnable-hint opt-in (unfaithful-proactive):
-                // if let Some(uv) = assets.pane_tile(spell, 3) {
-                //     quads.push(UiQuad { rect: snap(cell), uv, tint: WHITE });
-                // }
+                let relief = view
+                    .known
+                    .get(spell)
+                    .copied()
+                    .unwrap_or(false)
+                    .then(|| assets.pane_tile(spell, 3))
+                    .flatten();
+                match relief {
+                    Some(uv) => quads.push(UiQuad {
+                        rect: snap(cell),
+                        uv,
+                        tint: WHITE,
+                    }),
+                    None => push_opt(
+                        &mut quads,
+                        assets.sprite_quad_rect_tint(MC2_SPR_BOX, cell, WHITE),
+                    ),
+                }
                 continue;
             }
             let variant = if !castable {

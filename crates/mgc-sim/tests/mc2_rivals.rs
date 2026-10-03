@@ -546,6 +546,57 @@ fn mc2_grant_plausible_learns_spells_and_levels_them() {
     assert_eq!(book.xp[0], 100_000, "banked XP is the installed value");
 }
 
+/// A carried spell the level BLOCKS (`mc2_bank_withheld`) is not in
+/// the book — no token, no hand, the pane's empty box — but its banked
+/// XP and tier survive, so learning it again on the level (the jar;
+/// here the same adopt path through `mc2_grant_start_book`) hands it
+/// back at the old tier, not from scratch. Retail: `array_0x3E9`
+/// keeps it KNOWN while `BlockedSpells` withholds it (EF:39014).
+#[test]
+fn mc2_withheld_spell_keeps_its_xp_until_relearned() {
+    let Some((mut w, _pkg)) = load("level-000") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    w.mc2_bank_withheld(&[(24u8, 100_000i32)]);
+    let book = w.mc2_book_view();
+    assert!(!book.owned[24], "withheld: not in the book");
+    assert_eq!(book.xp[24], 100_000, "...but its XP is banked");
+    let tier = book.levels[24];
+    assert!(tier > 0, "...and its tier derived");
+    assert!(book.left != 24 && book.right != 24, "no hand holds it");
+
+    w.mc2_grant_start_book(&[24]);
+    let book = w.mc2_book_view();
+    assert!(book.owned[24], "relearned");
+    assert_eq!(book.xp[24], 100_000, "at the old XP");
+    assert_eq!(book.levels[24], tier, "and the old tier");
+
+    // An owned spell is never touched by the withhold.
+    w.mc2_bank_withheld(&[(24u8, 5)]);
+    assert_eq!(w.mc2_book_view().xp[24], 100_000);
+}
+
+/// Cave-In (25) is cave-only, and NOT through the block row: the book
+/// keeps it, but off-cave the view reports `cave = false` (the pane's
+/// plain box) and the select is refused before anything else
+/// (PlayerInput.cpp:849); on a cave level it binds like any spell.
+#[test]
+fn mc2_cave_in_is_unselectable_off_cave() {
+    for (level, cave) in [("level-000", false), ("level-014", true)] {
+        let Some((mut w, _pkg)) = load(level) else {
+            eprintln!("skipping: no baked mc2 gamedata");
+            return;
+        };
+        w.mc2_grant_plausible(&[(25u8, 0i32)]);
+        let book = w.mc2_book_view();
+        assert!(book.owned[25], "{level}: the book keeps it");
+        assert_eq!(book.cave, cave, "{level}");
+        w.mc2_select_spell(25, 0, 0);
+        assert_eq!(w.mc2_book_view().left == 25, cave, "{level}: select");
+    }
+}
+
 /// Objective type 1 (kill a NAMED creature): the port binds the row to
 /// the live entity its authored THING index spawns (`sub_58DA0`,
 /// EF:40650-90) and completes when that bound creature is gone.

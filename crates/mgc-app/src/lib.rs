@@ -796,6 +796,10 @@ struct LoadedLevel {
     /// (The MC1 set is `WorldInit::human_book` — granted by the world
     /// build, before the rivals.)
     plausible_book_mc2: Vec<(u8, i32)>,
+    /// MC2: the level's `BlockedSpells` row for the HUMAN seat (wizard
+    /// slot 0) — the carried spells retail's level-start grant
+    /// withholds (`apply_campaign_book`). All false off-MC2.
+    mc2_human_blocked: [bool; 26],
 }
 
 /// Resolve the world's live volumes into map overlay circles: amber =
@@ -1582,6 +1586,14 @@ fn load_level(
     // prefix (mains + secrets after their parents); a non-campaign
     // level assumes the whole campaign done.
     let is_mc2_pkg = package.meta.game == Game::MagicCarpet2;
+    let mut mc2_human_blocked = [false; 26];
+    if is_mc2_pkg
+        && let Some(human) = package.wizards.as_ref().and_then(|w| w.wizards.first())
+    {
+        for (s, b) in mc2_human_blocked.iter_mut().enumerate() {
+            *b = human.blocked_spells.get(s).is_some_and(|&v| v != 0);
+        }
+    }
     let plausible_book_mc2 = if let Some(ids) = set_book.filter(|_| is_mc2_pkg) {
         // `--set-spellbook` on MC2: the same `(spell, banked_xp)`
         // install the plausible instrument uses — learn each spell,
@@ -1699,6 +1711,7 @@ fn load_level(
         map_stamps: Vec::new(),
         objective_marks: Vec::new(),
         plausible_book_mc2,
+        mc2_human_blocked,
         ui: ui_assets,
         audio_dir,
         audio_bank,
@@ -4007,7 +4020,7 @@ impl App {
             if let Some(run) = &self.campaign {
                 // The restart is a fresh world — the campaign carry
                 // re-grants like any level entry.
-                apply_campaign_book(&mut w, run);
+                apply_campaign_book(&mut w, run, &sess.level.mc2_human_blocked);
             }
             w.terrain_dirty = true;
             w.entities_dirty = true;
@@ -4463,7 +4476,7 @@ impl App {
                     world_patches(&self.cfg),
                 );
                 if let Some(run) = &self.campaign {
-                    apply_campaign_book(&mut w, run);
+                    apply_campaign_book(&mut w, run, &level.mc2_human_blocked);
                 }
                 Simulation::with_world(w)
             }
@@ -7391,8 +7404,19 @@ impl App {
                     let mut xpos = [[0i32; 3]; 26];
                     let mut ring = [0u8; 26];
                     let mut expiring = [false; 26];
+                    let mut known = [false; 26];
                     let mut bound = [loadout.left, loadout.right];
                     if mc2 {
+                        // The campaign carry IS retail's known list
+                        // (`array_0x3E9`, never cleared): a carried
+                        // spell the book lacks — withheld by the
+                        // level's block, or lost this level — draws
+                        // the 0xA6 relief (EF:22557-61).
+                        let carried = self
+                            .campaign
+                            .as_ref()
+                            .and_then(|c| c.save.mc2())
+                            .map(|save| save.book().owned);
                         // The native spell book: ownership,
                         // per-spell LEVEL (the
                         // SpellLevels tier ceiling), selected
@@ -7403,6 +7427,17 @@ impl App {
                         if let Some(bv) = bv {
                             for s in 0..n {
                                 owned[s] = bv.owned[s] || self.cfg.gameplay.cheat.dev_spells;
+                                // Cave-In off-cave: the plain empty
+                                // box, whatever the book says
+                                // (EF:22429; selection refused,
+                                // PlayerInput.cpp:849).
+                                let cave_gated = s == 25 && !bv.cave;
+                                if cave_gated {
+                                    owned[s] = false;
+                                }
+                                known[s] = !owned[s]
+                                    && !cave_gated
+                                    && carried.is_some_and(|c| c[s]);
                                 // Retail's canSummon grey-out
                                 // (EF:22503-08): the selected
                                 // tier's castle-pool prereq.
@@ -7468,6 +7503,7 @@ impl App {
                         xp: &xp[..n],
                         xpos: &xpos[..n],
                         expiring: &expiring[..n],
+                        known: &known[..n],
                         blink: alert_blink,
                     };
                     let (pq, hover) = ui::selector_quads(
@@ -10840,17 +10876,29 @@ fn mc1_campaign_carry(run: Option<&CampaignRun>) -> Vec<u8> {
 /// 154); what is left is the native cycle-ring sidecar. MC2: learn
 /// the carried book with its banked XP — `mc2_grant_plausible` is the
 /// same grant+bank+re-derive path retail's `sub_549A0` carry feeds.
-fn apply_campaign_book(w: &mut mgc_sim::engine::world::World, run: &CampaignRun) {
+fn apply_campaign_book(
+    w: &mut mgc_sim::engine::world::World,
+    run: &CampaignRun,
+    mc2_blocked: &[bool; 26],
+) {
     match run.id {
         campaign::CampaignId::Mc2 => {
             let Some(save) = run.save.mc2() else { return };
             let book = save.book();
-            let grants: Vec<(u8, i32)> = (0..26)
+            // Retail's grant consults the carry only for spells the
+            // level does not block for the human (`InitialiseSpells_54A50`
+            // EF:39014): a blocked one stays known, XP and all, but out
+            // of the book until the level hands it back — mc2:017's
+            // Alliance jar (player report 2026-10-03).
+            let (withheld, grants): (Vec<(u8, i32)>, Vec<(u8, i32)>) = (0..26)
                 .filter(|&s| book.owned[s])
                 .map(|s| (s as u8, book.xp[s]))
-                .collect();
+                .partition(|&(s, _)| mc2_blocked[s as usize]);
             if !grants.is_empty() {
                 w.mc2_grant_plausible(&grants);
+            }
+            if !withheld.is_empty() {
+                w.mc2_bank_withheld(&withheld);
             }
             // The rest of retail's sub_549A0 carry: selected tiers +
             // the cycle ring (raw), hands kept where still possessed
@@ -10968,9 +11016,23 @@ fn campaign_complete(
             // Book carry: serialize the live book into str_611 (all
             // XP banked — the between-levels shape).
             let v = w.mc2_book_view();
+            // KNOWN is monotonic in retail (`array_0x3E9` is never
+            // cleared; the level end only ORs this level's book and
+            // finds into it, EF:43784-89), so the carry keeps every
+            // spell it already held — a blocked spell the level never
+            // handed back included — at no less than its carried XP.
+            let prev = save.book();
+            let mut owned = v.owned;
+            let mut xp = v.xp;
+            for s in 0..26 {
+                if prev.owned[s] && !v.owned[s] {
+                    owned[s] = true;
+                    xp[s] = xp[s].max(prev.xp[s]);
+                }
+            }
             save.set_book(&saves::Mc2Book {
-                owned: v.owned,
-                xp: v.xp,
+                owned,
+                xp,
                 levels: v.levels,
                 sel: v.sel,
                 left: v.left,
