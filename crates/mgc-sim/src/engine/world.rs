@@ -4973,8 +4973,15 @@ impl World {
     /// the team slot (MC1) or `color_art(team)` (MC2). `None` when the
     /// row already agrees, when the entity is not a real ball, or when
     /// its row is outside the ball families (nothing to re-derive).
+    ///
+    /// Never for a DECAYING sphere (flag 0x2000): retail's moving arm
+    /// stops re-deriving those (EF:26286), so the row they carry is
+    /// theirs on purpose — the doomsday rain rolls a random colour
+    /// family per sphere (`sub_32CF0`, EF:24060) while staying
+    /// unowned, the multicolour geyser the won-campaign map art shows.
+    /// Re-deriving from the owner painted the whole geyser neutral.
     fn ball_owner_type_index(&self, e: &Ent) -> Option<u16> {
-        if e.class64 != 10 || e.model65 != 39 || e.tick70 == 62 {
+        if e.class64 != 10 || e.model65 != 39 || e.tick70 == 62 || e.flags & 0x2000 != 0 {
             return None;
         }
         let row = e.type86;
@@ -18865,6 +18872,26 @@ impl World {
         (self.g.kills, self.g.shots, self.g.hits)
     }
 
+    /// The census mana riding decaying spheres (flag 0x2000) — the
+    /// world's share and the player's: `(all, player-owned)`. Counted
+    /// over exactly the census's sphere arm (`recompute_mana`: live
+    /// (10,39), owner from `+144`).
+    fn temporary_sphere_mana(&self) -> (u32, u32) {
+        let (mut all, mut owned) = (0u32, 0u32);
+        for e in self.g.ent.iter().skip(1) {
+            let temporary = e.flags & 0x2000 != 0 && e.flags & 0x400 == 0;
+            if !temporary || (e.class64, e.model65) != (10, 39) {
+                continue;
+            }
+            let m = e.f140.max(0) as u32;
+            all = all.saturating_add(m);
+            if e.f144 == PLAYER_TARGET {
+                owned = owned.saturating_add(m);
+            }
+        }
+        (all, owned)
+    }
+
     /// The end-of-level performance numbers ([`crate::engine::stats`]):
     /// retail's raw counters and derived rows, plus the enhanced
     /// every-death tally. Call it at the won edge, before teardown.
@@ -18897,9 +18924,25 @@ impl World {
         // ceiling above the wizard's base (castle store, balloons on
         // their way, claimed balls, dwellings); the dwellings are the
         // census's own house tally.
+        //
+        // Nor can anyone keep the TEMPORARY spheres — the doomsday mana
+        // rain and the spheres the pyramid's death re-lifes, all on the
+        // decay channel (flag 0x2000, `Gen::ball_decay_tail`): retail's
+        // census counts them like any other ball (player-reported: the
+        // final level could never read 100 %), so the enhanced rows
+        // leave them out of the world total and the owned share alike.
         let seed = if mc2 { 1 } else { WIZARD_BASE_MANA };
-        s.mana_world = self.player.world_mana.saturating_sub(seed);
-        s.mana_owned = self.player.mana_max.saturating_sub(WIZARD_BASE_MANA);
+        let (temporary, temporary_owned) = self.temporary_sphere_mana();
+        s.mana_world = self
+            .player
+            .world_mana
+            .saturating_sub(seed)
+            .saturating_sub(temporary);
+        s.mana_owned = self
+            .player
+            .mana_max
+            .saturating_sub(WIZARD_BASE_MANA)
+            .saturating_sub(temporary_owned);
         s.mana_houses = self.g.banked_houses.max(0) as u32;
         if mc2 {
             // EF:43794-99: census dword j offered, `array_0x403[j]`
@@ -38799,6 +38842,33 @@ mod tests {
         assert_eq!(pose(&w).owner_type_index, None);
     }
 
+    /// The doomsday rain keeps its ROLLED colour in the viewport: an
+    /// unowned decaying sphere wearing an owner family (`sub_32CF0`'s
+    /// random roll, EF:24060) gets no owner-derived override, while
+    /// the same row on a permanent unowned sphere still re-derives to
+    /// the neutral family (player report 2026-10-03: the port drew
+    /// retail's multicolour geyser all orange).
+    #[test]
+    fn ball_owner_recolor_leaves_the_rain_its_rolled_colour() {
+        let mut w = mc2_flat_world();
+        let (bx, by) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
+        let gz = w.g.ground_z(bx, by) as i16;
+        let b = w.g.mc2_spawn_mana_sphere(39, bx, by, gz).unwrap();
+        let rolled = 105 + 8 * crate::mc2::color_art(3) as u16 + 2;
+        w.g.ent[b].type86 = rolled;
+        w.g.ent[b].f144 = 0;
+        let override_of = |w: &World| {
+            w.live_poses()
+                .into_iter()
+                .find(|p| p.slot == b as u16)
+                .unwrap()
+                .owner_type_index
+        };
+        assert_eq!(override_of(&w), Some(52 + 2), "a permanent ball re-derives");
+        w.g.ent[b].flags |= 0x2000;
+        assert_eq!(override_of(&w), None, "the rain keeps its roll");
+    }
+
     /// The MC2 twin of [`ball_owner_recolor_mc1_settled_far_claim`]:
     /// the sphere's settle gate (EF:26173) skips the re-derive the
     /// same way, `mc2_awake_pass`'s sphere leg re-arms it inside 24
@@ -43692,6 +43762,39 @@ mod tests {
         let st = w.level_stats();
         assert_eq!(st.spells_found_fixed, 1);
         assert_eq!(st.spells_fixed_pct10(), 333);
+    }
+
+    /// THE TEMPORARY SPHERES ARE NOT THE LEVEL'S MANA (player report,
+    /// 2026-10-03). The doomsday rain's decaying spheres (flag 0x2000)
+    /// stay in retail's census and its Mana row, but the enhanced rows
+    /// drop them from the world total and from the owned share — so
+    /// banking every permanent ball still reads 100 %.
+    #[test]
+    fn mc2_mana_stats_skip_the_temporary_spheres() {
+        let mut w = mc2_world_from(&[]);
+        let ball = |w: &mut World, x: u16, mana: i32| {
+            let b = w.g.spawn_mana_ball(x << 8, 100 << 8, 3200).unwrap();
+            w.g.ent[b].f140 = mana;
+            b
+        };
+        let kept = ball(&mut w, 100, 3000);
+        let rain = ball(&mut w, 110, 500);
+        let claimed_rain = ball(&mut w, 120, 200);
+        w.g.ent[kept].f144 = PLAYER_TARGET;
+        for b in [rain, claimed_rain] {
+            w.g.ent[b].flags |= 0x2000;
+        }
+        w.g.ent[claimed_rain].f144 = PLAYER_TARGET;
+        w.recompute_mana();
+        let st = w.level_stats();
+        assert_eq!(st.world_mana, 1 + 3700, "retail's census keeps them");
+        assert_eq!(st.mana_world, 3000);
+        assert_eq!(st.mana_owned, 3000);
+        assert_eq!(st.mana_pct10(), 1000, "every permanent ball is ours");
+
+        // Expired (0x400) spheres were never in the census at all.
+        w.g.ent[rain].flags |= 0x400;
+        assert_eq!(w.temporary_sphere_mana(), (200, 200));
     }
 
     fn mc2_thing(slot: u32, class: u16, model: u16, x: u16, y: u16, dis_id: u16) -> Thing {
