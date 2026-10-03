@@ -35,8 +35,17 @@
 //! - ambient decorations: the `x_BYTE_E26C8_str[16]` table
 //!   (MI:199-216) via `DrawAnimSprite_81CA0` (EF:46934): loop rows
 //!   draw always; burst rows are INVISIBLE while waiting, then play
-//!   frames first..last-1 once. The frame-85/86 rows vanish once the
-//!   finale portal opens (MI:2786).
+//!   frames first..last-1 once. The frame-85/86 rows (the storm
+//!   clouds over Vissuluth's fortress) vanish once the finale portal
+//!   is won (MI:2810).
+//! - the won finale: Vissuluth's island is redrawn — 12 tiles
+//!   (sprites 285-296) stamped into the background buffer
+//!   (`MapMenuPortalsDraw_81760` MI:3825-46) — and the `//vulcan` row
+//!   of `str_WORD_E20A4` (MI:247, mode 3, portal 24) loops frames
+//!   297-304 at map (610,114), also stamped into the buffer every
+//!   frame (`DrawAndSoundDragonAndFire_81EE0` MI:4734-48): over the
+//!   route dots, under the ambients and portals. Sample 9 fires as it
+//!   starts.
 //! - cursor = bank sprite 239 (MI:986 — the map screen's own; 39 is
 //!   the MAIN MENU chunk's cursor).
 //! - anim cadence: 100 Hz clock, portal/ambient step every 8 ticks
@@ -79,6 +88,28 @@ const SND_PORTAL_OPEN: u8 = 41;
 const SND_TRAVEL: u8 = 19;
 /// The frontend click (every menu/map button, MI:2414).
 const SND_CLICK: u8 = 14;
+/// The finale's mana volcano (`str_WORD_E20A4` `//vulcan`, MI:247):
+/// map position, the looped frames, its start sample (`word_10`).
+const VULCAN_POS: (f32, f32) = (610.0, 114.0);
+const VULCAN_FIRST: usize = 297;
+const VULCAN_FRAMES: usize = 8;
+const SND_VULCAN: u8 = 9;
+/// The finale's island redraw: sprites 285-296 at their map
+/// positions (`MapMenuPortalsDraw_81760`, MI:3835-46).
+const VULCAN_ISLAND: [(usize, (f32, f32)); 12] = [
+    (285, (518.0, 17.0)),
+    (286, (583.0, 17.0)),
+    (287, (657.0, 17.0)),
+    (288, (696.0, 17.0)),
+    (289, (518.0, 88.0)),
+    (290, (574.0, 88.0)),
+    (291, (657.0, 88.0)),
+    (292, (706.0, 88.0)),
+    (293, (518.0, 156.0)),
+    (294, (582.0, 156.0)),
+    (295, (657.0, 156.0)),
+    (296, (703.0, 156.0)),
+];
 
 /// `LevelsNames_D9204` (EF:2305) — the MC2 level names by level
 /// number (main 0-24, secrets 30-34, multiplayer 50-59), as the
@@ -511,6 +542,11 @@ pub struct WorldMap {
     /// after a secret (`SetAnimationVariables_7DA70` call sites,
     /// MI:2975-3013).
     faces: (f32, f32),
+    /// The mana volcano's start time on `anim` — Some once the whole
+    /// campaign is won. Retail's state byte (`byte_43`) is a static
+    /// that only re-arms when the condition fails, so the start
+    /// sample fires once, not per visit.
+    vulcan: Option<f32>,
 }
 
 /// A stats-table row: a stat, a breakdown sub-row (indented), or a
@@ -686,6 +722,7 @@ impl WorldMap {
             edge_step: 0.0,
             glide: None,
             faces: (0.0, 0.0),
+            vulcan: None,
         })
     }
 
@@ -868,6 +905,17 @@ impl WorldMap {
             if self.anim > a.delay && starts(self.anim) > starts(prev) {
                 self.sounds.push(id);
             }
+        }
+        // The mana volcano starts once the finale is won (retail
+        // `byte_42 == 3` arm: the first unwon portal, less one, is
+        // 24 only when all 25 are won, MI:4697-4703).
+        if save.levels_completed >= 25 {
+            if self.vulcan.is_none() {
+                self.vulcan = Some(self.anim);
+                self.sounds.push(SND_VULCAN);
+            }
+        } else {
+            self.vulcan = None;
         }
         // The pending-level narrative: once per map visit, after the
         // next portal has materialized — suppressed while that
@@ -1726,29 +1774,16 @@ impl WorldMap {
             uv: [self.scroll.0, self.scroll.1, VIEW_W, VIEW_H],
             tint: [1.0, 1.0, 1.0, 1.0],
         });
-        // Ambient set dressing (the 85/86 rows vanish at the finale,
-        // MI:2786).
-        let finale = save.levels_completed >= 25;
-        for a in &AMBIENTS {
-            if finale && (a.first == 85 || a.first == 86) {
-                continue;
-            }
-            let count = (a.last - a.first).max(1) as f32;
-            let id = if a.burst {
-                let period = a.delay + count / ANIM_FPS;
-                let phase = self.anim % period;
-                if phase < a.delay {
-                    continue; // waiting bursts are invisible
+        // The won finale's redrawn island — the spires gone, the
+        // coast reshaped — stamped into the map buffer as 12 tiles
+        // (`MapMenuPortalsDraw_81760` "end game vulcan", MI:3825-46;
+        // the shipped exe agrees). Under the route dots: retail
+        // stamps those into the same buffer afterwards.
+        if save.levels_completed >= 25 {
+            for (id, pos) in VULCAN_ISLAND {
+                if let Some(q) = self.sprite(id, pos, scale) {
+                    quads.push(q);
                 }
-                a.first as usize + (((phase - a.delay) * ANIM_FPS) as usize).min(count as usize - 1)
-            } else {
-                // The authored start frame phase-offsets the loops
-                // (the meteors fall out of sync).
-                let offset = (a.start - a.first) as usize;
-                a.first as usize + ((self.anim * ANIM_FPS) as usize + offset) % count as usize
-            };
-            if let Some(q) = self.sprite(id, a.pos, scale) {
-                quads.push(q);
             }
         }
         // The dotted route (sprite 139): the FIXED main-line path.
@@ -1806,6 +1841,41 @@ impl WorldMap {
                 && t.on_route
             {
                 dots_along(self.parked, t.pos, &mut quads, &mut dot);
+            }
+        }
+        // The mana volcano, 12.5 fps (retail steps it every 8 ticks
+        // of the 100 Hz clock). Retail stamps it into the map buffer
+        // every frame, over the route dots stamped there — so it
+        // hides the dots under it — and under the ambients/portals.
+        if let Some(t0) = self.vulcan {
+            let f = ((self.anim - t0).max(0.0) * ANIM_FPS) as usize % VULCAN_FRAMES;
+            if let Some(q) = self.sprite(VULCAN_FIRST + f, VULCAN_POS, scale) {
+                quads.push(q);
+            }
+        }
+        // Ambient set dressing (the 85/86 rows vanish at the finale,
+        // MI:2810).
+        let finale = save.levels_completed >= 25;
+        for a in &AMBIENTS {
+            if finale && (a.first == 85 || a.first == 86) {
+                continue;
+            }
+            let count = (a.last - a.first).max(1) as f32;
+            let id = if a.burst {
+                let period = a.delay + count / ANIM_FPS;
+                let phase = self.anim % period;
+                if phase < a.delay {
+                    continue; // waiting bursts are invisible
+                }
+                a.first as usize + (((phase - a.delay) * ANIM_FPS) as usize).min(count as usize - 1)
+            } else {
+                // The authored start frame phase-offsets the loops
+                // (the meteors fall out of sync).
+                let offset = (a.start - a.first) as usize;
+                a.first as usize + ((self.anim * ANIM_FPS) as usize + offset) % count as usize
+            };
+            if let Some(q) = self.sprite(id, a.pos, scale) {
+                quads.push(q);
             }
         }
         for p in Self::portals(save) {
@@ -2064,6 +2134,7 @@ mod tests {
             edge_step: 0.0,
             glide: None,
             faces: (0.0, 0.0),
+            vulcan: None,
         }
     }
 
@@ -2572,6 +2643,55 @@ mod tests {
         // Next entry reads as a fresh session: full trail.
         wm.enter_visit(&save_with(5));
         assert!(wm.frontier_drawn);
+    }
+
+    /// The won campaign redraws Vissuluth's island and raises the mana
+    /// volcano on it: the 12 island tiles straight over the
+    /// background, then the route dots, then the looping volcano
+    /// (297-304, hiding the dots under it), then the dressing; the
+    /// start sample fires once, not per visit; an unfinished record
+    /// shows none of it.
+    #[test]
+    fn finale_raises_the_mana_volcano() {
+        let mut wm = bare();
+        // Sprite id = atlas x, so a quad's uv names its sprite.
+        wm.rects = (0..320)
+            .map(|i| Some((i as f32, 0.0, 24.0, 24.0)))
+            .collect();
+        wm.scroll = (300.0, 0.0);
+        let ids = |wm: &mut WorldMap, save: &Mc2Save| -> Vec<usize> {
+            let quads = wm.quads(save, (640.0, 480.0), (0.0, 0.0));
+            // Index 0 is the background.
+            quads[1..].iter().map(|q| q.uv[0] as usize).collect()
+        };
+        let unfinished = save_with(24);
+        wm.tick(0.1, &unfinished);
+        assert!(wm.vulcan.is_none());
+        assert!(!wm.take_sounds().contains(&SND_VULCAN));
+        let drawn = ids(&mut wm, &unfinished);
+        assert!(!drawn.iter().any(|id| (285..=304).contains(id)));
+
+        let won = save_with(25);
+        wm.tick(0.1, &won);
+        assert_eq!(wm.take_sounds().iter().filter(|&&s| s == SND_VULCAN).count(), 1);
+        let drawn = ids(&mut wm, &won);
+        assert_eq!(drawn[..12], (285..=296).collect::<Vec<_>>(), "island first");
+        let volcano = drawn.iter().position(|&id| id == VULCAN_FIRST).unwrap();
+        let last_dot = drawn.iter().rposition(|&id| id == 139).unwrap();
+        assert!(last_dot < volcano, "the volcano covers the route dots");
+        assert!(drawn[volcano + 1..].iter().any(|&id| (46..=58).contains(&id)), "dressing on top");
+
+        let frame = |wm: &mut WorldMap| {
+            ids(wm, &won).into_iter().find(|id| (297..=304).contains(id)).unwrap()
+        };
+        wm.tick(3.0 / ANIM_FPS + 0.01, &won);
+        assert_eq!(frame(&mut wm), VULCAN_FIRST + 3);
+        wm.tick(5.0 / ANIM_FPS, &won);
+        assert_eq!(frame(&mut wm), VULCAN_FIRST, "loops 297..=304");
+        assert!(!wm.take_sounds().contains(&SND_VULCAN), "one-shot");
+
+        wm.tick(0.1, &unfinished);
+        assert!(wm.vulcan.is_none());
     }
 
     #[test]
