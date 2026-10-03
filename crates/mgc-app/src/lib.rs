@@ -4605,7 +4605,47 @@ impl App {
         self.renderer.as_ref().is_some_and(|r| r.map_view())
     }
 
+    /// The local wizard is falling or dead — retail's `life < 0`, the
+    /// state in which it reads no gameplay input but the respawn key.
+    fn player_down(&self) -> bool {
+        self.screen == Screen::Level
+            && self
+                .session
+                .as_deref()
+                .and_then(|s| s.sim.world.as_ref())
+                .is_some_and(|w| w.player_falling() || w.player_dead())
+    }
+
+    /// While the wizard is down, the view is the main view and nothing
+    /// is held: retail's map modes close themselves the moment `life`
+    /// goes negative (`HandleButtonClick_191B0(20, 0)`, PlayerInput.cpp
+    /// :936-38 — the ordinary close, so the mode-switch ding rides
+    /// along) and its flight mode skips every spell/selector read
+    /// (:812-14). The CTRL pane and a held fire button go with them.
+    fn enforce_player_down(&mut self) {
+        if !self.player_down() {
+            return;
+        }
+        if self.book_open() {
+            if let Some(r) = &mut self.renderer {
+                r.set_map_view(false);
+            }
+            self.ui_ding();
+            self.set_grab(true);
+            self.stick = VirtualStick::default();
+        }
+        if self.ctrl_held {
+            self.ctrl_held = false;
+            self.selector_drag = None;
+            self.selector_hover = ui::SelectorHover::default();
+            self.set_grab(true);
+        }
+        self.fire_held = false;
+        self.fire_right_held = false;
+    }
+
     fn tick_input(&mut self) -> FlightInput {
+        self.enforce_player_down();
         let axis = |neg: bool, pos: bool| (pos as i32 - neg as i32) as f32;
         let k = &self.keys;
         // Keyboard turn rate: radians per tick (enhanced model only).
@@ -7627,9 +7667,17 @@ impl App {
                     &vitals,
                     size.0,
                     size.1,
-                    (sess.sim.tick / 8) % 2 == 0,
                     self.cfg.render.debug.grace_meter,
                 ));
+            }
+            // Falling or dead: retail draws NO HUD at all — the whole
+            // in-game UI sits in the `life >= 0` arm and a dead wizard
+            // gets only the pause menu (EF:21604-21623; MC1's twin
+            // likewise). Everything above goes; the pause indicator,
+            // mini-menu, options and exit dialog below stay.
+            let player_down = vitals.state != mgc_sim::engine::world::LifeState::Alive;
+            if player_down {
+                quads.clear();
             }
             if self.paused {
                 // Both views: the book screen is exactly where
@@ -8158,7 +8206,11 @@ impl App {
             }
             self.hovered = hovered;
             self.append_software_cursor(&mut quads);
+            let grey = death_greyscale(vitals.state, sess.sim.tick);
             if let Some(r) = &mut self.renderer {
+                // Retail's black-and-white palette over the death fall
+                // and the corpse (`death_greyscale`).
+                r.set_greyscale(grey);
                 // The screen-space map markers draw above the fade
                 // quad in flight — hand the renderer the fade level
                 // so they dim in step (set_overlay_fade).
@@ -8560,6 +8612,12 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // Falling or dead: no pointer input reaches the game
+                // (no casts, no pane, no map) — only the pause menu
+                // above stays clickable.
+                if down && self.player_down() {
+                    return;
+                }
                 if self.screen == Screen::Menu {
                     // The main menu owns the pointer. Save/Load
                     // clicks need the slot scan before their dialog
@@ -8782,6 +8840,10 @@ impl ApplicationHandler for App {
                 };
                 if let (Some(st), Some(assets)) = (&mut self.menu, assets) {
                     menu::scroll_by(assets, &self.specs, st, size.0, size.1, rows);
+                    self.wheel_accum = 0.0;
+                    return;
+                }
+                if self.player_down() {
                     self.wheel_accum = 0.0;
                     return;
                 }
@@ -9203,6 +9265,16 @@ impl ApplicationHandler for App {
                 // The menu swallows everything else (no quick-equips,
                 // no map toggle, no movement latching underneath it).
                 if self.menu.is_some() {
+                    return;
+                }
+                // Falling or dead: Space (the respawn) is the only
+                // gameplay key retail still reads (PlayerInput.cpp
+                // :812-14, :936-38). Esc and the option keys are
+                // handled above; key-ups still pass so nothing sticks.
+                if down
+                    && self.player_down()
+                    && event.physical_key != PhysicalKey::Code(KeyCode::Space)
+                {
                     return;
                 }
                 // The fullscreen-map toggle is a GAMEPLAY key. Without
@@ -10876,6 +10948,29 @@ fn mc1_campaign_carry(run: Option<&CampaignRun>) -> Vec<u8> {
 /// 154); what is left is the native cycle-ring sidecar. MC2: learn
 /// the carried book with its banked XP — `mc2_grant_plausible` is the
 /// same grant+bank+re-derive path retail's `sub_549A0` carry feeds.
+/// Retail's black-and-white palette over a dying wizard, as a
+/// greyscale amount for [`mgc_render::Renderer::set_greyscale`]. The
+/// DEATH FALL re-installs palette mode 7 on every tick whose blink bit
+/// `(Turn / 6) & 1` is set (MC2 EF:60432-33, MC1 :55464-65 — the
+/// `str_93` bank's `+99`), and each install hands over to mode 1, the
+/// 4-step fade back to the level palette (EF:31912-19): six ticks
+/// grey, then 3/4, 1/2, 1/4, colour, and again. The CORPSE installs it
+/// every tick (EF:60665, :55628) — solid monochrome until Space.
+fn death_greyscale(state: mgc_sim::engine::world::LifeState, tick: u64) -> f32 {
+    use mgc_sim::engine::world::LifeState;
+    match state {
+        LifeState::Alive => 0.0,
+        LifeState::Dead => 1.0,
+        LifeState::Falling => {
+            if (tick / 6) & 1 == 1 {
+                1.0
+            } else {
+                (1.0 - ((tick % 6) + 1) as f32 / 4.0).max(0.0)
+            }
+        }
+    }
+}
+
 fn apply_campaign_book(
     w: &mut mgc_sim::engine::world::World,
     run: &CampaignRun,
@@ -12175,6 +12270,31 @@ mod replay_gate_tests {
         );
         save.secrets[0].activated = 1;
         assert!(mc2_map_launch_replayed(&save, secret), "a completed secret");
+    }
+}
+
+#[cfg(test)]
+mod death_greyscale_tests {
+    use super::death_greyscale;
+    use mgc_sim::engine::world::LifeState;
+
+    /// The fall flickers: six grey ticks while `(Turn / 6) & 1` is set,
+    /// then the 4-step fade home and two colour ticks; the corpse is
+    /// solid grey and the living wizard untouched.
+    #[test]
+    fn the_fall_flickers_and_the_corpse_stays_grey() {
+        let fall: Vec<f32> = (0..12)
+            .map(|t| death_greyscale(LifeState::Falling, t))
+            .collect();
+        assert_eq!(
+            fall,
+            [0.75, 0.5, 0.25, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        );
+        assert_eq!(death_greyscale(LifeState::Falling, 18), 1.0, "periodic");
+        for t in [0, 5, 6, 1000] {
+            assert_eq!(death_greyscale(LifeState::Dead, t), 1.0);
+            assert_eq!(death_greyscale(LifeState::Alive, t), 0.0);
+        }
     }
 }
 

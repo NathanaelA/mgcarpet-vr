@@ -1387,6 +1387,18 @@ fn blur_sky(rgba: &mut [u8]) {
 /// The 1x1 group-1 sky-dummy texel for a fog color. sRGB bytes — the
 /// dummy is Rgba8UnormSrgb, so samples come back linear, matching the
 /// globals' fog constant.
+/// An sRGB colour blended `g` of the way to its channel mean — one
+/// palette entry under retail's black-and-white mode (see
+/// [`Renderer::set_greyscale`]).
+fn grey_mix_srgb(c: [f32; 3], g: f32) -> [f32; 3] {
+    let avg = (c[0] + c[1] + c[2]) / 3.0;
+    [
+        c[0] + (avg - c[0]) * g,
+        c[1] + (avg - c[1]) * g,
+        c[2] + (avg - c[2]) * g,
+    ]
+}
+
 fn sky_texel(srgb: [f32; 3]) -> [u8; 4] {
     [
         (srgb[0].clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -2052,6 +2064,14 @@ pub struct Renderer {
     sprite_index: Option<mgc_formats::bundle::SpriteIndex>,
     sprite_tex: Option<wgpu::Texture>,
     colormap_tex: Option<wgpu::Texture>,
+    /// The level's full-colour colormap and sky pixels, kept so the
+    /// greyscale palette mode ([`Renderer::set_greyscale`]) can be
+    /// blended in and back out without a reload.
+    colormap_base: Vec<u8>,
+    sky_base: Option<(wgpu::Texture, Vec<u8>)>,
+    /// The current greyscale amount (0 = the level palette, 1 =
+    /// retail's black-and-white palette), quantised to sixteenths.
+    greyscale: f32,
     billboards: Vec<Billboard>,
     // Health-bar overlay pass (unfaithful debug enhancement).
     bar_pipeline: wgpu::RenderPipeline,
@@ -3554,6 +3574,9 @@ impl Renderer {
             sprite_index: None,
             sprite_tex: None,
             colormap_tex: None,
+            colormap_base: Vec::new(),
+            sky_base: None,
+            greyscale: 0.0,
             billboards: Vec::new(),
             bar_pipeline,
             bar_bind_group,
@@ -3790,7 +3813,7 @@ impl Renderer {
         // this instead and must degenerate to the plain constant.
         self.queue.write_texture(
             self.sky_dummy_tex.as_image_copy(),
-            &sky_texel(srgb),
+            &sky_texel(grey_mix_srgb(srgb, self.greyscale)),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4),
@@ -3877,6 +3900,8 @@ impl Renderer {
             })
         };
         let main_bg = make(&self.globals_buf);
+        self.sky_base = Some((tex.clone(), rgba));
+        self.upload_greyscale();
         // The mirror twin: same texture, mirror globals (atlas.w = 2
         // flips the ray's y — the sky reflecting in the water).
         let mirror_bg = make(&self.mirror_globals_buf);
@@ -3893,6 +3918,7 @@ impl Renderer {
         self.sky_bind_group = None;
         self.sky_mirror_bind_group = None;
         self.sky_view = None;
+        self.sky_base = None;
         self.refresh_terrain_textures();
     }
 
@@ -3942,11 +3968,96 @@ impl Renderer {
     }
 
     fn sky_color_linear(&self) -> [f64; 3] {
+        let c = grey_mix_srgb(self.sky_srgb, self.greyscale);
         [
-            srgb_to_linear(self.sky_srgb[0]) as f64,
-            srgb_to_linear(self.sky_srgb[1]) as f64,
-            srgb_to_linear(self.sky_srgb[2]) as f64,
+            srgb_to_linear(c[0]) as f64,
+            srgb_to_linear(c[1]) as f64,
+            srgb_to_linear(c[2]) as f64,
         ]
+    }
+
+    /// Retail's black-and-white palette mode (`paletteSubMod` 7 —
+    /// every entry becomes `(r+g+b)/3`, EF:31996-32006) and its fade
+    /// back to the level palette (subMod 1): `amount` 0 = the level's
+    /// colours, 1 = fully grey. Drives the death fall's grey flicker
+    /// and the corpse's monochrome. Blended into the palette-resolved
+    /// tables the scene samples (the terrain/billboard colormap, the
+    /// sky, the fog colour), exactly where retail's palette swap
+    /// lands; quantised to sixteenths so a held value costs nothing.
+    pub fn set_greyscale(&mut self, amount: f32) {
+        let q = (amount.clamp(0.0, 1.0) * 16.0).round() / 16.0;
+        if q == self.greyscale {
+            return;
+        }
+        self.greyscale = q;
+        self.upload_greyscale();
+    }
+
+    fn upload_greyscale(&self) {
+        let g = self.greyscale;
+        let mix = |src: &[u8]| -> Vec<u8> {
+            let mut out = src.to_vec();
+            if g > 0.0 {
+                for px in out.chunks_exact_mut(4) {
+                    let avg = (px[0] as f32 + px[1] as f32 + px[2] as f32) / 3.0;
+                    for c in &mut px[..3] {
+                        *c = (*c as f32 + (avg - *c as f32) * g).round() as u8;
+                    }
+                }
+            }
+            out
+        };
+        if let Some(tex) = &self.colormap_tex
+            && !self.colormap_base.is_empty()
+        {
+            let px = mix(&self.colormap_base);
+            self.queue.write_texture(
+                tex.as_image_copy(),
+                &px,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256 * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: 256,
+                    height: (px.len() / (256 * 4)) as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        if let Some((tex, base)) = &self.sky_base {
+            let px = mix(base);
+            self.queue.write_texture(
+                tex.as_image_copy(),
+                &px,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256 * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: 256,
+                    height: 256,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        // The no-sky fog fallback texel follows the fog colour.
+        self.queue.write_texture(
+            self.sky_dummy_tex.as_image_copy(),
+            &sky_texel(grey_mix_srgb(self.sky_srgb, g)),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     pub fn smooth_shading(&self) -> bool {
@@ -4302,6 +4413,8 @@ impl Renderer {
         );
 
         self.colormap_tex = Some(colormap_tex.clone());
+        self.colormap_base = colormap;
+        self.upload_greyscale();
         self.rebuild_billboard_bind_group();
 
         self.bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {

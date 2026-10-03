@@ -2345,17 +2345,12 @@ pub fn pause_quads(w: f32, h: f32) -> Vec<UiQuad> {
     ]
 }
 
-/// Mortality overlays + the life bar (functional-first placement;
-/// the faithful HUD layout is the banked UI/UX track). `blink`
-/// drives the dead-screen respawn prompt; `grace_meter` opts into
-/// the (unfaithful) spawn-grace strip.
-pub fn vitals_quads(
-    v: &PlayerVitals,
-    w: f32,
-    h: f32,
-    blink: bool,
-    grace_meter: bool,
-) -> Vec<UiQuad> {
+/// Mortality overlays while ALIVE (functional-first placement; the
+/// faithful HUD layout is the banked UI/UX track). `grace_meter` opts
+/// into the (unfaithful) spawn-grace strip. The death fall and the
+/// corpse draw no UI at all — they are retail's black-and-white
+/// palette (`death_greyscale` in the app, `Renderer::set_greyscale`).
+pub fn vitals_quads(v: &PlayerVitals, w: f32, h: f32, grace_meter: bool) -> Vec<UiQuad> {
     let mut quads = Vec::new();
     let scale = HudFrame::new(w, h).s.max(1.0);
     let bw = w * 0.25;
@@ -2390,25 +2385,6 @@ pub fn vitals_quads(
     if v.pal_flash.0 == 3 && v.state == LifeState::Alive {
         let a = 0.09 * v.pal_flash.1 as f32;
         quads.push(solid_screen([0.0, 0.0, w, h], [0.55, 0.12, 0.95, a]));
-    }
-    match v.state {
-        // The death fall: a deepening red-out.
-        LifeState::Falling => {
-            quads.push(solid_screen([0.0, 0.0, w, h], [0.45, 0.03, 0.03, 0.35]));
-        }
-        // Dead: the grey screen (palette row 7) + a blinking center
-        // strip as the Space prompt (no text renderer yet).
-        LifeState::Dead => {
-            quads.push(solid_screen([0.0, 0.0, w, h], [0.22, 0.22, 0.25, 0.55]));
-            if blink {
-                let pw = w * 0.30;
-                quads.push(solid(
-                    [(w - pw) / 2.0, h * 0.62, pw, 4.0 * scale],
-                    [0.95, 0.95, 0.95, 0.9],
-                ));
-            }
-        }
-        LifeState::Alive => {}
     }
     quads
 }
