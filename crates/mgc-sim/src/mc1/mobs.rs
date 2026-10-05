@@ -3753,14 +3753,18 @@ impl Gen {
     /// mana-sphere handler, so the fire falls and rolls as an
     /// uncollectable "ball" for the rest of the level (again at
     /// t=3577, slot 131).
-    pub(crate) fn pack_partner_retarget(&mut self, i: usize, base: u8, target: u16, revalidate: bool) {
+    pub(crate) fn pack_partner_retarget(
+        &mut self,
+        i: usize,
+        base: u8,
+        target: u16,
+        revalidate: bool,
+    ) {
         let l = self.ent[i].f52 as usize;
         if l == 0 || l >= self.ent.len() {
             return;
         }
-        if revalidate
-            && (self.ent[l].class64 != 5 || self.ent[l].model65 != self.ent[i].model65)
-        {
+        if revalidate && (self.ent[l].class64 != 5 || self.ent[l].model65 != self.ent[i].model65) {
             return;
         }
         self.ent[l].f52 = 0;
@@ -5704,29 +5708,53 @@ mod tests {
         for patched in [false, true] {
             let mut g = flat_gen();
             g.skeletons_convert_traders = crate::engine::features::HashSilent(patched);
-            let sk = g.spawn_creature(9, 100 << 8, 100 << 8, 100).expect("skeleton");
+            let sk = g
+                .spawn_creature(9, 100 << 8, 100 << 8, 100)
+                .expect("skeleton");
             let v26 = super::BEHAVIOR[g.ent[sk].row156 as usize].v_26;
             assert!(3 * v26 < 256, "test premise: window 3 fits the u8 clock");
             g.ent[sk].f63 = (3 * v26) as u8;
-            let tr = g.spawn_creature(14, (100 << 8) + 300, 100 << 8, 100).expect("trader");
+            let tr = g
+                .spawn_creature(14, (100 << 8) + 300, 100 << 8, 100)
+                .expect("trader");
             g.ent[tr].z = g.ent[sk].z; // inside the 3-D reach (0x600)
             g.rebuild_mob_chains();
-            let before = (1..g.ent.len()).filter(|&s| g.ent[s].class64 == 5 && g.ent[s].model65 == 9).count();
+            let before = (1..g.ent.len())
+                .filter(|&s| g.ent[s].class64 == 5 && g.ent[s].model65 == 9)
+                .count();
             g.m9_convert(sk, false);
-            let after = (1..g.ent.len()).filter(|&s| g.ent[s].class64 == 5 && g.ent[s].model65 == 9).count();
-            assert_eq!(g.ent[tr].flags & 0x400 != 0, patched, "patched={patched}: trader consumed");
-            assert_eq!(after - before, patched as usize, "patched={patched}: one new skeleton");
+            let after = (1..g.ent.len())
+                .filter(|&s| g.ent[s].class64 == 5 && g.ent[s].model65 == 9)
+                .count();
+            assert_eq!(
+                g.ent[tr].flags & 0x400 != 0,
+                patched,
+                "patched={patched}: trader consumed"
+            );
+            assert_eq!(
+                after - before,
+                patched as usize,
+                "patched={patched}: one new skeleton"
+            );
 
             // Control: window 2 is the villager's in both rotations.
             let mut g = flat_gen();
             g.skeletons_convert_traders = crate::engine::features::HashSilent(patched);
-            let sk = g.spawn_creature(9, 100 << 8, 100 << 8, 100).expect("skeleton");
+            let sk = g
+                .spawn_creature(9, 100 << 8, 100 << 8, 100)
+                .expect("skeleton");
             g.ent[sk].f63 = (2 * v26) as u8;
-            let vi = g.spawn_creature(13, (100 << 8) + 300, 100 << 8, 100).expect("villager");
+            let vi = g
+                .spawn_creature(13, (100 << 8) + 300, 100 << 8, 100)
+                .expect("villager");
             g.ent[vi].z = g.ent[sk].z;
             g.rebuild_mob_chains();
             g.m9_convert(sk, false);
-            assert_ne!(g.ent[vi].flags & 0x400, 0, "patched={patched}: villager consumed");
+            assert_ne!(
+                g.ent[vi].flags & 0x400,
+                0,
+                "patched={patched}: villager consumed"
+            );
         }
     }
 }

@@ -1587,9 +1587,7 @@ fn load_level(
     // level assumes the whole campaign done.
     let is_mc2_pkg = package.meta.game == Game::MagicCarpet2;
     let mut mc2_human_blocked = [false; 26];
-    if is_mc2_pkg
-        && let Some(human) = package.wizards.as_ref().and_then(|w| w.wizards.first())
-    {
+    if is_mc2_pkg && let Some(human) = package.wizards.as_ref().and_then(|w| w.wizards.first()) {
         for (s, b) in mc2_human_blocked.iter_mut().enumerate() {
             *b = human.blocked_spells.get(s).is_some_and(|&v| v != 0);
         }
@@ -7476,9 +7474,8 @@ impl App {
                                 if cave_gated {
                                     owned[s] = false;
                                 }
-                                known[s] = !owned[s]
-                                    && !cave_gated
-                                    && carried.is_some_and(|c| c[s]);
+                                known[s] =
+                                    !owned[s] && !cave_gated && carried.is_some_and(|c| c[s]);
                                 // Retail's canSummon grey-out
                                 // (EF:22503-08): the selected
                                 // tier's castle-pool prereq.

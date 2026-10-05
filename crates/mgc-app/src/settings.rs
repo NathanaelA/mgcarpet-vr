@@ -2593,7 +2593,8 @@ pub fn registry() -> Vec<Spec> {
                    not stopped by it; walkers and caves keep retail's rule.",
             ctl: Ctl::Toggle {
                 set: |c, v| {
-                    c.gameplay.patches.mc2_flyers_clear_terrain = crate::config::PatchArm::from_on(v)
+                    c.gameplay.patches.mc2_flyers_clear_terrain =
+                        crate::config::PatchArm::from_on(v)
                 },
                 descs: [
                     "Flyers stall against steep tiles far below them, as retail.",
@@ -2621,7 +2622,8 @@ pub fn registry() -> Vec<Spec> {
                    animals are never converted either way.",
             ctl: Ctl::Toggle {
                 set: |c, v| {
-                    c.gameplay.patches.skeletons_convert_traders = crate::config::PatchArm::from_on(v)
+                    c.gameplay.patches.skeletons_convert_traders =
+                        crate::config::PatchArm::from_on(v)
                 },
                 descs: [
                     "Skeletons never convert traders, as retail.",

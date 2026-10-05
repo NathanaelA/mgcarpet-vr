@@ -2673,16 +2673,30 @@ mod tests {
 
         let won = save_with(25);
         wm.tick(0.1, &won);
-        assert_eq!(wm.take_sounds().iter().filter(|&&s| s == SND_VULCAN).count(), 1);
+        assert_eq!(
+            wm.take_sounds()
+                .iter()
+                .filter(|&&s| s == SND_VULCAN)
+                .count(),
+            1
+        );
         let drawn = ids(&mut wm, &won);
         assert_eq!(drawn[..12], (285..=296).collect::<Vec<_>>(), "island first");
         let volcano = drawn.iter().position(|&id| id == VULCAN_FIRST).unwrap();
         let last_dot = drawn.iter().rposition(|&id| id == 139).unwrap();
         assert!(last_dot < volcano, "the volcano covers the route dots");
-        assert!(drawn[volcano + 1..].iter().any(|&id| (46..=58).contains(&id)), "dressing on top");
+        assert!(
+            drawn[volcano + 1..]
+                .iter()
+                .any(|&id| (46..=58).contains(&id)),
+            "dressing on top"
+        );
 
         let frame = |wm: &mut WorldMap| {
-            ids(wm, &won).into_iter().find(|id| (297..=304).contains(id)).unwrap()
+            ids(wm, &won)
+                .into_iter()
+                .find(|id| (297..=304).contains(id))
+                .unwrap()
         };
         wm.tick(3.0 / ANIM_FPS + 0.01, &won);
         assert_eq!(frame(&mut wm), VULCAN_FIRST + 3);

@@ -7554,7 +7554,11 @@ mod tests {
             g.rebuild_mob_chains_mc2();
             let before = q24_live_hives(&g).len();
             g.m9_consume_scan(hive, false);
-            assert_eq!(g.ent[tr].flags & 0x400 != 0, patched, "patched={patched}: trader consumed");
+            assert_eq!(
+                g.ent[tr].flags & 0x400 != 0,
+                patched,
+                "patched={patched}: trader consumed"
+            );
             assert_eq!(q24_live_hives(&g).len() - before, patched as usize);
         }
     }
