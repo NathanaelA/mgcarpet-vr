@@ -27610,6 +27610,41 @@ mod tests {
         }
     }
 
+    /// PATCH `mc1_segment_chain_revalidate`, the PACK `+52` arm —
+    /// `ghostmana.mgcr` t=3496: a (5,10) member still linked to a
+    /// leader whose slot was re-minted as a (10,0) fire stamps
+    /// `60 + 2 = 62` (the class-10 mana-sphere handler) onto it unless
+    /// patched. Positive control: a live leader of the member's own
+    /// model is retargeted in both arms.
+    #[test]
+    fn a_pack_handoff_stamps_the_sphere_state_on_a_recycled_fire_unless_patched() {
+        for patched in [false, true] {
+            let mut w = flat_world();
+            let m = w.g.spawn_creature(10, 0x8000, 0x8000, 0).expect("member");
+            let l = w.g.spawn_creature(10, 0x8400, 0x8000, 0).expect("leader");
+            w.g.ent[m].f52 = l as u16;
+            w.g.pack_partner_retarget(m, 60, 77, patched);
+            assert_eq!(w.g.ent[l].tick70, 62, "a live leader chases in both arms");
+            assert_eq!(w.g.ent[l].f146, 77);
+
+            // The leader died and its slot is now a (10,0) fire.
+            {
+                let e = &mut w.g.ent[l];
+                e.class64 = 10;
+                e.model65 = 0;
+                e.tick70 = 0;
+                e.f146 = 0;
+            }
+            w.g.ent[m].f52 = l as u16;
+            w.g.pack_partner_retarget(m, 60, 77, patched);
+            let want = if patched { 0 } else { 62 };
+            assert_eq!(
+                w.g.ent[l].tick70, want,
+                "patched={patched}: the recycled fire's +70 (62 = mana-sphere handler)"
+            );
+        }
+    }
+
     /// Positive control for `mc1_segment_chain_revalidate`: a kraken
     /// whose segments are all still its own corpses EVERY one in the
     /// patched arm, exactly like retail.

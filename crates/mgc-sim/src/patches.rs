@@ -430,6 +430,17 @@ pub struct WorldPatches {
     /// (conformance): the blind walk. Patched: the walk stops at the
     /// first link that is not a class-5 record carrying the head's
     /// `+24` (every segment is a `qmemcpy` of its head).
+    ///
+    /// **The same class through the PACK `+52` link** (2026-10-05,
+    /// the player's "ghost mana on flat ground, with stuck fires"
+    /// report; witness `ghostmana.mgcr`, mc1 level 9): a pack member's
+    /// death or hit (`sub_1A390` :21746 / :21755-65) stamps `+70 =
+    /// base + 2` through `+52` with no test, and nothing clears `+52`
+    /// when the leader dies. A (5,10) leader's slot re-minted as the
+    /// player's (10,0) fireball fire takes `60 + 2 = 62` — the
+    /// class-10 mana-SPHERE handler. Patched: the write lands only on a
+    /// class-5 record of the member's own `model65`
+    /// (`Gen::pack_partner_retarget`).
     pub mc1_segment_chain_revalidate: bool,
     /// **THE STALE VOLCANO REGISTERS (MC1 AND MC2)** — round 158 (w158b), the
     /// player-reported FREEZES (`recordings/mc1l45-froze.mgcr`, and the

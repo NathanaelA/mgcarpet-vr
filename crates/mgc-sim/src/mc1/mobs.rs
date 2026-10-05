@@ -3736,6 +3736,38 @@ impl Gen {
     /// is a bare `mov %al,0x46(%edx)`) tests nothing but `+54 != 0`, so
     /// a head that dies a SECOND time stamps `base + 5` onto whatever
     /// record now occupies a reaped segment's slot.
+    /// The PACK arm's write through `+52` (:21746 lethal, :21755-65
+    /// hit): the partner clears its own `+52`, takes `target` as its
+    /// quarry and enters CHASE (`base + 2`). Retail's only gate is
+    /// `+52 != 0`, and nothing clears a member's `+52` when its leader
+    /// dies and the slot is re-minted.
+    ///
+    /// `revalidate` = PATCH `mc1_segment_chain_revalidate`, the same
+    /// ghost-mana class as the segment walk in [`Self::mob_death`]:
+    /// the write lands only on a class-5 record of the member's own
+    /// `model65` — the identity `pack_scan` linked it by. WITNESS
+    /// `ghostmana.mgcr` (mc1 level 9, a port take on retail patches):
+    /// a (5,10) leader dies at t=3489, its slot is re-minted as the
+    /// player's (10,0) fireball fire at t=3494, and at t=3496 a dying
+    /// member stamps `60 + 2 = 62` onto it. Class-10 state 62 is the
+    /// mana-sphere handler, so the fire falls and rolls as an
+    /// uncollectable "ball" for the rest of the level (again at
+    /// t=3577, slot 131).
+    pub(crate) fn pack_partner_retarget(&mut self, i: usize, base: u8, target: u16, revalidate: bool) {
+        let l = self.ent[i].f52 as usize;
+        if l == 0 || l >= self.ent.len() {
+            return;
+        }
+        if revalidate
+            && (self.ent[l].class64 != 5 || self.ent[l].model65 != self.ent[i].model65)
+        {
+            return;
+        }
+        self.ent[l].f52 = 0;
+        self.ent[l].f146 = target;
+        self.ent[l].tick70 = base + 2;
+    }
+
     pub(crate) fn mob_death(&mut self, i: usize, base: u8, chain_revalidate: bool) {
         if matches!(base / 6, 4 | 13 | 14) && self.ent[i].f26 != 0 {
             self.ent[i].flags |= 0x400;
@@ -4655,16 +4687,19 @@ impl Gen {
                     // retail indexes a fixed 1000-record C array with a
                     // raw u16 and would read garbage where the port's
                     // `Vec` would panic. Do NOT re-introduce a
-                    // behavioural test here.
-                    let l = self.ent[i].f52 as usize;
-                    if l != 0 && l < self.ent.len() {
-                        // :21746 reads `+40`; the lethal branch of the
-                        // inbox has just copied it into `+38`
-                        // (:21737-38), so the two are equal here.
-                        self.ent[l].f146 = self.ent[i].f40;
-                        self.ent[l].f52 = 0;
-                        self.ent[l].tick70 = base + 2;
-                    }
+                    // behavioural test on the RETAIL arm — the patched
+                    // arm's test lives in `pack_partner_retarget`.
+                    //
+                    // :21746 reads `+40`; the lethal branch of the
+                    // inbox has just copied it into `+38` (:21737-38),
+                    // so the two are equal here.
+                    let killer = self.ent[i].f40;
+                    self.pack_partner_retarget(
+                        i,
+                        base,
+                        killer,
+                        ctx.patches.mc1_segment_chain_revalidate && !ctx.strict,
+                    );
                 }
                 // Killing village folk puts the wizard on the wanted
                 // list (m12 :25291, m13 :25459, m14 :25638) — and so
@@ -4861,12 +4896,12 @@ impl Gen {
                             // through `+52` as the lethal arm above,
                             // and retail clears the PARTNER's `+52`
                             // (:21758) as well as its own.
-                            let l = self.ent[i].f52 as usize;
-                            if l != 0 && l < self.ent.len() {
-                                self.ent[l].f52 = 0;
-                                self.ent[l].f146 = src;
-                                self.ent[l].tick70 = base + 2;
-                            }
+                            self.pack_partner_retarget(
+                                i,
+                                base,
+                                src,
+                                ctx.patches.mc1_segment_chain_revalidate && !ctx.strict,
+                            );
                             self.ent[i].f146 = src;
                             self.ent[i].f52 = 0;
                             self.ent[i].tick70 = base + 2;
