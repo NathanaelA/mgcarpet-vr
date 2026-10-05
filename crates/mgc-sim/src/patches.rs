@@ -561,6 +561,22 @@ pub struct WorldPatches {
     /// the cliff), and caves keep retail's law whole (the ceiling
     /// tests are the real obstacle there).
     pub mc2_flyers_clear_terrain: bool,
+    /// **THE TRADER THE SKELETONS FORGOT (MC1 AND MC2)** — player-ruled
+    /// 2026-10-05. A skeleton with nothing to chase converts the
+    /// nearest civilian within reach into a new (5,9), hunting ONE
+    /// model per think window off its own clock: `(+63 / v_26) % 3`
+    /// over the rosters of m4 (militia / archer), m12 and m13 (MC1
+    /// `sub_1D060` / `sub_1D6D0`, remc1 :23837 / :24031; MC2 `sub_203D0`
+    /// / `sub_20940`, EF:12150). The fourth civilian, m14 (MC1's
+    /// cross-map migrant — the backpack trader; MC2's builder/trader
+    /// sibling of m12), is on no window, so it alone can never be
+    /// converted — an oversight. Retail corpus (82 MC1/HW takes): 134
+    /// m4, 22 m12, 20 m13, 0 m14 conversions. Castle guards (m15) and
+    /// every non-civilian (MC2's goats included) stay off the menu.
+    ///
+    /// Patched: the rotation runs `% 4` over {m4, m12, m13, m14}, each
+    /// model a quarter of the windows. Retail: `% 3`, m14 immune.
+    pub skeletons_convert_traders: bool,
 }
 
 impl WorldPatches {
@@ -594,6 +610,7 @@ impl WorldPatches {
         mc2_leviathan_high_lunge: false,
         mc2_leviathan_true_aim: false,
         mc2_flyers_clear_terrain: false,
+        skeletons_convert_traders: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -638,5 +655,6 @@ impl WorldPatches {
         mc2_leviathan_high_lunge: false,
         mc2_leviathan_true_aim: false,
         mc2_flyers_clear_terrain: false,
+        skeletons_convert_traders: false,
     };
 }

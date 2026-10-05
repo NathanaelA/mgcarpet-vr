@@ -1428,6 +1428,12 @@ pub(crate) struct Gen {
     /// move core has no ctx to read the set from. Config echo: not on
     /// the wire, not hashed.
     pub(crate) mc2_flyers_clear: HashSilent<bool>,
+    /// The `skeletons_convert_traders` patch arm, republished per tick
+    /// from `World::patches` (off under `strict_retail`) — the convert
+    /// tails ([`Gen::m9_convert`], [`Gen::m9_consume_scan`]) have no
+    /// ctx to read the set from. Config echo: not on the wire, not
+    /// hashed.
+    pub(crate) skeletons_convert_traders: HashSilent<bool>,
     /// ⭐ THE OUT-OF-POOL HUMAN'S `roll_0x20_32` — retail's TARGET-YAW
     /// word on the human carpet record, which the port has nowhere
     /// else to put (the conformance carpet is out of pool and
@@ -5900,6 +5906,7 @@ impl Gen {
             player_ghost: HashSilent(false),
             player_vel: HashSilent((0, 0)),
             mc2_flyers_clear: HashSilent(false),
+            skeletons_convert_traders: HashSilent(false),
             human_roll_0x20: HashSilent(0),
             player_rebound: false,
             player_chain: PlayerChain::default(),
@@ -12625,6 +12632,7 @@ impl Gen {
             player_ghost: _,
             player_vel: _,
             mc2_flyers_clear: _,
+            skeletons_convert_traders: _,
             // A shim for the out-of-pool carpet's @0x20 — see the
             // field doc; every conformance import seeds it outright
             // from the recorded carpet, on the `player_chain`

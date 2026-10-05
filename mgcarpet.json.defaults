@@ -67,6 +67,7 @@
       "no_spell_loss": "patched",
       "one_castle_per_wizard": "patched",
       "possessed_footprint": "patched",
+      "skeletons_convert_traders": "patched",
       "volcano_register_revalidate": "patched",
       "win2_movie_score": "patched"
     }

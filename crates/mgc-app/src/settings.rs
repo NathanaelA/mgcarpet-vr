@@ -2604,6 +2604,34 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Gameplay,
             group: "gameplay · patches",
+            label: "skeletons_convert_traders",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.skeletons_convert_traders",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.skeletons_convert_traders.on(),
+                faithful: false,
+            },
+            desc: "Skeletons can turn traders into skeletons too. A roaming \
+                   skeleton converts the nearest civilian, hunting one kind at \
+                   a time in turn: militia, settlers, villagers. Retail never \
+                   puts the trader on that list, so traders alone are immune. \
+                   Patched, the rotation includes them. Castle guards and \
+                   animals are never converted either way.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.skeletons_convert_traders = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Skeletons never convert traders, as retail.",
+                    "Skeletons convert traders like other civilians (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
             label: "mc2_orphan_balloon_reap",
             class: Patch,
             key: None,
@@ -3193,8 +3221,9 @@ mod tests {
         // MC2 twin). mc2_troglodyte_sprite_crop 2026-09-30
         // (presentation-only), mc2_leviathan_high_lunge the same day
         // (a balance deviation riding the class for its pin), and
-        // mc2_flyers_clear_terrain 2026-10-03.
-        assert_eq!(patches, 28, "all twenty-eight patches ship on");
+        // mc2_flyers_clear_terrain 2026-10-03, and
+        // skeletons_convert_traders 2026-10-05.
+        assert_eq!(patches, 29, "all twenty-nine patches ship on");
     }
 
     #[test]

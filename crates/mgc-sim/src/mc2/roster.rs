@@ -1149,7 +1149,14 @@ impl Gen {
     pub(crate) fn m9_consume_scan(&mut self, i: usize, grounded: bool) {
         let row = &BEHAVIOR[self.ent[i].row156 as usize];
         let range = (row.v_28 as i32) * (row.v_28 as i32);
-        let sel = [4u8, 12, 13][((self.ent[i].f63 as i16 / row.v_26.max(1)) % 3) as usize];
+        // PATCH `skeletons_convert_traders`: `% 4` with the m14
+        // builder/trader, which retail's `% 3` never reaches.
+        let menu: &[u8] = if self.skeletons_convert_traders.0 {
+            &[4, 12, 13, 14]
+        } else {
+            &[4, 12, 13]
+        };
+        let sel = menu[((self.ent[i].f63 as i16 / row.v_26.max(1)) % menu.len() as i16) as usize];
         let (ex, ey, ez) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z)

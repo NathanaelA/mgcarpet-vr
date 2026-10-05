@@ -8792,6 +8792,9 @@ impl World {
         self.g.mc2_flyers_clear = crate::engine::features::HashSilent(
             self.patches.mc2_flyers_clear_terrain && !self.strict_retail,
         );
+        self.g.skeletons_convert_traders = crate::engine::features::HashSilent(
+            self.patches.skeletons_convert_traders && !self.strict_retail,
+        );
         self.g.player_rebound = self.player.rebound;
 
         // Hand equips (the original's commands 0x15/0x16, :48717-31).

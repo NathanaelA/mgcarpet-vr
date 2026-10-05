@@ -7533,6 +7533,32 @@ mod tests {
         fresh[0]
     }
 
+    /// PATCH `skeletons_convert_traders` (MC2 arm): on window 3 the
+    /// patched `% 4` rotation reaches the m14 builder/trader; retail's
+    /// `% 3` reads the same clock as the archer window and, with no
+    /// archer near, consumes nothing.
+    #[test]
+    fn the_hive_consumes_a_trader_only_when_patched() {
+        for patched in [false, true] {
+            let mut g = q22_gen();
+            g.skeletons_convert_traders = crate::engine::features::HashSilent(patched);
+            let hive = g.mc2_spawn_m9(40 * 256, 40 * 256, 400).expect("a hive");
+            g.ent[hive].f63 = 75; // (75 / 25) = window 3
+            let tr = g.new_event().expect("a trader slot");
+            g.ent[tr].class64 = 5;
+            g.ent[tr].model65 = 14;
+            g.ent[tr].tick70 = 14 * 8 + 1;
+            g.ent[tr].act_life = 100;
+            let hz = g.ent[hive].z;
+            g.link(tr, 40 * 256 + 400, 40 * 256, hz);
+            g.rebuild_mob_chains_mc2();
+            let before = q24_live_hives(&g).len();
+            g.m9_consume_scan(hive, false);
+            assert_eq!(g.ent[tr].flags & 0x400 != 0, patched, "patched={patched}: trader consumed");
+            assert_eq!(q24_live_hives(&g).len() - before, patched as usize);
+        }
+    }
+
     fn q24_live_hives(g: &Gen) -> Vec<usize> {
         (1..g.ent.len())
             .filter(|s| g.ent[*s].class64 == 5 && g.ent[*s].model65 == 9)

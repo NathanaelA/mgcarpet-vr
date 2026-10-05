@@ -3946,13 +3946,17 @@ impl Gen {
     /// actually being a wizard body (:23912), the buried arm stamps
     /// unconditionally (:24112 — a wild mound passes its own slot
     /// index on, a genuine retail quirk kept as-is).
+    ///
+    /// PATCH `skeletons_convert_traders`: the menu rotates `% 4` and
+    /// adds the m14 migrant trader, which retail's `% 3` never reaches.
     fn m9_convert(&mut self, i: usize, buried: bool) {
         let row = &BEHAVIOR[self.ent[i].row156 as usize];
-        let victim_model = match (self.ent[i].f63 as i16 / row.v_26) % 3 {
-            0 => 4,
-            1 => 12,
-            _ => 13,
+        let menu: &[u16] = if self.skeletons_convert_traders.0 {
+            &[4, 12, 13, 14]
+        } else {
+            &[4, 12, 13]
         };
+        let victim_model = menu[((self.ent[i].f63 as i16 / row.v_26) % menu.len() as i16) as usize];
         let (ex, ey, ez, own) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.id24)
@@ -5688,5 +5692,41 @@ mod tests {
         // Control: the worm head carries the same stamp.
         let worm = g.spawn_creature(0, 120 << 8, 120 << 8, 100).unwrap();
         assert_eq!(g.ent[worm].f56, 96);
+    }
+
+    /// PATCH `skeletons_convert_traders`: on the fourth window of the
+    /// patched rotation a skeleton converts an m14 trader beside it;
+    /// retail's `% 3` reads that same clock as the militia window and
+    /// leaves the trader alone. Control: an m13 villager on its own
+    /// window is converted in both arms.
+    #[test]
+    fn a_skeleton_converts_a_trader_only_when_patched() {
+        for patched in [false, true] {
+            let mut g = flat_gen();
+            g.skeletons_convert_traders = crate::engine::features::HashSilent(patched);
+            let sk = g.spawn_creature(9, 100 << 8, 100 << 8, 100).expect("skeleton");
+            let v26 = super::BEHAVIOR[g.ent[sk].row156 as usize].v_26;
+            assert!(3 * v26 < 256, "test premise: window 3 fits the u8 clock");
+            g.ent[sk].f63 = (3 * v26) as u8;
+            let tr = g.spawn_creature(14, (100 << 8) + 300, 100 << 8, 100).expect("trader");
+            g.ent[tr].z = g.ent[sk].z; // inside the 3-D reach (0x600)
+            g.rebuild_mob_chains();
+            let before = (1..g.ent.len()).filter(|&s| g.ent[s].class64 == 5 && g.ent[s].model65 == 9).count();
+            g.m9_convert(sk, false);
+            let after = (1..g.ent.len()).filter(|&s| g.ent[s].class64 == 5 && g.ent[s].model65 == 9).count();
+            assert_eq!(g.ent[tr].flags & 0x400 != 0, patched, "patched={patched}: trader consumed");
+            assert_eq!(after - before, patched as usize, "patched={patched}: one new skeleton");
+
+            // Control: window 2 is the villager's in both rotations.
+            let mut g = flat_gen();
+            g.skeletons_convert_traders = crate::engine::features::HashSilent(patched);
+            let sk = g.spawn_creature(9, 100 << 8, 100 << 8, 100).expect("skeleton");
+            g.ent[sk].f63 = (2 * v26) as u8;
+            let vi = g.spawn_creature(13, (100 << 8) + 300, 100 << 8, 100).expect("villager");
+            g.ent[vi].z = g.ent[sk].z;
+            g.rebuild_mob_chains();
+            g.m9_convert(sk, false);
+            assert_ne!(g.ent[vi].flags & 0x400, 0, "patched={patched}: villager consumed");
+        }
     }
 }
