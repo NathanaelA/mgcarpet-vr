@@ -394,13 +394,13 @@ impl InputActions {
         }
 
         // Pitch Delta would normally be on right.y; but pitch is VERY annoying in vr; so we are fixing it based on moving forward backwards.
-        let pitch_delta = if left.y < 0.0 {
+        let pitch_delta =  if left.y < 0.0 {
             0.3
         } else if left.y > 0.0 {
             -0.3
         } else {
             0.0
-        }; //  right.y * PITCH_RATE_PER_TICK;
+        };  // right.y * PITCH_RATE_PER_TICK;
 
         let mut equip_left = 128;
         let mut equip_right = 128;
@@ -528,6 +528,7 @@ impl InputActions {
             strafe: left.x * if enhanced { 4.0 } else { 2.0 },
             yaw_delta: right.x * YAW_RATE_PER_TICK,
             pitch_delta,
+//            lift: pitch_delta,
             fire_left: trigger_left_value,
             fire_right: trigger_right_value,
             respawn: btn_a,

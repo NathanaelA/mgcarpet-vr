@@ -1321,6 +1321,7 @@ struct MapGlobals {
     rect: [f32; 4],
     player: [f32; 4],
     mode: [f32; 4],
+    fx: [f32; 4],
     view_proj: [[f32; 4]; 4],
     panel_origin: [f32; 3],
     panel_scale: f32,
@@ -6593,6 +6594,7 @@ impl Renderer {
                 rect,
                 player: [cam.x, cam.z, cam.yaw, self.map_pane_zoom(pw / ph)],
                 mode: [0.0, pw / ph, 1.0, MAP_TILES as f32],
+                fx: [self.sight_mist.0, self.sight_mist.1, 0.0, 0.0],
                 view_proj: if self.ui_panel_mode == 1 {
                     view_proj
                 } else {
@@ -6633,6 +6635,7 @@ impl Renderer {
                 rect,
                 player: [cam.x, cam.z, cam.yaw, self.minimap_zoom],
                 mode: [1.0, 1.0, self.minimap_alpha, MAP_TILES as f32],
+                fx: [self.sight_mist.0, self.sight_mist.1, 0.0, 0.0],
                 view_proj: if self.ui_panel_mode == 1 {
                     view_proj
                 } else {

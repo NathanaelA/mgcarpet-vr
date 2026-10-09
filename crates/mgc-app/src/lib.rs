@@ -2892,6 +2892,9 @@ impl App {
             // The pre-game selection menu is silent (no game — hence
             // no game audio bundle — has been chosen yet).
             None if app.screen == Screen::Launcher => {
+                if IS_ANDROID {
+                    app.set_grab(false);
+                }
                 app.launcher = Some(launcher_screen::Launcher::new(
                     &get_baked_directory(),
                     &app.cfg,
@@ -4832,6 +4835,7 @@ impl App {
     // On XR the input is polled from the XR session, not the keyboard/mouse.
     // All input from the XR controllers is handled here
     fn tick_input(&mut self, event_loop: &ActiveEventLoop) -> FlightInput {
+        self.enforce_player_down();
         let is_mc2 = self.is_mc2();
         let grabbed = self.grabbed;
         let mut owned = [false; 26];
@@ -4924,7 +4928,12 @@ impl App {
                         m.skip();
                         return FlightInput::default();
                     }
-                } else if self.ctrl_held {
+                } else if self.screen == Screen::Stats {
+                    if let Some(m) = &mut self.stats_screen {
+                        m.dismiss();
+                        return FlightInput::default();
+                    }
+            } else if self.ctrl_held {
                     // The CTRL selector pane (over flight OR the map
                     // screen): press anchors the level flyout for the
                     // clicked hand, release commits level + binding
@@ -10803,6 +10812,7 @@ fn parse_args() -> Result<Args, String> {
     args.slot = Option::from(1);
     args.pool_slots = Option::from(20000); // Match the new rev17 defaults.
     args.thrust = Some(config::ThrustModel::Enhanced);
+    args.altitude = Option::from(config::AltitudeModel::Classic);
     args.config = Option::from(PathBuf::from("/storage/emulated/0/mgcarpet/mgcarpet.json"));
     if !args.level.starts_with("/") {
         args.level = PathBuf::from("/storage/emulated/0/mgcarpet/").join(args.level);

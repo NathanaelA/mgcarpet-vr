@@ -398,18 +398,20 @@ pub const VISUALS_PRESET: PresetGroup = PresetGroup {
         let enhanced = p == Preset::Enhanced;
         let (pref, enh) = (&mut c.render.preference, &mut c.render.enhancement);
         if IS_ANDROID {
-            c.sim.parameters.awake_range = if enhanced { Option::Some(105) } else { Option::Some(24) };
+            c.sim.parameters.awake_range = if enhanced { Option::Some(75) } else { Option::Some(24) };
             pref.crosshair = false;
             pref.sky = false;
+            pref.reflections = false;
         } else {
             pref.crosshair = enhanced;
             pref.sky = true;
+            pref.reflections = true;
         }
-        pref.reflections = true;
+
         pref.horizon_cull = true;
         pref.light_sources = true;
-        pref.fog_distance = if enhanced { 90 } else { 20 };
-        pref.rival_tags = if enhanced {
+        pref.fog_distance = if enhanced { 60 } else { 20 };
+        pref.rival_tags = if !IS_ANDROID && enhanced {
             RivalTags::On
         } else {
             RivalTags::Auto
@@ -420,7 +422,7 @@ pub const VISUALS_PRESET: PresetGroup = PresetGroup {
         } else {
             FireEffects::Classic
         };
-        enh.lightning = if enhanced {
+        enh.lightning = if !IS_ANDROID && enhanced {
             LightningEffects::Enhanced
         } else {
             LightningEffects::Classic
@@ -853,6 +855,7 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Render,
             group: "render · preference",
@@ -1568,6 +1571,7 @@ pub fn registry() -> Vec<Spec> {
             },
         },
         // ---- controls · preset ------------------------------------------
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Controls,
             group: "controls · preset",

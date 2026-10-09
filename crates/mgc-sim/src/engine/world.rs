@@ -78,6 +78,9 @@ pub mod cheats;
 pub mod conformance;
 pub mod sight;
 
+use crate::IS_ANDROID;
+
+
 /// The player's life ceiling: the human wizard ctor's maxLife 10000
 /// (:44185; skill does NOT scale it — sub_44D30 :55026 resets to max
 /// on every spawn). Heal's 5%-per-tick rate divides it.
@@ -14623,7 +14626,8 @@ impl World {
         // the ctor default — the corpus pins target_yaw 0 on fresh
         // spawns, and the untargeted flight re-derives them).
         e.f30 = p.heading;
-        e.f32 = p.pitch;
+        let pitch = if IS_ANDROID { 0 }  else { p.pitch };
+        e.f32 = pitch;
         // Spell-row +44 (125/50 — vestigial on detonation: the fire
         // effect's own 400 is the fireball's real damage, sub_52B30
         // does not copy +44, :62928-30) and the TOKEN's +140 =
@@ -14638,7 +14642,7 @@ impl World {
         // :65074-76 — the dest triple: the CARPET's raw axis projected
         // 0x4000 along the live aim (`Gen::mc1_stamp_bolt_dest`).
         self.g
-            .mc1_stamp_bolt_dest(pr, (p.x, p.y, p.z), p.heading, p.pitch, id);
+            .mc1_stamp_bolt_dest(pr, (p.x, p.y, p.z), p.heading, pitch, id);
         self.entities_dirty = true;
     }
 
@@ -14691,7 +14695,7 @@ impl World {
         // 96 units of pitch below retail on every cast (mc1l42
         // t=20150: retail pitch 136, port 232). The DEVIATIONS.md
         // "launch pitches" entry is retired by this.
-        let pitch = p.pitch;
+        let pitch = if IS_ANDROID { 0 } else { p.pitch };
         let e = &mut self.g.ent[pr];
         // The launch boost lands on +126 ALONE (:65529-30 `+126 +=
         // caster.+126`); +128 keeps the ctor base, which is what the
@@ -16230,7 +16234,8 @@ impl World {
         // corpus target_yaw 0 on fresh balls) — and the flight EASES
         // from it toward the ground target.
         e.f30 = p.heading;
-        e.f32 = p.pitch;
+        let pitch = if IS_ANDROID { 0 } else { p.pitch };
+        e.f32 = pitch;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         e.f140 = ball_mana;
         // ⭐⭐⭐ THE MINT'S `axis_0x9A_154x` STAMP LIVES **INSIDE THE
@@ -16423,7 +16428,9 @@ impl World {
         // t=26716 borns slot 182 with retail `target_yaw` 0 against
         // our 340. Both binaries agree (:66036-38, hw:62258-60).
         e.f30 = p.heading;
-        e.f32 = p.pitch;
+        let pitch = if IS_ANDROID { 0 } else { p.pitch };
+
+        e.f32 = pitch;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         e.f140 = per_shot;
         e.f26 = charge;
@@ -16439,7 +16446,7 @@ impl World {
         // surface, and a record lane the port leaves at zero is one
         // more thing a later reader could inherit wrong.
         let mut d = (p.x, p.y, p.z);
-        Gen::polar_step(&mut d, p.heading, p.pitch, 0x4000);
+        Gen::polar_step(&mut d, p.heading, pitch, 0x4000);
         let e = &mut self.g.ent[pr];
         e.dest_x = d.0;
         e.dest_y = d.1;
@@ -16483,7 +16490,8 @@ impl World {
         // port's invented +34 copy read back as a phantom
         // target_yaw on the recorded born row (mc1l5 t=23382).
         e.f30 = p.heading;
-        e.f32 = p.pitch;
+        let pitch = if IS_ANDROID { 0 } else { p.pitch };
+        e.f32 = pitch;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         e.f140 = per_shot;
         e.f68 = 10;
@@ -16512,7 +16520,7 @@ impl World {
             0x4000
         };
         let mut d = (p.x, p.y, p.z);
-        Gen::polar_step(&mut d, p.heading, p.pitch, reach);
+        Gen::polar_step(&mut d, p.heading, pitch, reach);
         let e = &mut self.g.ent[pr];
         e.dest_x = d.0;
         e.dest_y = d.1;
@@ -16548,7 +16556,8 @@ impl World {
         // zero. No corpus witness in this family yet — the fix rides
         // the storm's, which the emit arms share verbatim.
         e.f30 = p.heading;
-        e.f32 = p.pitch;
+        let pitch = if IS_ANDROID { 0 } else { p.pitch };
+        e.f32 = pitch;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         // :66273 copies the TOKEN's `+140`, and the shared ctor
         // sub_3BF70 (:48001-05) sets `+140 = a4 / a5` — the PER-SHOT
@@ -16570,7 +16579,7 @@ impl World {
         // :66280-82 — the dest triple, the carrier's own (the relay
         // never reads it; `Gen::mc1_stamp_bolt_dest`).
         self.g
-            .mc1_stamp_bolt_dest(pr, (p.x, p.y, p.z), p.heading, p.pitch, 22);
+            .mc1_stamp_bolt_dest(pr, (p.x, p.y, p.z), p.heading, pitch, 22);
         self.entities_dirty = true;
     }
 
@@ -18050,7 +18059,7 @@ impl World {
             };
             // The down-arc launch bias (cast_projectile): the
             // volcano's acquire cone centers on the biased pitch.
-            let pitch = if spell == 8 {
+            let pitch = if IS_ANDROID { 0 } else if spell == 8 {
                 p.pitch.wrapping_add(0x60) & 0x7FF
             } else {
                 p.pitch

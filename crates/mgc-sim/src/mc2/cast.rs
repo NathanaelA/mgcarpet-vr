@@ -45,6 +45,7 @@ use crate::engine::world::{AimLock, LifeState, PlayerPose, World};
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc2::spells::Mc2SubSpell;
 use crate::world::PLAYER_LIFE_MAX;
+use crate::IS_ANDROID;
 
 /// Notification lives, in ticks (retail message-life `a3`): the
 /// level-up path sets 200 (EF:44012), the change-spell toast 20
@@ -5267,7 +5268,7 @@ impl World {
             e.f71 = tier; // byte_0x46_70 retaliation tier
             e.f144 = 0; // NEUTRAL — no owner colour (the "fool")
             e.f30 = yaw; // launch heading
-            e.f32 = p.pitch; // launch pitch (EF:57919)
+            e.f32 = if IS_ANDROID {0} else { p.pitch }; // launch pitch (EF:57919)
             if tier >= 3 {
                 e.f144 = PLAYER_TARGET;
                 self.g.ball_resize(s);
@@ -5334,7 +5335,8 @@ impl World {
         // conversion (see [[remc2-source-corruption-class]]); the
         // `MoveEntity_57FA0` call they feed survived intact.
         let mut dest = (p.x, p.y, p.z);
-        Gen::polar_step(&mut dest, p.heading, p.pitch, 10240);
+        let pitch = if IS_ANDROID { 0 } else { p.pitch };
+        Gen::polar_step(&mut dest, p.heading, pitch, 10240);
         let token_mana = self.g.ent[m].f140;
         let tier = self.g.ent[m].f71;
         {
@@ -5346,7 +5348,7 @@ impl World {
             e.f140 = token_mana;
             e.f71 = tier;
             e.f30 = p.heading;
-            e.f32 = p.pitch;
+            e.f32 = pitch;
             // `word_0x26_38` = the (15,14) token SLOT (see
             // [`no_token_slot_backref`]); was the bare index 14.
             e.f40 = if no_token_slot_backref() {
@@ -5482,6 +5484,7 @@ impl World {
         // ⭐⭐⭐ THE CARPET BOOST IS THE **LIVE** `actSpeed_0x82_130`,
         // NOT THE TICK-TOP POSE — see
         // [`no_mc2_speed_token_live_actspeed`].
+        let pitch = if IS_ANDROID { 0 } else { p.pitch };
         let caster_speed = self.mc2_caster_act_speed(p);
         let Some(i) = self.g.mc2_spawn_cast_proj(arm.subtype, mx, my, mz) else {
             return None; // pool full: no projectile, NO cast sound
@@ -5555,7 +5558,7 @@ impl World {
             // the muzzle lift (pos.z += caster fov — the carpet
             // sits at pose z already).
             e.f30 = p.heading;
-            e.f32 = p.pitch;
+            e.f32 = pitch;
             // ⭐⭐⭐ AN ABSENCE IN AN ENUMERATED LIST — THE CLASS-9
             // FLYER IS BORN WITH `roll`/`fov` AT ZERO. The port's
             // `f34`/`f36` ARE retail's `roll_0x20_32`/`fov_0x22_34`
@@ -5581,7 +5584,7 @@ impl World {
             // restores it.
             if no_launch_roll_absence() {
                 e.f34 = p.heading;
-                e.f36 = p.pitch;
+                e.f36 = pitch;
             }
             // ⭐⭐⭐ THE DIRECT ARMS TAKE THE CASTER BOOST **RAW** —
             // THE [384, 0x2000] CLAMP IS `sub_6DCA0`'s ALONE
@@ -5689,7 +5692,7 @@ impl World {
                 Gen::polar_step(
                     &mut dest,
                     p.heading,
-                    if use_pitch { p.pitch } else { 0 },
+                    if use_pitch { pitch } else { 0 },
                     reach,
                 );
                 // The terrain-tail eight end

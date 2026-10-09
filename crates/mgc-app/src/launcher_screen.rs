@@ -44,7 +44,7 @@ use mgc_render::UiQuad;
 use crate::bakecheck::{self, BakeStatus};
 use crate::campaign::CampaignId;
 use crate::config::{Config, WindowSize};
-use crate::IS_ANDROID;
+use crate::{ui, IS_ANDROID};
 use crate::settings::{self, Preset, PresetGroup};
 
 const FONT: &[u8] = include_bytes!("../../../assets/launcher/DejaVuSerif-Bold.ttf");
@@ -141,6 +141,10 @@ enum RowKind {
     Display,
     /// A preset group.
     Preset(&'static PresetGroup),
+    /// A save slot.
+    SaveSlot,
+    /// A start level.
+    StartLevel,
 }
 
 /// A Display row choice.
@@ -171,6 +175,14 @@ impl Mode {
     }
 }
 
+#[cfg(target_os = "android")]
+const OPTIONS: [(&str, RowKind); 3] = [
+    ("Visuals", RowKind::Preset(&settings::VISUALS_PRESET)),
+    ("Save Slot", RowKind::SaveSlot),
+    ("Start Level", RowKind::StartLevel),
+];
+
+#[cfg(not(target_os = "android"))]
 const OPTIONS: [(&str, RowKind); 3] = [
     ("Display", RowKind::Display),
     ("Controls", RowKind::Preset(&settings::CONTROLS_PRESET)),
@@ -261,6 +273,8 @@ pub struct Launcher {
     last: Option<ViewKey>,
     /// The no-games notice is up (modal until dismissed).
     notice: bool,
+    save_slot: usize,
+    start_level: usize,
 }
 
 impl Launcher {
@@ -289,6 +303,8 @@ impl Launcher {
             pending: None,
             last: None,
             notice: false,
+            save_slot: 1,
+            start_level: 0,
         };
         if let Some(reason) = l.status.tree.clone() {
             match bakecheck::gamedata(gamedata) {
@@ -464,6 +480,8 @@ impl Launcher {
     /// The row's value as shown.
     fn value(&self, row: usize, cfg: &Config) -> String {
         match &OPTIONS[row].1 {
+            RowKind::SaveSlot => self.save_slot.to_string(),
+            RowKind::StartLevel => self.start_level.to_string(),
             RowKind::Display => Mode::of(cfg).label(),
             RowKind::Preset(g) => match g.current(cfg) {
                 Some(p) => p.label().to_string(),
@@ -474,6 +492,34 @@ impl Launcher {
 
     fn step_option(&mut self, row: usize, right: bool, cfg: &mut Config) {
         match &OPTIONS[row].1 {
+            RowKind::SaveSlot => {
+                let at = self.save_slot;
+                let mut next = if right {
+                    (at + 1)
+                } else {
+                    (at - 1)
+                };
+                if next < 1 {
+                    next = 5;
+                } else if next > 5 {
+                    next = 1;
+                }
+                self.save_slot = next;
+            }
+            RowKind::StartLevel => {
+                let at = self.start_level;
+                let mut next = if right {
+                    (at + 1)
+                } else {
+                    (at - 1)
+                };
+                if next < 1 {
+                    next = 5;
+                } else if next > 5 {
+                    next = 1;
+                }
+                self.start_level = next;
+            }
             RowKind::Display => {
                 let list = self.modes(cfg);
                 let n = list.len();
@@ -648,13 +694,23 @@ impl Launcher {
             uv: [0.0, 0.0, w as f32, h as f32],
             tint: [1.0; 4],
         };
+        let mut quads = vec![quad];
+        if IS_ANDROID {
+            let s = ui::HudFrame::new(size.0 as f32, size.1 as f32)
+                .s
+                .max(1.0);
+
+            quads.extend(ui::cursor_quads(cursor.0, cursor.1, s));
+        }
+
         if self.last.as_ref() == Some(&key) {
-            return (None, vec![quad]);
+            return (None, quads);
         }
         let mut c = Canvas::new(w as usize, h as usize);
         self.compose(&mut c, &key);
         self.last = Some(key);
-        (Some(c.buf), vec![quad])
+        (Some(c.buf), quads)
+
     }
 
     fn compose(&self, c: &mut Canvas, key: &ViewKey) {
@@ -692,7 +748,7 @@ impl Launcher {
         );
 
         for (row, (label, _)) in OPTIONS.iter().enumerate() {
-            if !IS_ANDROID && row < 2 {
+            if IS_ANDROID && row > 0 {
                continue;
             }
             let focused = key.focus == Focus::Option(row);
